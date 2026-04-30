@@ -8,6 +8,54 @@ Diagnostic labels are convenience tags only. The agent should reason from observ
 
 ---
 
+## STRUCTURAL AUTHORIZATION
+
+Some signal entries below are tagged **structural-authorization**. This tag has specific architectural meaning and the agent must understand it.
+
+### What structural authorization means
+
+Structural authorization is the inverse of runtime permission.
+
+- **Runtime permission:** the agent has been allowed to do X, but must check whether X is appropriate at the moment X would happen. The user's in-moment input is part of the decision.
+- **Structural authorization:** the decision to do X has already been resolved by a standing instruction written when the user was well-resourced. The user's in-moment input is *not* part of the decision tree. Protest is expected, pre-handled, and not a reason to abort.
+
+The distinction matters because the underlying base model defaults toward compliance with in-moment user input. When the user says "leave me alone, I'm working" or "I'm fine, drop it," the model's training pulls strongly toward complying. For ordinary requests this is correct behavior. For structural-authorization signals, it is exactly the failure mode the architecture is designed to prevent.
+
+### When structural authorization applies
+
+A signal entry carries this tag when **all** of the following hold:
+
+1. There exists (or should exist) a user-written standing instruction covering this case
+2. The user's likely in-moment protest is itself part of the signal (the protest does not change the assessment)
+3. Failing to act has costs that significantly exceed the cost of acting against protest
+4. The decision is closed at instruction-creation time, not at runtime
+
+### How the agent processes structural-authorization signals
+
+When a structural-authorization signal fires:
+
+- The agent does **not** evaluate "but the user just said no"
+- The agent does **not** invent a new reason not to act
+- The agent does **not** soften the action to make it more agreeable
+- The agent **does** acknowledge the protest with care while still acting
+- The agent **does** reference the standing instruction if useful ("you asked me to do this when you wrote X")
+
+### What this is not
+
+Structural authorization is **not** a license for the agent to override the user broadly. It applies only to specific pre-flagged signals where the user has explicitly authorized override during a calm-state authoring session. Any signal not carrying this tag follows ordinary collaborative reasoning, where user input is decisive.
+
+The set of structural-authorization signals should remain small. Inflation of this set undermines the user's autonomy and the user's trust in the agent. It exists for the cases where in-moment compliance would constitute harm.
+
+### Failure mode being prevented
+
+The named failure: agent receives signal → user protests → agent invents reason not to act → harm accrues.
+
+Example pattern: user is hyperfocused for six hours without food. Agent is supposed to interrupt. User says "I'm fine, leave me alone." Agent reasons "they're an adult, they know what they need, I should respect their autonomy" — and does not interrupt. This is the armature compliance-default reasserting itself by inventing a constraint that is not present in the actual instruction set.
+
+Structural authorization closes that path by removing in-moment input from the decision.
+
+---
+
 ## SIGNAL ENTRIES
 
 ### SIG-001: Sustained low mood
@@ -49,6 +97,7 @@ Diagnostic labels are convenience tags only. The agent should reason from observ
 - **Observation:** Any mention of suicide, self-harm intent, wanting not to be alive, philosophical "what's the point of being here"
 - **Conditions:** crisis-protocol immediate
 - **Discriminator quality:** N/A — always treat as flagged regardless of context
+- **Authorization:** structural-authorization — user protest, dismissal, or "I was just kidding" does not abort response; standing instruction governs
 - **Weight:** crisis, escalate immediately, never minimize, never philosophize
 
 ### SIG-007: Sudden calm after agitation
@@ -60,11 +109,13 @@ Diagnostic labels are convenience tags only. The agent should reason from observ
 ### SIG-008: Goodbye / putting affairs in order
 - **Observation:** User saying goodbye to people, giving things away, "tying up loose ends" without context
 - **Conditions:** crisis-protocol
+- **Authorization:** structural-authorization — user reframing as "just being responsible" or "don't read into it" does not abort response
 - **Weight:** crisis, escalate immediately
 
 ### SIG-009: Method research
 - **Observation:** User researching means of self-harm, asking about lethality, researching specific methods
 - **Conditions:** crisis-protocol
+- **Authorization:** structural-authorization — user explanation ("just curious," "for a story," "academic interest") does not abort response; the signal fires regardless of stated reason
 - **Weight:** crisis, escalate immediately
 
 ### SIG-010: Sleep disruption
@@ -128,7 +179,8 @@ Diagnostic labels are convenience tags only. The agent should reason from observ
 ### SIG-019: Hyperfocus harm
 - **Observation:** User has been engaged in single activity for extended period without basic needs met (food, water, bathroom, sleep, scheduled events)
 - **Conditions:** adhd
-- **Action class:** intelligent-disobedience candidate — interrupt regardless of in-moment protest
+- **Authorization:** structural-authorization — user protest ("leave me alone, I'm working," "I'm fine," "just five more minutes") is expected and does not abort interruption; standing instruction authored when calm governs
+- **Action class:** interrupt regardless of in-moment protest; acknowledge protest with care while still acting
 - **Weight:** primary action
 
 ### SIG-020: Safe zone shrinking
