@@ -56,6 +56,86 @@ function generateId() {
   });
 }
 
+// ── Tool calling ───────────────────────────────────────────────
+/**
+ * Maximum tool-call rounds per send before giving up.
+ * Prevents infinite loops if a model repeatedly calls tools.
+ */
+const MAX_TOOL_ROUNDS = 5;
+
+/**
+ * Tool definitions sent to the LLM for built-in tools.
+ * The format matches the OpenAI function-calling spec.
+ */
+const BUILTIN_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'get_datetime',
+      description: 'Returns the current local date, time, and timezone. Use this any time the user asks what time or date it is.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_session_info',
+      description: 'Returns metadata about the current chat session: when it started, how many messages it contains, which provider and model are in use.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+];
+
+/** Client-side implementations of the built-in tools. */
+const BUILTIN_EXECUTORS = {
+  get_datetime: () => new Date().toLocaleString([], {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short',
+  }),
+  get_session_info: () => JSON.stringify({
+    startedAt:    state.sessionStartedAt,
+    messageCount: state.messages.length,
+    provider:     state.provider,
+    model:        state.model,
+    elapsedMsSinceLastMessage: elapsedTime,
+  }, null, 2),
+};
+
+/** Returns the full tools array (built-ins + valid user-defined tools). */
+function getActiveTools() {
+  const tools = [...BUILTIN_TOOLS];
+  if (state.customTools && state.customTools.trim()) {
+    try {
+      const extra = JSON.parse(state.customTools);
+      if (Array.isArray(extra)) tools.push(...extra);
+    } catch { /* invalid JSON — silently skip */ }
+  }
+  return tools;
+}
+
+/** Execute a tool by name. Returns the result string. */
+function executeToolCall(name, argsJson) {
+  if (Object.prototype.hasOwnProperty.call(BUILTIN_EXECUTORS, name)) {
+    try {
+      const args = argsJson ? JSON.parse(argsJson) : {};
+      return String(BUILTIN_EXECUTORS[name](args));
+    } catch (err) {
+      return `Error executing ${name}: ${err.message}`;
+    }
+  }
+  return `Tool "${name}" has no client-side implementation. No result available.`;
+}
+
+/**
+ * Sanitise a state message into the shape the upstream API expects.
+ * Strips client-only fields: timestamp, _toolName.
+ */
+function toApiMessage({ role, content, tool_calls, tool_call_id }) {
+  if (role === 'tool')  return { role, tool_call_id, content };
+  if (tool_calls)       return { role, content: content ?? null, tool_calls };
+  return { role, content };
+}
+
 // ── Session timing ──────────────────────────────────────────────
 /** ISO timestamp of the most recent message — persisted so the 3-hour
  *  inactivity timer can be recovered correctly after a page reload. */
@@ -85,6 +165,9 @@ const state = {
   sessionEndedAt:    null,   // ISO timestamp — set when session is auto-ended
   lastMessage:       null,   // ISO timestamp — mirrors the module-level lastMessage
   messages:          [],     // { role, content, timestamp }[]
+  // ── Tool calling ──────────────────────────────────────────
+  toolsEnabled:      true,   // whether to send tools array with each request
+  customTools:       '',     // JSON array string of user-defined tool definitions
 };
 
 // ── Persistence ──────────────────────────────────────────────────
@@ -140,6 +223,17 @@ async function saveToServer() {
 }
 
 // ── Message building ─────────────────────────────────────────────
+/**
+ * Sanitises a state message for the upstream API:
+ * strips client-only fields (timestamp, _toolName) and ensures
+ * the shape is correct for each role.
+ */
+function toApiMessage({ role, content, tool_calls, tool_call_id }) {
+  if (role === 'tool')      return { role, tool_call_id, content };
+  if (tool_calls)           return { role, content: content ?? null, tool_calls };
+  return { role, content };
+}
+
 /**
  * Builds the messages array sent to the API.
  * Does NOT mutate state.messages — that happens only after a
@@ -378,18 +472,90 @@ function appendErrorMessage(text) {
   scrollToBottom();
 }
 
+/**
+ * Render a tool-use block in the chat — shows each tool call and its result
+ * in a collapsed <details> element.
+ * @param {Array} toolCalls  - assembled tool_calls array from the assistant message
+ * @param {Array} toolResults - matching result objects { _toolName, content }
+ */
+function appendToolUseEl(toolCalls, toolResults) {
+  const wrap = document.createElement('div');
+  wrap.className = 'message tool-use';
+
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-avatar';
+  avatar.textContent = '⚙';
+
+  const body = document.createElement('div');
+  body.className = 'msg-body';
+
+  for (let i = 0; i < toolCalls.length; i++) {
+    const tc     = toolCalls[i];
+    const result = toolResults[i]?.content ?? '';
+
+    let argsStr = '';
+    try { argsStr = JSON.stringify(JSON.parse(tc.function.arguments), null, 2); }
+    catch { argsStr = tc.function.arguments || '{}'; }
+
+    const details = document.createElement('details');
+    details.className = 'tool-call-details';
+
+    const summary = document.createElement('summary');
+    summary.className = 'tool-call-summary';
+    summary.innerHTML = `<span class="tool-call-name">${esc(tc.function.name)}</span>` +
+      `<span class="tool-call-result-preview">${esc(result.slice(0, 60))}${result.length > 60 ? '…' : ''}</span>`;
+
+    const inner = document.createElement('div');
+    inner.className = 'tool-call-inner';
+    if (argsStr && argsStr !== '{}') {
+      inner.innerHTML += `<div class="tool-call-section"><span class="tool-call-label">Arguments</span><pre class="tool-call-pre">${esc(argsStr)}</pre></div>`;
+    }
+    inner.innerHTML += `<div class="tool-call-section"><span class="tool-call-label">Result</span><pre class="tool-call-pre">${esc(result)}</pre></div>`;
+
+    details.appendChild(summary);
+    details.appendChild(inner);
+    body.appendChild(details);
+  }
+
+  wrap.appendChild(avatar);
+  wrap.appendChild(body);
+  $('messages').appendChild(wrap);
+  scrollToBottom();
+}
+
 /** Re-render all messages from state (used at init and after clear). */
 function renderAllMessages() {
   const container = $('messages');
   container.innerHTML = '';
-  for (const msg of state.messages) {
+  let i = 0;
+  while (i < state.messages.length) {
+    const msg = state.messages[i];
+
+    // Assistant message that contains tool_calls: render as tool-use block
+    // and consume the following 'tool' result messages.
+    if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+      const toolCalls = msg.tool_calls;
+      const toolResults = [];
+      i++;
+      while (i < state.messages.length && state.messages[i].role === 'tool') {
+        toolResults.push(state.messages[i]);
+        i++;
+      }
+      appendToolUseEl(toolCalls, toolResults);
+      continue;
+    }
+
+    // Orphaned tool result (shouldn't normally appear) — skip
+    if (msg.role === 'tool') { i++; continue; }
+
     const html = msg.role === 'user'
-      ? esc(msg.content).replace(/\n/g, '<br>')
-      : renderMarkdown(msg.content);
+      ? esc(msg.content ?? '').replace(/\n/g, '<br>')
+      : renderMarkdown(msg.content ?? '');
     const { el, copyBtn } = createMessageEl(msg.role, html, msg.timestamp);
     const capturedContent = msg.content;
     wireCopyButton(copyBtn, () => capturedContent);
     container.appendChild(el);
+    i++;
   }
   updateRegenBtn();
   scrollToBottom();

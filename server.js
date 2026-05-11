@@ -38,7 +38,7 @@ const PROVIDER_URLS = {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', async (req, res) => {
-  const { provider, apiKey, model, messages, stream, temperature, max_tokens } = req.body;
+  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice } = req.body;
 
   const url = PROVIDER_URLS[provider];
   if (!url) {
@@ -57,6 +57,8 @@ app.post('/api/chat', async (req, res) => {
   const payload = { model: model.trim(), messages, stream: !!stream };
   if (typeof temperature === 'number') payload.temperature = temperature;
   if (typeof max_tokens === 'number' && max_tokens > 0) payload.max_tokens = max_tokens;
+  if (Array.isArray(tools) && tools.length > 0) payload.tools = tools;
+  if (tool_choice !== undefined) payload.tool_choice = tool_choice;
 
   let upstream;
   try {
