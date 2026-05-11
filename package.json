@@ -1,0 +1,17 @@
+{
+  "name": "proto-familiar",
+  "version": "1.0.0",
+  "description": "Lightweight LLM frontend for z.ai and NanoGPT",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

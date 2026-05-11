@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="Proto-Familiar — lightweight LLM chat frontend">
+  <title>Proto-Familiar</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+
+    <!-- ── Top bar ─────────────────────────────────────────── -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <button id="sidebar-toggle" class="icon-btn" aria-label="Toggle settings panel" title="Settings">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <h1 class="app-title">Proto-Familiar</h1>
+      </div>
+      <div class="topbar-right">
+        <span id="status-badge" class="status-badge" title="Connection status">●</span>
+        <button id="theme-toggle" class="icon-btn" aria-label="Toggle light/dark theme" title="Toggle theme">
+          <svg id="theme-icon-dark" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+          <svg id="theme-icon-light" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- ── App body ──────────────────────────────────────────── -->
+    <div class="app-body" id="app-body">
+
+      <!-- Mobile overlay backdrop -->
+      <div class="sidebar-overlay" id="sidebar-overlay" aria-hidden="true"></div>
+
+      <!-- ── Sidebar / Settings ────────────────────────────── -->
+      <aside class="sidebar" id="sidebar" aria-label="Settings panel">
+
+        <!-- Connection -->
+        <div class="sidebar-section">
+          <h3 class="section-label">Connection</h3>
+
+          <div class="field">
+            <label for="provider-select">Provider</label>
+            <select id="provider-select">
+              <option value="nanogpt">NanoGPT</option>
+              <option value="zai">Z.ai — Standard API</option>
+              <option value="zai-coding">Z.ai — Coding Plan</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="api-key">API Key</label>
+            <div class="input-with-reveal">
+              <input type="password" id="api-key" placeholder="Bearer token…" autocomplete="off" spellcheck="false">
+              <button class="reveal-btn" data-target="api-key" aria-label="Show / hide key" title="Show / hide">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="model-input">Model</label>
+            <input list="model-suggestions" id="model-input" placeholder="e.g. gpt-4o-mini" autocomplete="off" spellcheck="false">
+            <datalist id="model-suggestions"></datalist>
+          </div>
+
+          <div class="field-row">
+            <label for="streaming-toggle">Streaming</label>
+            <input type="checkbox" id="streaming-toggle" checked>
+          </div>
+
+          <div class="field">
+            <label for="temperature">Temperature: <span id="temp-display">0.8</span></label>
+            <input type="range" id="temperature" min="0" max="2" step="0.05" value="0.8">
+          </div>
+
+          <div class="field">
+            <label for="max-tokens">Max Tokens</label>
+            <input type="number" id="max-tokens" value="2048" min="128" max="128000" step="128">
+          </div>
+        </div>
+
+        <!-- System Prompt -->
+        <div class="sidebar-section collapsible" id="section-system">
+          <button class="section-label collapse-toggle" aria-expanded="true" aria-controls="content-system">
+            System Prompt
+            <span class="chevron">▾</span>
+          </button>
+          <div class="section-content" id="content-system">
+            <textarea id="system-prompt" rows="5" placeholder="Core instructions for the AI…"></textarea>
+            <div class="field-actions">
+              <button class="btn-secondary import-btn" data-target="system-prompt">↑ Import file</button>
+              <button class="btn-ghost clear-field-btn" data-target="system-prompt">✕ Clear</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Character Profile -->
+        <div class="sidebar-section collapsible" id="section-char">
+          <button class="section-label collapse-toggle" aria-expanded="true" aria-controls="content-char">
+            Character Profile
+            <span class="chevron">▾</span>
+          </button>
+          <div class="section-content" id="content-char">
+            <textarea id="char-profile" rows="5" placeholder="Name, personality, background, speech patterns…"></textarea>
+            <div class="field-actions">
+              <button class="btn-secondary import-btn" data-target="char-profile">↑ Import file</button>
+              <button class="btn-ghost clear-field-btn" data-target="char-profile">✕ Clear</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- User Profile -->
+        <div class="sidebar-section collapsible" id="section-user">
+          <button class="section-label collapse-toggle" aria-expanded="true" aria-controls="content-user">
+            User Profile
+            <span class="chevron">▾</span>
+          </button>
+          <div class="section-content" id="content-user">
+            <textarea id="user-profile" rows="5" placeholder="Your name, preferences, context the AI should know about you…"></textarea>
+            <div class="field-actions">
+              <button class="btn-secondary import-btn" data-target="user-profile">↑ Import file</button>
+              <button class="btn-ghost clear-field-btn" data-target="user-profile">✕ Clear</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Post-History Prompt -->
+        <div class="sidebar-section collapsible" id="section-posthist">
+          <button class="section-label collapse-toggle" aria-expanded="true" aria-controls="content-posthist">
+            Post-History Prompt
+            <span class="chevron">▾</span>
+          </button>
+          <div class="section-content" id="content-posthist">
+            <p class="field-hint">Injected as a final user message after the conversation history, right before the AI responds. Use for in-character direction or formatting instructions.</p>
+            <textarea id="post-history-prompt" rows="4" placeholder="e.g. [Write {{char}}'s next reply, staying in character.]"></textarea>
+            <div class="field-actions">
+              <button class="btn-secondary import-btn" data-target="post-history-prompt">↑ Import file</button>
+              <button class="btn-ghost clear-field-btn" data-target="post-history-prompt">✕ Clear</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Chat Actions -->
+        <div class="sidebar-section">
+          <h3 class="section-label">Chat</h3>
+          <div class="action-row">
+            <button id="export-chat-btn" class="btn-secondary">↓ Export</button>
+            <button id="clear-chat-btn" class="btn-danger">✕ Clear history</button>
+          </div>
+        </div>
+
+      </aside><!-- /sidebar -->
+
+      <!-- ── Chat pane ──────────────────────────────────────── -->
+      <main class="chat-pane" id="chat-pane">
+
+        <div class="messages-scroller" id="messages-scroller">
+          <div id="messages" role="log" aria-live="polite" aria-label="Conversation"></div>
+          <div id="typing-indicator" class="typing-indicator hidden" aria-label="Assistant is typing">
+            <div class="typing-avatar">A</div>
+            <div class="typing-dots">
+              <span></span><span></span><span></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="input-bar" id="input-bar">
+          <div class="input-wrapper">
+            <textarea
+              id="user-input"
+              rows="1"
+              placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
+              aria-label="Message input"
+            ></textarea>
+          </div>
+          <div class="input-controls">
+            <button id="send-btn" class="btn-send" title="Send (Enter)">Send</button>
+            <button id="regen-btn" class="icon-btn regen-btn" title="Regenerate last response" aria-label="Regenerate" disabled>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.28"/></svg>
+            </button>
+          </div>
+        </div>
+
+      </main><!-- /chat-pane -->
+    </div><!-- /app-body -->
+  </div><!-- /app -->
+
+  <!-- Hidden file input for profile/prompt imports -->
+  <input type="file" id="file-input" accept=".txt,.md,.json" style="display:none" aria-hidden="true">
+
+  <script src="app.js"></script>
+</body>
+</html>

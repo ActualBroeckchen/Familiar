@@ -1,6 +1,41 @@
 # Familiar
 I've decided to make this public while I work on it so others can access the research.
 
+---
+
+## Frontend — Quick Start
+
+A lightweight chat UI for [z.ai](https://api.z.ai) and [NanoGPT](https://nano-gpt.com) that runs locally in your browser.
+
+**Requirements:** Node.js 18 or newer.
+
+```bash
+# 1. Install dependencies (only Express)
+npm install
+
+# 2. Start the server
+npm start
+# → open http://localhost:3000
+```
+
+Open the Settings panel (☰ button), choose your provider, paste your API key, pick a model, and start chatting.
+
+The server proxies all API calls through `localhost:3000/api/chat` — your key never leaves your machine. All settings and chat history are persisted in browser `localStorage`.
+
+| Feature | Notes |
+|---|---|
+| Providers | NanoGPT (OpenAI-compat.) · Z.ai (GLM) |
+| Streaming | SSE streamed responses by default |
+| System prompt | Free-text or import from `.txt`/`.md`/`.json` |
+| Character profile | Injected into system message |
+| User profile | Injected into system message |
+| Post-history prompt | Appended as final user message before AI responds |
+| Export | Markdown `.md` download |
+| Themes | Dark / light toggle |
+| Responsive | Desktop sidebar · Mobile full-screen panel |
+
+---
+
 My idea is to create an agentic caretaker for myself. As you can see I am starting by thoroughly researching different frontends and extensions to try and gleam the best building blocks from each. Most of what you read here is strongly a WIP, very early. I am conceptualising in-depth before going forward with even creating a roadmap.
 
 However, I found some stuff potentially helpful for others. So I've made the repo public already. Have at it.
