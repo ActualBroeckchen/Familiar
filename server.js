@@ -7,8 +7,18 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { mkdirSync, promises as fsp } from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Ensure the logs directory exists next to server.js
+const LOGS_DIR = path.join(__dirname, 'logs');
+mkdirSync(LOGS_DIR, { recursive: true });
+
+// Only allow UUID-shaped session IDs to prevent path traversal
+function isValidSessionId(id) {
+  return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id);
+}
 
 const app = express();
 app.use(express.json({ limit: '4mb' }));
@@ -91,6 +101,77 @@ app.post('/api/chat', async (req, res) => {
     }
   } catch (err) {
     if (!res.writableEnded) res.end();
+  }
+});
+
+// ── Log endpoints ───────────────────────────────────────────────
+
+// POST /api/log — create or overwrite a session log file
+app.post('/api/log', async (req, res) => {
+  const { sessionId, startedAt, endedAt, provider, model, messages } = req.body;
+  if (!isValidSessionId(sessionId))
+    return res.status(400).json({ error: 'Invalid session ID.' });
+  if (!Array.isArray(messages))
+    return res.status(400).json({ error: 'messages must be an array.' });
+
+  const logPath = path.join(LOGS_DIR, `${sessionId}.json`);
+  const data = {
+    sessionId, startedAt, endedAt: endedAt || null, provider, model, messages,
+    updatedAt: new Date().toISOString(),
+  };
+  try {
+    await fsp.writeFile(logPath, JSON.stringify(data, null, 2), 'utf8');
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to write log.' });
+  }
+});
+
+// GET /api/logs — list all sessions (metadata only)
+app.get('/api/logs', async (_req, res) => {
+  try {
+    const files = await fsp.readdir(LOGS_DIR);
+    const sessions = [];
+    for (const f of files) {
+      if (!f.endsWith('.json')) continue;
+      try {
+        const raw = await fsp.readFile(path.join(LOGS_DIR, f), 'utf8');
+        const { sessionId, startedAt, endedAt, updatedAt, provider, model, messages } = JSON.parse(raw);
+        sessions.push({ sessionId, startedAt, endedAt, updatedAt, provider, model,
+          messageCount: Array.isArray(messages) ? messages.length : 0 });
+      } catch { /* skip corrupt files */ }
+    }
+    sessions.sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt));
+    res.json(sessions);
+  } catch {
+    res.json([]);
+  }
+});
+
+// GET /api/logs/:id — retrieve a full session log
+app.get('/api/logs/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!isValidSessionId(id))
+    return res.status(400).json({ error: 'Invalid session ID.' });
+  try {
+    const raw = await fsp.readFile(path.join(LOGS_DIR, `${id}.json`), 'utf8');
+    res.setHeader('Content-Type', 'application/json');
+    res.send(raw);
+  } catch {
+    res.status(404).json({ error: 'Session not found.' });
+  }
+});
+
+// DELETE /api/logs/:id — remove a session log
+app.delete('/api/logs/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!isValidSessionId(id))
+    return res.status(400).json({ error: 'Invalid session ID.' });
+  try {
+    await fsp.unlink(path.join(LOGS_DIR, `${id}.json`));
+    res.json({ ok: true });
+  } catch {
+    res.status(404).json({ error: 'Session not found.' });
   }
 });
 

@@ -147,6 +147,9 @@
           <h3 class="section-label">Chat</h3>
           <div class="action-row">
             <button id="export-chat-btn" class="btn-secondary">↓ Export</button>
+            <button id="logs-btn" class="btn-secondary">☰ Logs</button>
+          </div>
+          <div class="action-row" style="margin-top:6px">
             <button id="clear-chat-btn" class="btn-danger">✕ Clear history</button>
           </div>
         </div>
@@ -189,6 +192,19 @@
 
   <!-- Hidden file input for profile/prompt imports -->
   <input type="file" id="file-input" accept=".txt,.md,.json" style="display:none" aria-hidden="true">
+
+  <!-- Logs modal -->
+  <div class="modal-backdrop hidden" id="logs-modal" role="dialog" aria-modal="true" aria-labelledby="logs-modal-title">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 class="modal-title" id="logs-modal-title">Saved Sessions</h2>
+        <button class="icon-btn modal-close" id="logs-modal-close" aria-label="Close modal">✕</button>
+      </div>
+      <div class="modal-body" id="logs-list">
+        <p class="logs-loading">Loading…</p>
+      </div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>

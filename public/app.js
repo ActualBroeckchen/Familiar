@@ -47,6 +47,27 @@ const PROVIDER_DEFAULT_MODEL = {
   'zai-coding': 'glm-4.7',
 };
 
+// ── ID generation ────────────────────────────────────────────
+function generateId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+
+// ── Session timing ──────────────────────────────────────────────
+/** ISO timestamp of the most recent message — persisted so the 3-hour
+ *  inactivity timer can be recovered correctly after a page reload. */
+let lastMessage       = null;
+/** Milliseconds between the previous message and the most recent user
+ *  send — updated each time the user submits a message. */
+let elapsedTime       = 0;
+/** Handle for the 3-hour auto-end setTimeout. */
+let _sessionTimeoutId = null;
+/** Milliseconds of inactivity before the current session is closed (3 h). */
+const SESSION_IDLE_MS = 3 * 60 * 60 * 1000;
+
 // ── State ────────────────────────────────────────────────────────
 const state = {
   provider:          'nanogpt',
@@ -59,7 +80,11 @@ const state = {
   characterProfile:  '',
   userProfile:       '',
   postHistoryPrompt: '',
-  messages:          [],   // { role: 'user'|'assistant', content: string }[]
+  sessionId:         null,   // UUID, created at init or on clear
+  sessionStartedAt:  null,   // ISO timestamp
+  sessionEndedAt:    null,   // ISO timestamp — set when session is auto-ended
+  lastMessage:       null,   // ISO timestamp — mirrors the module-level lastMessage
+  messages:          [],     // { role, content, timestamp }[]
 };
 
 // ── Persistence ──────────────────────────────────────────────────
@@ -74,6 +99,7 @@ function saveHistory() {
   try {
     localStorage.setItem('pf_history', JSON.stringify(state.messages));
   } catch { /* quota exceeded */ }
+  saveToServer(); // fire-and-forget
 }
 
 function loadPersisted() {
@@ -85,6 +111,32 @@ function loadPersisted() {
     const raw = localStorage.getItem('pf_history');
     if (raw) state.messages = JSON.parse(raw);
   } catch { /* corrupt storage */ }
+  // Ensure a session ID exists
+  if (!state.sessionId) {
+    state.sessionId        = generateId();
+    state.sessionStartedAt = new Date().toISOString();
+    saveSettings();
+  }
+}
+
+// Fire-and-forget — writes the current session to disk via the server.
+// localStorage is the primary store; this is for persistence & log browsing.
+async function saveToServer() {
+  if (!state.sessionId) return;
+  try {
+    await fetch('/api/log', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId:  state.sessionId,
+        startedAt:  state.sessionStartedAt,
+        endedAt:    state.sessionEndedAt,
+        provider:   state.provider,
+        model:      state.model,
+        messages:   state.messages,
+      }),
+    });
+  } catch { /* non-critical */ }
 }
 
 // ── Message building ─────────────────────────────────────────────
@@ -224,7 +276,14 @@ function renderInlineText(text) {
 
 // ── DOM helpers ──────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
-
+function formatTimestamp(iso) {
+  if (!iso) return '';
+  const d   = new Date(iso);
+  const now = new Date();
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === now.toDateString()) return time;
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + time;
+}
 function scrollToBottom() {
   const scroller = $('messages-scroller');
   scroller.scrollTop = scroller.scrollHeight;
@@ -245,7 +304,7 @@ function setStatus(type) {
  * Create and return a message DOM element.
  * Returns { el, bubble } so callers can update the bubble during streaming.
  */
-function createMessageEl(role, htmlContent) {
+function createMessageEl(role, htmlContent, timestamp) {
   const el = document.createElement('div');
   el.className = `message ${role}`;
 
@@ -269,12 +328,22 @@ function createMessageEl(role, htmlContent) {
   // Will be wired up by callers who know the raw text
   actions.appendChild(copyBtn);
 
+  // Timestamp
+  const timeEl = document.createElement('time');
+  timeEl.className = 'msg-time';
+  if (timestamp) {
+    timeEl.setAttribute('datetime', timestamp);
+    timeEl.textContent = formatTimestamp(timestamp);
+    timeEl.title = new Date(timestamp).toLocaleString();
+  }
+
   body.appendChild(bubble);
   body.appendChild(actions);
+  body.appendChild(timeEl);
   el.appendChild(avatar);
   el.appendChild(body);
 
-  return { el, bubble, copyBtn };
+  return { el, bubble, copyBtn, timeEl };
 }
 
 function wireCopyButton(btn, getText) {
@@ -289,18 +358,18 @@ function wireCopyButton(btn, getText) {
   });
 }
 
-function appendUserMessage(text) {
-  const { el, copyBtn } = createMessageEl('user', esc(text).replace(/\n/g, '<br>'));
+function appendUserMessage(text, timestamp) {
+  const { el, copyBtn } = createMessageEl('user', esc(text).replace(/\n/g, '<br>'), timestamp);
   wireCopyButton(copyBtn, () => text);
   $('messages').appendChild(el);
   scrollToBottom();
 }
 
-function appendAssistantShell() {
-  const { el, bubble, copyBtn } = createMessageEl('assistant', '');
+function appendAssistantShell(timestamp) {
+  const { el, bubble, copyBtn, timeEl } = createMessageEl('assistant', '', timestamp);
   $('messages').appendChild(el);
   scrollToBottom();
-  return { el, bubble, copyBtn };
+  return { el, bubble, copyBtn, timeEl };
 }
 
 function appendErrorMessage(text) {
@@ -317,7 +386,7 @@ function renderAllMessages() {
     const html = msg.role === 'user'
       ? esc(msg.content).replace(/\n/g, '<br>')
       : renderMarkdown(msg.content);
-    const { el, copyBtn } = createMessageEl(msg.role, html);
+    const { el, copyBtn } = createMessageEl(msg.role, html, msg.timestamp);
     const capturedContent = msg.content;
     wireCopyButton(copyBtn, () => capturedContent);
     container.appendChild(el);
@@ -353,19 +422,29 @@ async function sendMessage(userInput) {
     abortController = null;
   }
 
-  const apiMessages = buildApiMessages(userInput);
+  // Update session timing: measure gap since last message, refresh lastMessage,
+  // and reset the 3-hour inactivity countdown.
+  const now = new Date().toISOString();
+  elapsedTime       = lastMessage ? (Date.now() - new Date(lastMessage).getTime()) : 0;
+  lastMessage       = now;
+  state.lastMessage = now;
+  saveSettings();
+  resetSessionTimeout();
+
+  const userTimestamp = now;
+  const apiMessages   = buildApiMessages(userInput);
 
   // Optimistic UI
-  appendUserMessage(userInput);
+  appendUserMessage(userInput, userTimestamp);
   setInputLocked(true);
   setTyping(true);
   setStatus('busy');
 
   try {
     if (state.streaming) {
-      await doStreamingRequest(apiMessages, userInput);
+      await doStreamingRequest(apiMessages, userInput, userTimestamp);
     } else {
-      await doNonStreamingRequest(apiMessages, userInput);
+      await doNonStreamingRequest(apiMessages, userInput, userTimestamp);
     }
     setStatus('ok');
   } catch (err) {
@@ -381,7 +460,7 @@ async function sendMessage(userInput) {
   }
 }
 
-async function doStreamingRequest(apiMessages, userInput) {
+async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
   abortController = new AbortController();
 
   const response = await fetch('/api/chat', {
@@ -406,8 +485,9 @@ async function doStreamingRequest(apiMessages, userInput) {
     throw new Error(msg);
   }
 
+  const assistantTimestamp = new Date().toISOString();
   setTyping(false);
-  const { bubble, copyBtn } = appendAssistantShell();
+  const { bubble, copyBtn, timeEl } = appendAssistantShell(assistantTimestamp);
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -440,14 +520,14 @@ async function doStreamingRequest(apiMessages, userInput) {
   }
 
   // Commit to state only after full response
-  state.messages.push({ role: 'user',      content: userInput });
-  state.messages.push({ role: 'assistant', content: fullContent });
+  state.messages.push({ role: 'user',      content: userInput,    timestamp: userTimestamp });
+  state.messages.push({ role: 'assistant', content: fullContent,  timestamp: assistantTimestamp });
   saveHistory();
   wireCopyButton(copyBtn, () => fullContent);
   updateRegenBtn();
 }
 
-async function doNonStreamingRequest(apiMessages, userInput) {
+async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
   abortController = new AbortController();
 
   const response = await fetch('/api/chat', {
@@ -465,6 +545,7 @@ async function doNonStreamingRequest(apiMessages, userInput) {
     }),
   });
 
+  const assistantTimestamp = new Date().toISOString();
   setTyping(false);
 
   const data = await response.json();
@@ -473,12 +554,12 @@ async function doNonStreamingRequest(apiMessages, userInput) {
   }
 
   const content = data.choices?.[0]?.message?.content ?? '';
-  const { bubble, copyBtn } = appendAssistantShell();
+  const { bubble, copyBtn } = appendAssistantShell(assistantTimestamp);
   bubble.innerHTML = renderMarkdown(content);
   scrollToBottom();
 
-  state.messages.push({ role: 'user',      content: userInput });
-  state.messages.push({ role: 'assistant', content });
+  state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp });
+  state.messages.push({ role: 'assistant', content,            timestamp: assistantTimestamp });
   saveHistory();
   wireCopyButton(copyBtn, () => content);
   updateRegenBtn();
@@ -488,23 +569,24 @@ async function doNonStreamingRequest(apiMessages, userInput) {
 async function regenerateLastResponse() {
   if (state.messages.length < 2) return;
 
-  // Pop last assistant + user turn
+  // Pop last assistant + user turn, preserve the original user timestamp
   state.messages.pop();
-  const { content: lastUserInput } = state.messages.pop();
+  const { content: lastUserInput, timestamp: origUserTimestamp } = state.messages.pop();
   saveHistory();
   renderAllMessages();
 
-  const apiMessages = buildApiMessages(lastUserInput);
-  appendUserMessage(lastUserInput);
+  const userTimestamp = origUserTimestamp || new Date().toISOString();
+  const apiMessages   = buildApiMessages(lastUserInput);
+  appendUserMessage(lastUserInput, userTimestamp);
   setInputLocked(true);
   setTyping(true);
   setStatus('busy');
 
   try {
     if (state.streaming) {
-      await doStreamingRequest(apiMessages, lastUserInput);
+      await doStreamingRequest(apiMessages, lastUserInput, userTimestamp);
     } else {
-      await doNonStreamingRequest(apiMessages, lastUserInput);
+      await doNonStreamingRequest(apiMessages, lastUserInput, userTimestamp);
     }
     setStatus('ok');
   } catch (err) {
@@ -584,8 +666,9 @@ function exportChat() {
   md += `---\n\n`;
 
   for (const msg of state.messages) {
-    const label = msg.role === 'user' ? '**User**' : '**Assistant**';
-    md += `${label}\n\n${msg.content}\n\n---\n\n`;
+    const label    = msg.role === 'user' ? '**User**' : '**Assistant**';
+    const tsStr    = msg.timestamp ? ` _(${new Date(msg.timestamp).toLocaleString()})_` : '';
+    md += `${label}${tsStr}\n\n${msg.content}\n\n---\n\n`;
   }
 
   const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
@@ -685,10 +768,201 @@ function closeSidebarOnMobile() {
   $('sidebar-overlay').classList.remove('visible');
 }
 
-// ── Init ─────────────────────────────────────────────────────────
+// ── Session management ───────────────────────────────────────────
+
+/** Restart the 3-hour inactivity countdown from zero. */
+function resetSessionTimeout() {
+  if (_sessionTimeoutId) clearTimeout(_sessionTimeoutId);
+  _sessionTimeoutId = setTimeout(autoEndSession, SESSION_IDLE_MS);
+}
+
+/**
+ * Start a fresh session: generate new UUID, clear messages.
+ * The old session's log file on the server is preserved untouched.
+ */
+function startNewSession() {
+  if (_sessionTimeoutId) { clearTimeout(_sessionTimeoutId); _sessionTimeoutId = null; }
+  state.sessionId        = generateId();
+  state.sessionStartedAt = new Date().toISOString();
+  state.sessionEndedAt   = null;
+  state.messages         = [];
+  lastMessage            = null;
+  state.lastMessage      = null;
+  elapsedTime            = 0;
+  saveSettings();
+  try { localStorage.setItem('pf_history', JSON.stringify([])); } catch { /* ignore */ }
+  $('messages').innerHTML = '';
+  updateRegenBtn();
+}
+
+/**
+ * Called when SESSION_IDLE_MS elapses since lastMessage.
+ * Stamps the current session with endedAt, saves it, then starts a new session.
+ */
+async function autoEndSession() {
+  _sessionTimeoutId = null;
+  if (state.messages.length) {
+    state.sessionEndedAt = new Date().toISOString();
+    saveSettings();
+    await saveToServer();
+  }
+  startNewSession();
+  showSessionEndedNotice();
+}
+
+function showSessionEndedNotice() {
+  const toast = document.createElement('div');
+  toast.className = 'session-toast';
+  toast.textContent = 'Session ended after 3 hours of inactivity. A new session has started.';
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('session-toast-show'));
+  setTimeout(() => {
+    toast.classList.remove('session-toast-show');
+    setTimeout(() => toast.remove(), 400);
+  }, 4500);
+}
+
+// ── Logs modal ──────────────────────────────────────────────
+function openLogsModal() {
+  $('logs-modal').classList.remove('hidden');
+  refreshLogsList();
+}
+
+function closeLogsModal() {
+  $('logs-modal').classList.add('hidden');
+}
+
+async function refreshLogsList() {
+  const container = $('logs-list');
+  container.innerHTML = '<p class="logs-loading">Loading…</p>';
+  try {
+    const res      = await fetch('/api/logs');
+    const sessions = await res.json();
+
+    if (!sessions.length) {
+      container.innerHTML = '<p class="logs-empty">No saved sessions yet.</p>';
+      return;
+    }
+
+    container.innerHTML = '';
+    for (const s of sessions) {
+      const isActive  = s.sessionId === state.sessionId;
+
+      // Build human-readable date/time label: "May 11, 2026, 14:30 → 17:45"
+      const startDate = s.startedAt ? new Date(s.startedAt) : null;
+      const endDate   = s.endedAt   ? new Date(s.endedAt)   : null;
+      const startStr  = startDate
+        ? startDate.toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+        : '—';
+      let endStr;
+      if (!endDate) {
+        endStr = isActive ? 'ongoing' : '—';
+      } else if (startDate && endDate.toDateString() === startDate.toDateString()) {
+        endStr = endDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      } else {
+        endStr = endDate.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      }
+
+      const modelStr  = [s.provider, s.model].filter(Boolean).join(' / ');
+      const countStr  = `${s.messageCount} msg${s.messageCount !== 1 ? 's' : ''}`;
+
+      const row = document.createElement('div');
+      row.className = 'log-row' + (isActive ? ' log-row-active' : '');
+
+      row.innerHTML = `
+        <div class="log-info">
+          <div class="log-date">${esc(startStr)} → ${esc(endStr)}${isActive ? ' <span class="log-current">(current)</span>' : ''}</div>
+          <div class="log-meta">${esc(modelStr)} · ${esc(countStr)}</div>
+        </div>
+        <div class="log-actions"></div>
+      `;
+
+      const actions = row.querySelector('.log-actions');
+
+      if (!isActive) {
+        const loadBtn = document.createElement('button');
+        loadBtn.className = 'btn-secondary log-action-btn';
+        loadBtn.textContent = 'Load';
+        loadBtn.addEventListener('click', () => loadSession(s.sessionId));
+        actions.appendChild(loadBtn);
+      }
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn-ghost log-action-btn';
+      delBtn.textContent = 'Delete';
+      delBtn.addEventListener('click', async () => {
+        if (!confirm('Delete this session log? This cannot be undone.')) return;
+        await fetch(`/api/logs/${s.sessionId}`, { method: 'DELETE' });
+        refreshLogsList();
+      });
+      actions.appendChild(delBtn);
+
+      container.appendChild(row);
+    }
+  } catch (err) {
+    container.innerHTML = `<p class="logs-error">⚠ Failed to load sessions: ${esc(String(err.message))}</p>`;
+  }
+}
+
+async function loadSession(sessionId) {
+  try {
+    const res  = await fetch(`/api/logs/${sessionId}`);
+    const data = await res.json();
+    if (!res.ok || !Array.isArray(data.messages)) throw new Error(data.error || 'Invalid session data');
+
+    // Cancel any running timeout before switching sessions
+    if (_sessionTimeoutId) { clearTimeout(_sessionTimeoutId); _sessionTimeoutId = null; }
+
+    state.messages         = data.messages;
+    state.sessionId        = sessionId;
+    state.sessionStartedAt = data.startedAt || new Date().toISOString();
+    state.sessionEndedAt   = null; // treat loaded session as resumed/active
+
+    const lastMsg   = state.messages[state.messages.length - 1];
+    lastMessage         = lastMsg?.timestamp || null;
+    state.lastMessage   = lastMessage;
+    elapsedTime         = 0;
+    saveSettings();
+    try { localStorage.setItem('pf_history', JSON.stringify(state.messages)); } catch { /* ignore */ }
+
+    // Resume inactivity timer with remaining time (if session not already stale)
+    if (lastMessage) {
+      const idleMs = Date.now() - new Date(lastMessage).getTime();
+      if (idleMs < SESSION_IDLE_MS) {
+        _sessionTimeoutId = setTimeout(autoEndSession, SESSION_IDLE_MS - idleMs);
+      }
+    }
+
+    renderAllMessages();
+    closeLogsModal();
+  } catch (err) {
+    alert(`Failed to load session: ${err.message}`);
+  }
+}
+
+// ── Init ────────────────────────────────────────────────────────────
 function init() {
   // Restore persisted state
   loadPersisted();
+
+  // Restore session timing from persisted state and check for stale session.
+  // This handles the case where the tab was closed before the 3-hour timer fired.
+  lastMessage = state.lastMessage || null;
+  if (lastMessage) {
+    const idleMs = Date.now() - new Date(lastMessage).getTime();
+    if (idleMs >= SESSION_IDLE_MS) {
+      // Session expired while the tab was closed — finalize silently, then reset
+      if (state.messages.length && !state.sessionEndedAt) {
+        state.sessionEndedAt = lastMessage; // approximate — last known activity
+        saveSettings();
+        saveToServer(); // fire-and-forget
+      }
+      startNewSession();
+    } else {
+      // Resume the countdown with however much time remains
+      _sessionTimeoutId = setTimeout(autoEndSession, SESSION_IDLE_MS - idleMs);
+    }
+  }
 
   // Apply saved theme
   const savedTheme = localStorage.getItem('pf_theme') || 'dark';
@@ -757,17 +1031,21 @@ function init() {
 
   // ── Clear history ────────────────────────────────────────────
   $('clear-chat-btn').addEventListener('click', () => {
-    if (!state.messages.length || confirm('Clear all chat history?')) {
-      state.messages = [];
-      saveHistory();
-      $('messages').innerHTML = '';
-      updateRegenBtn();
+    if (!state.messages.length || confirm('Clear all chat history? The current session log will be kept.')) {
+      startNewSession();
       setStatus('');
     }
   });
 
   // ── Export chat ──────────────────────────────────────────────
   $('export-chat-btn').addEventListener('click', exportChat);
+
+  // ── Logs modal ────────────────────────────────────────────
+  $('logs-btn').addEventListener('click', openLogsModal);
+  $('logs-modal-close').addEventListener('click', closeLogsModal);
+  $('logs-modal').addEventListener('click', e => {
+    if (e.target === $('logs-modal')) closeLogsModal();
+  });
 
   // ── Import buttons ───────────────────────────────────────────
   document.querySelectorAll('.import-btn').forEach(btn => {
