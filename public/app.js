@@ -939,9 +939,13 @@ function exportChat() {
   md += `---\n\n`;
 
   for (const msg of state.messages) {
-    const label    = msg.role === 'user' ? '**User**' : '**Assistant**';
-    const tsStr    = msg.timestamp ? ` _(${new Date(msg.timestamp).toLocaleString()})_` : '';
-    md += `${label}${tsStr}\n\n${msg.content}\n\n---\n\n`;
+    // Skip tool-call plumbing messages (role=tool and assistant tool_call turns)
+    if (msg.role === 'tool') continue;
+    if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) continue;
+
+    const label = msg.role === 'user' ? '**User**' : '**Assistant**';
+    const tsStr = msg.timestamp ? ` _(${new Date(msg.timestamp).toLocaleString()})_` : '';
+    md += `${label}${tsStr}\n\n${msg.content ?? ''}\n\n---\n\n`;
   }
 
   const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
