@@ -142,6 +142,29 @@
           </div>
         </div>
 
+        <!-- Tools -->
+        <div class="sidebar-section collapsible collapsed" id="section-tools">
+          <button class="section-label collapse-toggle" aria-expanded="false" aria-controls="content-tools">
+            Tools
+            <span class="chevron">▾</span>
+          </button>
+          <div class="section-content" id="content-tools">
+            <div class="field-row">
+              <label for="tools-enabled">Enable tool use</label>
+              <input type="checkbox" id="tools-enabled" checked>
+            </div>
+            <p class="field-hint">Built-in tools always available: <code>get_datetime</code>, <code>get_session_info</code></p>
+            <div class="field">
+              <label for="custom-tools">Custom tools <span class="label-hint">(JSON array)</span></label>
+              <textarea id="custom-tools" rows="5" spellcheck="false" placeholder='[{"type":"function","function":{"name":"my_tool","description":"...","parameters":{"type":"object","properties":{}}}}]'></textarea>
+            </div>
+            <div class="field-actions">
+              <button class="btn-secondary import-btn" data-target="custom-tools">↑ Import file</button>
+              <button class="btn-ghost clear-field-btn" data-target="custom-tools">✕ Clear</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Chat Actions -->
         <div class="sidebar-section">
           <h3 class="section-label">Chat</h3>

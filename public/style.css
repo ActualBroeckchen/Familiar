@@ -916,6 +916,105 @@ button { cursor: pointer; font-family: var(--font); }
 
 .logs-error { color: var(--error-color); }
 
+/* ── Tool-use messages ───────────────────────────────────────── */
+.message.tool-use {
+  align-self: stretch;
+  max-width: 100%;
+  opacity: 0.88;
+}
+
+.message.tool-use .msg-avatar {
+  background: var(--border);
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+
+.message.tool-use .msg-body {
+  flex: 1;
+}
+
+.tool-call-details {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.tool-call-details:last-child { margin-bottom: 0; }
+
+.tool-call-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  cursor: pointer;
+  background: var(--surface-raise);
+  font-size: 0.8rem;
+  list-style: none;
+  user-select: none;
+}
+
+.tool-call-summary::-webkit-details-marker { display: none; }
+
+.tool-call-summary::before {
+  content: '▶';
+  font-size: 0.6rem;
+  color: var(--text-dim);
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+
+.tool-call-details[open] .tool-call-summary::before {
+  transform: rotate(90deg);
+}
+
+.tool-call-name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.tool-call-result-preview {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+.tool-call-inner {
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg);
+}
+
+.tool-call-section { display: flex; flex-direction: column; gap: 3px; }
+
+.tool-call-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+
+.tool-call-pre {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--surface-raise);
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  font-family: var(--font-mono);
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
 /* ── Session-end toast ───────────────────────────────────────── */
 .session-toast {
   position: fixed;

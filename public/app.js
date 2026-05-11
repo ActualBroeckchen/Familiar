@@ -627,108 +627,215 @@ async function sendMessage(userInput) {
 }
 
 async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
-  abortController = new AbortController();
+  const activeTools     = state.toolsEnabled ? getActiveTools() : [];
+  const pendingMsgs     = []; // tool_call + tool_result messages accumulated across rounds
+  let   currentMsgs     = apiMessages;
 
-  const response = await fetch('/api/chat', {
-    method: 'POST',
-    signal: abortController.signal,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      provider:     state.provider,
-      apiKey:       state.apiKey,
-      model:        state.model,
-      messages:     apiMessages,
-      stream:       true,
-      temperature:  state.temperature,
-      max_tokens:   state.maxTokens,
-    }),
-  });
+  for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+    abortController = new AbortController();
 
-  if (!response.ok) {
-    const body = await response.text();
-    let msg = `API error ${response.status}`;
-    try { msg = JSON.parse(body).error || msg; } catch { /* non-JSON error body */ }
-    throw new Error(msg);
-  }
+    const extraPayload = activeTools.length > 0
+      ? { tools: activeTools, tool_choice: 'auto' }
+      : {};
 
-  const assistantTimestamp = new Date().toISOString();
-  setTyping(false);
-  const { bubble, copyBtn, timeEl } = appendAssistantShell(assistantTimestamp);
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      signal: abortController.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider:    state.provider,
+        apiKey:      state.apiKey,
+        model:       state.model,
+        messages:    currentMsgs,
+        stream:      true,
+        temperature: state.temperature,
+        max_tokens:  state.maxTokens,
+        ...extraPayload,
+      }),
+    });
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let fullContent = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() ?? '';   // Keep incomplete final line
-
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const data = line.slice(6).trim();
-      if (data === '[DONE]') continue;
-
-      try {
-        const parsed = JSON.parse(data);
-        const delta = parsed.choices?.[0]?.delta?.content;
-        if (typeof delta === 'string') {
-          fullContent += delta;
-          bubble.innerHTML = renderMarkdown(fullContent);
-          scrollToBottom();
-        }
-      } catch { /* malformed chunk — ignore */ }
+    if (!response.ok) {
+      const body = await response.text();
+      let msg = `API error ${response.status}`;
+      try { msg = JSON.parse(body).error || msg; } catch { /* non-JSON */ }
+      throw new Error(msg);
     }
-  }
 
-  // Commit to state only after full response
-  state.messages.push({ role: 'user',      content: userInput,    timestamp: userTimestamp });
-  state.messages.push({ role: 'assistant', content: fullContent,  timestamp: assistantTimestamp });
-  saveHistory();
-  wireCopyButton(copyBtn, () => fullContent);
-  updateRegenBtn();
+    const reader  = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer       = '';
+    let fullContent  = '';
+    let toolCallsAcc = {};  // index → {id, type, function:{name,arguments}}
+    let finishReason = null;
+    let shell        = null; // assistant bubble, created lazily on first content delta
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const raw = line.slice(6).trim();
+        if (raw === '[DONE]') continue;
+
+        try {
+          const parsed = JSON.parse(raw);
+          const choice = parsed.choices?.[0];
+          const delta  = choice?.delta;
+          if (choice?.finish_reason) finishReason = choice.finish_reason;
+
+          // Content delta
+          if (typeof delta?.content === 'string' && delta.content.length > 0) {
+            if (!shell) {
+              setTyping(false);
+              shell = appendAssistantShell(new Date().toISOString());
+            }
+            fullContent += delta.content;
+            shell.bubble.innerHTML = renderMarkdown(fullContent);
+            scrollToBottom();
+          }
+
+          // Tool-call deltas
+          for (const tc of (delta?.tool_calls ?? [])) {
+            const acc = (toolCallsAcc[tc.index] ??= { id: '', type: 'function', function: { name: '', arguments: '' } });
+            if (tc.id)                    acc.id                   += tc.id;
+            if (tc.function?.name)        acc.function.name        += tc.function.name;
+            if (tc.function?.arguments)   acc.function.arguments   += tc.function.arguments;
+          }
+        } catch { /* malformed chunk */ }
+      }
+    }
+
+    // ── Tool-call round ──────────────────────────────────────────
+    if (finishReason === 'tool_calls' && round < MAX_TOOL_ROUNDS) {
+      const toolCalls  = Object.values(toolCallsAcc);
+      const roundTs    = new Date().toISOString();
+      const toolResults = toolCalls.map(tc => ({
+        role:         'tool',
+        tool_call_id: tc.id,
+        content:      executeToolCall(tc.function.name, tc.function.arguments),
+        timestamp:    roundTs,
+        _toolName:    tc.function.name,
+      }));
+
+      // Record in pending (for state.messages commit at the end)
+      pendingMsgs.push({ role: 'assistant', content: fullContent || null, tool_calls: toolCalls, timestamp: roundTs });
+      pendingMsgs.push(...toolResults);
+
+      // Show compact tool-use block in chat
+      setTyping(false);
+      appendToolUseEl(toolCalls, toolResults);
+      setTyping(true);
+
+      // Extend apiMessages for next round
+      currentMsgs = [
+        ...currentMsgs,
+        { role: 'assistant', content: fullContent || null, tool_calls: toolCalls },
+        ...toolResults.map(({ timestamp: _t, _toolName: _n, ...m }) => m),
+      ];
+      continue;
+    }
+
+    // ── Final response ───────────────────────────────────────────
+    if (!shell) {
+      setTyping(false);
+      shell = appendAssistantShell(new Date().toISOString());
+    }
+    const assistantTimestamp = shell.timeEl?.getAttribute('datetime') || new Date().toISOString();
+
+    state.messages.push({ role: 'user',      content: userInput,   timestamp: userTimestamp });
+    state.messages.push(...pendingMsgs);
+    state.messages.push({ role: 'assistant', content: fullContent, timestamp: assistantTimestamp });
+    saveHistory();
+    wireCopyButton(shell.copyBtn, () => fullContent);
+    updateRegenBtn();
+    break;
+  }
 }
 
 async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
-  abortController = new AbortController();
+  const activeTools = state.toolsEnabled ? getActiveTools() : [];
+  const pendingMsgs = [];
+  let   currentMsgs = apiMessages;
 
-  const response = await fetch('/api/chat', {
-    method: 'POST',
-    signal: abortController.signal,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      provider:    state.provider,
-      apiKey:      state.apiKey,
-      model:       state.model,
-      messages:    apiMessages,
-      stream:      false,
-      temperature: state.temperature,
-      max_tokens:  state.maxTokens,
-    }),
-  });
+  for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+    abortController = new AbortController();
 
-  const assistantTimestamp = new Date().toISOString();
-  setTyping(false);
+    const extraPayload = activeTools.length > 0
+      ? { tools: activeTools, tool_choice: 'auto' }
+      : {};
 
-  const data = await response.json();
-  if (!response.ok || data.error) {
-    throw new Error(data.error || `API error ${response.status}`);
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      signal: abortController.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider:    state.provider,
+        apiKey:      state.apiKey,
+        model:       state.model,
+        messages:    currentMsgs,
+        stream:      false,
+        temperature: state.temperature,
+        max_tokens:  state.maxTokens,
+        ...extraPayload,
+      }),
+    });
+
+    const roundTs = new Date().toISOString();
+    setTyping(false);
+
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      throw new Error(data.error || `API error ${response.status}`);
+    }
+
+    const choice      = data.choices?.[0];
+    const message     = choice?.message;
+    const finishReason = choice?.finish_reason;
+
+    // ── Tool-call round ──────────────────────────────────────────
+    if (finishReason === 'tool_calls' && Array.isArray(message?.tool_calls) && round < MAX_TOOL_ROUNDS) {
+      const toolCalls   = message.tool_calls;
+      const toolResults = toolCalls.map(tc => ({
+        role:         'tool',
+        tool_call_id: tc.id,
+        content:      executeToolCall(tc.function.name, tc.function.arguments),
+        timestamp:    roundTs,
+        _toolName:    tc.function.name,
+      }));
+
+      pendingMsgs.push({ role: 'assistant', content: message.content || null, tool_calls: toolCalls, timestamp: roundTs });
+      pendingMsgs.push(...toolResults);
+
+      appendToolUseEl(toolCalls, toolResults);
+      setTyping(true);
+
+      currentMsgs = [
+        ...currentMsgs,
+        { role: 'assistant', content: message.content || null, tool_calls: toolCalls },
+        ...toolResults.map(({ timestamp: _t, _toolName: _n, ...m }) => m),
+      ];
+      continue;
+    }
+
+    // ── Final response ───────────────────────────────────────────
+    const content = message?.content ?? '';
+    const { bubble, copyBtn } = appendAssistantShell(roundTs);
+    bubble.innerHTML = renderMarkdown(content);
+    scrollToBottom();
+
+    state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp });
+    state.messages.push(...pendingMsgs);
+    state.messages.push({ role: 'assistant', content,            timestamp: roundTs });
+    saveHistory();
+    wireCopyButton(copyBtn, () => content);
+    updateRegenBtn();
+    break;
   }
-
-  const content = data.choices?.[0]?.message?.content ?? '';
-  const { bubble, copyBtn } = appendAssistantShell(assistantTimestamp);
-  bubble.innerHTML = renderMarkdown(content);
-  scrollToBottom();
-
-  state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp });
-  state.messages.push({ role: 'assistant', content,            timestamp: assistantTimestamp });
-  saveHistory();
-  wireCopyButton(copyBtn, () => content);
-  updateRegenBtn();
 }
 
 // ── Regenerate ───────────────────────────────────────────────────
@@ -861,6 +968,8 @@ function readSettingsFromUI() {
   state.characterProfile  = $('char-profile').value;
   state.userProfile       = $('user-profile').value;
   state.postHistoryPrompt = $('post-history-prompt').value;
+  state.toolsEnabled      = $('tools-enabled').checked;
+  state.customTools       = $('custom-tools').value;
   saveSettings();
 }
 
@@ -876,6 +985,8 @@ function writeSettingsToUI() {
   $('char-profile').value       = state.characterProfile;
   $('user-profile').value       = state.userProfile;
   $('post-history-prompt').value = state.postHistoryPrompt;
+  $('tools-enabled').checked    = state.toolsEnabled ?? true;
+  $('custom-tools').value       = state.customTools ?? '';
   refreshModelSuggestions(state.provider);
 }
 
@@ -1143,7 +1254,7 @@ function init() {
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
     'temperature', 'max-tokens', 'system-prompt', 'char-profile',
-    'user-profile', 'post-history-prompt',
+    'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
   ];
 
   settingsIds.forEach(id => {
