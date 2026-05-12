@@ -24,6 +24,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENTITY_CORE_ENTRY = process.env.ENTITY_CORE_PATH
   ?? path.resolve(__dirname, '../entity-core-alpha/src/mod.ts');
 
+// Project root of entity-core (parent of src/).
+// entity-core resolves its ./data directory relative to cwd, so we must
+// start it from its own root, not from wherever node server.js was launched.
+const ENTITY_CORE_ROOT = path.dirname(path.dirname(ENTITY_CORE_ENTRY));
+
 /** @type {import('@modelcontextprotocol/sdk/client/index.js').Client | null} */
 let mcpClient = null;
 
@@ -47,6 +52,7 @@ async function connect() {
   const transport = new StdioClientTransport({
     command: 'deno',
     args: ['run', '-A', '--unstable-cron', ENTITY_CORE_ENTRY],
+    cwd: ENTITY_CORE_ROOT,
   });
 
   const client = new Client(
@@ -136,8 +142,10 @@ export async function enrich(userMessage) {
   if (!mcpClient) return '';
 
   try {
-    // Fire all three queries in parallel
-    const [idResult, memResult, graphResult] = await Promise.all([
+    // Fire all three queries in parallel but independently — a failure in
+    // memory_search or graph_node_search must not prevent identity from being
+    // injected. Promise.allSettled never rejects.
+    const [idSettled, memSettled, graphSettled] = await Promise.allSettled([
       mcpClient.callTool({ name: 'identity_get_all', arguments: {} }),
       mcpClient.callTool({
         name: 'memory_search',
@@ -148,6 +156,14 @@ export async function enrich(userMessage) {
         arguments: { query: userMessage, limit: 10, minScore: 0.3 },
       }),
     ]);
+
+    if (idSettled.status    === 'rejected') console.error('[thalamus] identity_get_all failed:', idSettled.reason?.message ?? idSettled.reason);
+    if (memSettled.status   === 'rejected') console.error('[thalamus] memory_search failed:',    memSettled.reason?.message ?? memSettled.reason);
+    if (graphSettled.status === 'rejected') console.error('[thalamus] graph_node_search failed:', graphSettled.reason?.message ?? graphSettled.reason);
+
+    const idResult    = idSettled.status    === 'fulfilled' ? idSettled.value    : null;
+    const memResult   = memSettled.status   === 'fulfilled' ? memSettled.value   : null;
+    const graphResult = graphSettled.status === 'fulfilled' ? graphSettled.value : null;
 
     // ── Identity ──────────────────────────────────────────────────────────
     const id = parseToolText(idResult, {});
@@ -241,6 +257,12 @@ export async function enrich(userMessage) {
     if (custContent) sections.push(`---\nCustom files (from identity/custom/ directory):\n\n${custContent}`);
     if (memLines)    sections.push(`---\nRelevant Memories via RAG:\n\n${memLines}`);
     if (graphLines)  sections.push(`---\nRelevant Knowledge from Graph:\n${graphLines}`);
+
+    if (sections.length === 0) {
+      console.warn('[thalamus] enrich() produced no content — identity files may be empty and no memories found');
+    } else {
+      console.log(`[thalamus] enrich() injecting ${sections.length} section(s), ~${sections.join('\n').length} chars`);
+    }
 
     return sections.join('\n');
   } catch (err) {
