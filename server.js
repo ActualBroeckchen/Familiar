@@ -126,6 +126,40 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/debug-prompt
+ * Body: { messages }
+ * Returns the full message array that would be sent to the LLM for a given
+ * messages payload — including entity-core enrichment prepended to the system
+ * message. Does NOT call any upstream LLM.
+ */
+app.post('/api/debug-prompt', async (req, res) => {
+  const { messages } = req.body;
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: 'messages array is required.' });
+  }
+
+  const lastUser = [...messages].reverse().find(m => m.role === 'user');
+  const userText = typeof lastUser?.content === 'string'
+    ? lastUser.content
+    : ((lastUser?.content ?? []).find(c => c.type === 'text')?.text ?? '');
+  const entityContext = await enrich(userText);
+
+  let enrichedMessages = messages;
+  if (entityContext) {
+    const sysIdx = messages.findIndex(m => m.role === 'system');
+    if (sysIdx >= 0) {
+      enrichedMessages = messages.map((m, i) =>
+        i === sysIdx ? { ...m, content: entityContext + '\n\n' + m.content } : m,
+      );
+    } else {
+      enrichedMessages = [{ role: 'system', content: entityContext }, ...messages];
+    }
+  }
+
+  res.json({ messages: enrichedMessages });
+});
+
 // ── Log endpoints ───────────────────────────────────────────────
 
 // POST /api/log — create or overwrite a session log file

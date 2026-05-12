@@ -662,6 +662,9 @@ function updateRegenBtn() {
 // ── API communication ────────────────────────────────────────────
 let abortController = null;
 
+/** The last messages array sent to /api/chat (client-side, pre-enrichment). */
+let lastSentMessages = null;
+
 async function sendMessage(userInput) {
   userInput = userInput.trim();
   if (!userInput) return;
@@ -692,6 +695,7 @@ async function sendMessage(userInput) {
 
   const userTimestamp = now;
   const apiMessages   = buildApiMessages(userInput);
+  lastSentMessages    = apiMessages;
 
   // Optimistic UI
   appendUserMessage(userInput, userTimestamp);
@@ -945,6 +949,7 @@ async function regenerateLastResponse() {
 
   const userTimestamp = origUserTimestamp || new Date().toISOString();
   const apiMessages   = buildApiMessages(lastUserInput);
+  lastSentMessages    = apiMessages;
   appendUserMessage(lastUserInput, userTimestamp);
   setInputLocked(true);
   setTyping(true);
@@ -1608,6 +1613,13 @@ function init() {
 
   // ── Export chat ──────────────────────────────────────────────
   $('export-chat-btn').addEventListener('click', exportChat);
+
+  // ── Prompt inspector ─────────────────────────────────────────
+  $('prompt-inspector-btn').addEventListener('click', openPromptInspector);
+  $('prompt-inspector-close').addEventListener('click', closePromptInspector);
+  $('prompt-inspector-modal').addEventListener('click', e => {
+    if (e.target === $('prompt-inspector-modal')) closePromptInspector();
+  });
 
   // ── Logs modal ────────────────────────────────────────────
   $('logs-btn').addEventListener('click', openLogsModal);
