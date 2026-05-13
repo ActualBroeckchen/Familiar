@@ -271,3 +271,67 @@ export async function enrich(userMessage) {
   }
 }
 
+// ── Write operations ──────────────────────────────────────────────────────────
+
+/**
+ * Create a new memory entry in entity-core.
+ * @param {{ content: string, granularity: string, date?: string, instanceId?: string }} opts
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+export async function createMemory({ content, granularity = 'daily', date, instanceId = 'proto-familiar' }) {
+  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    await mcpClient.callTool({
+      name: 'memory_create',
+      arguments: { content, granularity, date: date ?? today, instanceId },
+    });
+    console.log(`[thalamus] createMemory() saved ${granularity} memory`);
+    return { ok: true };
+  } catch (err) {
+    console.error('[thalamus] createMemory failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Append content to an entity-core identity file.
+ * @param {{ category: string, filename: string, content: string }} opts
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+export async function appendIdentity({ category, filename, content }) {
+  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  try {
+    await mcpClient.callTool({
+      name: 'identity_append',
+      arguments: { category, filename, content },
+    });
+    console.log(`[thalamus] appendIdentity() updated ${category}/${filename}`);
+    return { ok: true };
+  } catch (err) {
+    console.error('[thalamus] appendIdentity failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Append content to a specific markdown section of an entity-core identity file.
+ * Auto-creates the section if the heading doesn't exist.
+ * @param {{ category: string, filename: string, heading: string, content: string }} opts
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+export async function updateIdentitySection({ category, filename, heading, content }) {
+  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  try {
+    await mcpClient.callTool({
+      name: 'identity_update_section',
+      arguments: { category, filename, heading, content },
+    });
+    console.log(`[thalamus] updateIdentitySection() updated ${category}/${filename} § ${heading}`);
+    return { ok: true };
+  } catch (err) {
+    console.error('[thalamus] updateIdentitySection failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+

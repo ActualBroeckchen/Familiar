@@ -14,14 +14,50 @@ The **Enable tool use** checkbox in the sidebar **Tools** section controls wheth
 
 ## Built-in Tools
 
-Two tools are always available when tool use is enabled:
+Five tools are always available when tool use is enabled:
 
 | Tool | Description | Returns |
 |---|---|---|
 | `get_datetime` | Current local date, time, and timezone | Human-readable locale string (e.g. `"Tuesday, May 13, 2026 at 02:30:00 PM CEST"`) |
 | `get_session_info` | Metadata about the current session | JSON with `startedAt`, `messageCount`, `provider`, `model`, `elapsedMsSinceLastMessage` |
+| `save_to_tome` | Save a fact or piece of knowledge into the persistent Tome knowledge base, with trigger keywords. The entry is immediately available for activation in future conversations. | Confirmation string with the assigned entry UID |
+| `save_memory` | Write a new time-stamped memory entry to entity-core's long-term memory store at a chosen granularity (`daily`, `weekly`, `monthly`, `yearly`, `significant`). | `"Memory saved."` or an error string |
+| `update_identity` | Append a durable fact to an entity-core identity file (`user` or `relationship` category). | `"Identity file updated."` or an error string |
 
-Both tools require no arguments.
+`get_datetime` and `get_session_info` require no arguments. See parameter details for the write tools below.
+
+---
+
+### Write Tool Parameters
+
+#### `save_to_tome`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `title` | string | Yes | Short label for the entry |
+| `content` | string | Yes | Text to inject when the entry activates |
+| `keywords` | string[] | Yes | 2–8 trigger words/phrases |
+
+Entries are saved to the first enabled Tome (auto-creates "General" if none exist), with `learnedAt` set to the current timestamp.
+
+#### `save_memory`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `content` | string | Yes | Memory text in first-person perspective; use `[chat:auto]`-prefixed bullet points |
+| `granularity` | enum | Yes | `daily` \| `weekly` \| `monthly` \| `yearly` \| `significant` |
+
+Requires entity-core to be running. Degrades gracefully (returns an error string) if entity-core is unavailable.
+
+#### `update_identity`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `category` | enum | Yes | `user` \| `relationship` |
+| `filename` | string | Yes | Target file, e.g. `user_notes.md` or `relationship_notes.md` |
+| `content` | string | Yes | Text to append to the file |
+
+Requires entity-core. Appends to the end of the specified file.
 
 ---
 

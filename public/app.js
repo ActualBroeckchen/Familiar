@@ -84,6 +84,53 @@ const BUILTIN_TOOLS = [
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'save_to_tome',
+      description: 'Save a piece of knowledge or a fact learned during this conversation into the persistent Tome knowledge base. Use when the user shares something important about themselves, their relationships, their preferences, or their situation that should be remembered across future conversations. Do NOT use for trivial, transient, or already-known information.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title:    { type: 'string', description: 'Short descriptive label for this entry (e.g. "User stress about lateness").' },
+          content:  { type: 'string', description: 'The knowledge to store. Write concisely in third person, with enough detail to be useful as injected context in future conversations.' },
+          keywords: { type: 'array', items: { type: 'string' }, description: 'Two to eight trigger keywords or short phrases. The entry will be injected into the prompt whenever these appear in conversation.' },
+        },
+        required: ['title', 'content', 'keywords'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'save_memory',
+      description: 'Write a new memory entry to the long-term memory system. Use to record important events, emotional patterns, or significant moments from this conversation in a durable, time-stamped store. Prefer "daily" for routine session events; use "significant" for major milestones.',
+      parameters: {
+        type: 'object',
+        properties: {
+          content:     { type: 'string', description: 'Memory content written in first-person perspective. Use bullet points prefixed with [chat:auto] for individual facts.' },
+          granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier.' },
+        },
+        required: ['content', 'granularity'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_identity',
+      description: 'Append a new durable fact to a persistent identity file. Use for facts about the user (category: user, filename: user_notes.md) or the relationship (category: relationship, filename: relationship_notes.md). Do NOT use for session-specific or transient information.',
+      parameters: {
+        type: 'object',
+        properties: {
+          category: { type: 'string', enum: ['user', 'relationship'], description: 'Identity file category.' },
+          filename: { type: 'string', description: 'Target filename within the category, e.g. user_notes.md or relationship_notes.md.' },
+          content:  { type: 'string', description: 'Content to append to the identity file.' },
+        },
+        required: ['category', 'filename', 'content'],
+      },
+    },
+  },
 ];
 
 /** Client-side implementations of the built-in tools. */
@@ -99,6 +146,56 @@ const BUILTIN_EXECUTORS = {
     model:        state.model,
     elapsedMsSinceLastMessage: elapsedTime,
   }, null, 2),
+
+  save_to_tome: async ({ title, content, keywords }) => {
+    try {
+      const res = await fetch('/api/tomes/default/entries', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          comment:   title,
+          content,
+          keys:      Array.isArray(keywords) ? keywords : String(keywords ?? '').split(',').map(s => s.trim()).filter(Boolean),
+          learnedAt: new Date().toISOString(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) return `Failed to save to Tome: ${data.error ?? res.status}`;
+      return `Saved to Tome (entry: ${data.uid ?? 'unknown'}).`;
+    } catch (err) {
+      return `Failed to save to Tome: ${err.message}`;
+    }
+  },
+
+  save_memory: async ({ content, granularity }) => {
+    try {
+      const res = await fetch('/api/entity/memory', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, granularity }),
+      });
+      const data = await res.json();
+      if (!res.ok) return `Failed to save memory: ${data.error ?? res.status}`;
+      return data.ok ? 'Memory saved.' : `Memory save failed: ${data.error ?? 'unknown error'}`;
+    } catch (err) {
+      return `Failed to save memory: ${err.message}`;
+    }
+  },
+
+  update_identity: async ({ category, filename, content }) => {
+    try {
+      const res = await fetch('/api/entity/identity', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category, filename, content, mode: 'append' }),
+      });
+      const data = await res.json();
+      if (!res.ok) return `Failed to update identity: ${data.error ?? res.status}`;
+      return data.ok ? 'Identity file updated.' : `Identity update failed: ${data.error ?? 'unknown error'}`;
+    } catch (err) {
+      return `Failed to update identity: ${err.message}`;
+    }
+  },
 };
 
 /** Returns the full tools array (built-ins + valid user-defined tools). */
@@ -114,11 +211,11 @@ function getActiveTools() {
 }
 
 /** Execute a tool by name. Returns the result string. */
-function executeToolCall(name, argsJson) {
+async function executeToolCall(name, argsJson) {
   if (Object.prototype.hasOwnProperty.call(BUILTIN_EXECUTORS, name)) {
     try {
       const args = argsJson ? JSON.parse(argsJson) : {};
-      return String(BUILTIN_EXECUTORS[name](args));
+      return String(await BUILTIN_EXECUTORS[name](args));
     } catch (err) {
       return `Error executing ${name}: ${err.message}`;
     }
@@ -811,13 +908,13 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
     if (finishReason === 'tool_calls' && round < MAX_TOOL_ROUNDS) {
       const toolCalls  = Object.values(toolCallsAcc);
       const roundTs    = new Date().toISOString();
-      const toolResults = toolCalls.map(tc => ({
+      const toolResults = await Promise.all(toolCalls.map(async tc => ({
         role:         'tool',
         tool_call_id: tc.id,
-        content:      executeToolCall(tc.function.name, tc.function.arguments),
+        content:      await executeToolCall(tc.function.name, tc.function.arguments),
         timestamp:    roundTs,
         _toolName:    tc.function.name,
-      }));
+      })));
 
       // Record in pending (for state.messages commit at the end)
       pendingMsgs.push({ role: 'assistant', content: fullContent || null, tool_calls: toolCalls, timestamp: roundTs });
@@ -898,13 +995,13 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
     // ── Tool-call round ──────────────────────────────────────────
     if (finishReason === 'tool_calls' && Array.isArray(message?.tool_calls) && round < MAX_TOOL_ROUNDS) {
       const toolCalls   = message.tool_calls;
-      const toolResults = toolCalls.map(tc => ({
+      const toolResults = await Promise.all(toolCalls.map(async tc => ({
         role:         'tool',
         tool_call_id: tc.id,
-        content:      executeToolCall(tc.function.name, tc.function.arguments),
+        content:      await executeToolCall(tc.function.name, tc.function.arguments),
         timestamp:    roundTs,
         _toolName:    tc.function.name,
-      }));
+      })));
 
       pendingMsgs.push({ role: 'assistant', content: message.content || null, tool_calls: toolCalls, timestamp: roundTs });
       pendingMsgs.push(...toolResults);
@@ -1361,6 +1458,7 @@ ${convText}`;
         groupWeight:         null,
         insertion_order:     100,
         created_at:          now,
+        learnedAt:           now,
         session_id:          sessionId,
         message_range:       null,
       };
@@ -2168,6 +2266,7 @@ async function savePendingSummary() {
     groupWeight:         null,
     insertion_order:  100,
     created_at:       new Date().toISOString(),
+    learnedAt:        new Date().toISOString(),
     session_id:       state.sessionId,
     message_range:    [topic.startIndex, topic.endIndex],
   };
@@ -2694,6 +2793,17 @@ function openLoreEditor(uid) {
   $('lore-ed-group').value        = entry.group ?? '';
   const gw = entry.groupWeight;
   $('lore-ed-group-weight').value = (gw !== null && gw !== undefined) ? String(gw) : '';
+
+  // learnedAt — read-only, shown only when the field is present
+  const learnedEl = $('lore-ed-learned-at');
+  if (learnedEl) {
+    if (entry.learnedAt) {
+      learnedEl.textContent = `Learned: ${new Date(entry.learnedAt).toLocaleString()}`;
+      learnedEl.classList.remove('hidden');
+    } else {
+      learnedEl.classList.add('hidden');
+    }
+  }
 
   $('lore-editor-modal').classList.remove('hidden');
 }

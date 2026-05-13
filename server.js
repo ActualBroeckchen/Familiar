@@ -9,7 +9,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
-import { enrich } from './thalamus.js';
+import { enrich, createMemory, appendIdentity, updateIdentitySection } from './thalamus.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -377,6 +377,130 @@ app.delete('/api/tomes/:id/entries/:uid', async (req, res) => {
   } catch {
     res.status(500).json({ error: 'Failed to save tome.' });
   }
+});
+
+// POST /api/tomes/default/entries — add a single entry to the default (first enabled) tome.
+// Used by the save_to_tome LLM tool so the model can write knowledge back mid-conversation.
+app.post('/api/tomes/default/entries', async (req, res) => {
+  const { comment, content, keys, learnedAt } = req.body;
+  if (!content || typeof content !== 'string' || !content.trim())
+    return res.status(400).json({ error: 'content is required.' });
+  if (content.length > 16384)
+    return res.status(400).json({ error: 'content exceeds 16 KB limit.' });
+  if (comment !== undefined && typeof comment !== 'string')
+    return res.status(400).json({ error: 'comment must be a string.' });
+
+  // Accept keys as string[] or comma-separated string
+  let normKeys = [];
+  if (Array.isArray(keys)) {
+    normKeys = keys.map(k => String(k).trim()).filter(Boolean);
+  } else if (typeof keys === 'string') {
+    normKeys = keys.split(',').map(k => k.trim()).filter(Boolean);
+  }
+
+  try {
+    // Find first enabled tome, or create "General"
+    const files = await fsp.readdir(TOMES_DIR);
+    let targetTome = null;
+    for (const f of files.sort()) {
+      if (!f.endsWith('.json')) continue;
+      try {
+        const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
+        const t = JSON.parse(raw);
+        if (t.enabled) { targetTome = t; break; }
+      } catch { /* skip corrupt */ }
+    }
+    if (!targetTome) {
+      const newId = randomUUID();
+      targetTome = { id: newId, name: 'General', description: '', enabled: true, entries: {} };
+      await writeTome(targetTome);
+    } else {
+      // Re-read a fresh copy so we merge correctly
+      const fresh = await readTome(targetTome.id);
+      if (fresh) targetTome = fresh;
+    }
+
+    const uid  = randomUUID();
+    const now  = new Date().toISOString();
+    targetTome.entries[uid] = {
+      uid,
+      comment:             typeof comment === 'string' ? comment.trim() || 'Auto-saved entry' : 'Auto-saved entry',
+      keys:                normKeys,
+      keysecondary:        [],
+      content:             content.trim(),
+      constant:            false,
+      selective:           false,
+      selectiveLogic:      0,
+      enabled:             true,
+      position:            0,
+      depth:               4,
+      role:                0,
+      scanDepth:           null,
+      caseSensitive:       null,
+      matchWholeWords:     null,
+      probability:         100,
+      sticky:              null,
+      cooldown:            null,
+      preventRecursion:    false,
+      delayUntilRecursion: false,
+      excludeRecursion:    false,
+      group:               '',
+      groupWeight:         null,
+      insertion_order:     100,
+      created_at:          now,
+      learnedAt:           (typeof learnedAt === 'string' && learnedAt) ? learnedAt : now,
+    };
+    await writeTome(targetTome);
+    res.json({ ok: true, tomeId: targetTome.id, uid });
+  } catch {
+    res.status(500).json({ error: 'Failed to save entry.' });
+  }
+});
+
+// ── Entity-core write endpoints ─────────────────────────────────
+
+const VALID_MEMORY_GRANULARITIES = new Set(['daily', 'weekly', 'monthly', 'yearly', 'significant']);
+const VALID_IDENTITY_CATEGORIES  = new Set(['self', 'user', 'relationship', 'custom']);
+const VALID_FILENAME_RE           = /^[\w]+\.md$/;
+
+// POST /api/entity/memory — write a new memory entry to entity-core
+app.post('/api/entity/memory', async (req, res) => {
+  const { content, granularity = 'daily', date } = req.body;
+  if (!content || typeof content !== 'string' || !content.trim())
+    return res.status(400).json({ error: 'content is required.' });
+  if (content.length > 8192)
+    return res.status(400).json({ error: 'content exceeds 8 KB limit.' });
+  if (!VALID_MEMORY_GRANULARITIES.has(granularity))
+    return res.status(400).json({ error: `granularity must be one of: ${[...VALID_MEMORY_GRANULARITIES].join(', ')}.` });
+
+  const result = await createMemory({ content: content.trim(), granularity, date });
+  if (!result.ok) return res.status(502).json({ error: result.error ?? 'entity-core unavailable' });
+  res.json({ ok: true });
+});
+
+// POST /api/entity/identity — append to or update a section of an entity-core identity file
+app.post('/api/entity/identity', async (req, res) => {
+  const { category, filename, heading, content, mode = 'append' } = req.body;
+  if (!VALID_IDENTITY_CATEGORIES.has(category))
+    return res.status(400).json({ error: `category must be one of: ${[...VALID_IDENTITY_CATEGORIES].join(', ')}.` });
+  if (!filename || !VALID_FILENAME_RE.test(filename))
+    return res.status(400).json({ error: 'filename must be a simple .md filename (letters, numbers, underscores).' });
+  if (!content || typeof content !== 'string' || !content.trim())
+    return res.status(400).json({ error: 'content is required.' });
+  if (content.length > 8192)
+    return res.status(400).json({ error: 'content exceeds 8 KB limit.' });
+
+  let result;
+  if (mode === 'update_section') {
+    if (!heading || typeof heading !== 'string' || !heading.trim())
+      return res.status(400).json({ error: 'heading is required for update_section mode.' });
+    result = await updateIdentitySection({ category, filename, heading: heading.trim(), content: content.trim() });
+  } else {
+    result = await appendIdentity({ category, filename, content: content.trim() });
+  }
+
+  if (!result.ok) return res.status(502).json({ error: result.error ?? 'entity-core unavailable' });
+  res.json({ ok: true });
 });
 
 const PORT = process.env.PORT || 3000;
