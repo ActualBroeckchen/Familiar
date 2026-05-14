@@ -343,7 +343,8 @@ The lorebook is stored as `lorebook.json` in the project root (next to `server.j
 ├── logs/              Session JSON files (auto-created, git-ignored)
 ├── lorebook.json      Lorebook entries (auto-created, git-ignored)
 ├── scripts/
-│   └── import-entity.js  Import an existing entity-core data directory
+│   ├── import-entity.js  Import an existing entity-core data directory
+│   └── import-tome.js    Convert a SillyTavern lorebook export to a Proto-Familiar Tome
 ├── public/
 │   ├── index.html     App shell (sidebar + chat pane + modals)
 │   ├── style.css      All styling — dark/light themes, responsive layout
@@ -432,6 +433,23 @@ npm run import-entity -- --from /path/to/entity-core --yes
 ```
 
 The script resolves the destination using the same logic as `thalamus.js` (`$ENTITY_CORE_PATH` → `../entity-core-alpha`). It reads both installs' `.env` files for `ENTITY_CORE_DATA_DIR` overrides, preserves timestamps so recency ranking stays accurate, and stops you if source and destination are the same. **Stop the Familiar server before running this** to avoid write conflicts with the running entity-core process.
+
+#### Importing a SillyTavern lorebook
+
+Convert a SillyTavern lorebook export to a Proto-Familiar Tome with:
+
+```bash
+# Auto-detects name from file, writes to tomes/<Name>.json
+npm run import-tome -- path/to/lorebook.json
+
+# Override the tome name
+npm run import-tome -- path/to/lorebook.json --name "World Lore"
+
+# Write to a specific output path
+npm run import-tome -- path/to/lorebook.json --out tomes/my-lore.json
+```
+
+The script renames SillyTavern fields to their Proto-Familiar equivalents (`key→keys`, `order→insertion_order`, `disable→enabled`) and wraps the entries in a valid top-level Tome structure. Activate the result via **☰ → Tomes → Manage Tomes**.
 
 ---
 

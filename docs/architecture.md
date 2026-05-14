@@ -30,7 +30,8 @@ server.js  (Express, Node 18+, ESM)
 ├── tomes/               Per-Tome JSON files (auto-created, git-ignored)
 │
 ├── scripts/
-│   └── import-entity.js Import an entity-core data directory into the local instance
+│   ├── import-entity.js Import an entity-core data directory into the local instance
+│   └── import-tome.js   Convert a SillyTavern lorebook export to Proto-Familiar tome format
 │
 ├── public/
 │   ├── index.html       App shell — sidebar, chat pane, all modals

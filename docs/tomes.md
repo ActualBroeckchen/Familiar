@@ -74,8 +74,47 @@ Enable **Require secondary key match** on an entry to add a second gating condit
 |---|---|
 | **Sticky N** | Once activated, the entry continues injecting for the next N messages even if its keywords are no longer present in the scan corpus. |
 | **Cooldown N** | After a sticky period ends (or after a normal one-shot activation), the entry is suppressed for N messages before it can trigger again. |
+| **Delay N** | The entry will not activate at all until N conversation turns have elapsed since the page loaded. Useful for entries that should only become available once a conversation is underway. |
 
 Timed effect state is tracked in memory per page-load (not persisted). The counters reset when the page reloads.
+
+---
+
+## Generation Mode Filtering
+
+Set **Triggers** on an entry to restrict it to specific generation modes. An entry with a non-empty `triggers` list only activates when the current generation mode is included in that list. An empty or absent `triggers` list means the entry activates in all modes.
+
+Supported modes: `normal`, `swipe`, `regenerate`, `continue`, `impersonate`, `quiet`.
+
+---
+
+## Match Source Flags
+
+By default, the scan corpus contains only recent conversation messages. These per-entry flags extend it with static profile text:
+
+| Flag | Appends to scan corpus |
+|---|---|
+| `matchCharacterDescription` | The Familiar's character profile (`[Character Profile]` field) |
+| `matchCharacterPersonality` | Same as above (personality is part of the character profile in Proto-Familiar) |
+| `matchPersonaDescription` | The user profile (`[User Profile]` field) |
+| `matchScenario` | The main system prompt text |
+
+Use these to create entries that activate based on who the Familiar *is* or who the user *is*, rather than what is said in the current conversation.
+
+---
+
+## Character Filter
+
+Set `characterFilter` on an entry to restrict it to activating only when a specific entity (Familiar) is active:
+
+```json
+"characterFilter": {
+  "isExclude": false,
+  "names": ["Pip", "Vesper"]
+}
+```
+
+`isExclude: false` means the entry only activates when the current Familiar's name is in the list. `isExclude: true` means the entry activates for any Familiar *except* those in the list. Leave `characterFilter` absent or `null` to apply the entry regardless of which Familiar is active.
 
 ---
 
@@ -98,6 +137,8 @@ Per-entry recursion flags:
 Set the same **Group name** on multiple entries to make them compete: only the one entry with the highest **Weight** (ties broken by lowest insertion order) activates when any member of the group is triggered. Use this for mutually exclusive content like location descriptions, relationship states, or character moods.
 
 Groups work across Tomes — entries from different Tomes sharing a group name are treated as competitors.
+
+Set **Group override** on an entry to make it win its group unconditionally, regardless of other members' weights. When multiple entries in a group all have override set, they fall back to weight/insertion-order tiebreak among themselves.
 
 ---
 
@@ -161,3 +202,44 @@ Each Tome is stored as a JSON file at `tomes/<id>.json`:
 | `preventRecursion` | boolean | Excludes this entry's content from recursive scan passes |
 | `delayUntilRecursion` | boolean | Only activates on recursive passes, not the initial scan |
 | `excludeRecursion` | boolean | Not checked during recursive passes at all |
+| `delay` | number \| null | Minimum conversation turns before this entry can activate |
+| `groupOverride` | boolean | Wins group competition unconditionally |
+| `triggers` | string[] \| null | Generation modes in which this entry is eligible to activate |
+| `characterFilter` | object \| null | Restricts activation to specific Familiar names (`{ isExclude, names[] }`) |
+| `matchCharacterDescription` | boolean | Extends scan corpus with the Familiar's character profile |
+| `matchCharacterPersonality` | boolean | Extends scan corpus with the Familiar's character profile |
+| `matchPersonaDescription` | boolean | Extends scan corpus with the user profile |
+| `matchScenario` | boolean | Extends scan corpus with the system prompt text |
+
+---
+
+## SillyTavern Compatibility
+
+The tome engine automatically normalizes SillyTavern-format field names at scan time, so lorebook files exported from SillyTavern work without manual editing:
+
+| SillyTavern field | Proto-Familiar field |
+|---|---|
+| `key` | `keys` |
+| `order` | `insertion_order` |
+| `disable: true` | `enabled: false` (inverted) |
+
+The top-level Tome wrapper (`id`, `name`, `description`, `enabled`) is not present in SillyTavern exports — use `import-tome.js` to generate it.
+
+---
+
+## Importing a SillyTavern Lorebook
+
+Convert any SillyTavern lorebook export to Proto-Familiar format with the import script:
+
+```bash
+# Auto-detects name from file, writes to tomes/<Name>.json
+node scripts/import-tome.js path/to/lorebook.json
+
+# Override the tome name
+node scripts/import-tome.js path/to/lorebook.json --name "World Lore"
+
+# Write to a specific output path
+node scripts/import-tome.js path/to/lorebook.json --out tomes/my-lore.json
+```
+
+The script renames fields, inverts `disable → enabled`, wraps the entries in a valid top-level tome structure with a fresh UUID, and preserves all other fields unchanged. Activate the resulting file via **☰ → Tomes → Manage Tomes**.

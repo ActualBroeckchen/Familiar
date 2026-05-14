@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "import-entity": "node scripts/import-entity.js"
+    "import-entity": "node scripts/import-entity.js",
+    "import-tome": "node scripts/import-tome.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
