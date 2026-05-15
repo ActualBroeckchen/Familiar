@@ -2131,17 +2131,24 @@ function endTopicAtIndex(topic, endIdx) {
     if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
     rangeMessages.push(m);
   }
-  if (!rangeMessages.length || !state.apiKey.trim()) return;
 
-  // Enqueue a topic-scoped memorization in addition to the topic summary.
-  memorizeSessionToTome(rangeMessages, state.sessionId, {
-    scope:        'topic',
-    topicId:      topic.id,
-    messageRange: { start: topic.startIndex, end: topic.endIndex },
-  });
-
+  // Always open the summary modal so the user sees the topic actually ended.
+  // Auto-generate only when we have something to summarize AND an API key;
+  // otherwise drop into a blank manual form with a hint.
   openSummaryModal(topic);
-  generateTopicSummary(topic, rangeMessages);
+  if (rangeMessages.length && state.apiKey.trim()) {
+    memorizeSessionToTome(rangeMessages, state.sessionId, {
+      scope:        'topic',
+      topicId:      topic.id,
+      messageRange: { start: topic.startIndex, end: topic.endIndex },
+    });
+    generateTopicSummary(topic, rangeMessages);
+  } else {
+    populateSummaryForm({ title: topic.label, content: '', keywords: [], sticky: null });
+    $('summary-content-input').placeholder = !state.apiKey.trim()
+      ? 'Set an API key in Settings to auto-generate, or write the summary manually.'
+      : 'No readable messages in this topic range. Write the summary manually.';
+  }
 }
 
 function endTopic(topicId) {
@@ -3196,7 +3203,7 @@ async function refreshTomesList() {
   await loadTomesFromServer();
   const container = $('tomes-list');
   container.innerHTML = '';
-  const tomes = state.tomeRegistry;
+  const tomes = state.tomeRegistry.filter(t => t && t.id);
   if (!tomes.length) {
     container.innerHTML = '<p class="lorebook-empty">No tomes yet. Click <strong>+ New Tome</strong> to create one.</p>';
     return;
@@ -3471,7 +3478,9 @@ async function saveLoreEditorEntry() {
   if (!content) { alert('Content is required.'); return; }
 
   const uid      = _loreEditUid || generateId();
-  const existing = _loreEditUid ? (state.lorebook.entries[uid] ?? {}) : {};
+  const existing = _loreEditUid
+    ? (state.tomeCache[_currentTomeId]?.entries?.[uid] ?? {})
+    : {};
 
   const keysRaw    = $('lore-ed-keys').value;
   const keys       = keysRaw.split(',').map(k => k.trim()).filter(Boolean);

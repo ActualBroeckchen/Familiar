@@ -272,6 +272,12 @@ const TOMES_DIR = path.join(__dirname, 'tomes');
 mkdirSync(TOMES_DIR, { recursive: true });
 
 
+// True for filenames that look like a tome file (i.e. not the memorization
+// queue dotfile or any other hidden bookkeeping file we drop in TOMES_DIR).
+function isTomeFile(f) {
+  return f.endsWith('.json') && !f.startsWith('.');
+}
+
 // Returns the absolute path for a tome file, falling back to a directory scan
 // so that pre-existing tomes with non-UUID filenames (e.g. "ADHD-Tome.json") are found.
 async function findTomeFile(id) {
@@ -282,7 +288,7 @@ async function findTomeFile(id) {
   } catch { /* not found by UUID filename — scan */ }
   const files = await fsp.readdir(TOMES_DIR);
   for (const f of files) {
-    if (!f.endsWith('.json')) continue;
+    if (!isTomeFile(f)) continue;
     try {
       const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
       const data = JSON.parse(raw);
@@ -313,10 +319,11 @@ app.get('/api/tomes', async (_req, res) => {
     const files = await fsp.readdir(TOMES_DIR);
     const tomes = [];
     for (const f of files) {
-      if (!f.endsWith('.json')) continue;
+      if (!isTomeFile(f)) continue;
       try {
         const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
         const { id, name, description, enabled, entries } = JSON.parse(raw);
+        if (!id) continue; // not a tome (no id) — skip rather than poison the registry
         tomes.push({ id, name, description, enabled, entryCount: Object.keys(entries ?? {}).length });
       } catch { /* skip corrupt */ }
     }
