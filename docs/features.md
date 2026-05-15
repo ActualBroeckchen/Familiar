@@ -106,8 +106,9 @@ See [Sessions & Memorization](sessions.md) for the full reference.
 | Feature | Description |
 |---|---|
 | Auto-end | After 3 hours of inactivity the session closes and a new one starts |
-| Session memorization | On every session close, the LLM extracts 1–8 topics and saves each as a Tome entry |
-| Clear | Manual clear closes and memorizes the current session before starting a fresh one |
+| Session memorization | Idle timeout, manual Clear, tab close, topic end, or the **Memorize now** button enqueues a server-side job that extracts 1–8 topics and writes them to the dedicated **Session Memories** Tome — with retry-on-failure |
+| Clear | Manual clear closes and enqueues memorization of the current session before starting a fresh one |
+| Memorize now | **Chat sidebar** button that enqueues memorization of the current session on demand without ending it |
 | Session browser | **☰ → Logs** — view, load, or delete any past session |
 
 ---

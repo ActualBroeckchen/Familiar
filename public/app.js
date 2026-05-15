@@ -1295,9 +1295,10 @@ async function autoEndSession() {
     state.sessionEndedAt  = new Date().toISOString();
     saveSettings();
     await saveToServer();
+    memorizeViaBeacon(sessionMessages, sessionId, { scope: 'session' });
+    state._beaconedSessionId = sessionId;
     startNewSession();
     showSessionEndedNotice();
-    memorizeSessionToTome(sessionMessages, sessionId); // fire-and-forget
   } else {
     startNewSession();
     showSessionEndedNotice();
@@ -1329,165 +1330,121 @@ function showMemorizationNotice(count) {
 }
 
 /**
- * Automatically memorize a finished session into lorebook entries.
- * Fires-and-forgets after session close — never blocks the UI.
- * Calls the configured LLM to split the conversation into distinct topics
- * and creates a lorebook entry for each one.
+ * Enqueue a memorization job on the server. The server-side worker calls the
+ * LLM, finds/creates the "Session Memories" tome, and writes entries — with
+ * retry-on-failure. Survives tab close and server restart.
+ *
+ * scope: 'session' (whole session) or 'topic' (a topic's message range).
+ * Returns the jobId, or null on error / when memorization isn't possible.
  */
-async function memorizeSessionToTome(messages, sessionId) {
-  if (!state.apiKey.trim()) return;
-
-  // Filter to user/assistant only — skip tool-call plumbing and empty turns
-  const readable = messages.filter(m => {
-    if (m.role === 'tool') return false;
-    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return false;
-    return m.content?.trim();
-  });
-  if (readable.length < 4) return;
-
-  const convText = readable
-    .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
-    .join('\n\n');
-
-  const prompt =
-`You are producing Tome entries for a Familiar (AI companion). Each entry is private reference notes that get injected into the Familiar's context when its keywords appear in a future conversation. Identify the distinct situational topics in the conversation below and write one entry per topic, following the craft rules carefully.
-
-Return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
-{
-  "topics": [
-    {
-      "title":    "Short label for the entry comment (max 60 chars)",
-      "content":  "Familiar-perspective bullet guidance — see content rules below",
-      "keywords": ["conversational phrase 1", "conversational phrase 2"],
-      "sticky":   3
-    }
-  ]
-}
-
-Identify 1–8 genuinely distinct topics. Merge closely related material rather than over-splitting. Each entry must be self-contained.
-
-### Content rules (most important)
-Write content as the Familiar's private notes to themselves about this situation. NOT a summary of what happened.
-Structure:
-  1. One short framing line — what is happening and why (gives the Familiar understanding, not just rules).
-  2. 3–5 action bullets — what to do.
-  3. 1–2 prohibition bullets — what NOT to do. Usually the most valuable: name the well-intentioned default response that would make things worse.
-Style:
-  - Second person, addressed to the Familiar. Use {{user}} wherever the user's name belongs.
-  - Practical, grounded, non-clinical. Notes, not a textbook.
-  - Short declarative bullets. The whole entry should be readable in 5–10 seconds.
-  - Do NOT include narrative summaries of "what they said" — distil the situation and the response, not the transcript.
-
-### Keyword rules
-Keywords are TRIGGERS, not labels. They must be phrases the user would literally say when this situation recurs — not the name of the topic.
-  - WRONG: "executive dysfunction", "rejection sensitive dysphoria", "hyperfocus".
-  - RIGHT: "don't know where to start", "did I say something wrong", "been at this for".
-Derive them by imagining what the user would actually type when the situation is happening, then extracting distinctive phrases.
-  - Prefer multi-word phrases over single common words (avoid bare "tired", "can't", "hard").
-  - 3–8 keywords per entry. Each one specific enough not to fire in unrelated conversations.
-  - You may use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has 3+ predictable variants.
-
-### Sticky rules
-Pick an integer sticky value per entry (number of turns the entry stays active after first match):
-  - null = one-shot lore/fact that does not need persistence.
-  - 2    = brief states that typically resolve quickly.
-  - 3    = moderate states needing a few exchanges.
-  - 4–5  = complex/intense states taking multiple turns to navigate.
-  - 8+   = ongoing modes that should persist across the whole session.
-
-Conversation:
-${convText}`;
-
+async function memorizeSessionToTome(messages, sessionId, opts = {}) {
+  if (!state.apiKey.trim()) return null;
+  if (!Array.isArray(messages) || messages.length < 2) return null;
+  const payload = {
+    sessionId,
+    scope:        opts.scope ?? 'session',
+    topicId:      opts.topicId ?? null,
+    messageRange: opts.messageRange ?? null,
+    messages,
+    provider:     state.provider,
+    apiKey:       state.apiKey,
+    model:        state.model,
+  };
   try {
-    const resp = await fetch('/api/chat', {
+    const resp = await fetch('/api/memorize', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        provider:    state.provider,
-        apiKey:      state.apiKey,
-        model:       state.model,
-        messages:    [{ role: 'user', content: prompt }],
-        stream:      false,
-        temperature: 0.2,
-        max_tokens:  2000,
-      }),
+      body:    JSON.stringify(payload),
     });
-    if (!resp.ok) return;
-    const data = await resp.json();
-    if (data.error) return;
-
-    const raw       = data.choices?.[0]?.message?.content ?? '';
-    const jsonMatch = raw.match(/\{[\s\S]+\}/);
-    if (!jsonMatch) return;
-    const parsed = JSON.parse(jsonMatch[0]);
-    const topics = parsed.topics;
-    if (!Array.isArray(topics) || !topics.length) return;
-
-    // Get or create the default tome for auto-saved memories
-    let targetTome = null;
-    try { targetTome = await getDefaultTomeForSaving(); } catch { return; }
-    if (!targetTome) return;
-
-    // Fetch the current tome fresh from the server
-    let tomeData = { entries: {} };
-    try {
-      const tRes = await fetch(`/api/tomes/${targetTome.id}`);
-      if (tRes.ok) tomeData = await tRes.json();
-    } catch { /* fall back to empty */ }
-
-    const now = new Date().toISOString();
-    let created = 0;
-    for (const t of topics) {
-      const title   = (t.title   ?? '').trim();
-      const content = (t.content ?? '').trim();
-      if (!title || !content) continue;
-      const stickyN = parseInt(t.sticky, 10);
-      const sticky  = Number.isFinite(stickyN) && stickyN > 0 ? stickyN : null;
-      const uid = generateId();
-      tomeData.entries[uid] = {
-        uid,
-        comment:             title,
-        keys:                Array.isArray(t.keywords) ? t.keywords.map(k => String(k).trim()).filter(Boolean) : [],
-        keysecondary:        [],
-        content,
-        constant:            false,
-        selective:           false,
-        selectiveLogic:      0,
-        enabled:             true,
-        position:            0,
-        depth:               4,
-        role:                0,
-        scanDepth:           null,
-        caseSensitive:       null,
-        matchWholeWords:     null,
-        probability:         100,
-        sticky,
-        cooldown:            null,
-        preventRecursion:    false,
-        delayUntilRecursion: false,
-        excludeRecursion:    false,
-        group:               '',
-        groupWeight:         null,
-        insertion_order:     100,
-        created_at:          now,
-        learnedAt:           now,
-        session_id:          sessionId,
-        message_range:       null,
-      };
-      created++;
+    if (!resp.ok) {
+      console.warn('[memorize] enqueue failed:', resp.status, await resp.text().catch(() => ''));
+      return null;
     }
-    if (!created) return;
+    const { jobId } = await resp.json();
+    return jobId;
+  } catch (err) {
+    console.warn('[memorize] enqueue error:', err);
+    return null;
+  }
+}
 
-    await fetch(`/api/tomes/${targetTome.id}`, {
-      method:  'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ entries: tomeData.entries }),
-    });
+/**
+ * Fire-and-forget enqueue that survives tab close via navigator.sendBeacon.
+ * Used in the `beforeunload` handler — fetch() won't reliably deliver there.
+ */
+function memorizeViaBeacon(messages, sessionId, opts = {}) {
+  if (!state.apiKey.trim()) return false;
+  if (!Array.isArray(messages) || messages.length < 2) return false;
+  const payload = {
+    sessionId,
+    scope:        opts.scope ?? 'session',
+    topicId:      opts.topicId ?? null,
+    messageRange: opts.messageRange ?? null,
+    messages,
+    provider:     state.provider,
+    apiKey:       state.apiKey,
+    model:        state.model,
+  };
+  try {
+    const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+    return navigator.sendBeacon('/api/memorize', blob);
+  } catch {
+    return false;
+  }
+}
 
-    // Update cache so the tome entries modal reflects new entries immediately.
-    state.tomeCache[targetTome.id] = tomeData;
-    showMemorizationNotice(created);
-  } catch { /* non-critical — silently swallow any error */ }
+// ── Memorization status polling ──────────────────────────────────
+// The server queue runs asynchronously. Poll for terminal-state jobs so we
+// can toast outcomes (success or failure) and then ACK them so we don't
+// re-toast on the next poll.
+
+let _memStatusTimerId = null;
+
+async function pollMemorizationStatus() {
+  try {
+    const resp = await fetch('/api/memorize');
+    if (!resp.ok) return;
+    const jobs = await resp.json();
+    let tomeChanged = false;
+    for (const j of jobs) {
+      if (j.acknowledged) continue;
+      if (j.status === 'done') {
+        const n = j.result?.entriesCreated ?? 0;
+        if (n > 0) showMemorizationNotice(n);
+        tomeChanged = true;
+      } else if (j.status === 'failed') {
+        showMemorizationFailureNotice(j.lastError ?? 'unknown error');
+      } else {
+        continue;
+      }
+      // Best-effort ack; ignore failure.
+      fetch(`/api/memorize/${j.id}/ack`, { method: 'POST' }).catch(() => {});
+    }
+    if (tomeChanged) {
+      // Refresh the registry so a freshly-created "Session Memories" tome shows up.
+      loadTomesFromServer?.().catch?.(() => {});
+    }
+  } catch { /* polling is best-effort */ }
+}
+
+function startMemorizationStatusPolling() {
+  if (_memStatusTimerId) return;
+  pollMemorizationStatus();
+  _memStatusTimerId = setInterval(pollMemorizationStatus, 30_000);
+  // Also poll when the tab regains focus — likely just-completed jobs.
+  window.addEventListener('focus', pollMemorizationStatus);
+}
+
+function showMemorizationFailureNotice(reason) {
+  const toast = document.createElement('div');
+  toast.className = 'session-toast';
+  toast.textContent = `Memorization failed: ${reason}`;
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('session-toast-show'));
+  setTimeout(() => {
+    toast.classList.remove('session-toast-show');
+    setTimeout(() => toast.remove(), 400);
+  }, 6000);
 }
 
 // ── Prompt inspector modal ───────────────────────────────────
@@ -1757,8 +1714,9 @@ function init() {
         state.sessionEndedAt  = new Date().toISOString();
         saveSettings();
         saveToServer(); // fire-and-forget — stamps the log with endedAt
+        memorizeViaBeacon(sessionMessages, sessionId, { scope: 'session' });
+        state._beaconedSessionId = sessionId;
         startNewSession();
-        memorizeSessionToTome(sessionMessages, sessionId); // fire-and-forget
       } else {
         startNewSession();
       }
@@ -1876,6 +1834,41 @@ function init() {
 
   // ── Load tomes from server ────────────────────────────────────
   loadTomesFromServer();
+
+  // ── Memorization status polling ──────────────────────────────
+  startMemorizationStatusPolling();
+
+  // ── Memorize-now button (in the Chat sidebar section) ────────
+  const memNowBtn = $('memorize-now-btn');
+  if (memNowBtn) {
+    memNowBtn.addEventListener('click', async () => {
+      if (!state.messages.length) {
+        setStatus('Nothing to memorize yet.');
+        return;
+      }
+      if (!state.apiKey.trim()) {
+        setStatus('Set an API key in Settings first.');
+        return;
+      }
+      const jobId = await memorizeSessionToTome([...state.messages], state.sessionId, { scope: 'session' });
+      if (jobId) {
+        setStatus('Memorization queued.');
+      } else {
+        setStatus('Could not queue memorization.');
+      }
+    });
+  }
+
+  // ── beforeunload: catch tab-close mid-session ────────────────
+  // Only enqueue if the current session has messages AND we haven't already
+  // enqueued for this session (avoids duplicate jobs when Clear was just used).
+  window.addEventListener('beforeunload', () => {
+    if (!state.messages.length) return;
+    if (state._beaconedSessionId === state.sessionId) return;
+    if (memorizeViaBeacon([...state.messages], state.sessionId, { scope: 'session' })) {
+      state._beaconedSessionId = state.sessionId;
+    }
+  });
 
   // Restore topic strip
   updateTopicStrip();
@@ -1997,6 +1990,14 @@ function endTopicAtIndex(topic, endIdx) {
     rangeMessages.push(m);
   }
   if (!rangeMessages.length || !state.apiKey.trim()) return;
+
+  // Enqueue a topic-scoped memorization in addition to the topic summary.
+  memorizeSessionToTome(rangeMessages, state.sessionId, {
+    scope:        'topic',
+    topicId:      topic.id,
+    messageRange: { start: topic.startIndex, end: topic.endIndex },
+  });
+
   openSummaryModal(topic);
   generateTopicSummary(topic, rangeMessages);
 }

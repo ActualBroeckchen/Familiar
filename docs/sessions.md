@@ -37,8 +37,11 @@ Load persisted settings + history from localStorage
 |---|---|
 | **App start** | Settings and history loaded from `localStorage`. If the last message was ≥ 3 hours ago, the old session is finalized silently and a new one starts. |
 | **Message sent** | `lastMessage` timestamp updated; 3-hour inactivity timer resets. Session written to server (fire-and-forget). |
-| **3-hour idle timeout** | Session stamped with `endedAt` and saved. New session starts automatically. Memorization begins in the background. |
-| **Manual clear** | **Clear** button closes and memorizes the current session before starting a fresh one. |
+| **3-hour idle timeout** | Session stamped with `endedAt` and saved. New session starts automatically. A memorization job is enqueued on the server. |
+| **Manual clear** | **Clear** button closes the current session, enqueues a memorization job, and starts a fresh one. |
+| **Tab close** | A `beforeunload` handler uses `navigator.sendBeacon` to enqueue the current session before the page unloads. |
+| **Topic end** | Clicking **□ Topic end** enqueues a topic-scoped memorization for that topic's message range, in addition to the existing topic summary. |
+| **Memorize now** | The **✦ Memorize now** button in the Chat sidebar enqueues the current session on demand without ending it. |
 
 ### Session ID and Timestamps
 
@@ -71,7 +74,21 @@ Tool-call turns (role `tool` and assistant turns containing `tool_calls`) are in
 
 ## Session Memorization
 
-When a session closes — either by the 3-hour idle timeout or by manually clearing the chat — the full conversation is automatically sent to the configured LLM. The model is prompted in the style of [`tome-writing-guide.md`](tome-writing-guide.md), splits the conversation into distinct situational topics, and returns structured JSON. Each topic becomes a new entry in the **default Tome** (the first enabled Tome; if none exist, a "General" Tome is created automatically).
+Memorization is a **server-side queued job**. The browser submits a payload to `POST /api/memorize`; a worker in `memorization.js` calls the configured LLM, parses the response, and writes entries to the dedicated **Session Memories** Tome — auto-created on first use. The model is prompted in the style of [`tome-writing-guide.md`](tome-writing-guide.md), splits the conversation into distinct situational topics, and returns structured JSON.
+
+The queue is persisted to `tomes/.memorization-queue.json` (git-ignored), so jobs survive tab close, 3-hour idle rollover, and server restart. Any job left in `processing` after a restart is automatically re-queued.
+
+### Triggers
+
+| Trigger | Delivery | Scope |
+|---|---|---|
+| 3-hour idle timeout | `navigator.sendBeacon` | Whole session |
+| Manual **Clear** | `navigator.sendBeacon` | Whole session |
+| **Memorize now** button | `fetch` | Whole current session, on demand, without ending it |
+| `beforeunload` (tab close) | `navigator.sendBeacon` | Current session if it has messages and hasn't been beaconed already |
+| Topic end | `fetch` | Just that topic's message range |
+
+`sendBeacon` is used for terminal events because it survives the page unloading. Identical jobs (same `sessionId + scope + topicId + messageRange`) are deduplicated server-side, so double-triggering from `beforeunload` after a Clear is safe.
 
 ### What Gets Saved Per Entry
 
@@ -82,26 +99,53 @@ When a session closes — either by the 3-hour idle timeout or by manually clear
 | Keys (keywords) | 3–8 conversational trigger phrases the user would actually say when the situation recurs |
 | Sticky | How many turns the entry stays active after first match (sized to how long the situation typically lasts) |
 | Position | `before_char` (default for memorized entries) |
+| `scope`, `topic_id`, `message_range`, `session_id` | Provenance metadata: which trigger produced the entry and what conversation slice it came from |
+
+### Job Lifecycle
+
+```
+pending  ──►  processing  ──►  done       (entries written, ack pending)
+                  │
+                  └──►  pending  (with nextAttemptAt for retry)
+                          │
+                          └──►  failed    (max attempts exhausted)
+```
+
+- **Backoff schedule:** 5s → 30s → 2m → 10m → 30m, max 5 attempts.
+- **Per-Tome mutex** serialises concurrent writes so entries from parallel jobs never clobber each other.
+- **Acknowledgement:** the client polls `GET /api/memorize` every 30 seconds (and on window focus). Terminal jobs (`done` or `failed`) are toasted to the user, then ACKed via `POST /api/memorize/:id/ack` so they don't toast twice. Acknowledged terminal jobs are pruned after 24 hours.
+
+### Endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/memorize` | Enqueue a job. Accepts `application/json` (fetch) or `text/plain` JSON (sendBeacon). Returns `{ jobId, deduped }`. |
+| `GET /api/memorize` | List all jobs (sanitised — no API keys or message bodies). Used by the client poller. |
+| `POST /api/memorize/:id/ack` | Mark a terminal job as seen by the UI. |
+| `DELETE /api/memorize/:id` | Cancel a pending job. Returns 409 if the job is already running. |
 
 ### Limits and Conditions
 
 | Condition | Behaviour |
 |---|---|
-| Session has fewer than 4 readable messages | Skipped — too short to summarize meaningfully |
-| No API key configured | Silently skipped |
-| 1–8 entries per session | The LLM is asked to return between 1 and 8 topic entries |
-| Background execution | Runs after the new session has already started; never blocks the UI |
-| Race-condition safety | The target Tome is fetched fresh from the server before writing, so no concurrent edits are lost |
+| Fewer than 2 readable messages | Job is rejected at enqueue |
+| No API key configured | Memorization is skipped |
+| 1–8 entries per job | The LLM is asked to return between 1 and 8 topic entries |
+| Queue file contains the API key on disk | Match the existing local-only posture of `logs/` and `tomes/`. The queue file is git-ignored. If exposing the server beyond localhost, lock it down. |
 
 ### User Feedback
 
-A brief on-screen toast confirms the result, e.g.:
+A brief on-screen toast confirms success once the job completes, e.g.:
 
 > *"3 Tome entries memorized from the last session."*
 
+If a job fails after exhausting its retries, a separate toast surfaces the error:
+
+> *"Memorization failed: Provider zai returned 401: token expired or incorrect"*
+
 ### Editing Memorized Entries
 
-Entries created by memorization are indistinguishable from hand-crafted lorebook entries and can be edited, disabled, or deleted at any time via **☰ → Lorebook → View entries**.
+Entries created by memorization are indistinguishable from hand-crafted lorebook entries and can be edited, disabled, or deleted at any time via **☰ → Lorebook → View entries**, inside the **Session Memories** Tome.
 
 ---
 
