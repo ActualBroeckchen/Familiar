@@ -12,18 +12,17 @@ A lightweight, self-hosted chat UI for [z.ai](https://api.z.ai) and [NanoGPT](ht
 - [Node.js](https://nodejs.org/) 18 or newer
 - [Deno](https://deno.com/) 2+ (only required if using the entity-core identity layer)
 
-### Quick Start
+### Quick Start (one double-click)
 
-**One-click installer + launcher** (recommended):
-
-| OS | Install | Start | Stop |
+| OS | First-run | Launch | Stop |
 |---|---|---|---|
-| macOS / Linux | `./install.sh` | `./start.sh` | `./stop.sh` |
-| Windows | double-click `install.bat` | double-click `start.bat` | double-click `stop.bat` |
+| **Windows** | Double-click `Proto-Familiar.vbs`. It auto-installs Node, Deno, and Git via `winget` (no admin needed — `--scope user`), runs `npm install`, clones entity-core, and creates Desktop + Start Menu shortcuts. | Double-click the **Proto-Familiar** Desktop shortcut (or `Proto-Familiar.vbs`). A tray icon appears; the browser opens automatically. Left-click the icon to re-open the browser. | Right-click the tray icon → **Quit**. Cleanly stops both Proto-Familiar and entity-core. |
+| **macOS** | Double-click `Proto-Familiar.command` in Finder. First run installs dependencies; subsequent runs just start it. | Double-click `Proto-Familiar.command`. Browser opens automatically. | Press **Ctrl-C** in the Terminal window, then close the window. |
+| **Linux** | Run `./install.sh` once. It installs Node deps, clones entity-core, and registers a **Proto-Familiar** entry in your application menu. | Search **Proto-Familiar** in your app launcher, or `./start.sh`. | `./stop.sh` |
 
-`install` runs `npm install` and clones [entity-core-alpha](https://github.com/PsycherosAI/Psycheros) into `../entity-core-alpha` so the identity layer works out of the box. `start` launches the server in the background, waits for the port, and opens **http://localhost:3000** in your browser. `stop` kills the server and its entity-core child process.
+Everything runs locally at **http://localhost:3000** — your API key never leaves your machine. Set `PORT=8080` (env var, or `PORT=8080 ./start.sh`) to change the port.
 
-**Manual:**
+**Manual / advanced:**
 
 ```bash
 # 1. Install dependencies

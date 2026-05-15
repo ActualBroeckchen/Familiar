@@ -57,10 +57,32 @@ else
   fi
 fi
 
+# --- Platform-specific launcher polish ---
+UNAME="$(uname -s 2>/dev/null || echo unknown)"
+case "$UNAME" in
+  Linux)
+    if [ -f "$SCRIPT_DIR/scripts/linux/install-desktop-entry.sh" ]; then
+      say "Installing application-menu entry..."
+      bash "$SCRIPT_DIR/scripts/linux/install-desktop-entry.sh" || warn "Desktop entry install failed (non-fatal)."
+    fi
+    ;;
+  Darwin)
+    if [ -f "$SCRIPT_DIR/Proto-Familiar.command" ]; then
+      chmod +x "$SCRIPT_DIR/Proto-Familiar.command" || true
+      say "macOS launcher ready: double-click Proto-Familiar.command in Finder."
+    fi
+    ;;
+esac
+
 say "Install complete."
 echo
-echo "  Start:  ./start.sh"
-echo "  Stop:   ./stop.sh"
+echo "  Launch:"
+case "$UNAME" in
+  Darwin) echo "    - Double-click Proto-Familiar.command in Finder";;
+  Linux)  echo "    - Search 'Proto-Familiar' in your app launcher, or run ./start.sh";;
+  *)      echo "    - ./start.sh";;
+esac
+echo "  Stop:   ./stop.sh  (or close the launcher window on macOS)"
 echo
 if [ "$HAVE_DENO" = "0" ]; then
   warn "Reminder: install Deno before first start if you want entity-core enrichment."
