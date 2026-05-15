@@ -1,6 +1,9 @@
 node_modules/
+package-lock.json
 .env
 *.log
 npm-debug.log*
 logs/
+tomes/.memorization-queue.json
+tomes/.memorization-queue.json.tmp
 .proto-familiar.pid

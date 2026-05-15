@@ -213,6 +213,34 @@ Creates a new Tome.
 
 ---
 
+### `GET /api/tomes/session-memories`
+
+Returns metadata for the special **Session Memories** tome, creating it if it doesn't exist yet. This is the system tome that receives all session memorization output — both the worker-driven Auto-summarize path and the user-driven Manual topics path. Always present, always at the same logical name; the underlying file id remains stable across calls.
+
+The find-or-create routine is shared with the memorization worker (`memorization.js#findOrCreateSessionMemoriesTome`) via a process-wide mutex, so concurrent callers (e.g. the worker processing a queued job and the client opening the manual viewer) can't produce duplicate tomes.
+
+**Response:**
+
+```json
+{
+  "id":          "550e8400-e29b-41d4-a716-446655440000",
+  "name":        "Session Memories",
+  "description": "Auto-generated entries from past conversations. Created on first session memorization.",
+  "enabled":     true,
+  "entryCount":  12
+}
+```
+
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| `500` | File system read/write failure during find-or-create |
+
+> Registered before `GET /api/tomes/:id` so the literal segment isn't shadowed by the UUID-validated route.
+
+---
+
 ### `GET /api/tomes/:id`
 
 Returns the full Tome including all entries.

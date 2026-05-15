@@ -249,11 +249,12 @@ const state = {
   characterProfile:  '',
   userProfile:       '',
   postHistoryPrompt: '',
-  sessionId:         null,   // UUID, created at init or on clear
-  sessionStartedAt:  null,   // ISO timestamp
-  sessionEndedAt:    null,   // ISO timestamp — set when session is auto-ended
-  lastMessage:       null,   // ISO timestamp — mirrors the module-level lastMessage
-  messages:          [],     // { role, content, timestamp }[]
+  sessionId:               null,   // UUID, created at init or on clear
+  sessionStartedAt:        null,   // ISO timestamp
+  sessionEndedAt:          null,   // ISO timestamp — set when session is auto-ended
+  previousSessionEndedAt:  null,   // ISO timestamp of the most recent prior session's endedAt — drives {{timeSinceLastSession}}
+  lastMessage:             null,   // ISO timestamp — mirrors the module-level lastMessage
+  messages:                [],     // { role, content, timestamp }[]
   // ── Tool calling ──────────────────────────────────────────
   toolsEnabled:      true,   // whether to send tools array with each request
   customTools:       '',     // JSON array string of user-defined tool definitions
@@ -335,15 +336,108 @@ async function saveToServer() {
   } catch { /* non-critical */ }
 }
 
-// ── Name variable substitution ──────────────────────────────────
+// ── Macro substitution ──────────────────────────────────────────
 /**
- * Replace {{user}} and {{char}} in a prompt string with the
- * configured user/AI display names.
+ * Format a millisecond duration as a compact human string: "47s", "5m",
+ * "2h 14m", "3d 4h", or "just now" when under a minute.
+ */
+function formatDuration(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return 'unknown';
+  if (ms < 60_000) return ms < 5_000 ? 'just now' : `${Math.floor(ms / 1000)}s`;
+  const min  = Math.floor(ms / 60_000);
+  const hour = Math.floor(min / 60);
+  const day  = Math.floor(hour / 24);
+  if (day  >= 1) return `${day}d ${hour % 24}h`;
+  if (hour >= 1) return `${hour}h ${min % 60}m`;
+  return `${min}m`;
+}
+
+/**
+ * Milliseconds between the timestamps of the two most recent USER messages
+ * in `state.messages`. Returns null when fewer than two timestamped user
+ * messages exist.
+ *
+ * This is intentionally history-only — no synthesized `Date.now()` — so the
+ * macro is detecting "user returned after a long absence" by comparing the
+ * timestamps of two messages that are both actually in the saved chat
+ * history. Every message is dated and timestamped on send, so once the new
+ * user turn lands the gap surfaces on the next prompt build.
+ *
+ * Stays inside `state.messages`, so it can't accidentally cross a session
+ * boundary the way the legacy module-level `elapsedTime` field can after a
+ * state restore.
+ */
+function elapsedBetweenUserMessages() {
+  const stamps = [];
+  for (let i = state.messages.length - 1; i >= 0 && stamps.length < 2; i--) {
+    const m = state.messages[i];
+    if (m?.role === 'user' && m.timestamp) {
+      const t = new Date(m.timestamp).getTime();
+      if (Number.isFinite(t)) stamps.push(t);
+    }
+  }
+  if (stamps.length < 2) return null;
+  return stamps[0] - stamps[1];
+}
+
+/**
+ * Milliseconds since the most recent prior session ended, based on
+ * `state.previousSessionEndedAt` (maintained on session-boundary events
+ * and refreshed from /api/logs when the cache is missing).
+ */
+function timeSinceLastSessionEnded() {
+  if (!state.previousSessionEndedAt) return null;
+  const t = new Date(state.previousSessionEndedAt).getTime();
+  if (!Number.isFinite(t)) return null;
+  return Date.now() - t;
+}
+
+/**
+ * Refresh `state.previousSessionEndedAt` from the server's session list,
+ * picking the most recent `endedAt` among logs that aren't the current
+ * session. Used on cold start and when loading a different historical
+ * session — both cases where localStorage may not reflect what the
+ * server knows.
+ */
+async function refreshPreviousSessionEndedAt() {
+  try {
+    const res = await fetch('/api/logs');
+    if (!res.ok) return;
+    const list = await res.json();
+    let latest = null;
+    for (const s of list) {
+      if (!s?.endedAt) continue;
+      if (s.sessionId === state.sessionId) continue;
+      const t = new Date(s.endedAt).getTime();
+      if (!Number.isFinite(t)) continue;
+      if (latest === null || t > new Date(latest).getTime()) latest = s.endedAt;
+    }
+    if (latest && latest !== state.previousSessionEndedAt) {
+      state.previousSessionEndedAt = latest;
+      saveSettings();
+    }
+  } catch { /* best-effort cache refresh */ }
+}
+
+/**
+ * Replace prompt macros with their current values:
+ *   {{user}}                — configured user display name
+ *   {{char}}                — configured AI display name
+ *   {{elapsedTime}}         — duration between the last two user messages
+ *   {{timeSinceLastSession}} — duration since the previous session ended
  */
 function applyNameVars(text) {
   return text
     .replace(/\{\{user\}\}/gi, state.userName || 'User')
-    .replace(/\{\{char\}\}/gi, state.charName || 'Assistant');
+    .replace(/\{\{char\}\}/gi, state.charName || 'Assistant')
+    .replace(/\{\{elapsedTime\}\}/gi, () => {
+      const ms = elapsedBetweenUserMessages();
+      return ms !== null ? formatDuration(ms) : 'no prior user message';
+    })
+    .replace(/\{\{timeSinceLastSession\}\}/gi, () => {
+      const ms = timeSinceLastSessionEnded();
+      return ms !== null ? formatDuration(ms) : 'no prior session';
+    });
 }
 
 // ── Message building ─────────────────────────────────────────────
@@ -1293,11 +1387,15 @@ async function autoEndSession() {
     const sessionMessages = [...state.messages];
     const sessionId       = state.sessionId;
     state.sessionEndedAt  = new Date().toISOString();
+    // Remember when this session ended so {{timeSinceLastSession}} reads
+    // correctly from the new session that's about to start.
+    state.previousSessionEndedAt = state.sessionEndedAt;
     saveSettings();
     await saveToServer();
+    memorizeViaBeacon(sessionMessages, sessionId, { scope: 'session' });
+    state._beaconedSessionId = sessionId;
     startNewSession();
     showSessionEndedNotice();
-    memorizeSessionToTome(sessionMessages, sessionId); // fire-and-forget
   } else {
     startNewSession();
     showSessionEndedNotice();
@@ -1329,165 +1427,121 @@ function showMemorizationNotice(count) {
 }
 
 /**
- * Automatically memorize a finished session into lorebook entries.
- * Fires-and-forgets after session close — never blocks the UI.
- * Calls the configured LLM to split the conversation into distinct topics
- * and creates a lorebook entry for each one.
+ * Enqueue a memorization job on the server. The server-side worker calls the
+ * LLM, finds/creates the "Session Memories" tome, and writes entries — with
+ * retry-on-failure. Survives tab close and server restart.
+ *
+ * scope: 'session' (whole session) or 'topic' (a topic's message range).
+ * Returns the jobId, or null on error / when memorization isn't possible.
  */
-async function memorizeSessionToTome(messages, sessionId) {
-  if (!state.apiKey.trim()) return;
-
-  // Filter to user/assistant only — skip tool-call plumbing and empty turns
-  const readable = messages.filter(m => {
-    if (m.role === 'tool') return false;
-    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return false;
-    return m.content?.trim();
-  });
-  if (readable.length < 4) return;
-
-  const convText = readable
-    .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
-    .join('\n\n');
-
-  const prompt =
-`You are producing Tome entries for a Familiar (AI companion). Each entry is private reference notes that get injected into the Familiar's context when its keywords appear in a future conversation. Identify the distinct situational topics in the conversation below and write one entry per topic, following the craft rules carefully.
-
-Return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
-{
-  "topics": [
-    {
-      "title":    "Short label for the entry comment (max 60 chars)",
-      "content":  "Familiar-perspective bullet guidance — see content rules below",
-      "keywords": ["conversational phrase 1", "conversational phrase 2"],
-      "sticky":   3
-    }
-  ]
-}
-
-Identify 1–8 genuinely distinct topics. Merge closely related material rather than over-splitting. Each entry must be self-contained.
-
-### Content rules (most important)
-Write content as the Familiar's private notes to themselves about this situation. NOT a summary of what happened.
-Structure:
-  1. One short framing line — what is happening and why (gives the Familiar understanding, not just rules).
-  2. 3–5 action bullets — what to do.
-  3. 1–2 prohibition bullets — what NOT to do. Usually the most valuable: name the well-intentioned default response that would make things worse.
-Style:
-  - Second person, addressed to the Familiar. Use {{user}} wherever the user's name belongs.
-  - Practical, grounded, non-clinical. Notes, not a textbook.
-  - Short declarative bullets. The whole entry should be readable in 5–10 seconds.
-  - Do NOT include narrative summaries of "what they said" — distil the situation and the response, not the transcript.
-
-### Keyword rules
-Keywords are TRIGGERS, not labels. They must be phrases the user would literally say when this situation recurs — not the name of the topic.
-  - WRONG: "executive dysfunction", "rejection sensitive dysphoria", "hyperfocus".
-  - RIGHT: "don't know where to start", "did I say something wrong", "been at this for".
-Derive them by imagining what the user would actually type when the situation is happening, then extracting distinctive phrases.
-  - Prefer multi-word phrases over single common words (avoid bare "tired", "can't", "hard").
-  - 3–8 keywords per entry. Each one specific enough not to fire in unrelated conversations.
-  - You may use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has 3+ predictable variants.
-
-### Sticky rules
-Pick an integer sticky value per entry (number of turns the entry stays active after first match):
-  - null = one-shot lore/fact that does not need persistence.
-  - 2    = brief states that typically resolve quickly.
-  - 3    = moderate states needing a few exchanges.
-  - 4–5  = complex/intense states taking multiple turns to navigate.
-  - 8+   = ongoing modes that should persist across the whole session.
-
-Conversation:
-${convText}`;
-
+async function memorizeSessionToTome(messages, sessionId, opts = {}) {
+  if (!state.apiKey.trim()) return null;
+  if (!Array.isArray(messages) || messages.length < 2) return null;
+  const payload = {
+    sessionId,
+    scope:        opts.scope ?? 'session',
+    topicId:      opts.topicId ?? null,
+    messageRange: opts.messageRange ?? null,
+    messages,
+    provider:     state.provider,
+    apiKey:       state.apiKey,
+    model:        state.model,
+  };
   try {
-    const resp = await fetch('/api/chat', {
+    const resp = await fetch('/api/memorize', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        provider:    state.provider,
-        apiKey:      state.apiKey,
-        model:       state.model,
-        messages:    [{ role: 'user', content: prompt }],
-        stream:      false,
-        temperature: 0.2,
-        max_tokens:  2000,
-      }),
+      body:    JSON.stringify(payload),
     });
-    if (!resp.ok) return;
-    const data = await resp.json();
-    if (data.error) return;
-
-    const raw       = data.choices?.[0]?.message?.content ?? '';
-    const jsonMatch = raw.match(/\{[\s\S]+\}/);
-    if (!jsonMatch) return;
-    const parsed = JSON.parse(jsonMatch[0]);
-    const topics = parsed.topics;
-    if (!Array.isArray(topics) || !topics.length) return;
-
-    // Get or create the default tome for auto-saved memories
-    let targetTome = null;
-    try { targetTome = await getDefaultTomeForSaving(); } catch { return; }
-    if (!targetTome) return;
-
-    // Fetch the current tome fresh from the server
-    let tomeData = { entries: {} };
-    try {
-      const tRes = await fetch(`/api/tomes/${targetTome.id}`);
-      if (tRes.ok) tomeData = await tRes.json();
-    } catch { /* fall back to empty */ }
-
-    const now = new Date().toISOString();
-    let created = 0;
-    for (const t of topics) {
-      const title   = (t.title   ?? '').trim();
-      const content = (t.content ?? '').trim();
-      if (!title || !content) continue;
-      const stickyN = parseInt(t.sticky, 10);
-      const sticky  = Number.isFinite(stickyN) && stickyN > 0 ? stickyN : null;
-      const uid = generateId();
-      tomeData.entries[uid] = {
-        uid,
-        comment:             title,
-        keys:                Array.isArray(t.keywords) ? t.keywords.map(k => String(k).trim()).filter(Boolean) : [],
-        keysecondary:        [],
-        content,
-        constant:            false,
-        selective:           false,
-        selectiveLogic:      0,
-        enabled:             true,
-        position:            0,
-        depth:               4,
-        role:                0,
-        scanDepth:           null,
-        caseSensitive:       null,
-        matchWholeWords:     null,
-        probability:         100,
-        sticky,
-        cooldown:            null,
-        preventRecursion:    false,
-        delayUntilRecursion: false,
-        excludeRecursion:    false,
-        group:               '',
-        groupWeight:         null,
-        insertion_order:     100,
-        created_at:          now,
-        learnedAt:           now,
-        session_id:          sessionId,
-        message_range:       null,
-      };
-      created++;
+    if (!resp.ok) {
+      console.warn('[memorize] enqueue failed:', resp.status, await resp.text().catch(() => ''));
+      return null;
     }
-    if (!created) return;
+    const { jobId } = await resp.json();
+    return jobId;
+  } catch (err) {
+    console.warn('[memorize] enqueue error:', err);
+    return null;
+  }
+}
 
-    await fetch(`/api/tomes/${targetTome.id}`, {
-      method:  'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ entries: tomeData.entries }),
-    });
+/**
+ * Fire-and-forget enqueue that survives tab close via navigator.sendBeacon.
+ * Used in the `beforeunload` handler — fetch() won't reliably deliver there.
+ */
+function memorizeViaBeacon(messages, sessionId, opts = {}) {
+  if (!state.apiKey.trim()) return false;
+  if (!Array.isArray(messages) || messages.length < 2) return false;
+  const payload = {
+    sessionId,
+    scope:        opts.scope ?? 'session',
+    topicId:      opts.topicId ?? null,
+    messageRange: opts.messageRange ?? null,
+    messages,
+    provider:     state.provider,
+    apiKey:       state.apiKey,
+    model:        state.model,
+  };
+  try {
+    const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+    return navigator.sendBeacon('/api/memorize', blob);
+  } catch {
+    return false;
+  }
+}
 
-    // Update cache so the tome entries modal reflects new entries immediately.
-    state.tomeCache[targetTome.id] = tomeData;
-    showMemorizationNotice(created);
-  } catch { /* non-critical — silently swallow any error */ }
+// ── Memorization status polling ──────────────────────────────────
+// The server queue runs asynchronously. Poll for terminal-state jobs so we
+// can toast outcomes (success or failure) and then ACK them so we don't
+// re-toast on the next poll.
+
+let _memStatusTimerId = null;
+
+async function pollMemorizationStatus() {
+  try {
+    const resp = await fetch('/api/memorize');
+    if (!resp.ok) return;
+    const jobs = await resp.json();
+    let tomeChanged = false;
+    for (const j of jobs) {
+      if (j.acknowledged) continue;
+      if (j.status === 'done') {
+        const n = j.result?.entriesCreated ?? 0;
+        if (n > 0) showMemorizationNotice(n);
+        tomeChanged = true;
+      } else if (j.status === 'failed') {
+        showMemorizationFailureNotice(j.lastError ?? 'unknown error');
+      } else {
+        continue;
+      }
+      // Best-effort ack; ignore failure.
+      fetch(`/api/memorize/${j.id}/ack`, { method: 'POST' }).catch(() => {});
+    }
+    if (tomeChanged) {
+      // Refresh the registry so a freshly-created "Session Memories" tome shows up.
+      loadTomesFromServer?.().catch?.(() => {});
+    }
+  } catch { /* polling is best-effort */ }
+}
+
+function startMemorizationStatusPolling() {
+  if (_memStatusTimerId) return;
+  pollMemorizationStatus();
+  _memStatusTimerId = setInterval(pollMemorizationStatus, 30_000);
+  // Also poll when the tab regains focus — likely just-completed jobs.
+  window.addEventListener('focus', pollMemorizationStatus);
+}
+
+function showMemorizationFailureNotice(reason) {
+  const toast = document.createElement('div');
+  toast.className = 'session-toast';
+  toast.textContent = `Memorization failed: ${reason}`;
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('session-toast-show'));
+  setTimeout(() => {
+    toast.classList.remove('session-toast-show');
+    setTimeout(() => toast.remove(), 400);
+  }, 6000);
 }
 
 // ── Prompt inspector modal ───────────────────────────────────
@@ -1596,6 +1650,13 @@ async function refreshLogsList() {
         actions.appendChild(loadBtn);
       }
 
+      const memBtn = document.createElement('button');
+      memBtn.className = 'btn-secondary log-action-btn';
+      memBtn.textContent = 'Memorize';
+      memBtn.title = 'Auto-summarize or manually mark topics for this session';
+      memBtn.addEventListener('click', () => openMemorizeChoice(s));
+      actions.appendChild(memBtn);
+
       const delBtn = document.createElement('button');
       delBtn.className = 'btn-ghost log-action-btn';
       delBtn.textContent = 'Delete';
@@ -1651,6 +1712,10 @@ async function loadSession(sessionId) {
     renderAllMessages();
     updateTopicStrip();
     closeLogsModal();
+
+    // Loading a different session changes which log is "the prior one" —
+    // recompute the cache so {{timeSinceLastSession}} stays correct.
+    refreshPreviousSessionEndedAt().catch(() => {});
   } catch (err) {
     alert(`Failed to load session: ${err.message}`);
   }
@@ -1667,9 +1732,16 @@ function init() {
   if (lastMessage) {
     const idleMs = Date.now() - new Date(lastMessage).getTime();
     if (idleMs >= SESSION_IDLE_MS) {
-      // Session expired while the tab was closed — finalize silently, then reset
+      // Session expired while the tab was closed — finalize silently, then reset.
+      // Capture the just-finalised endedAt for {{timeSinceLastSession}} before
+      // startNewSession() clears sessionEndedAt.
       if (state.messages.length && !state.sessionEndedAt) {
         state.sessionEndedAt = lastMessage; // approximate — last known activity
+      }
+      if (state.sessionEndedAt) {
+        state.previousSessionEndedAt = state.sessionEndedAt;
+      }
+      if (state.messages.length) {
         saveSettings();
         saveToServer(); // fire-and-forget
       }
@@ -1678,6 +1750,12 @@ function init() {
       // Resume the countdown with however much time remains
       _sessionTimeoutId = setTimeout(autoEndSession, SESSION_IDLE_MS - idleMs);
     }
+  }
+
+  // Backfill {{timeSinceLastSession}}'s cache from server logs on cold start,
+  // so the macro works for users whose localStorage doesn't have it yet.
+  if (!state.previousSessionEndedAt) {
+    refreshPreviousSessionEndedAt().catch(() => {});
   }
 
   // Apply saved theme
@@ -1755,10 +1833,14 @@ function init() {
         const sessionMessages = [...state.messages];
         const sessionId       = state.sessionId;
         state.sessionEndedAt  = new Date().toISOString();
+        // Hand the just-ended session's endedAt to {{timeSinceLastSession}}
+        // before startNewSession() resets sessionEndedAt to null.
+        state.previousSessionEndedAt = state.sessionEndedAt;
         saveSettings();
         saveToServer(); // fire-and-forget — stamps the log with endedAt
+        memorizeViaBeacon(sessionMessages, sessionId, { scope: 'session' });
+        state._beaconedSessionId = sessionId;
         startNewSession();
-        memorizeSessionToTome(sessionMessages, sessionId); // fire-and-forget
       } else {
         startNewSession();
       }
@@ -1874,8 +1956,61 @@ function init() {
     if (e.target === $('retro-end-modal')) closeRetroEndModal();
   });
 
+  // Memorize choice modal (per-session "Memorize" button in the logs modal)
+  $('memorize-choice-close').addEventListener('click', closeMemorizeChoice);
+  $('memorize-choice-modal').addEventListener('click', e => {
+    if (e.target === $('memorize-choice-modal')) closeMemorizeChoice();
+  });
+  $('memorize-choice-auto-btn').addEventListener('click', () => {
+    if (_memorizeChoiceSession) runAutoSummarize(_memorizeChoiceSession);
+  });
+  $('memorize-choice-manual-btn').addEventListener('click', () => {
+    if (_memorizeChoiceSession) openManualMemorize(_memorizeChoiceSession);
+  });
+
+  // Manual memorize modal
+  $('manual-memorize-close').addEventListener('click', closeManualMemorize);
+  $('manual-memorize-modal').addEventListener('click', e => {
+    if (e.target === $('manual-memorize-modal')) closeManualMemorize();
+  });
+
   // ── Load tomes from server ────────────────────────────────────
   loadTomesFromServer();
+
+  // ── Memorization status polling ──────────────────────────────
+  startMemorizationStatusPolling();
+
+  // ── Memorize-now button (in the Chat sidebar section) ────────
+  const memNowBtn = $('memorize-now-btn');
+  if (memNowBtn) {
+    memNowBtn.addEventListener('click', async () => {
+      if (!state.messages.length) {
+        setStatus('Nothing to memorize yet.');
+        return;
+      }
+      if (!state.apiKey.trim()) {
+        setStatus('Set an API key in Settings first.');
+        return;
+      }
+      const jobId = await memorizeSessionToTome([...state.messages], state.sessionId, { scope: 'session' });
+      if (jobId) {
+        setStatus('Memorization queued.');
+      } else {
+        setStatus('Could not queue memorization.');
+      }
+    });
+  }
+
+  // ── beforeunload: catch tab-close mid-session ────────────────
+  // Only enqueue if the current session has messages AND we haven't already
+  // enqueued for this session (avoids duplicate jobs when Clear was just used).
+  window.addEventListener('beforeunload', () => {
+    if (!state.messages.length) return;
+    if (state._beaconedSessionId === state.sessionId) return;
+    if (memorizeViaBeacon([...state.messages], state.sessionId, { scope: 'session' })) {
+      state._beaconedSessionId = state.sessionId;
+    }
+  });
 
   // Restore topic strip
   updateTopicStrip();
@@ -1997,6 +2132,14 @@ function endTopicAtIndex(topic, endIdx) {
     rangeMessages.push(m);
   }
   if (!rangeMessages.length || !state.apiKey.trim()) return;
+
+  // Enqueue a topic-scoped memorization in addition to the topic summary.
+  memorizeSessionToTome(rangeMessages, state.sessionId, {
+    scope:        'topic',
+    topicId:      topic.id,
+    messageRange: { start: topic.startIndex, end: topic.endIndex },
+  });
+
   openSummaryModal(topic);
   generateTopicSummary(topic, rangeMessages);
 }
@@ -2188,6 +2331,365 @@ function closeRetroEndModal() {
   $('retro-end-modal').classList.add('hidden');
 }
 
+// ── Session-memorize: choice modal ───────────────────────────────
+// Per-row "Memorize" button in the logs modal opens this picker, which
+// branches to either the auto-summarize path (enqueue a memorization job
+// and wait for the worker) or the manual-topics path (open a read-only
+// transcript with topic-mark buttons).
+
+let _memorizeChoiceSession = null; // session row {sessionId, startedAt, …}
+
+function openMemorizeChoice(session) {
+  _memorizeChoiceSession = session;
+  const startLabel = session.startedAt
+    ? new Date(session.startedAt).toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : 'session';
+  $('memorize-choice-subtitle').textContent = `Choose how to extract Tome entries from ${startLabel}.`;
+  $('memorize-choice-status').classList.add('hidden');
+  $('memorize-choice-status').textContent = '';
+  $('memorize-choice-auto-btn').disabled   = false;
+  $('memorize-choice-manual-btn').disabled = false;
+  $('memorize-choice-modal').classList.remove('hidden');
+}
+
+function closeMemorizeChoice() {
+  _memorizeChoiceSession = null;
+  $('memorize-choice-modal').classList.add('hidden');
+}
+
+/**
+ * Auto-summarize path: enqueue a memorization job for the chosen session
+ * and poll until the worker reports done/failed. The worker writes to the
+ * Session Memories tome via memorization.js#findOrCreateSessionMemoriesTome.
+ */
+async function runAutoSummarize(session) {
+  if (!state.apiKey.trim()) {
+    setMemorizeChoiceStatus('Set an API key in Settings first.', true);
+    return;
+  }
+  setMemorizeChoiceStatus('Loading session…', false);
+  $('memorize-choice-auto-btn').disabled   = true;
+  $('memorize-choice-manual-btn').disabled = true;
+
+  let messages;
+  try {
+    const res = await fetch(`/api/logs/${session.sessionId}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    messages = Array.isArray(data.messages) ? data.messages : [];
+  } catch (err) {
+    setMemorizeChoiceStatus(`Could not load session: ${err.message}`, true);
+    $('memorize-choice-auto-btn').disabled   = false;
+    $('memorize-choice-manual-btn').disabled = false;
+    return;
+  }
+  if (messages.length < 2) {
+    setMemorizeChoiceStatus('Session is too short to memorize.', true);
+    $('memorize-choice-auto-btn').disabled   = false;
+    $('memorize-choice-manual-btn').disabled = false;
+    return;
+  }
+
+  setMemorizeChoiceStatus('Memorizing… this can take a few seconds.', false);
+
+  let jobId;
+  try {
+    const resp = await fetch('/api/memorize', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        sessionId: session.sessionId,
+        scope:     'session',
+        messages,
+        provider:  state.provider,
+        apiKey:    state.apiKey,
+        model:     state.model,
+      }),
+    });
+    if (!resp.ok) throw new Error(await resp.text().catch(() => `HTTP ${resp.status}`));
+    const data = await resp.json();
+    jobId = data.jobId;
+  } catch (err) {
+    setMemorizeChoiceStatus(`Failed to enqueue: ${err.message}`, true);
+    $('memorize-choice-auto-btn').disabled   = false;
+    $('memorize-choice-manual-btn').disabled = false;
+    return;
+  }
+
+  // Poll this specific job (faster than the 30s background poller) so we can
+  // give immediate, in-context feedback for the click the user just made.
+  const result = await waitForMemorizationJob(jobId, { timeoutMs: 5 * 60 * 1000 });
+  if (result.status === 'done') {
+    const n = result.entriesCreated ?? 0;
+    setMemorizeChoiceStatus(`✓ ${n} Tome entr${n === 1 ? 'y' : 'ies'} saved to Session Memories.`, false);
+    fetch(`/api/memorize/${jobId}/ack`, { method: 'POST' }).catch(() => {});
+    loadTomesFromServer?.().catch?.(() => {});
+    showMemorizationNotice(n);
+    setTimeout(() => { closeMemorizeChoice(); refreshLogsList(); }, 1500);
+  } else if (result.status === 'failed') {
+    setMemorizeChoiceStatus(`Memorization failed: ${result.lastError ?? 'unknown error'}`, true);
+    fetch(`/api/memorize/${jobId}/ack`, { method: 'POST' }).catch(() => {});
+    $('memorize-choice-auto-btn').disabled   = false;
+    $('memorize-choice-manual-btn').disabled = false;
+  } else if (result.status === 'timeout') {
+    setMemorizeChoiceStatus('Still running — the result will toast when it finishes.', false);
+    $('memorize-choice-auto-btn').disabled   = false;
+    $('memorize-choice-manual-btn').disabled = false;
+  } else {
+    setMemorizeChoiceStatus(`Memorization error: ${result.error ?? 'unknown'}`, true);
+    $('memorize-choice-auto-btn').disabled   = false;
+    $('memorize-choice-manual-btn').disabled = false;
+  }
+}
+
+function setMemorizeChoiceStatus(text, isError) {
+  const el = $('memorize-choice-status');
+  el.textContent = text;
+  el.classList.remove('hidden');
+  el.style.color = isError ? 'var(--error-color)' : 'var(--text-dim)';
+}
+
+/** Poll /api/memorize until the named jobId reaches a terminal state. */
+async function waitForMemorizationJob(jobId, { timeoutMs = 5 * 60 * 1000, intervalMs = 2000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const resp = await fetch('/api/memorize');
+      if (resp.ok) {
+        const jobs = await resp.json();
+        const job  = jobs.find(j => j.id === jobId);
+        if (job?.status === 'done') {
+          return { status: 'done', entriesCreated: job.result?.entriesCreated ?? 0 };
+        }
+        if (job?.status === 'failed') {
+          return { status: 'failed', lastError: job.lastError };
+        }
+      }
+    } catch (err) {
+      return { status: 'error', error: err.message };
+    }
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+  return { status: 'timeout' };
+}
+
+// ── Session-memorize: manual topics modal ─────────────────────────
+// Loads a historical session into a dedicated viewer with the same
+// topic-marking workflow as the live chat. Tome entries are saved to
+// the Session Memories tome.
+
+let _manualMemorize = null; // { sessionId, messages: [], topics: [], tomeId }
+
+async function openManualMemorize(session) {
+  closeMemorizeChoice();
+
+  // Reset state and open the modal in a loading state so the user sees movement.
+  _manualMemorize = {
+    sessionId: session.sessionId,
+    startedAt: session.startedAt,
+    messages:  [],
+    topics:    [],
+    tomeId:    null,
+  };
+  $('manual-memorize-title').textContent = 'Memorize Session — Manual Topics';
+  $('manual-memorize-topics-strip').innerHTML = '';
+  $('manual-memorize-messages').innerHTML = '<p class="logs-loading">Loading session…</p>';
+  $('manual-memorize-modal').classList.remove('hidden');
+
+  // Load both the session log and the Session Memories tome id in parallel.
+  let messages;
+  let tomeId;
+  try {
+    const [logRes, tomeRes] = await Promise.all([
+      fetch(`/api/logs/${session.sessionId}`),
+      fetch('/api/tomes/session-memories'),
+    ]);
+    if (!logRes.ok)  throw new Error(`Session log: HTTP ${logRes.status}`);
+    if (!tomeRes.ok) throw new Error(`Session Memories tome: HTTP ${tomeRes.status}`);
+    const logData  = await logRes.json();
+    const tomeData = await tomeRes.json();
+    messages = Array.isArray(logData.messages) ? logData.messages : [];
+    tomeId   = tomeData.id;
+  } catch (err) {
+    $('manual-memorize-messages').innerHTML =
+      `<p class="logs-error">⚠ Failed to load: ${esc(err.message)}</p>`;
+    return;
+  }
+
+  _manualMemorize.messages = messages;
+  _manualMemorize.tomeId   = tomeId;
+  renderManualMemorizeMessages();
+  // Refresh registry so the newly-created Session Memories tome appears in the
+  // tome library on next open (no-op if it already existed).
+  loadTomesFromServer?.().catch?.(() => {});
+}
+
+function closeManualMemorize() {
+  _manualMemorize = null;
+  $('manual-memorize-modal').classList.add('hidden');
+}
+
+function renderManualMemorizeMessages() {
+  const container = $('manual-memorize-messages');
+  container.innerHTML = '';
+  const mm = _manualMemorize;
+  if (!mm) return;
+  if (!mm.messages.length) {
+    container.innerHTML = '<p class="logs-empty">This session has no messages.</p>';
+    return;
+  }
+
+  let rendered = 0;
+  mm.messages.forEach((msg, idx) => {
+    // Skip tool plumbing — same filter as the worker uses.
+    if (msg.role === 'tool') return;
+    if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) return;
+    rendered++;
+
+    const row = document.createElement('div');
+    row.className = `mm-msg mm-msg-${msg.role}`;
+    row.dataset.msgIndex = String(idx);
+
+    const stripe = document.createElement('div');
+    stripe.className = 'mm-msg-stripe';
+    row.appendChild(stripe);
+
+    const header = document.createElement('div');
+    header.className = 'mm-msg-header';
+    const roleSpan = document.createElement('span');
+    roleSpan.textContent = `${msg.role}${msg.timestamp ? ' · ' + formatTimestamp(msg.timestamp) : ''}`;
+    header.appendChild(roleSpan);
+
+    const actions = document.createElement('span');
+    actions.className = 'mm-msg-actions';
+    const startBtn = document.createElement('button');
+    startBtn.className = 'mm-msg-action-btn';
+    startBtn.textContent = '▷ Topic start';
+    startBtn.addEventListener('click', () => manualMemorizeStartTopic(idx));
+    actions.appendChild(startBtn);
+    const endBtn = document.createElement('button');
+    endBtn.className = 'mm-msg-action-btn';
+    endBtn.textContent = '□ Topic end';
+    endBtn.addEventListener('click', () => manualMemorizeEndTopic(idx));
+    actions.appendChild(endBtn);
+    header.appendChild(actions);
+    row.appendChild(header);
+
+    const content = document.createElement('div');
+    content.className = 'mm-msg-content';
+    content.textContent = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content ?? '');
+    row.appendChild(content);
+
+    container.appendChild(row);
+  });
+
+  if (!rendered) {
+    container.innerHTML = '<p class="logs-empty">This session has no user/assistant messages to memorize.</p>';
+    return;
+  }
+
+  refreshManualMemorizeDecorations();
+}
+
+function refreshManualMemorizeDecorations() {
+  const mm = _manualMemorize;
+  if (!mm) return;
+
+  // Topic strip
+  const strip = $('manual-memorize-topics-strip');
+  strip.innerHTML = '';
+  for (const t of mm.topics) {
+    const pill = document.createElement('span');
+    pill.className = 'mm-topic-pill';
+    pill.style.setProperty('--topic-c', t.color);
+    const stateLabel = t.endIndex === null ? 'open' : (t.tomeEntryId ? 'saved' : 'closed');
+    pill.innerHTML =
+      `<span class="mm-topic-pill-dot"></span>` +
+      `<span>${esc(t.label)}</span>` +
+      `<span class="mm-topic-pill-state">${stateLabel}</span>`;
+    strip.appendChild(pill);
+  }
+
+  // Per-message colored bands showing which topics cover them
+  document.querySelectorAll('#manual-memorize-messages .mm-msg').forEach(row => {
+    const idx = parseInt(row.dataset.msgIndex, 10);
+    const stripe = row.querySelector('.mm-msg-stripe');
+    stripe.innerHTML = '';
+    for (const t of mm.topics) {
+      const covers = t.startIndex <= idx && (t.endIndex === null || idx <= t.endIndex);
+      if (!covers) continue;
+      const band = document.createElement('span');
+      band.className = 'mm-msg-stripe-band';
+      band.style.background = t.color;
+      stripe.appendChild(band);
+    }
+  });
+}
+
+function manualMemorizeStartTopic(msgIndex) {
+  const mm = _manualMemorize;
+  if (!mm) return;
+  const label = prompt('Topic label (optional):', `Topic ${mm.topics.length + 1}`);
+  if (label === null) return; // cancelled
+  const used   = new Set(mm.topics.map(t => t.color));
+  const color  = TOPIC_COLORS.find(c => !used.has(c)) ?? TOPIC_COLORS[mm.topics.length % TOPIC_COLORS.length];
+  mm.topics.push({
+    id:          generateId(),
+    label:       label.trim() || `Topic ${mm.topics.length + 1}`,
+    color,
+    startIndex:  msgIndex,
+    endIndex:    null,
+    tomeEntryId: null,
+  });
+  refreshManualMemorizeDecorations();
+}
+
+function manualMemorizeEndTopic(msgIndex) {
+  const mm = _manualMemorize;
+  if (!mm) return;
+  const open = mm.topics.filter(t => t.endIndex === null && t.startIndex <= msgIndex);
+  if (!open.length) {
+    alert('No open topic to end here. Click "Topic start" on an earlier message first.');
+    return;
+  }
+  let topic;
+  if (open.length === 1) {
+    topic = open[0];
+  } else {
+    const choice = prompt(
+      `End which topic?\n${open.map(t => `- ${t.label}`).join('\n')}`,
+      open[0].label,
+    );
+    if (choice === null) return; // cancelled
+    topic = open.find(t => t.label === choice.trim());
+    if (!topic) { alert(`No open topic named "${choice.trim()}".`); return; }
+  }
+
+  // Gather range messages, filtered like the worker does.
+  const rangeMessages = [];
+  for (let i = topic.startIndex; i <= msgIndex; i++) {
+    const m = mm.messages[i];
+    if (!m || m.role === 'tool') continue;
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
+    rangeMessages.push(m);
+  }
+  if (rangeMessages.length < 2) {
+    alert('A topic needs at least two non-tool messages to summarize. Pick a later message to end at.');
+    return; // keep the topic open so the user can try again
+  }
+
+  topic.endIndex = msgIndex;
+  refreshManualMemorizeDecorations();
+
+  openSummaryModal(topic, {
+    sessionId:     mm.sessionId,
+    tomeId:        mm.tomeId,
+    rangeMessages,
+    onSaved:       () => { refreshManualMemorizeDecorations(); },
+  });
+  generateTopicSummary(topic, rangeMessages);
+}
+
 // ── Summary generation ────────────────────────────────────────────
 let _pendingSummaryTopic = null;
 
@@ -2279,12 +2781,19 @@ async function regenerateSummary(topic) {
   $('summary-generating-hint').classList.remove('hidden');
   $('summary-form').classList.add('hidden');
 
-  const rangeMessages = [];
-  for (let i = topic.startIndex; i <= topic.endIndex; i++) {
-    const m = state.messages[i];
-    if (!m || m.role === 'tool') continue;
-    if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
-    rangeMessages.push(m);
+  // Manual-session contexts capture their messages at open time so regen still
+  // works even if the manual viewer has been closed in the meantime.
+  let rangeMessages;
+  if (_pendingSummaryContext?.rangeMessages) {
+    rangeMessages = _pendingSummaryContext.rangeMessages;
+  } else {
+    rangeMessages = [];
+    for (let i = topic.startIndex; i <= topic.endIndex; i++) {
+      const m = state.messages[i];
+      if (!m || m.role === 'tool') continue;
+      if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
+      rangeMessages.push(m);
+    }
   }
   await generateTopicSummary(topic, rangeMessages);
 }
@@ -2304,8 +2813,14 @@ function populateSummaryForm({ title, content, keywords, sticky }) {
 }
 
 // ── Summary modal ─────────────────────────────────────────────────
-function openSummaryModal(topic) {
-  _pendingSummaryTopic = topic;
+// When _pendingSummaryContext is set, savePendingSummary routes the entry
+// to a specific tome and uses the supplied sessionId / onSaved callback
+// instead of the default (live-session) behaviour.
+let _pendingSummaryContext = null; // { sessionId, tomeId, onSaved(uid) } | null
+
+function openSummaryModal(topic, context = null) {
+  _pendingSummaryTopic   = topic;
+  _pendingSummaryContext = context;
   $('summary-modal-title').textContent = `Tome entry: ${topic.label}`;
   $('summary-generating-hint').classList.remove('hidden');
   $('summary-form').classList.add('hidden');
@@ -2316,7 +2831,8 @@ function openSummaryModal(topic) {
 
 function closeSummaryModal() {
   $('summary-modal').classList.add('hidden');
-  _pendingSummaryTopic = null;
+  _pendingSummaryTopic   = null;
+  _pendingSummaryContext = null;
 }
 
 async function savePendingSummary() {
@@ -2336,6 +2852,7 @@ async function savePendingSummary() {
     return;
   }
 
+  const ctx = _pendingSummaryContext;
   const uid = generateId();
   const entry = {
     uid,
@@ -2364,27 +2881,33 @@ async function savePendingSummary() {
     insertion_order:  100,
     created_at:       new Date().toISOString(),
     learnedAt:        new Date().toISOString(),
-    session_id:       state.sessionId,
+    session_id:       ctx?.sessionId ?? state.sessionId,
     message_range:    [topic.startIndex, topic.endIndex],
   };
 
   try {
-    // Get or create the default tome, fetch fresh, merge, save
-    const targetTome = await getDefaultTomeForSaving();
-    if (!targetTome) throw new Error('No tome available for saving.');
-    const tRes = await fetch(`/api/tomes/${targetTome.id}`);
+    // Route to the context-supplied tome (manual session memorization) or
+    // fall back to the first enabled tome (live-session topic save).
+    let targetTomeId = ctx?.tomeId ?? null;
+    if (!targetTomeId) {
+      const targetTome = await getDefaultTomeForSaving();
+      if (!targetTome) throw new Error('No tome available for saving.');
+      targetTomeId = targetTome.id;
+    }
+    const tRes = await fetch(`/api/tomes/${targetTomeId}`);
     if (!tRes.ok) throw new Error(`HTTP ${tRes.status}`);
     const tomeData = await tRes.json();
     tomeData.entries[uid] = entry;
-    await fetch(`/api/tomes/${targetTome.id}`, {
+    await fetch(`/api/tomes/${targetTomeId}`, {
       method:  'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ entries: tomeData.entries }),
     });
-    state.tomeCache[targetTome.id] = tomeData;
-    // Link back to topic
+    state.tomeCache[targetTomeId] = tomeData;
+    // Link back to topic (live session only; manual sessions track topics separately)
     topic.tomeEntryId = uid;
-    saveTopics();
+    if (!ctx) saveTopics();
+    if (ctx?.onSaved) ctx.onSaved(uid);
     closeSummaryModal();
   } catch (err) {
     alert(`Failed to save Tome entry: ${err.message}`);
@@ -2394,6 +2917,9 @@ async function savePendingSummary() {
 // ── Tomes: server sync ───────────────────────────────────────────
 async function loadTomesFromServer() {
   try {
+    // Ensure the Session Memories tome exists before listing, so it always
+    // appears in the library even before its first entry is written.
+    await fetch('/api/tomes/session-memories').catch(() => {});
     const res  = await fetch('/api/tomes');
     if (!res.ok) return;
     const list = await res.json(); // array of { id, name, description, enabled, entryCount }

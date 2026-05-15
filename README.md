@@ -63,7 +63,7 @@ Project wiki pages are available in [`/wiki`](wiki/):
 | **Entity-core enrichment** | Automatically prepends the full identity layer (all four identity categories, XML-wrapped) + RAG memories + knowledge graph context to every system prompt via a local [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) MCP server |
 | **Prompt inspector** | Click the 🔍 button in the top bar after any message to see the complete prompt sent to the LLM — including entity-core identity, Tome injections, and memory context |
 | **Streaming** | Server-sent event streaming by default; toggle off for full-response mode |
-| **Name variables** | Set a User name and AI name in the sidebar; use `{{user}}` and `{{char}}` anywhere in prompts |
+| **Prompt macros** | `{{user}}` / `{{char}}` insert configured names; `{{elapsedTime}}` is the time between the two most recent user messages in this session (so the LLM can detect when the user returns after a long absence — surfaces once both messages are in saved history); `{{timeSinceLastSession}}` is the gap since the previous session ended. All durations render as `5m`, `2h 14m`, `3d 4h`, etc. |
 | **System prompt** | Free-text field or import from `.txt` / `.md` / `.json` |
 | **Character profile** | Injected into the system message after the system prompt |
 | **User profile** | Injected into the system message after character profile |
@@ -77,7 +77,8 @@ Project wiki pages are available in [`/wiki`](wiki/):
 | **Session logging** | Conversations saved as JSON files in `logs/` with start + end timestamps |
 | **Session browser** | In-app Logs modal to view, load, or delete any past session |
 | **Session auto-end** | After 3 hours of inactivity the session is closed and a new one starts automatically |
-| **Session memorization** | On every session close (idle timeout or manual clear), the LLM automatically extracts 1–8 distinct topics and saves each as a Tome entry with keywords; a toast confirms the count |
+| **Session memorization** | Sessions are queued for memorization on idle timeout, manual clear, tab close, topic end, or via the **Memorize now** button; a server-side worker calls the LLM, extracts 1–8 distinct topics, and saves each as an entry in the dedicated **Session Memories** Tome. Jobs survive tab close and server restart, with exponential backoff retry on failure |
+| **Per-session Memorize** | Each row in the Logs modal has a **Memorize** button that opens a chooser: **Auto-summarize** runs the worker over that session and shows the entry count inline, while **Manual topics** opens the session read-only so you can mark topic ranges by hand and review each entry before saving |
 | **Export** | Download conversation as a Markdown `.md` file (tool-call turns are omitted) |
 | **Regenerate** | Re-run the last AI response with the same user message |
 | **Themes** | Dark / light toggle |
@@ -134,25 +135,39 @@ Each log file is named `<uuid>.json` and contains:
 4. If you close the tab and reopen it after 3+ hours, the same check runs on startup: the old session is finalised silently and a new one starts.
 5. Manually clearing the chat (the **Clear** button) also closes and memorizes the current session before starting a fresh one.
 
-You can browse, load, or delete sessions at any time via the **☰ Logs** button in the Chat section of the sidebar.
+You can browse, load, delete, or **memorize** any past session at any time via the **☰ Logs** button in the Chat section of the sidebar. The per-row **Memorize** button opens a chooser with **Auto-summarize** (run the worker over the whole session and toast the result) and **Manual topics** (open the session in a read-only viewer with topic-mark buttons and review each entry before saving). Both write to the **Session Memories** tome.
 
 #### Session memorization
 
-When a session closes — either by the 3-hour idle timeout or by manually clearing the chat — the full conversation is automatically sent to the configured LLM. The model is asked to identify the distinct topics discussed and return structured JSON shaped by the [tome-writing-guide](docs/tome-writing-guide.md). Each topic becomes a lorebook entry containing:
+Memorization is a **server-side queued job** that survives tab close, idle rollover, and server restart. The browser submits a payload to the server, the server-side worker calls the configured LLM, and entries are written to the dedicated **Session Memories** Tome (auto-created on first use). The model is asked to identify distinct topics and return structured JSON shaped by the [tome-writing-guide](docs/tome-writing-guide.md). Each topic becomes a lorebook entry containing:
 
 - A concise **title** (used as the entry comment)
 - **Familiar-perspective bullet content** — a one-sentence framing line followed by action bullets and one or two prohibition bullets, written in second person and using `{{user}}` where the user's name belongs
 - **3–8 conversational trigger keywords** — phrases the user would actually say when this situation recurs, not topic labels
 - A suggested **sticky** value sized to how long the situation typically persists
 
-Between 1 and 8 entries are created per session. A brief on-screen toast confirms how many were saved (e.g. *"3 lorebook entries memorized from the last session."*).
+Between 1 and 8 entries are created per memorization job. A brief on-screen toast confirms how many were saved once the job completes (e.g. *"3 lorebook entries memorized from the last session."*); a separate toast surfaces any failure.
+
+**When memorization is enqueued:**
+
+| Trigger | Scope |
+|---|---|
+| 3-hour idle timeout | The full session that just closed |
+| Manual **Clear** button | The full session being cleared |
+| **Memorize now** button (Chat sidebar) | The current session, on demand, without ending it |
+| Closing the tab mid-session (`beforeunload`) | The current session, delivered via `navigator.sendBeacon` |
+| Ending a topic (**□ Topic end**) | Only that topic's message range |
+| Logs modal **Memorize → Auto-summarize** on any past session | The full historical session — chooser modal shows live status, entry count on success, or the failure reason |
+| Logs modal **Memorize → Manual topics** on any past session | Each topic the user closes in the read-only viewer — one LLM call per topic, reviewed before saving (no worker queue involved) |
 
 **Conditions and limits:**
-- Sessions with fewer than 4 readable messages are skipped — too short to be worth summarising.
-- If no API key is configured, memorization is silently skipped.
-- The call runs entirely in the background after the new session has already started, so it never blocks the UI.
-- Entries are fetched fresh from the server before writing to avoid overwriting any changes made in the new session.
-- Entries created this way are indistinguishable from hand-crafted lorebook entries and can be edited, disabled, or deleted in the Lorebook modal.
+- Jobs with fewer than 2 readable messages are rejected — too short to be worth summarising.
+- If no API key is configured, memorization is skipped.
+- The queue is persisted to `tomes/.memorization-queue.json` (git-ignored). It contains the API key on disk; matches the existing local-only posture of `logs/` and `tomes/`.
+- Failures retry with exponential backoff (5s → 30s → 2m → 10m → 30m, max 5 attempts) before the job is marked failed and toasted to the user.
+- Concurrent jobs writing to the same Tome are serialised by a per-file mutex on the server, so entries are never clobbered.
+- Identical jobs (same session, scope, topic, and message range) are deduplicated, so retrying or double-triggering is safe.
+- Entries created by memorization are indistinguishable from hand-crafted lorebook entries and can be edited, disabled, or deleted in the Lorebook modal.
 
 ---
 

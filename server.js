@@ -10,6 +10,14 @@ import { fileURLToPath } from 'url';
 import { mkdirSync, promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
 import { enrich, createMemory, appendIdentity, updateIdentitySection } from './thalamus.js';
+import {
+  enqueueMemorization,
+  listJobs as listMemorizationJobs,
+  acknowledgeJob as acknowledgeMemorizationJob,
+  cancelJob as cancelMemorizationJob,
+  startMemorizationWorker,
+  findOrCreateSessionMemoriesTome,
+} from './memorization.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -339,6 +347,27 @@ app.post('/api/tomes', async (req, res) => {
   }
 });
 
+// GET /api/tomes/session-memories — find or create the special Session
+// Memories tome (the system tome that receives all session memorization
+// output, auto-summarized or manually marked). Always present: created on
+// first lookup. Shares find-or-create logic with the memorization worker
+// via memorization.js so concurrent calls can't produce duplicates.
+// Must be registered BEFORE GET /api/tomes/:id so it isn't shadowed.
+app.get('/api/tomes/session-memories', async (_req, res) => {
+  try {
+    const { tome } = await findOrCreateSessionMemoriesTome();
+    res.json({
+      id:          tome.id,
+      name:        tome.name,
+      description: tome.description ?? '',
+      enabled:     tome.enabled !== false,
+      entryCount:  Object.keys(tome.entries ?? {}).length,
+    });
+  } catch {
+    res.status(500).json({ error: 'Failed to find or create Session Memories tome.' });
+  }
+});
+
 // GET /api/tomes/:id — get a full tome with entries
 app.get('/api/tomes/:id', async (req, res) => {
   const { id } = req.params;
@@ -501,6 +530,60 @@ app.post('/api/tomes/default/entries', async (req, res) => {
   }
 });
 
+// ── Memorization queue endpoints ────────────────────────────────
+
+// POST /api/memorize — enqueue a memorization job.
+// Accepts JSON body OR sendBeacon's text/plain JSON for beforeunload.
+app.post('/api/memorize', express.text({ type: ['text/plain', 'application/json'], limit: '4mb' }), async (req, res) => {
+  // express.json() above this route already consumed application/json bodies
+  // into req.body. For sendBeacon (text/plain), parse it here.
+  let body = req.body;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch { return res.status(400).json({ error: 'Invalid JSON.' }); }
+  }
+  if (!body || typeof body !== 'object') {
+    return res.status(400).json({ error: 'Request body required.' });
+  }
+  const { sessionId, scope, topicId, messageRange, messages, provider, apiKey, model } = body;
+  if (!isValidSessionId(sessionId))
+    return res.status(400).json({ error: 'Invalid session ID.' });
+  try {
+    const { jobId, deduped } = await enqueueMemorization({
+      sessionId, scope, topicId, messageRange, messages, provider, apiKey, model,
+    });
+    res.status(202).json({ jobId, deduped });
+  } catch (err) {
+    res.status(400).json({ error: err.message ?? 'Failed to enqueue memorization.' });
+  }
+});
+
+// GET /api/memorize — list all jobs (sanitized, no apiKey or messages)
+app.get('/api/memorize', async (_req, res) => {
+  try {
+    res.json(await listMemorizationJobs());
+  } catch {
+    res.json([]);
+  }
+});
+
+// POST /api/memorize/:id/ack — mark a terminal job as seen by the UI
+app.post('/api/memorize/:id/ack', async (req, res) => {
+  const { id } = req.params;
+  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid job ID.' });
+  const ok = await acknowledgeMemorizationJob(id);
+  if (!ok) return res.status(404).json({ error: 'Job not found or not terminal.' });
+  res.json({ ok: true });
+});
+
+// DELETE /api/memorize/:id — cancel a pending job
+app.delete('/api/memorize/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid job ID.' });
+  const ok = await cancelMemorizationJob(id);
+  if (!ok) return res.status(409).json({ error: 'Job not found or already running.' });
+  res.json({ ok: true });
+});
+
 // ── Entity-core write endpoints ─────────────────────────────────
 
 const VALID_MEMORY_GRANULARITIES = new Set(['daily', 'weekly', 'monthly', 'yearly', 'significant']);
@@ -550,4 +633,5 @@ app.post('/api/entity/identity', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`\nProto-Familiar running at http://localhost:${PORT}\n`);
+  startMemorizationWorker();
 });
