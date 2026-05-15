@@ -1,6 +1,6 @@
 # Entity Core Alpha: Memory & Identity System Analysis
 
-**Repository:** [zarilewis/entity-core-alpha](https://github.com/zarilewis/entity-core-alpha)  
+**Repository:** [entity-core-alpha](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2)  
 **Research Date:** May 8, 2026  
 **Purpose:** Comparative analysis of entity-core-alpha memory/identity system against existing Familiar research and evaluation for integration potential
 
@@ -1028,7 +1028,7 @@ Entity-core: [No permission check] "User A has therapy on Thursdays"
 **Approach:** Fork entity-core-alpha, modify for multi-user + caretaker features
 
 **Implementation:**
-1. Clone repository: `git clone https://github.com/zarilewis/entity-core-alpha.git familiar-core`
+1. Clone repository: `git clone https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2 familiar-core`
 2. Rename throughout: `entity-core` → `familiar-core` or `tome`
 3. Rebuild identity structure (single `user/` → multi `users/`)
 4. Add user scoping to memory system

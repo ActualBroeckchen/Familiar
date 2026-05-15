@@ -73,9 +73,9 @@ All three providers use the OpenAI-compatible `chat/completions` format. The ser
 
 Entity-core provides persistent identity and memory enrichment for every LLM request. It is optional — the app runs normally without it.
 
-1. Clone [entity-core-alpha](https://github.com/zarilewis/entity-core-alpha) as a sibling directory:
+1. Clone [entity-core-alpha](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) as a sibling directory:
    ```bash
-   git clone https://github.com/zarilewis/entity-core-alpha ../entity-core-alpha
+   git clone https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2 ../entity-core-alpha
    ```
 2. Follow the entity-core README to populate its `data/` directory with identity files.
 3. Start Proto-Familiar normally — `thalamus.js` will spawn entity-core automatically on startup.

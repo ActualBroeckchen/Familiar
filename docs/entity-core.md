@@ -2,7 +2,7 @@
 
 ## What Is Entity-Core?
 
-[entity-core-alpha](https://github.com/zarilewis/entity-core-alpha) is a Deno-based MCP (Model Context Protocol) server that manages persistent identity files, RAG memories, and a knowledge graph for a named AI entity. Proto-Familiar connects to it through `thalamus.js` to ground every LLM request in stable, long-term context that survives session boundaries.
+[entity-core-alpha](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) is a Deno-based MCP (Model Context Protocol) server that manages persistent identity files, RAG memories, and a knowledge graph for a named AI entity. Proto-Familiar connects to it through `thalamus.js` to ground every LLM request in stable, long-term context that survives session boundaries.
 
 This integration is **optional** — the app runs fully without it. When entity-core is unavailable, `thalamus.js` logs the error and returns an empty string, and every chat request proceeds without enrichment.
 
@@ -118,7 +118,7 @@ The inspector calls `POST /api/debug-prompt` with the current message array and 
 
 1. Clone entity-core-alpha as a sibling directory next to Proto-Familiar:
    ```bash
-   git clone https://github.com/zarilewis/entity-core-alpha ../entity-core-alpha
+   git clone https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2 ../entity-core-alpha
    ```
 2. Populate its `data/` directory with identity files following the entity-core README.
 3. Start Proto-Familiar normally. `thalamus.js` spawns entity-core automatically on startup.

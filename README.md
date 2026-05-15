@@ -50,7 +50,7 @@ Project wiki pages are available in [`/wiki`](wiki/):
 | Feature | Details |
 |---|---|
 | **Providers** | NanoGPT (OpenAI-compatible) · Z.ai Standard API · Z.ai Coding Plan |
-| **Entity-core enrichment** | Automatically prepends the full identity layer (all four identity categories, XML-wrapped) + RAG memories + knowledge graph context to every system prompt via a local [entity-core](https://github.com/zarilewis/entity-core-alpha) MCP server |
+| **Entity-core enrichment** | Automatically prepends the full identity layer (all four identity categories, XML-wrapped) + RAG memories + knowledge graph context to every system prompt via a local [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) MCP server |
 | **Prompt inspector** | Click the 🔍 button in the top bar after any message to see the complete prompt sent to the LLM — including entity-core identity, Tome injections, and memory context |
 | **Streaming** | Server-sent event streaming by default; toggle off for full-response mode |
 | **Name variables** | Set a User name and AI name in the sidebar; use `{{user}}` and `{{char}}` anywhere in prompts |
@@ -367,7 +367,7 @@ The lorebook is stored as `lorebook.json` in the project root (next to `server.j
 
 ### Entity-Core Identity Layer
 
-Familiar optionally connects to a local [entity-core-alpha](https://github.com/zarilewis/entity-core-alpha) MCP server to ground every LLM request in persistent identity and memory. This is wired through `thalamus.js`.
+Familiar optionally connects to a local [entity-core-alpha](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) MCP server to ground every LLM request in persistent identity and memory. This is wired through `thalamus.js`.
 
 #### How it works
 
@@ -419,9 +419,9 @@ To see exactly what was sent to the LLM on any given message — including the f
 
 #### Setup
 
-1. Clone [entity-core-alpha](https://github.com/zarilewis/entity-core-alpha) as a sibling directory:
+1. Clone [entity-core-alpha](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) as a sibling directory:
    ```bash
-   git clone https://github.com/zarilewis/entity-core-alpha ../entity-core-alpha
+   git clone https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2 ../entity-core-alpha
    ```
 2. Follow its README to populate `data/` with identity files and memories.
 3. Start Familiar normally — `thalamus.js` spawns entity-core automatically.
@@ -583,5 +583,5 @@ SillyTavern's universal adapter architecture. Chat Completions API (OpenAI-compa
 
 ## Acknowledgements
 
-Huge thanks to **[zarilewis](https://github.com/zarilewis)** for creating [entity-core-alpha](https://github.com/zarilewis/entity-core-alpha) — the MCP server that powers Familiar's identity and memory layer. entity-core provides the persistent self-model, RAG memory, and knowledge graph that make it possible for Familiar to maintain consistent character values, voice, and relational context across conversations. None of the identity injection work in this project would exist without it.
+Huge thanks to **[zarilewis](https://github.com/zarilewis)** for creating [entity-core-alpha](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) — the MCP server that powers Familiar's identity and memory layer. entity-core provides the persistent self-model, RAG memory, and knowledge graph that make it possible for Familiar to maintain consistent character values, voice, and relational context across conversations. None of the identity injection work in this project would exist without it.
 
