@@ -8,7 +8,7 @@ Proto-Familiar is the current working prototype of **Familiar** — a lightweigh
 
 | Document | Description |
 |---|---|
-| [Getting Started](getting-started.md) | Installation, requirements, quick-start, and configuration |
+| [Getting Started](getting-started.md) | One-click installer + launcher, requirements, quick-start, tray icon, and configuration |
 | [Architecture](architecture.md) | Component overview, file structure, and data flow |
 | [Features](features.md) | Complete feature reference |
 | [API Reference](api-reference.md) | All server endpoints, request/response shapes |

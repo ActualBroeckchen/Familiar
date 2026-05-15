@@ -116,12 +116,16 @@ The inspector calls `POST /api/debug-prompt` with the current message array and 
 
 ## Setup
 
+The one-click installers handle the clone for you (`Proto-Familiar.vbs` on Windows, `Proto-Familiar.command` on macOS, `./install.sh` on Linux). If you'd rather do it by hand:
+
 1. Clone entity-core-alpha as a sibling directory next to Proto-Familiar:
    ```bash
-   git clone https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2 ../entity-core-alpha
+   git clone --depth 1 --branch entity-core-v0.2.2 https://github.com/PsycherosAI/Psycheros.git ../entity-core-alpha
    ```
 2. Populate its `data/` directory with identity files following the entity-core README.
 3. Start Proto-Familiar normally. `thalamus.js` spawns entity-core automatically on startup.
+
+If entity-core is missing or fails to start, `thalamus.js` logs the error and `enrich()` returns an empty string — Proto-Familiar runs normally without enrichment.
 
 To use a custom install path, set `ENTITY_CORE_PATH` to the absolute path of entity-core's `src/mod.ts` before starting the server:
 
