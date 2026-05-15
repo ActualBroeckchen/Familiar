@@ -14,6 +14,17 @@ A lightweight, self-hosted chat UI for [z.ai](https://api.z.ai) and [NanoGPT](ht
 
 ### Quick Start
 
+**One-click installer + launcher** (recommended):
+
+| OS | Install | Start | Stop |
+|---|---|---|---|
+| macOS / Linux | `./install.sh` | `./start.sh` | `./stop.sh` |
+| Windows | double-click `install.bat` | double-click `start.bat` | double-click `stop.bat` |
+
+`install` runs `npm install` and clones [entity-core-alpha](https://github.com/PsycherosAI/Psycheros) into `../entity-core-alpha` so the identity layer works out of the box. `start` launches the server in the background, waits for the port, and opens **http://localhost:3000** in your browser. `stop` kills the server and its entity-core child process.
+
+**Manual:**
+
 ```bash
 # 1. Install dependencies
 npm install
