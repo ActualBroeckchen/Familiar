@@ -3,3 +3,5 @@ node_modules/
 *.log
 npm-debug.log*
 logs/
+tomes/.memorization-queue.json
+tomes/.memorization-queue.json.tmp
