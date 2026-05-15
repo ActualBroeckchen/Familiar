@@ -346,6 +346,45 @@ app.post('/api/tomes', async (req, res) => {
   }
 });
 
+// Session Memories — the special system tome that receives all session
+// memorization output (auto-summarized or manually marked). Always present:
+// created on first lookup if it doesn't exist yet.
+const SESSION_MEMORIES_TOME_NAME = 'Session Memories';
+const SESSION_MEMORIES_TOME_DESC = 'Auto-generated entries from past conversations. Created on first session memorization.';
+
+async function findOrCreateSessionMemoriesTome() {
+  const files = await fsp.readdir(TOMES_DIR);
+  for (const f of files) {
+    if (!f.endsWith('.json') || f.startsWith('.')) continue;
+    try {
+      const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
+      const t = JSON.parse(raw);
+      if (t?.name === SESSION_MEMORIES_TOME_NAME) return t;
+    } catch { /* skip corrupt */ }
+  }
+  const id = randomUUID();
+  const tome = { id, name: SESSION_MEMORIES_TOME_NAME, description: SESSION_MEMORIES_TOME_DESC, enabled: true, entries: {} };
+  await writeTome(tome);
+  return tome;
+}
+
+// GET /api/tomes/session-memories — find or create the special Session Memories tome.
+// Must be registered BEFORE GET /api/tomes/:id so it isn't shadowed.
+app.get('/api/tomes/session-memories', async (_req, res) => {
+  try {
+    const tome = await findOrCreateSessionMemoriesTome();
+    res.json({
+      id:          tome.id,
+      name:        tome.name,
+      description: tome.description ?? '',
+      enabled:     tome.enabled !== false,
+      entryCount:  Object.keys(tome.entries ?? {}).length,
+    });
+  } catch {
+    res.status(500).json({ error: 'Failed to find or create Session Memories tome.' });
+  }
+});
+
 // GET /api/tomes/:id — get a full tome with entries
 app.get('/api/tomes/:id', async (req, res) => {
   const { id } = req.params;

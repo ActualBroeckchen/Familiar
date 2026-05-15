@@ -422,6 +422,48 @@
     </div>
   </div>
 
+  <!-- Memorize choice modal — Auto vs Manual for a chosen past session -->
+  <div class="modal-backdrop hidden" id="memorize-choice-modal" role="dialog" aria-modal="true" aria-labelledby="memorize-choice-title">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 class="modal-title" id="memorize-choice-title">Memorize Session</h2>
+        <button class="icon-btn modal-close" id="memorize-choice-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="field-hint" id="memorize-choice-subtitle">Choose how to extract Tome entries from this session.</p>
+        <button class="btn-primary memorize-choice-btn" id="memorize-choice-auto-btn">
+          <span class="memorize-choice-label">Auto-summarize</span>
+          <span class="memorize-choice-desc">Run the memorization LLM over the whole session and save its topics to the <strong>Session Memories</strong> tome.</span>
+        </button>
+        <button class="btn-secondary memorize-choice-btn" id="memorize-choice-manual-btn">
+          <span class="memorize-choice-label">Manual topics</span>
+          <span class="memorize-choice-desc">Open the session in a read-only view, mark topic ranges, and review each summary before saving to <strong>Session Memories</strong>.</span>
+        </button>
+        <p class="field-hint hidden" id="memorize-choice-status"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Manual memorize modal — read-only view of a historical session with topic marking UI -->
+  <div class="modal-backdrop hidden" id="manual-memorize-modal" role="dialog" aria-modal="true" aria-labelledby="manual-memorize-title">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2 class="modal-title" id="manual-memorize-title">Memorize Session — Manual Topics</h2>
+        <button class="icon-btn modal-close" id="manual-memorize-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="field-hint" id="manual-memorize-hint">
+          Click <strong>▷ Topic start</strong> on a message to begin a topic, then <strong>□ Topic end</strong> on a later message to close it.
+          A Tome entry will be generated for each closed topic and saved to <strong>Session Memories</strong>.
+        </p>
+        <div id="manual-memorize-topics-strip" class="manual-memorize-topics-strip"></div>
+        <div id="manual-memorize-messages" class="manual-memorize-messages">
+          <p class="logs-loading">Loading session…</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Retroactive topic end picker modal -->
   <div class="modal-backdrop hidden" id="retro-end-modal" role="dialog" aria-modal="true" aria-labelledby="retro-end-modal-title">
     <div class="modal">

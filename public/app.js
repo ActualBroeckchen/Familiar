@@ -1553,6 +1553,13 @@ async function refreshLogsList() {
         actions.appendChild(loadBtn);
       }
 
+      const memBtn = document.createElement('button');
+      memBtn.className = 'btn-secondary log-action-btn';
+      memBtn.textContent = 'Memorize';
+      memBtn.title = 'Auto-summarize or manually mark topics for this session';
+      memBtn.addEventListener('click', () => openMemorizeChoice(s));
+      actions.appendChild(memBtn);
+
       const delBtn = document.createElement('button');
       delBtn.className = 'btn-ghost log-action-btn';
       delBtn.textContent = 'Delete';
@@ -1830,6 +1837,24 @@ function init() {
   $('retro-end-cancel-btn').addEventListener('click', closeRetroEndModal);
   $('retro-end-modal').addEventListener('click', e => {
     if (e.target === $('retro-end-modal')) closeRetroEndModal();
+  });
+
+  // Memorize choice modal (per-session "Memorize" button in the logs modal)
+  $('memorize-choice-close').addEventListener('click', closeMemorizeChoice);
+  $('memorize-choice-modal').addEventListener('click', e => {
+    if (e.target === $('memorize-choice-modal')) closeMemorizeChoice();
+  });
+  $('memorize-choice-auto-btn').addEventListener('click', () => {
+    if (_memorizeChoiceSession) runAutoSummarize(_memorizeChoiceSession);
+  });
+  $('memorize-choice-manual-btn').addEventListener('click', () => {
+    if (_memorizeChoiceSession) openManualMemorize(_memorizeChoiceSession);
+  });
+
+  // Manual memorize modal
+  $('manual-memorize-close').addEventListener('click', closeManualMemorize);
+  $('manual-memorize-modal').addEventListener('click', e => {
+    if (e.target === $('manual-memorize-modal')) closeManualMemorize();
   });
 
   // ── Load tomes from server ────────────────────────────────────
@@ -2189,6 +2214,351 @@ function closeRetroEndModal() {
   $('retro-end-modal').classList.add('hidden');
 }
 
+// ── Session-memorize: choice modal ───────────────────────────────
+// Per-row "Memorize" button in the logs modal opens this picker, which
+// branches to either the auto-summarize path (enqueue a memorization job
+// and wait for the worker) or the manual-topics path (open a read-only
+// transcript with topic-mark buttons).
+
+let _memorizeChoiceSession = null; // session row {sessionId, startedAt, …}
+
+function openMemorizeChoice(session) {
+  _memorizeChoiceSession = session;
+  const startLabel = session.startedAt
+    ? new Date(session.startedAt).toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : 'session';
+  $('memorize-choice-subtitle').textContent = `Choose how to extract Tome entries from ${startLabel}.`;
+  $('memorize-choice-status').classList.add('hidden');
+  $('memorize-choice-status').textContent = '';
+  $('memorize-choice-auto-btn').disabled   = false;
+  $('memorize-choice-manual-btn').disabled = false;
+  $('memorize-choice-modal').classList.remove('hidden');
+}
+
+function closeMemorizeChoice() {
+  _memorizeChoiceSession = null;
+  $('memorize-choice-modal').classList.add('hidden');
+}
+
+/**
+ * Auto-summarize path: enqueue a memorization job for the chosen session
+ * and poll until the worker reports done/failed. The worker writes to the
+ * Session Memories tome via memorization.js#findOrCreateSessionMemoriesTome.
+ */
+async function runAutoSummarize(session) {
+  if (!state.apiKey.trim()) {
+    setMemorizeChoiceStatus('Set an API key in Settings first.', true);
+    return;
+  }
+  setMemorizeChoiceStatus('Loading session…', false);
+  $('memorize-choice-auto-btn').disabled   = true;
+  $('memorize-choice-manual-btn').disabled = true;
+
+  let messages;
+  try {
+    const res = await fetch(`/api/logs/${session.sessionId}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    messages = Array.isArray(data.messages) ? data.messages : [];
+  } catch (err) {
+    setMemorizeChoiceStatus(`Could not load session: ${err.message}`, true);
+    $('memorize-choice-auto-btn').disabled   = false;
+    $('memorize-choice-manual-btn').disabled = false;
+    return;
+  }
+  if (messages.length < 2) {
+    setMemorizeChoiceStatus('Session is too short to memorize.', true);
+    $('memorize-choice-auto-btn').disabled   = false;
+    $('memorize-choice-manual-btn').disabled = false;
+    return;
+  }
+
+  setMemorizeChoiceStatus('Memorizing… this can take a few seconds.', false);
+
+  let jobId;
+  try {
+    const resp = await fetch('/api/memorize', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        sessionId: session.sessionId,
+        scope:     'session',
+        messages,
+        provider:  state.provider,
+        apiKey:    state.apiKey,
+        model:     state.model,
+      }),
+    });
+    if (!resp.ok) throw new Error(await resp.text().catch(() => `HTTP ${resp.status}`));
+    const data = await resp.json();
+    jobId = data.jobId;
+  } catch (err) {
+    setMemorizeChoiceStatus(`Failed to enqueue: ${err.message}`, true);
+    $('memorize-choice-auto-btn').disabled   = false;
+    $('memorize-choice-manual-btn').disabled = false;
+    return;
+  }
+
+  // Poll this specific job (faster than the 30s background poller) so we can
+  // give immediate, in-context feedback for the click the user just made.
+  const result = await waitForMemorizationJob(jobId, { timeoutMs: 5 * 60 * 1000 });
+  if (result.status === 'done') {
+    const n = result.entriesCreated ?? 0;
+    setMemorizeChoiceStatus(`✓ ${n} Tome entr${n === 1 ? 'y' : 'ies'} saved to Session Memories.`, false);
+    fetch(`/api/memorize/${jobId}/ack`, { method: 'POST' }).catch(() => {});
+    loadTomesFromServer?.().catch?.(() => {});
+    showMemorizationNotice(n);
+    setTimeout(() => { closeMemorizeChoice(); refreshLogsList(); }, 1500);
+  } else if (result.status === 'failed') {
+    setMemorizeChoiceStatus(`Memorization failed: ${result.lastError ?? 'unknown error'}`, true);
+    fetch(`/api/memorize/${jobId}/ack`, { method: 'POST' }).catch(() => {});
+    $('memorize-choice-auto-btn').disabled   = false;
+    $('memorize-choice-manual-btn').disabled = false;
+  } else if (result.status === 'timeout') {
+    setMemorizeChoiceStatus('Still running — the result will toast when it finishes.', false);
+    $('memorize-choice-auto-btn').disabled   = false;
+    $('memorize-choice-manual-btn').disabled = false;
+  } else {
+    setMemorizeChoiceStatus(`Memorization error: ${result.error ?? 'unknown'}`, true);
+    $('memorize-choice-auto-btn').disabled   = false;
+    $('memorize-choice-manual-btn').disabled = false;
+  }
+}
+
+function setMemorizeChoiceStatus(text, isError) {
+  const el = $('memorize-choice-status');
+  el.textContent = text;
+  el.classList.remove('hidden');
+  el.style.color = isError ? 'var(--error-color)' : 'var(--text-dim)';
+}
+
+/** Poll /api/memorize until the named jobId reaches a terminal state. */
+async function waitForMemorizationJob(jobId, { timeoutMs = 5 * 60 * 1000, intervalMs = 2000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const resp = await fetch('/api/memorize');
+      if (resp.ok) {
+        const jobs = await resp.json();
+        const job  = jobs.find(j => j.id === jobId);
+        if (job?.status === 'done') {
+          return { status: 'done', entriesCreated: job.result?.entriesCreated ?? 0 };
+        }
+        if (job?.status === 'failed') {
+          return { status: 'failed', lastError: job.lastError };
+        }
+      }
+    } catch (err) {
+      return { status: 'error', error: err.message };
+    }
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+  return { status: 'timeout' };
+}
+
+// ── Session-memorize: manual topics modal ─────────────────────────
+// Loads a historical session into a dedicated viewer with the same
+// topic-marking workflow as the live chat. Tome entries are saved to
+// the Session Memories tome.
+
+let _manualMemorize = null; // { sessionId, messages: [], topics: [], tomeId }
+
+async function openManualMemorize(session) {
+  $('memorize-choice-modal').classList.add('hidden');
+
+  // Reset state and open the modal in a loading state so the user sees movement.
+  _manualMemorize = {
+    sessionId: session.sessionId,
+    startedAt: session.startedAt,
+    messages:  [],
+    topics:    [],
+    tomeId:    null,
+  };
+  $('manual-memorize-title').textContent = 'Memorize Session — Manual Topics';
+  $('manual-memorize-topics-strip').innerHTML = '';
+  $('manual-memorize-messages').innerHTML = '<p class="logs-loading">Loading session…</p>';
+  $('manual-memorize-modal').classList.remove('hidden');
+
+  // Load both the session log and the Session Memories tome id in parallel.
+  let messages;
+  let tomeId;
+  try {
+    const [logRes, tomeRes] = await Promise.all([
+      fetch(`/api/logs/${session.sessionId}`),
+      fetch('/api/tomes/session-memories'),
+    ]);
+    if (!logRes.ok)  throw new Error(`Session log: HTTP ${logRes.status}`);
+    if (!tomeRes.ok) throw new Error(`Session Memories tome: HTTP ${tomeRes.status}`);
+    const logData  = await logRes.json();
+    const tomeData = await tomeRes.json();
+    messages = Array.isArray(logData.messages) ? logData.messages : [];
+    tomeId   = tomeData.id;
+  } catch (err) {
+    $('manual-memorize-messages').innerHTML =
+      `<p class="logs-error">⚠ Failed to load: ${esc(err.message)}</p>`;
+    return;
+  }
+
+  _manualMemorize.messages = messages;
+  _manualMemorize.tomeId   = tomeId;
+  renderManualMemorizeMessages();
+  // Refresh registry so the newly-created Session Memories tome appears in the
+  // tome library on next open (no-op if it already existed).
+  loadTomesFromServer?.().catch?.(() => {});
+}
+
+function closeManualMemorize() {
+  _manualMemorize = null;
+  $('manual-memorize-modal').classList.add('hidden');
+}
+
+function renderManualMemorizeMessages() {
+  const container = $('manual-memorize-messages');
+  container.innerHTML = '';
+  const mm = _manualMemorize;
+  if (!mm) return;
+  if (!mm.messages.length) {
+    container.innerHTML = '<p class="logs-empty">This session has no messages.</p>';
+    return;
+  }
+
+  mm.messages.forEach((msg, idx) => {
+    // Skip tool plumbing — same filter as the worker uses.
+    if (msg.role === 'tool') return;
+    if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) return;
+
+    const row = document.createElement('div');
+    row.className = `mm-msg mm-msg-${msg.role}`;
+    row.dataset.msgIndex = String(idx);
+
+    const stripe = document.createElement('div');
+    stripe.className = 'mm-msg-stripe';
+    row.appendChild(stripe);
+
+    const header = document.createElement('div');
+    header.className = 'mm-msg-header';
+    const roleSpan = document.createElement('span');
+    roleSpan.textContent = `${msg.role}${msg.timestamp ? ' · ' + formatTimestamp(msg.timestamp) : ''}`;
+    header.appendChild(roleSpan);
+
+    const actions = document.createElement('span');
+    actions.className = 'mm-msg-actions';
+    const startBtn = document.createElement('button');
+    startBtn.className = 'mm-msg-action-btn';
+    startBtn.textContent = '▷ Topic start';
+    startBtn.addEventListener('click', () => manualMemorizeStartTopic(idx));
+    actions.appendChild(startBtn);
+    const endBtn = document.createElement('button');
+    endBtn.className = 'mm-msg-action-btn';
+    endBtn.textContent = '□ Topic end';
+    endBtn.addEventListener('click', () => manualMemorizeEndTopic(idx));
+    actions.appendChild(endBtn);
+    header.appendChild(actions);
+    row.appendChild(header);
+
+    const content = document.createElement('div');
+    content.className = 'mm-msg-content';
+    content.textContent = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content ?? '');
+    row.appendChild(content);
+
+    container.appendChild(row);
+  });
+
+  refreshManualMemorizeDecorations();
+}
+
+function refreshManualMemorizeDecorations() {
+  const mm = _manualMemorize;
+  if (!mm) return;
+
+  // Topic strip
+  const strip = $('manual-memorize-topics-strip');
+  strip.innerHTML = '';
+  for (const t of mm.topics) {
+    const pill = document.createElement('span');
+    pill.className = 'mm-topic-pill';
+    pill.style.setProperty('--topic-c', t.color);
+    const stateLabel = t.endIndex === null ? 'open' : (t.tomeEntryId ? 'saved' : 'closed');
+    pill.innerHTML =
+      `<span class="mm-topic-pill-dot"></span>` +
+      `<span>${esc(t.label)}</span>` +
+      `<span class="mm-topic-pill-state">${stateLabel}</span>`;
+    strip.appendChild(pill);
+  }
+
+  // Per-message colored bands showing which topics cover them
+  document.querySelectorAll('#manual-memorize-messages .mm-msg').forEach(row => {
+    const idx = parseInt(row.dataset.msgIndex, 10);
+    const stripe = row.querySelector('.mm-msg-stripe');
+    stripe.innerHTML = '';
+    for (const t of mm.topics) {
+      const covers = t.startIndex <= idx && (t.endIndex === null || idx <= t.endIndex);
+      if (!covers) continue;
+      const band = document.createElement('span');
+      band.className = 'mm-msg-stripe-band';
+      band.style.background = t.color;
+      stripe.appendChild(band);
+    }
+  });
+}
+
+function manualMemorizeStartTopic(msgIndex) {
+  const mm = _manualMemorize;
+  if (!mm) return;
+  const label = prompt('Topic label (optional):', `Topic ${mm.topics.length + 1}`);
+  if (label === null) return; // cancelled
+  const used   = new Set(mm.topics.map(t => t.color));
+  const color  = TOPIC_COLORS.find(c => !used.has(c)) ?? TOPIC_COLORS[mm.topics.length % TOPIC_COLORS.length];
+  mm.topics.push({
+    id:          generateId(),
+    label:       label.trim() || `Topic ${mm.topics.length + 1}`,
+    color,
+    startIndex:  msgIndex,
+    endIndex:    null,
+    tomeEntryId: null,
+  });
+  refreshManualMemorizeDecorations();
+}
+
+function manualMemorizeEndTopic(msgIndex) {
+  const mm = _manualMemorize;
+  if (!mm) return;
+  const open = mm.topics.filter(t => t.endIndex === null && t.startIndex <= msgIndex);
+  if (!open.length) {
+    alert('No open topic to end here. Click "Topic start" on an earlier message first.');
+    return;
+  }
+  const topic = open.length === 1
+    ? open[0]
+    : open.find(t => t.label === prompt(
+        `End which topic?\n${open.map(t => `- ${t.label}`).join('\n')}`,
+        open[0].label,
+      ));
+  if (!topic) return;
+  topic.endIndex = msgIndex;
+  refreshManualMemorizeDecorations();
+
+  // Gather range messages, filtered like the worker does.
+  const rangeMessages = [];
+  for (let i = topic.startIndex; i <= topic.endIndex; i++) {
+    const m = mm.messages[i];
+    if (!m || m.role === 'tool') continue;
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
+    rangeMessages.push(m);
+  }
+  if (rangeMessages.length < 2) {
+    alert('A topic needs at least two non-tool messages to summarize.');
+    return;
+  }
+
+  openSummaryModal(topic, {
+    sessionId: mm.sessionId,
+    tomeId:    mm.tomeId,
+    onSaved:   () => { refreshManualMemorizeDecorations(); },
+  });
+  generateTopicSummary(topic, rangeMessages);
+}
+
 // ── Summary generation ────────────────────────────────────────────
 let _pendingSummaryTopic = null;
 
@@ -2280,9 +2650,15 @@ async function regenerateSummary(topic) {
   $('summary-generating-hint').classList.remove('hidden');
   $('summary-form').classList.add('hidden');
 
+  // Source messages from the manual-memorize buffer when the summary modal was
+  // opened for a historical session; otherwise the live session.
+  const source = (_pendingSummaryContext && _manualMemorize
+                   && _pendingSummaryContext.sessionId === _manualMemorize.sessionId)
+    ? _manualMemorize.messages
+    : state.messages;
   const rangeMessages = [];
   for (let i = topic.startIndex; i <= topic.endIndex; i++) {
-    const m = state.messages[i];
+    const m = source[i];
     if (!m || m.role === 'tool') continue;
     if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
     rangeMessages.push(m);
@@ -2305,8 +2681,14 @@ function populateSummaryForm({ title, content, keywords, sticky }) {
 }
 
 // ── Summary modal ─────────────────────────────────────────────────
-function openSummaryModal(topic) {
-  _pendingSummaryTopic = topic;
+// When _pendingSummaryContext is set, savePendingSummary routes the entry
+// to a specific tome and uses the supplied sessionId / onSaved callback
+// instead of the default (live-session) behaviour.
+let _pendingSummaryContext = null; // { sessionId, tomeId, onSaved(uid) } | null
+
+function openSummaryModal(topic, context = null) {
+  _pendingSummaryTopic   = topic;
+  _pendingSummaryContext = context;
   $('summary-modal-title').textContent = `Tome entry: ${topic.label}`;
   $('summary-generating-hint').classList.remove('hidden');
   $('summary-form').classList.add('hidden');
@@ -2317,7 +2699,8 @@ function openSummaryModal(topic) {
 
 function closeSummaryModal() {
   $('summary-modal').classList.add('hidden');
-  _pendingSummaryTopic = null;
+  _pendingSummaryTopic   = null;
+  _pendingSummaryContext = null;
 }
 
 async function savePendingSummary() {
@@ -2337,6 +2720,7 @@ async function savePendingSummary() {
     return;
   }
 
+  const ctx = _pendingSummaryContext;
   const uid = generateId();
   const entry = {
     uid,
@@ -2365,27 +2749,33 @@ async function savePendingSummary() {
     insertion_order:  100,
     created_at:       new Date().toISOString(),
     learnedAt:        new Date().toISOString(),
-    session_id:       state.sessionId,
+    session_id:       ctx?.sessionId ?? state.sessionId,
     message_range:    [topic.startIndex, topic.endIndex],
   };
 
   try {
-    // Get or create the default tome, fetch fresh, merge, save
-    const targetTome = await getDefaultTomeForSaving();
-    if (!targetTome) throw new Error('No tome available for saving.');
-    const tRes = await fetch(`/api/tomes/${targetTome.id}`);
+    // Route to the context-supplied tome (manual session memorization) or
+    // fall back to the first enabled tome (live-session topic save).
+    let targetTomeId = ctx?.tomeId ?? null;
+    if (!targetTomeId) {
+      const targetTome = await getDefaultTomeForSaving();
+      if (!targetTome) throw new Error('No tome available for saving.');
+      targetTomeId = targetTome.id;
+    }
+    const tRes = await fetch(`/api/tomes/${targetTomeId}`);
     if (!tRes.ok) throw new Error(`HTTP ${tRes.status}`);
     const tomeData = await tRes.json();
     tomeData.entries[uid] = entry;
-    await fetch(`/api/tomes/${targetTome.id}`, {
+    await fetch(`/api/tomes/${targetTomeId}`, {
       method:  'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ entries: tomeData.entries }),
     });
-    state.tomeCache[targetTome.id] = tomeData;
-    // Link back to topic
+    state.tomeCache[targetTomeId] = tomeData;
+    // Link back to topic (live session only; manual sessions track topics separately)
     topic.tomeEntryId = uid;
-    saveTopics();
+    if (!ctx) saveTopics();
+    if (ctx?.onSaved) ctx.onSaved(uid);
     closeSummaryModal();
   } catch (err) {
     alert(`Failed to save Tome entry: ${err.message}`);
@@ -2395,6 +2785,9 @@ async function savePendingSummary() {
 // ── Tomes: server sync ───────────────────────────────────────────
 async function loadTomesFromServer() {
   try {
+    // Ensure the Session Memories tome exists before listing, so it always
+    // appears in the library even before its first entry is written.
+    await fetch('/api/tomes/session-memories').catch(() => {});
     const res  = await fetch('/api/tomes');
     if (!res.ok) return;
     const list = await res.json(); // array of { id, name, description, enabled, entryCount }
