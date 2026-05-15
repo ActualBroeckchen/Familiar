@@ -16,31 +16,40 @@ Multiple topics can run in parallel. Each active topic shows a pulsing dot at th
 
 ### Retroactive Start
 
-Click the **▷** start button on any past message to begin a topic from that point in history rather than the present. This is useful for labelling a conversation slice after the fact.
+Click the **▷ Topic start** button on any past message to begin a topic from that point in history rather than the present. This is useful for labelling a conversation slice after the fact.
 
 ---
 
 ## Ending a Topic
 
-Hover over any message and click the **⬛** end button. If more than one open topic includes that message, a picker appears so you can choose which topic to close.
+Hover over any message and click the **□ Topic end** button. If more than one open topic includes that message, a picker appears so you can choose which topic to close.
 
 ---
 
 ## Topic Auto-Summary
 
-When a topic ends, an LLM call is made to summarize the messages within that topic's bounds. A review dialog opens with:
+When a topic ends, an LLM call is made to produce a tome entry for the messages within that topic's bounds. The prompt is shaped by [`docs/tome-writing-guide.md`](tome-writing-guide.md), so the model is asked for:
 
-- **Title** — editable; defaults to the topic name or a generated title
-- **Body** — the generated summary; fully editable before saving
-- **Keywords** — 3–8 suggested trigger words; editable
+- **Conversational trigger keywords** — phrases the user would actually say when the situation recurs, not topic labels.
+- **Familiar-perspective bullet content** — a short framing line followed by action and prohibition bullets, written in second person and using the `{{user}}` macro.
+- **A sticky value** suggestion sized to how long the situation typically persists.
+
+A review dialog opens with:
+
+- **Title** — editable; defaults to the topic name or a generated title.
+- **Body** — the generated bullet content; fully editable before saving.
+- **Keywords** — 3–8 conversational trigger phrases; editable.
+- **Sticky** — number of turns the entry stays active after first match; editable (blank for one-shot).
 
 Clicking **Save to Tome** creates a new [Tomes](tomes.md) entry with:
+
 - The title as the entry comment
-- The summary body as the entry content
+- The bullet body as the entry content
 - The chosen keywords as primary keys
+- The chosen sticky value (or none if blank)
 - Injection position `before_char` (default)
 
-The summary dialog can be dismissed without saving if the summary is not useful.
+The summary dialog can be dismissed without saving if the entry is not useful.
 
 ---
 
@@ -56,18 +65,20 @@ Each topic object stored in `localStorage`:
 
 ```json
 {
-  "id":       "uuid",
-  "name":     "My Topic",
-  "color":    "#a8d8a8",
-  "startIdx": 3,
-  "endIdx":   12
+  "id":          "uuid",
+  "label":       "My Topic",
+  "color":       "#a8d8a8",
+  "startIndex":  3,
+  "endIndex":    12,
+  "tomeEntryId": null
 }
 ```
 
 | Field | Description |
 |---|---|
 | `id` | UUID |
-| `name` | Display name |
+| `label` | Display name |
 | `color` | Hex colour for the gutter bar |
-| `startIdx` | Index of the first message in `state.messages` |
-| `endIdx` | Index of the last message, or `null` if the topic is still open |
+| `startIndex` | Index of the first message in `state.messages` |
+| `endIndex` | Index of the last message, or `null` if the topic is still open |
+| `tomeEntryId` | UID of the Tome entry saved from this topic's summary, or `null` if none was saved |
