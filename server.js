@@ -8,6 +8,8 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, promises as fsp } from 'fs';
+import { randomUUID } from 'crypto';
+import { enrich, createMemory, appendIdentity, updateIdentitySection } from './thalamus.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -32,12 +34,30 @@ const PROVIDER_URLS = {
   'zai-coding': 'https://api.z.ai/api/coding/paas/v4/chat/completions',
 };
 
+// Simple in-memory rate limiter for /api/chat: max 20 requests per minute per IP.
+// Protects against accidental public exposure and runaway tool-call loops.
+const _chatRateCounts = new Map();
+function chatRateLimit(req, res, next) {
+  const ip = req.ip ?? req.socket?.remoteAddress ?? 'unknown';
+  const now = Date.now();
+  const WINDOW_MS = 60_000;
+  const MAX_REQ   = 20;
+  const entry = _chatRateCounts.get(ip) ?? { count: 0, resetAt: now + WINDOW_MS };
+  if (now > entry.resetAt) { entry.count = 0; entry.resetAt = now + WINDOW_MS; }
+  entry.count++;
+  _chatRateCounts.set(ip, entry);
+  if (entry.count > MAX_REQ) {
+    return res.status(429).json({ error: 'Too many requests. Please wait a moment before sending another message.' });
+  }
+  next();
+}
+
 /**
  * POST /api/chat
  * Body: { provider, apiKey, model, messages, stream, temperature?, max_tokens? }
  * Proxies to the chosen provider and streams or returns the response.
  */
-app.post('/api/chat', async (req, res) => {
+app.post('/api/chat', chatRateLimit, async (req, res) => {
   const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice } = req.body;
 
   const url = PROVIDER_URLS[provider];
@@ -54,7 +74,26 @@ app.post('/api/chat', async (req, res) => {
     return res.status(400).json({ error: 'Messages array is required and must not be empty.' });
   }
 
-  const payload = { model: model.trim(), messages, stream: !!stream };
+  // Enrich with entity-core context (memories + identity). Degrades gracefully.
+  const lastUser = [...messages].reverse().find(m => m.role === 'user');
+  const userText = typeof lastUser?.content === 'string'
+    ? lastUser.content
+    : ((lastUser?.content ?? []).find(c => c.type === 'text')?.text ?? '');
+  const entityContext = await enrich(userText);
+
+  let enrichedMessages = messages;
+  if (entityContext) {
+    const sysIdx = messages.findIndex(m => m.role === 'system');
+    if (sysIdx >= 0) {
+      enrichedMessages = messages.map((m, i) =>
+        i === sysIdx ? { ...m, content: entityContext + '\n\n' + m.content } : m,
+      );
+    } else {
+      enrichedMessages = [{ role: 'system', content: entityContext }, ...messages];
+    }
+  }
+
+  const payload = { model: model.trim(), messages: enrichedMessages, stream: !!stream };
   if (typeof temperature === 'number') payload.temperature = temperature;
   if (typeof max_tokens === 'number' && max_tokens > 0) payload.max_tokens = max_tokens;
   if (Array.isArray(tools) && tools.length > 0) payload.tools = tools;
@@ -104,6 +143,44 @@ app.post('/api/chat', async (req, res) => {
   } catch (err) {
     if (!res.writableEnded) res.end();
   }
+});
+
+/**
+ * POST /api/debug-prompt
+ * Body: { messages }
+ * Returns the full message array that would be sent to the LLM for a given
+ * messages payload — including entity-core enrichment prepended to the system
+ * message. Does NOT call any upstream LLM.
+ *
+ * WARNING: This endpoint returns entity-core enriched context (personal memory /
+ * identity data) with no authentication. Keep it disabled or firewalled in any
+ * deployment outside localhost.
+ */
+app.post('/api/debug-prompt', async (req, res) => {
+  const { messages } = req.body;
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: 'messages array is required.' });
+  }
+
+  const lastUser = [...messages].reverse().find(m => m.role === 'user');
+  const userText = typeof lastUser?.content === 'string'
+    ? lastUser.content
+    : ((lastUser?.content ?? []).find(c => c.type === 'text')?.text ?? '');
+  const entityContext = await enrich(userText);
+
+  let enrichedMessages = messages;
+  if (entityContext) {
+    const sysIdx = messages.findIndex(m => m.role === 'system');
+    if (sysIdx >= 0) {
+      enrichedMessages = messages.map((m, i) =>
+        i === sysIdx ? { ...m, content: entityContext + '\n\n' + m.content } : m,
+      );
+    } else {
+      enrichedMessages = [{ role: 'system', content: entityContext }, ...messages];
+    }
+  }
+
+  res.json({ messages: enrichedMessages });
 });
 
 // ── Log endpoints ───────────────────────────────────────────────
@@ -179,6 +256,296 @@ app.delete('/api/logs/:id', async (req, res) => {
 
 // Health check
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
+
+// ── Tome endpoints ──────────────────────────────────────────────
+const TOMES_DIR = path.join(__dirname, 'tomes');
+mkdirSync(TOMES_DIR, { recursive: true });
+
+function isValidTomeId(id) {
+  return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id);
+}
+
+function isValidEntryUid(uid) {
+  return typeof uid === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uid);
+}
+
+// Returns the absolute path for a tome file, falling back to a directory scan
+// so that pre-existing tomes with non-UUID filenames (e.g. "ADHD-Tome.json") are found.
+async function findTomeFile(id) {
+  const direct = path.join(TOMES_DIR, `${id}.json`);
+  try {
+    await fsp.access(direct);
+    return direct;
+  } catch { /* not found by UUID filename — scan */ }
+  const files = await fsp.readdir(TOMES_DIR);
+  for (const f of files) {
+    if (!f.endsWith('.json')) continue;
+    try {
+      const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
+      const data = JSON.parse(raw);
+      if (data.id === id) return path.join(TOMES_DIR, f);
+    } catch { /* skip corrupt */ }
+  }
+  return direct; // default path for newly created tomes
+}
+
+async function readTome(id) {
+  try {
+    const filePath = await findTomeFile(id);
+    const raw = await fsp.readFile(filePath, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function writeTome(tome) {
+  const filePath = await findTomeFile(tome.id);
+  await fsp.writeFile(filePath, JSON.stringify(tome, null, 2), 'utf8');
+}
+
+// GET /api/tomes — list all tomes (metadata + entry count)
+app.get('/api/tomes', async (_req, res) => {
+  try {
+    const files = await fsp.readdir(TOMES_DIR);
+    const tomes = [];
+    for (const f of files) {
+      if (!f.endsWith('.json')) continue;
+      try {
+        const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
+        const { id, name, description, enabled, entries } = JSON.parse(raw);
+        tomes.push({ id, name, description, enabled, entryCount: Object.keys(entries ?? {}).length });
+      } catch { /* skip corrupt */ }
+    }
+    tomes.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
+    res.json(tomes);
+  } catch {
+    res.json([]);
+  }
+});
+
+// POST /api/tomes — create a new tome
+app.post('/api/tomes', async (req, res) => {
+  const { name, description } = req.body;
+  if (!name || typeof name !== 'string' || !name.trim())
+    return res.status(400).json({ error: 'name is required.' });
+  const id = randomUUID();
+  const tome = { id, name: name.trim(), description: (description ?? '').trim(), enabled: true, entries: {} };
+  try {
+    await writeTome(tome);
+    res.json({ id });
+  } catch {
+    res.status(500).json({ error: 'Failed to create tome.' });
+  }
+});
+
+// GET /api/tomes/:id — get a full tome with entries
+app.get('/api/tomes/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
+  const tome = await readTome(id);
+  if (!tome) return res.status(404).json({ error: 'Tome not found.' });
+  res.json(tome);
+});
+
+// PUT /api/tomes/:id — save full tome (entries + optional metadata)
+app.put('/api/tomes/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
+  const { name, description, enabled, entries } = req.body;
+  if (!entries || typeof entries !== 'object' || Array.isArray(entries))
+    return res.status(400).json({ error: 'entries object required.' });
+  const existing = await readTome(id);
+  if (!existing) return res.status(404).json({ error: 'Tome not found.' });
+  const safe = {};
+  for (const [uid, entry] of Object.entries(entries)) {
+    if (!isValidEntryUid(uid)) continue;
+    safe[uid] = entry;
+  }
+  const updated = {
+    ...existing,
+    name:        name !== undefined ? (String(name).trim() || existing.name) : existing.name,
+    description: description !== undefined ? String(description ?? '').trim() : (existing.description ?? ''),
+    enabled:     enabled !== undefined ? !!enabled : existing.enabled,
+    entries:     safe,
+  };
+  try {
+    await writeTome(updated);
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to save tome.' });
+  }
+});
+
+// PATCH /api/tomes/:id — update metadata only (name, description, enabled)
+app.patch('/api/tomes/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
+  const tome = await readTome(id);
+  if (!tome) return res.status(404).json({ error: 'Tome not found.' });
+  if (req.body.name !== undefined) tome.name = String(req.body.name).trim() || tome.name;
+  if (req.body.description !== undefined) tome.description = String(req.body.description ?? '').trim();
+  if (req.body.enabled !== undefined) tome.enabled = !!req.body.enabled;
+  try {
+    await writeTome(tome);
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to update tome.' });
+  }
+});
+
+// DELETE /api/tomes/:id — delete a tome
+app.delete('/api/tomes/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
+  try {
+    await fsp.unlink(path.join(TOMES_DIR, `${id}.json`));
+    res.json({ ok: true });
+  } catch {
+    res.status(404).json({ error: 'Tome not found.' });
+  }
+});
+
+// DELETE /api/tomes/:id/entries/:uid — remove a single entry
+app.delete('/api/tomes/:id/entries/:uid', async (req, res) => {
+  const { id, uid } = req.params;
+  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
+  if (!isValidEntryUid(uid)) return res.status(400).json({ error: 'Invalid entry UID.' });
+  const tome = await readTome(id);
+  if (!tome) return res.status(404).json({ error: 'Tome not found.' });
+  if (!tome.entries?.[uid]) return res.status(404).json({ error: 'Entry not found.' });
+  delete tome.entries[uid];
+  try {
+    await writeTome(tome);
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to save tome.' });
+  }
+});
+
+// POST /api/tomes/default/entries — add a single entry to the default (first enabled) tome.
+// Used by the save_to_tome LLM tool so the model can write knowledge back mid-conversation.
+app.post('/api/tomes/default/entries', async (req, res) => {
+  const { comment, content, keys, learnedAt } = req.body;
+  if (!content || typeof content !== 'string' || !content.trim())
+    return res.status(400).json({ error: 'content is required.' });
+  if (content.length > 16384)
+    return res.status(400).json({ error: 'content exceeds 16 KB limit.' });
+  if (comment !== undefined && typeof comment !== 'string')
+    return res.status(400).json({ error: 'comment must be a string.' });
+
+  // Accept keys as string[] or comma-separated string
+  let normKeys = [];
+  if (Array.isArray(keys)) {
+    normKeys = keys.map(k => String(k).trim()).filter(Boolean);
+  } else if (typeof keys === 'string') {
+    normKeys = keys.split(',').map(k => k.trim()).filter(Boolean);
+  }
+
+  try {
+    // Find first enabled tome, or create "General"
+    const files = await fsp.readdir(TOMES_DIR);
+    let targetTome = null;
+    for (const f of files.sort()) {
+      if (!f.endsWith('.json')) continue;
+      try {
+        const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
+        const t = JSON.parse(raw);
+        if (t.enabled) { targetTome = t; break; }
+      } catch { /* skip corrupt */ }
+    }
+    if (!targetTome) {
+      const newId = randomUUID();
+      targetTome = { id: newId, name: 'General', description: '', enabled: true, entries: {} };
+      await writeTome(targetTome);
+    } else {
+      // Re-read a fresh copy so we merge correctly
+      const fresh = await readTome(targetTome.id);
+      if (fresh) targetTome = fresh;
+    }
+
+    const uid  = randomUUID();
+    const now  = new Date().toISOString();
+    targetTome.entries[uid] = {
+      uid,
+      comment:             typeof comment === 'string' ? comment.trim() || 'Auto-saved entry' : 'Auto-saved entry',
+      keys:                normKeys,
+      keysecondary:        [],
+      content:             content.trim(),
+      constant:            false,
+      selective:           false,
+      selectiveLogic:      0,
+      enabled:             true,
+      position:            0,
+      depth:               4,
+      role:                0,
+      scanDepth:           null,
+      caseSensitive:       null,
+      matchWholeWords:     null,
+      probability:         100,
+      sticky:              null,
+      cooldown:            null,
+      preventRecursion:    false,
+      delayUntilRecursion: false,
+      excludeRecursion:    false,
+      group:               '',
+      groupWeight:         null,
+      insertion_order:     100,
+      created_at:          now,
+      learnedAt:           (typeof learnedAt === 'string' && learnedAt) ? learnedAt : now,
+    };
+    await writeTome(targetTome);
+    res.json({ ok: true, tomeId: targetTome.id, uid });
+  } catch {
+    res.status(500).json({ error: 'Failed to save entry.' });
+  }
+});
+
+// ── Entity-core write endpoints ─────────────────────────────────
+
+const VALID_MEMORY_GRANULARITIES = new Set(['daily', 'weekly', 'monthly', 'yearly', 'significant']);
+const VALID_IDENTITY_CATEGORIES  = new Set(['self', 'user', 'relationship', 'custom']);
+const VALID_FILENAME_RE           = /^[\w]+\.md$/;
+
+// POST /api/entity/memory — write a new memory entry to entity-core
+app.post('/api/entity/memory', async (req, res) => {
+  const { content, granularity = 'daily', date } = req.body;
+  if (!content || typeof content !== 'string' || !content.trim())
+    return res.status(400).json({ error: 'content is required.' });
+  if (content.length > 8192)
+    return res.status(400).json({ error: 'content exceeds 8 KB limit.' });
+  if (!VALID_MEMORY_GRANULARITIES.has(granularity))
+    return res.status(400).json({ error: `granularity must be one of: ${[...VALID_MEMORY_GRANULARITIES].join(', ')}.` });
+
+  const result = await createMemory({ content: content.trim(), granularity, date });
+  if (!result.ok) return res.status(502).json({ error: result.error ?? 'entity-core unavailable' });
+  res.json({ ok: true });
+});
+
+// POST /api/entity/identity — append to or update a section of an entity-core identity file
+app.post('/api/entity/identity', async (req, res) => {
+  const { category, filename, heading, content, mode = 'append' } = req.body;
+  if (!VALID_IDENTITY_CATEGORIES.has(category))
+    return res.status(400).json({ error: `category must be one of: ${[...VALID_IDENTITY_CATEGORIES].join(', ')}.` });
+  if (!filename || !VALID_FILENAME_RE.test(filename))
+    return res.status(400).json({ error: 'filename must be a simple .md filename (letters, numbers, underscores).' });
+  if (!content || typeof content !== 'string' || !content.trim())
+    return res.status(400).json({ error: 'content is required.' });
+  if (content.length > 8192)
+    return res.status(400).json({ error: 'content exceeds 8 KB limit.' });
+
+  let result;
+  if (mode === 'update_section') {
+    if (!heading || typeof heading !== 'string' || !heading.trim())
+      return res.status(400).json({ error: 'heading is required for update_section mode.' });
+    result = await updateIdentitySection({ category, filename, heading: heading.trim(), content: content.trim() });
+  } else {
+    result = await appendIdentity({ category, filename, content: content.trim() });
+  }
+
+  if (!result.ok) return res.status(502).json({ error: result.error ?? 'entity-core unavailable' });
+  res.json({ ok: true });
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {

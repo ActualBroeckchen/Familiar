@@ -84,6 +84,53 @@ const BUILTIN_TOOLS = [
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'save_to_tome',
+      description: 'Save a piece of knowledge or a fact learned during this conversation into the persistent Tome knowledge base. Use when the user shares something important about themselves, their relationships, their preferences, or their situation that should be remembered across future conversations. Do NOT use for trivial, transient, or already-known information.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title:    { type: 'string', description: 'Short descriptive label for this entry (e.g. "User stress about lateness").' },
+          content:  { type: 'string', description: 'The knowledge to store. Write concisely in third person, with enough detail to be useful as injected context in future conversations.' },
+          keywords: { type: 'array', items: { type: 'string' }, description: 'Two to eight trigger keywords or short phrases. The entry will be injected into the prompt whenever these appear in conversation.' },
+        },
+        required: ['title', 'content', 'keywords'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'save_memory',
+      description: 'Write a new memory entry to the long-term memory system. Use to record important events, emotional patterns, or significant moments from this conversation in a durable, time-stamped store. Prefer "daily" for routine session events; use "significant" for major milestones.',
+      parameters: {
+        type: 'object',
+        properties: {
+          content:     { type: 'string', description: 'Memory content written in first-person perspective. Use bullet points prefixed with [chat:auto] for individual facts.' },
+          granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier.' },
+        },
+        required: ['content', 'granularity'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_identity',
+      description: 'Append a new durable fact to a persistent identity file. Use for facts about the user (category: user, filename: user_notes.md) or the relationship (category: relationship, filename: relationship_notes.md). Do NOT use for session-specific or transient information.',
+      parameters: {
+        type: 'object',
+        properties: {
+          category: { type: 'string', enum: ['user', 'relationship'], description: 'Identity file category.' },
+          filename: { type: 'string', description: 'Target filename within the category, e.g. user_notes.md or relationship_notes.md.' },
+          content:  { type: 'string', description: 'Content to append to the identity file.' },
+        },
+        required: ['category', 'filename', 'content'],
+      },
+    },
+  },
 ];
 
 /** Client-side implementations of the built-in tools. */
@@ -99,6 +146,56 @@ const BUILTIN_EXECUTORS = {
     model:        state.model,
     elapsedMsSinceLastMessage: elapsedTime,
   }, null, 2),
+
+  save_to_tome: async ({ title, content, keywords }) => {
+    try {
+      const res = await fetch('/api/tomes/default/entries', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          comment:   title,
+          content,
+          keys:      Array.isArray(keywords) ? keywords : String(keywords ?? '').split(',').map(s => s.trim()).filter(Boolean),
+          learnedAt: new Date().toISOString(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) return `Failed to save to Tome: ${data.error ?? res.status}`;
+      return `Saved to Tome (entry: ${data.uid ?? 'unknown'}).`;
+    } catch (err) {
+      return `Failed to save to Tome: ${err.message}`;
+    }
+  },
+
+  save_memory: async ({ content, granularity }) => {
+    try {
+      const res = await fetch('/api/entity/memory', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, granularity }),
+      });
+      const data = await res.json();
+      if (!res.ok) return `Failed to save memory: ${data.error ?? res.status}`;
+      return data.ok ? 'Memory saved.' : `Memory save failed: ${data.error ?? 'unknown error'}`;
+    } catch (err) {
+      return `Failed to save memory: ${err.message}`;
+    }
+  },
+
+  update_identity: async ({ category, filename, content }) => {
+    try {
+      const res = await fetch('/api/entity/identity', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category, filename, content, mode: 'append' }),
+      });
+      const data = await res.json();
+      if (!res.ok) return `Failed to update identity: ${data.error ?? res.status}`;
+      return data.ok ? 'Identity file updated.' : `Identity update failed: ${data.error ?? 'unknown error'}`;
+    } catch (err) {
+      return `Failed to update identity: ${err.message}`;
+    }
+  },
 };
 
 /** Returns the full tools array (built-ins + valid user-defined tools). */
@@ -114,26 +211,16 @@ function getActiveTools() {
 }
 
 /** Execute a tool by name. Returns the result string. */
-function executeToolCall(name, argsJson) {
+async function executeToolCall(name, argsJson) {
   if (Object.prototype.hasOwnProperty.call(BUILTIN_EXECUTORS, name)) {
     try {
       const args = argsJson ? JSON.parse(argsJson) : {};
-      return String(BUILTIN_EXECUTORS[name](args));
+      return String(await BUILTIN_EXECUTORS[name](args));
     } catch (err) {
       return `Error executing ${name}: ${err.message}`;
     }
   }
   return `Tool "${name}" has no client-side implementation. No result available.`;
-}
-
-/**
- * Sanitise a state message into the shape the upstream API expects.
- * Strips client-only fields: timestamp, _toolName.
- */
-function toApiMessage({ role, content, tool_calls, tool_call_id }) {
-  if (role === 'tool')  return { role, tool_call_id, content };
-  if (tool_calls)       return { role, content: content ?? null, tool_calls };
-  return { role, content };
 }
 
 // ── Session timing ──────────────────────────────────────────────
@@ -156,6 +243,8 @@ const state = {
   streaming:         true,
   temperature:       0.8,
   maxTokens:         2048,
+  userName:          'User',
+  charName:          'Assistant',
   systemPrompt:      '',
   characterProfile:  '',
   userProfile:       '',
@@ -168,14 +257,33 @@ const state = {
   // ── Tool calling ──────────────────────────────────────────
   toolsEnabled:      true,   // whether to send tools array with each request
   customTools:       '',     // JSON array string of user-defined tool definitions
+  // ── Topics & tomes (lorebook) ───────────────────────────
+  tomeScanDepth:         4,      // how many recent messages to scan for keyword matches
+  tomeRecursive:         false,  // enable recursive tome entry activation
+  tomeMaxRecursionSteps: 3,      // max recursive passes
+  tomeCaseSensitive:     false,  // global case-sensitive keyword matching
+  tomeMatchWholeWords:   false,  // global whole-word keyword matching
+  turnCount:             0,      // conversation turn counter (used by entry.delay)
+  generationMode:        'normal', // current generation mode (used by entry.triggers[])
+  lorebook:          { entries: {} }, // legacy field kept for compatibility
+  tomeCache:         {},         // { [tomeId]: tomeObject } — not persisted
+  tomeRegistry:      [],         // array of { id, name, enabled, entryCount } — not persisted
+  topics:            [],         // session-level; stored under pf_topics_{sessionId}
 };
 
 // ── Persistence ──────────────────────────────────────────────────
 function saveSettings() {
   try {
-    const { messages: _ignored, ...settings } = state;
+    const { messages: _ignored, tomeCache: _tc, tomeRegistry: _tr, topics: _t, ...settings } = state;
     localStorage.setItem('pf_settings', JSON.stringify(settings));
   } catch { /* quota exceeded — silently skip */ }
+}
+
+function saveTopics() {
+  if (!state.sessionId) return;
+  try {
+    localStorage.setItem(`pf_topics_${state.sessionId}`, JSON.stringify(state.topics));
+  } catch { /* quota exceeded */ }
 }
 
 function saveHistory() {
@@ -200,6 +308,11 @@ function loadPersisted() {
     state.sessionStartedAt = new Date().toISOString();
     saveSettings();
   }
+  // Load session-scoped topics
+  try {
+    const rawTopics = localStorage.getItem(`pf_topics_${state.sessionId}`);
+    if (rawTopics) state.topics = JSON.parse(rawTopics);
+  } catch { /* corrupt */ }
 }
 
 // Fire-and-forget — writes the current session to disk via the server.
@@ -220,6 +333,17 @@ async function saveToServer() {
       }),
     });
   } catch { /* non-critical */ }
+}
+
+// ── Name variable substitution ──────────────────────────────────
+/**
+ * Replace {{user}} and {{char}} in a prompt string with the
+ * configured user/AI display names.
+ */
+function applyNameVars(text) {
+  return text
+    .replace(/\{\{user\}\}/gi, state.userName || 'User')
+    .replace(/\{\{char\}\}/gi, state.charName || 'Assistant');
 }
 
 // ── Message building ─────────────────────────────────────────────
@@ -248,27 +372,60 @@ function toApiMessage({ role, content, tool_calls, tool_call_id }) {
 function buildApiMessages(userInput) {
   const msgs = [];
 
+  // ── Activate lorebook entries ────────────────────────────────
+  const lore = activateTomeEntries(userInput);
+  const joinLore = (entries) =>
+    entries.map(e => applyNameVars(e.content.trim())).filter(Boolean).join('\n\n---\n\n');
+
   // ── System message ────────────────────────────────────────────
   const systemParts = [];
+
+  // Position 2 — top of system message
+  if (lore.sys_top.length) systemParts.push(joinLore(lore.sys_top));
+
   if (state.systemPrompt.trim())
-    systemParts.push(state.systemPrompt.trim());
+    systemParts.push(applyNameVars(state.systemPrompt.trim()));
+
+  // Position 0 — before character profile
+  if (lore.before_char.length) systemParts.push(joinLore(lore.before_char));
+
   if (state.characterProfile.trim())
-    systemParts.push('[Character Profile]\n' + state.characterProfile.trim());
+    systemParts.push('[Character Profile]\n' + applyNameVars(state.characterProfile.trim()));
+
+  // Position 1 — after character profile
+  if (lore.after_char.length) systemParts.push(joinLore(lore.after_char));
+
   if (state.userProfile.trim())
-    systemParts.push('[User Profile]\n' + state.userProfile.trim());
+    systemParts.push('[User Profile]\n' + applyNameVars(state.userProfile.trim()));
+
+  // Position 3 — bottom of system message
+  if (lore.sys_bottom.length) systemParts.push(joinLore(lore.sys_bottom));
 
   if (systemParts.length)
     msgs.push({ role: 'system', content: systemParts.join('\n\n---\n\n') });
 
-  // ── History ───────────────────────────────────────────────────
-  msgs.push(...state.messages);
+  // ── History + position-4 (@depth) injections ─────────────────
+  // Clone history as clean API messages so we can splice into it
+  const histMsgs = state.messages.map(toApiMessage);
+
+  // Sort at_depth entries deepest-first so splice positions stay consistent
+  const atDepthSorted = [...lore.at_depth].sort((a, b) => (b.depth ?? 4) - (a.depth ?? 4));
+  const roleNames = ['system', 'user', 'assistant'];
+  for (const entry of atDepthSorted) {
+    const d    = Math.max(0, entry.depth ?? 4);
+    const role = roleNames[entry.role ?? 0] ?? 'system';
+    const idx  = Math.max(0, histMsgs.length - d);
+    histMsgs.splice(idx, 0, { role, content: applyNameVars(entry.content.trim()) });
+  }
+
+  msgs.push(...histMsgs);
 
   // ── New user turn ─────────────────────────────────────────────
   msgs.push({ role: 'user', content: userInput });
 
   // ── Post-history prompt ───────────────────────────────────────
   if (state.postHistoryPrompt.trim())
-    msgs.push({ role: 'user', content: state.postHistoryPrompt.trim() });
+    msgs.push({ role: 'user', content: applyNameVars(state.postHistoryPrompt.trim()) });
 
   return msgs;
 }
@@ -306,18 +463,6 @@ function renderMarkdown(text) {
       return `<pre><code>${esc(part)}</code></pre>`;
     }
 
-    // Inline code (before other inline rules)
-    let s = part.replace(/`([^`\n]+)`/g, (_, c) => `<code>${esc(c)}</code>`);
-
-    // Bold and italic (non-greedy, no newlines)
-    s = s
-      .replace(/\*\*\*([^\n*]+?)\*\*\*/g, '<strong><em>$1</em></strong>')
-      .replace(/\*\*([^\n*]+?)\*\*/g,     '<strong>$1</strong>')
-      .replace(/\*([^\n*]+?)\*/g,          '<em>$1</em>');
-
-    // Escape HTML in non-code text (done after inline code to avoid double-escaping)
-    // Note: esc() was already applied above via replace, we need a different strategy.
-    // Redo: escape first, then apply markdown.
     return renderInlineText(part);
   }).join('');
 }
@@ -350,9 +495,9 @@ function renderInlineText(text) {
     s = s.replace(/^[*\-] (.+)$/gm, '<li>$1</li>');
     s = s.replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m}</ul>`);
 
-    // Ordered lists
-    s = s.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
-    // (wrap already done above via same pattern)
+    // Ordered lists — use a temporary tag to avoid re-wrapping unordered <li> items
+    s = s.replace(/^\d+\. (.+)$/gm, '<oli>$1</oli>');
+    s = s.replace(/(<oli>.*<\/oli>\n?)+/g, m => `<ol>${m.replace(/<oli>/g, '<li>').replace(/<\/oli>/g, '</li>')}</ol>`);
 
     // Paragraphs: double newline → </p><p>
     s = s.replace(/\n\n+/g, '</p><p>');
@@ -422,6 +567,29 @@ function createMessageEl(role, htmlContent, timestamp) {
   // Will be wired up by callers who know the raw text
   actions.appendChild(copyBtn);
 
+  // Topic action buttons — only for user/assistant messages
+  if (role === 'user' || role === 'assistant') {
+    const topicStartBtn = document.createElement('button');
+    topicStartBtn.className = 'msg-action-btn msg-topic-start-btn';
+    topicStartBtn.title = 'Start a topic from this message';
+    topicStartBtn.textContent = '▷ Topic start';
+    topicStartBtn.addEventListener('click', () => {
+      const idx = parseInt(el.dataset.msgIndex, 10);
+      if (!isNaN(idx)) startTopicAt(idx);
+    });
+    actions.appendChild(topicStartBtn);
+
+    const topicEndBtn = document.createElement('button');
+    topicEndBtn.className = 'msg-action-btn msg-topic-end-btn';
+    topicEndBtn.title = 'End an active topic at this message';
+    topicEndBtn.textContent = '□ Topic end';
+    topicEndBtn.addEventListener('click', () => {
+      const idx = parseInt(el.dataset.msgIndex, 10);
+      if (!isNaN(idx)) endTopicAt(idx);
+    });
+    actions.appendChild(topicEndBtn);
+  }
+
   // Timestamp
   const timeEl = document.createElement('time');
   timeEl.className = 'msg-time';
@@ -455,6 +623,8 @@ function wireCopyButton(btn, getText) {
 function appendUserMessage(text, timestamp) {
   const { el, copyBtn } = createMessageEl('user', esc(text).replace(/\n/g, '<br>'), timestamp);
   wireCopyButton(copyBtn, () => text);
+  // Index will be assigned by refreshTopicGutter after state.messages is updated
+  el.dataset.msgIndex = String(state.messages.length); // optimistic: will be corrected
   $('messages').appendChild(el);
   scrollToBottom();
 }
@@ -552,12 +722,14 @@ function renderAllMessages() {
       ? esc(msg.content ?? '').replace(/\n/g, '<br>')
       : renderMarkdown(msg.content ?? '');
     const { el, copyBtn } = createMessageEl(msg.role, html, msg.timestamp);
+    el.dataset.msgIndex = String(i);
     const capturedContent = msg.content;
     wireCopyButton(copyBtn, () => capturedContent);
     container.appendChild(el);
     i++;
   }
   updateRegenBtn();
+  refreshTopicGutter();
   scrollToBottom();
 }
 
@@ -568,6 +740,9 @@ function updateRegenBtn() {
 
 // ── API communication ────────────────────────────────────────────
 let abortController = null;
+
+/** The last messages array sent to /api/chat (client-side, pre-enrichment). */
+let lastSentMessages = null;
 
 async function sendMessage(userInput) {
   userInput = userInput.trim();
@@ -599,6 +774,7 @@ async function sendMessage(userInput) {
 
   const userTimestamp = now;
   const apiMessages   = buildApiMessages(userInput);
+  lastSentMessages    = apiMessages;
 
   // Optimistic UI
   appendUserMessage(userInput, userTimestamp);
@@ -613,6 +789,7 @@ async function sendMessage(userInput) {
       await doNonStreamingRequest(apiMessages, userInput, userTimestamp);
     }
     setStatus('ok');
+    state.turnCount = (state.turnCount ?? 0) + 1;
   } catch (err) {
     setTyping(false);
     if (err.name !== 'AbortError') {
@@ -714,13 +891,13 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
     if (finishReason === 'tool_calls' && round < MAX_TOOL_ROUNDS) {
       const toolCalls  = Object.values(toolCallsAcc);
       const roundTs    = new Date().toISOString();
-      const toolResults = toolCalls.map(tc => ({
+      const toolResults = await Promise.all(toolCalls.map(async tc => ({
         role:         'tool',
         tool_call_id: tc.id,
-        content:      executeToolCall(tc.function.name, tc.function.arguments),
+        content:      await executeToolCall(tc.function.name, tc.function.arguments),
         timestamp:    roundTs,
         _toolName:    tc.function.name,
-      }));
+      })));
 
       // Record in pending (for state.messages commit at the end)
       pendingMsgs.push({ role: 'assistant', content: fullContent || null, tool_calls: toolCalls, timestamp: roundTs });
@@ -751,6 +928,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
     state.messages.push(...pendingMsgs);
     state.messages.push({ role: 'assistant', content: fullContent, timestamp: assistantTimestamp });
     saveHistory();
+    refreshTopicGutter();
     wireCopyButton(shell.copyBtn, () => fullContent);
     updateRegenBtn();
     break;
@@ -800,13 +978,13 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
     // ── Tool-call round ──────────────────────────────────────────
     if (finishReason === 'tool_calls' && Array.isArray(message?.tool_calls) && round < MAX_TOOL_ROUNDS) {
       const toolCalls   = message.tool_calls;
-      const toolResults = toolCalls.map(tc => ({
+      const toolResults = await Promise.all(toolCalls.map(async tc => ({
         role:         'tool',
         tool_call_id: tc.id,
-        content:      executeToolCall(tc.function.name, tc.function.arguments),
+        content:      await executeToolCall(tc.function.name, tc.function.arguments),
         timestamp:    roundTs,
         _toolName:    tc.function.name,
-      }));
+      })));
 
       pendingMsgs.push({ role: 'assistant', content: message.content || null, tool_calls: toolCalls, timestamp: roundTs });
       pendingMsgs.push(...toolResults);
@@ -832,6 +1010,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
     state.messages.push(...pendingMsgs);
     state.messages.push({ role: 'assistant', content,            timestamp: roundTs });
     saveHistory();
+    refreshTopicGutter();
     wireCopyButton(copyBtn, () => content);
     updateRegenBtn();
     break;
@@ -850,6 +1029,7 @@ async function regenerateLastResponse() {
 
   const userTimestamp = origUserTimestamp || new Date().toISOString();
   const apiMessages   = buildApiMessages(lastUserInput);
+  lastSentMessages    = apiMessages;
   appendUserMessage(lastUserInput, userTimestamp);
   setInputLocked(true);
   setTyping(true);
@@ -968,12 +1148,24 @@ function readSettingsFromUI() {
   state.streaming         = $('streaming-toggle').checked;
   state.temperature       = parseFloat($('temperature').value);
   state.maxTokens         = parseInt($('max-tokens').value, 10);
+  state.userName          = $('user-name').value.trim() || 'User';
+  state.charName          = $('char-name').value.trim() || 'Assistant';
   state.systemPrompt      = $('system-prompt').value;
   state.characterProfile  = $('char-profile').value;
   state.userProfile       = $('user-profile').value;
   state.postHistoryPrompt = $('post-history-prompt').value;
   state.toolsEnabled      = $('tools-enabled').checked;
   state.customTools       = $('custom-tools').value;
+  const scanEl = $('tome-scan-depth');
+  if (scanEl) state.tomeScanDepth = Math.max(1, parseInt(scanEl.value, 10) || 4);
+  const recursiveEl = $('tome-recursive');
+  if (recursiveEl) state.tomeRecursive = recursiveEl.checked;
+  const maxRecEl = $('tome-max-recursion');
+  if (maxRecEl) state.tomeMaxRecursionSteps = Math.max(1, parseInt(maxRecEl.value, 10) || 3);
+  const csEl = $('tome-case-sensitive');
+  if (csEl) state.tomeCaseSensitive = csEl.checked;
+  const wwEl = $('tome-match-whole-words');
+  if (wwEl) state.tomeMatchWholeWords = wwEl.checked;
   saveSettings();
 }
 
@@ -985,12 +1177,24 @@ function writeSettingsToUI() {
   $('temperature').value        = state.temperature;
   $('temp-display').textContent = state.temperature;
   $('max-tokens').value         = state.maxTokens;
+  $('user-name').value          = state.userName ?? 'User';
+  $('char-name').value          = state.charName ?? 'Assistant';
   $('system-prompt').value      = state.systemPrompt;
   $('char-profile').value       = state.characterProfile;
   $('user-profile').value       = state.userProfile;
   $('post-history-prompt').value = state.postHistoryPrompt;
   $('tools-enabled').checked    = state.toolsEnabled ?? true;
   $('custom-tools').value       = state.customTools ?? '';
+  const scanEl = $('tome-scan-depth');
+  if (scanEl) scanEl.value = state.tomeScanDepth ?? 4;
+  const recursiveEl = $('tome-recursive');
+  if (recursiveEl) recursiveEl.checked = state.tomeRecursive ?? false;
+  const maxRecEl = $('tome-max-recursion');
+  if (maxRecEl) maxRecEl.value = state.tomeMaxRecursionSteps ?? 3;
+  const csEl = $('tome-case-sensitive');
+  if (csEl) csEl.checked = state.tomeCaseSensitive ?? false;
+  const wwEl = $('tome-match-whole-words');
+  if (wwEl) wwEl.checked = state.tomeMatchWholeWords ?? false;
   refreshModelSuggestions(state.provider);
 }
 
@@ -1067,6 +1271,7 @@ function startNewSession() {
   state.sessionStartedAt = new Date().toISOString();
   state.sessionEndedAt   = null;
   state.messages         = [];
+  state.topics           = [];
   lastMessage            = null;
   state.lastMessage      = null;
   elapsedTime            = 0;
@@ -1074,6 +1279,8 @@ function startNewSession() {
   try { localStorage.setItem('pf_history', JSON.stringify([])); } catch { /* ignore */ }
   $('messages').innerHTML = '';
   updateRegenBtn();
+  updateTopicStrip();
+  refreshTopicGutter();
 }
 
 /**
@@ -1083,12 +1290,18 @@ function startNewSession() {
 async function autoEndSession() {
   _sessionTimeoutId = null;
   if (state.messages.length) {
-    state.sessionEndedAt = new Date().toISOString();
+    const sessionMessages = [...state.messages];
+    const sessionId       = state.sessionId;
+    state.sessionEndedAt  = new Date().toISOString();
     saveSettings();
     await saveToServer();
+    startNewSession();
+    showSessionEndedNotice();
+    memorizeSessionToTome(sessionMessages, sessionId); // fire-and-forget
+  } else {
+    startNewSession();
+    showSessionEndedNotice();
   }
-  startNewSession();
-  showSessionEndedNotice();
 }
 
 function showSessionEndedNotice() {
@@ -1101,6 +1314,221 @@ function showSessionEndedNotice() {
     toast.classList.remove('session-toast-show');
     setTimeout(() => toast.remove(), 400);
   }, 4500);
+}
+
+function showMemorizationNotice(count) {
+  const toast = document.createElement('div');
+  toast.className = 'session-toast';
+  toast.textContent = `${count} lorebook entr${count === 1 ? 'y' : 'ies'} memorized from the last session.`;
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('session-toast-show'));
+  setTimeout(() => {
+    toast.classList.remove('session-toast-show');
+    setTimeout(() => toast.remove(), 400);
+  }, 4500);
+}
+
+/**
+ * Automatically memorize a finished session into lorebook entries.
+ * Fires-and-forgets after session close — never blocks the UI.
+ * Calls the configured LLM to split the conversation into distinct topics
+ * and creates a lorebook entry for each one.
+ */
+async function memorizeSessionToTome(messages, sessionId) {
+  if (!state.apiKey.trim()) return;
+
+  // Filter to user/assistant only — skip tool-call plumbing and empty turns
+  const readable = messages.filter(m => {
+    if (m.role === 'tool') return false;
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return false;
+    return m.content?.trim();
+  });
+  if (readable.length < 4) return;
+
+  const convText = readable
+    .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
+    .join('\n\n');
+
+  const prompt =
+`You are producing Tome entries for a Familiar (AI companion). Each entry is private reference notes that get injected into the Familiar's context when its keywords appear in a future conversation. Identify the distinct situational topics in the conversation below and write one entry per topic, following the craft rules carefully.
+
+Return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
+{
+  "topics": [
+    {
+      "title":    "Short label for the entry comment (max 60 chars)",
+      "content":  "Familiar-perspective bullet guidance — see content rules below",
+      "keywords": ["conversational phrase 1", "conversational phrase 2"],
+      "sticky":   3
+    }
+  ]
+}
+
+Identify 1–8 genuinely distinct topics. Merge closely related material rather than over-splitting. Each entry must be self-contained.
+
+### Content rules (most important)
+Write content as the Familiar's private notes to themselves about this situation. NOT a summary of what happened.
+Structure:
+  1. One short framing line — what is happening and why (gives the Familiar understanding, not just rules).
+  2. 3–5 action bullets — what to do.
+  3. 1–2 prohibition bullets — what NOT to do. Usually the most valuable: name the well-intentioned default response that would make things worse.
+Style:
+  - Second person, addressed to the Familiar. Use {{user}} wherever the user's name belongs.
+  - Practical, grounded, non-clinical. Notes, not a textbook.
+  - Short declarative bullets. The whole entry should be readable in 5–10 seconds.
+  - Do NOT include narrative summaries of "what they said" — distil the situation and the response, not the transcript.
+
+### Keyword rules
+Keywords are TRIGGERS, not labels. They must be phrases the user would literally say when this situation recurs — not the name of the topic.
+  - WRONG: "executive dysfunction", "rejection sensitive dysphoria", "hyperfocus".
+  - RIGHT: "don't know where to start", "did I say something wrong", "been at this for".
+Derive them by imagining what the user would actually type when the situation is happening, then extracting distinctive phrases.
+  - Prefer multi-word phrases over single common words (avoid bare "tired", "can't", "hard").
+  - 3–8 keywords per entry. Each one specific enough not to fire in unrelated conversations.
+  - You may use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has 3+ predictable variants.
+
+### Sticky rules
+Pick an integer sticky value per entry (number of turns the entry stays active after first match):
+  - null = one-shot lore/fact that does not need persistence.
+  - 2    = brief states that typically resolve quickly.
+  - 3    = moderate states needing a few exchanges.
+  - 4–5  = complex/intense states taking multiple turns to navigate.
+  - 8+   = ongoing modes that should persist across the whole session.
+
+Conversation:
+${convText}`;
+
+  try {
+    const resp = await fetch('/api/chat', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider:    state.provider,
+        apiKey:      state.apiKey,
+        model:       state.model,
+        messages:    [{ role: 'user', content: prompt }],
+        stream:      false,
+        temperature: 0.2,
+        max_tokens:  2000,
+      }),
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (data.error) return;
+
+    const raw       = data.choices?.[0]?.message?.content ?? '';
+    const jsonMatch = raw.match(/\{[\s\S]+\}/);
+    if (!jsonMatch) return;
+    const parsed = JSON.parse(jsonMatch[0]);
+    const topics = parsed.topics;
+    if (!Array.isArray(topics) || !topics.length) return;
+
+    // Get or create the default tome for auto-saved memories
+    let targetTome = null;
+    try { targetTome = await getDefaultTomeForSaving(); } catch { return; }
+    if (!targetTome) return;
+
+    // Fetch the current tome fresh from the server
+    let tomeData = { entries: {} };
+    try {
+      const tRes = await fetch(`/api/tomes/${targetTome.id}`);
+      if (tRes.ok) tomeData = await tRes.json();
+    } catch { /* fall back to empty */ }
+
+    const now = new Date().toISOString();
+    let created = 0;
+    for (const t of topics) {
+      const title   = (t.title   ?? '').trim();
+      const content = (t.content ?? '').trim();
+      if (!title || !content) continue;
+      const stickyN = parseInt(t.sticky, 10);
+      const sticky  = Number.isFinite(stickyN) && stickyN > 0 ? stickyN : null;
+      const uid = generateId();
+      tomeData.entries[uid] = {
+        uid,
+        comment:             title,
+        keys:                Array.isArray(t.keywords) ? t.keywords.map(k => String(k).trim()).filter(Boolean) : [],
+        keysecondary:        [],
+        content,
+        constant:            false,
+        selective:           false,
+        selectiveLogic:      0,
+        enabled:             true,
+        position:            0,
+        depth:               4,
+        role:                0,
+        scanDepth:           null,
+        caseSensitive:       null,
+        matchWholeWords:     null,
+        probability:         100,
+        sticky,
+        cooldown:            null,
+        preventRecursion:    false,
+        delayUntilRecursion: false,
+        excludeRecursion:    false,
+        group:               '',
+        groupWeight:         null,
+        insertion_order:     100,
+        created_at:          now,
+        learnedAt:           now,
+        session_id:          sessionId,
+        message_range:       null,
+      };
+      created++;
+    }
+    if (!created) return;
+
+    await fetch(`/api/tomes/${targetTome.id}`, {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries: tomeData.entries }),
+    });
+
+    // Update cache so the tome entries modal reflects new entries immediately.
+    state.tomeCache[targetTome.id] = tomeData;
+    showMemorizationNotice(created);
+  } catch { /* non-critical — silently swallow any error */ }
+}
+
+// ── Prompt inspector modal ───────────────────────────────────
+function openPromptInspector() {
+  const body = $('prompt-inspector-body');
+  if (!lastSentMessages) {
+    body.innerHTML = '<p class="logs-empty">Send a message first.</p>';
+  } else {
+    body.innerHTML = '';
+    for (const msg of lastSentMessages) {
+      const div = document.createElement('div');
+      div.className = 'pi-msg';
+      const roleClass = `pi-role-${msg.role ?? 'user'}`;
+      const contentText = typeof msg.content === 'string'
+        ? msg.content
+        : JSON.stringify(msg.content ?? msg.tool_calls ?? '', null, 2);
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'btn-ghost pi-copy';
+      copyBtn.textContent = 'Copy';
+      wireCopyButton(copyBtn, () => contentText);
+      div.innerHTML = `<span class="pi-role ${roleClass}">${esc(msg.role ?? 'user')}</span>`;
+      const details = document.createElement('details');
+      details.open = msg.role === 'system' || lastSentMessages.length <= 6;
+      const summary = document.createElement('summary');
+      summary.className = 'pi-summary';
+      summary.textContent = contentText.slice(0, 120).replace(/\n/g, ' ');
+      const pre = document.createElement('pre');
+      pre.className = 'pi-pre';
+      pre.textContent = contentText;
+      details.appendChild(summary);
+      details.appendChild(pre);
+      div.appendChild(details);
+      div.appendChild(copyBtn);
+      body.appendChild(div);
+    }
+  }
+  $('prompt-inspector-modal').classList.remove('hidden');
+}
+
+function closePromptInspector() {
+  $('prompt-inspector-modal').classList.add('hidden');
 }
 
 // ── Logs modal ──────────────────────────────────────────────
@@ -1199,6 +1627,12 @@ async function loadSession(sessionId) {
     state.sessionStartedAt = data.startedAt || new Date().toISOString();
     state.sessionEndedAt   = null; // treat loaded session as resumed/active
 
+    // Close all open topics from the loaded session (treat as historic)
+    const rawTopics = localStorage.getItem(`pf_topics_${sessionId}`);
+    state.topics = rawTopics ? JSON.parse(rawTopics).map(t => ({
+      ...t, endIndex: t.endIndex ?? (state.messages.length - 1)
+    })) : [];
+
     const lastMsg   = state.messages[state.messages.length - 1];
     lastMessage         = lastMsg?.timestamp || null;
     state.lastMessage   = lastMessage;
@@ -1215,6 +1649,7 @@ async function loadSession(sessionId) {
     }
 
     renderAllMessages();
+    updateTopicStrip();
     closeLogsModal();
   } catch (err) {
     alert(`Failed to load session: ${err.message}`);
@@ -1257,8 +1692,11 @@ function init() {
   // ── Settings field listeners ─────────────────────────────────
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
-    'temperature', 'max-tokens', 'system-prompt', 'char-profile',
+    'temperature', 'max-tokens', 'user-name', 'char-name',
+    'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
+    'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',
+    'tome-case-sensitive', 'tome-match-whole-words',
   ];
 
   settingsIds.forEach(id => {
@@ -1313,7 +1751,17 @@ function init() {
   // ── Clear history ────────────────────────────────────────────
   $('clear-chat-btn').addEventListener('click', () => {
     if (!state.messages.length || confirm('Clear all chat history? The current session log will be kept.')) {
-      startNewSession();
+      if (state.messages.length) {
+        const sessionMessages = [...state.messages];
+        const sessionId       = state.sessionId;
+        state.sessionEndedAt  = new Date().toISOString();
+        saveSettings();
+        saveToServer(); // fire-and-forget — stamps the log with endedAt
+        startNewSession();
+        memorizeSessionToTome(sessionMessages, sessionId); // fire-and-forget
+      } else {
+        startNewSession();
+      }
       setStatus('');
     }
   });
@@ -1321,12 +1769,117 @@ function init() {
   // ── Export chat ──────────────────────────────────────────────
   $('export-chat-btn').addEventListener('click', exportChat);
 
+  // ── Prompt inspector ─────────────────────────────────────────
+  $('prompt-inspector-btn').addEventListener('click', openPromptInspector);
+  $('prompt-inspector-close').addEventListener('click', closePromptInspector);
+  $('prompt-inspector-modal').addEventListener('click', e => {
+    if (e.target === $('prompt-inspector-modal')) closePromptInspector();
+  });
+
   // ── Logs modal ────────────────────────────────────────────
   $('logs-btn').addEventListener('click', openLogsModal);
   $('logs-modal-close').addEventListener('click', closeLogsModal);
   $('logs-modal').addEventListener('click', e => {
     if (e.target === $('logs-modal')) closeLogsModal();
   });
+
+  // ── Topic system ─────────────────────────────────────────────
+  $('new-topic-btn').addEventListener('click', openTopicNameModal);
+  $('topic-name-modal-close').addEventListener('click', closeTopicNameModal);
+  $('topic-name-cancel-btn').addEventListener('click', closeTopicNameModal);
+  $('topic-name-modal').addEventListener('click', e => {
+    if (e.target === $('topic-name-modal')) closeTopicNameModal();
+  });
+  $('topic-name-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); $('topic-name-start-btn').click(); }
+    if (e.key === 'Escape') closeTopicNameModal();
+  });
+  $('topic-name-start-btn').addEventListener('click', () => {
+    const label = $('topic-name-input').value.trim() || `Topic ${state.topics.length + 1}`;
+    closeTopicNameModal();
+    startTopic(label);
+  });
+
+  // Summary modal
+  $('summary-modal-close').addEventListener('click', () => {
+    if (confirm('Discard this topic summary? It will not be saved to a Tome.')) {
+      closeSummaryModal();
+    }
+  });
+  $('summary-modal').addEventListener('click', e => {
+    if (e.target === $('summary-modal') && confirm('Discard this summary?')) closeSummaryModal();
+  });
+  $('summary-discard-btn').addEventListener('click', () => {
+    if (confirm('Discard this topic summary?')) closeSummaryModal();
+  });
+  $('summary-regen-btn').addEventListener('click', () => {
+    if (_pendingSummaryTopic) regenerateSummary(_pendingSummaryTopic);
+  });
+  $('summary-save-btn').addEventListener('click', savePendingSummary);
+
+  // Tomes modal
+  $('tomes-btn').addEventListener('click', openTomesModal);
+  $('tomes-modal-close').addEventListener('click', closeTomesModal);
+  $('tomes-modal').addEventListener('click', e => {
+    if (e.target === $('tomes-modal')) closeTomesModal();
+  });
+  $('tome-new-btn').addEventListener('click', openNewTomeModal);
+
+  // Tome entries modal
+  $('tome-entries-modal-close').addEventListener('click', closeTomeEntriesModal);
+  $('tome-entries-back-btn').addEventListener('click', () => {
+    closeTomeEntriesModal();
+    openTomesModal();
+  });
+  $('tome-entries-modal').addEventListener('click', e => {
+    if (e.target === $('tome-entries-modal')) closeTomeEntriesModal();
+  });
+  $('tome-entries-new-btn').addEventListener('click', () => openLoreEditor(null));
+
+  // New tome modal
+  $('new-tome-modal-close').addEventListener('click', closeNewTomeModal);
+  $('new-tome-cancel-btn').addEventListener('click', closeNewTomeModal);
+  $('new-tome-modal').addEventListener('click', e => {
+    if (e.target === $('new-tome-modal')) closeNewTomeModal();
+  });
+  $('new-tome-name-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); $('new-tome-create-btn').click(); }
+    if (e.key === 'Escape') closeNewTomeModal();
+  });
+  $('new-tome-create-btn').addEventListener('click', createNewTome);
+
+  // Lorebook entry editor modal
+  $('lore-editor-close').addEventListener('click', closeLoreEditor);
+  $('lore-editor-cancel').addEventListener('click', closeLoreEditor);
+  $('lore-editor-modal').addEventListener('click', e => {
+    if (e.target === $('lore-editor-modal')) closeLoreEditor();
+  });
+  $('lore-editor-save').addEventListener('click', saveLoreEditorEntry);
+  $('lore-ed-selective').addEventListener('change', () => {
+    $('lore-ed-secondary-section').classList.toggle('hidden', !$('lore-ed-selective').checked);
+  });
+  $('lore-ed-position').addEventListener('change', () => {
+    const isAtDepth = $('lore-ed-position').value === '4';
+    $('lore-ed-depth-field').classList.toggle('hidden', !isAtDepth);
+    $('lore-ed-role-field').classList.toggle('hidden', !isAtDepth);
+  });
+  $('lore-ed-probability').addEventListener('input', () => {
+    $('lore-ed-prob-display').textContent = `${$('lore-ed-probability').value}%`;
+  });
+
+  // Retro-end modal
+  $('retro-end-modal-close').addEventListener('click', closeRetroEndModal);
+  $('retro-end-cancel-btn').addEventListener('click', closeRetroEndModal);
+  $('retro-end-modal').addEventListener('click', e => {
+    if (e.target === $('retro-end-modal')) closeRetroEndModal();
+  });
+
+  // ── Load tomes from server ────────────────────────────────────
+  loadTomesFromServer();
+
+  // Restore topic strip
+  updateTopicStrip();
+  refreshTopicGutter();
 
   // ── Import buttons ───────────────────────────────────────────
   document.querySelectorAll('.import-btn').forEach(btn => {
@@ -1371,3 +1924,1096 @@ function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+/* ================================================================
+   Topics & Lorebook
+   ================================================================ */
+
+// ── Topic colors ─────────────────────────────────────────────────
+const TOPIC_COLORS = [
+  '#f38ba8', // rose
+  '#a6e3a1', // green
+  '#89dceb', // sky
+  '#fab387', // peach
+  '#cba6f7', // mauve
+  '#f9e2af', // yellow
+  '#74c7ec', // sapphire
+  '#eba0ac', // flamingo
+];
+
+function nextTopicColor() {
+  const used = new Set(state.topics.map(t => t.color));
+  return TOPIC_COLORS.find(c => !used.has(c)) ?? TOPIC_COLORS[state.topics.length % TOPIC_COLORS.length];
+}
+
+// ── Topic lifecycle ───────────────────────────────────────────────
+
+/** Index override for retroactively-started topics. */
+let _retroStartIndex = null;
+
+/**
+ * Start a new topic, optionally anchored at a past message index.
+ * If startIndex is provided it takes precedence over the current tail.
+ */
+function startTopic(label, startIndex = null) {
+  const idx = startIndex !== null ? startIndex
+    : (_retroStartIndex !== null ? _retroStartIndex : state.messages.length);
+  _retroStartIndex = null;
+  const topic = {
+    id:           generateId(),
+    label,
+    color:        nextTopicColor(),
+    startIndex:   idx,
+    endIndex:     null,
+    tomeEntryId:  null,
+  };
+  state.topics.push(topic);
+  saveTopics();
+  updateTopicStrip();
+  refreshTopicGutter();
+}
+
+/** Open the topic-name modal anchored at a specific past message. */
+function startTopicAt(msgIndex) {
+  _retroStartIndex = msgIndex;
+  openTopicNameModal();
+}
+
+/**
+ * Shared logic for closing a topic at a given message index.
+ * Used both by the live end-pill and the retroactive end-at-message button.
+ */
+function endTopicAtIndex(topic, endIdx) {
+  topic.endIndex = endIdx;
+  saveTopics();
+  updateTopicStrip();
+  refreshTopicGutter();
+
+  const rangeMessages = [];
+  for (let i = topic.startIndex; i <= topic.endIndex; i++) {
+    const m = state.messages[i];
+    if (!m || m.role === 'tool') continue;
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
+    rangeMessages.push(m);
+  }
+  if (!rangeMessages.length || !state.apiKey.trim()) return;
+  openSummaryModal(topic);
+  generateTopicSummary(topic, rangeMessages);
+}
+
+function endTopic(topicId) {
+  const topic = state.topics.find(t => t.id === topicId);
+  if (!topic || topic.endIndex !== null) return;
+  endTopicAtIndex(topic, state.messages.length - 1);
+}
+
+/**
+ * Called from the "End topic here" message action button.
+ * Finds open topics whose startIndex ≤ msgIndex and ends one of them.
+ */
+function endTopicAt(msgIndex) {
+  const openTopics = state.topics.filter(
+    t => t.endIndex === null && t.startIndex <= msgIndex
+  );
+  if (!openTopics.length) return;
+  if (openTopics.length === 1) {
+    endTopicAtIndex(openTopics[0], msgIndex);
+  } else {
+    openRetroEndModal(openTopics, msgIndex);
+  }
+}
+
+// ── Topic strip (active topic pills above input) ──────────────────
+function updateTopicStrip() {
+  const strip = $('topic-strip');
+  if (!strip) return;
+  // Remove existing pills but keep the "+ Topic" button
+  strip.querySelectorAll('.topic-pill').forEach(p => p.remove());
+
+  const openTopics = state.topics.filter(t => t.endIndex === null);
+  for (const topic of openTopics) {
+    const pill = document.createElement('button');
+    pill.className = 'topic-pill';
+    pill.style.setProperty('--topic-c', topic.color);
+    pill.dataset.topicId = topic.id;
+    pill.title = `End topic: ${topic.label}`;
+    pill.innerHTML =
+      `<span class="topic-pill-dot"></span>` +
+      `<span class="topic-pill-label">${esc(topic.label)}</span>` +
+      `<span class="topic-pill-end" aria-hidden="true">✕</span>`;
+    pill.addEventListener('click', () => endTopic(topic.id));
+    strip.insertBefore(pill, $('new-topic-btn'));
+  }
+}
+
+// ── Topic gutter (colored bars alongside messages) ────────────────
+function refreshTopicGutter() {
+  const gutter = $('topic-gutter');
+  if (!gutter) return;
+  gutter.innerHTML = '';
+
+  if (!state.topics.length) {
+    gutter.classList.remove('has-topics');
+    return;
+  }
+  gutter.classList.add('has-topics');
+
+  // Match DOM message elements to their state.messages indices
+  const msgElMap = buildMsgElMap();
+
+  const scroller = $('messages-scroller');
+  if (!scroller) return;
+
+  state.topics.forEach((topic, topicIdx) => {
+    // Find message elements whose state index falls in this topic's range
+    const rangeEntries = msgElMap.filter(({ idx }) =>
+      idx >= topic.startIndex && (topic.endIndex === null || idx <= topic.endIndex)
+    );
+    if (!rangeEntries.length) return;
+
+    const firstEl = rangeEntries[0].el;
+    const lastEl  = rangeEntries[rangeEntries.length - 1].el;
+    const gutterRect  = gutter.getBoundingClientRect();
+    const firstRect   = firstEl.getBoundingClientRect();
+    const lastRect    = lastEl.getBoundingClientRect();
+
+    // Absolute Y within gutter (both share same scroll parent, so delta cancels scroll)
+    const topPx    = firstRect.top  - gutterRect.top;
+    // For open (ongoing) topics, extend the bar to the full gutter height
+    // so it's visible as a reminder that the topic is still active.
+    const bottomPx = topic.endIndex === null
+      ? gutterRect.height
+      : (lastRect.bottom - gutterRect.top);
+    const heightPx = Math.max(bottomPx - topPx, 8);
+
+    const bar = document.createElement('div');
+    bar.className     = 'topic-gutter-bar';
+    bar.dataset.label = topic.label;
+    bar.style.cssText =
+      `top: ${topPx}px;` +
+      `height: ${heightPx}px;` +
+      `background: ${topic.color};` +
+      `left: ${4 + topicIdx * 7}px;`;
+    if (topic.endIndex === null) bar.classList.add('topic-gutter-bar-open');
+    gutter.appendChild(bar);
+  });
+}
+
+/**
+ * Build an array of { idx (state index), el (DOM element) } for all
+ * displayable messages currently rendered in #messages.
+ */
+function buildMsgElMap() {
+  const container = $('messages');
+  if (!container) return [];
+  const result = [];
+  container.querySelectorAll('.message[data-msg-index]').forEach(el => {
+    const idx = parseInt(el.dataset.msgIndex, 10);
+    if (!isNaN(idx)) result.push({ idx, el });
+  });
+  // Sort by state index to handle any out-of-order appends
+  result.sort((a, b) => a.idx - b.idx);
+  return result;
+}
+
+// Re-render gutter on window resize (message heights may change)
+window.addEventListener('resize', () => {
+  clearTimeout(window._gutterResizeTimer);
+  window._gutterResizeTimer = setTimeout(refreshTopicGutter, 120);
+});
+
+// ── Topic name modal ──────────────────────────────────────────────
+function openTopicNameModal() {
+  $('topic-name-input').value = '';
+  // Update hint text to reflect retroactive vs. live start
+  const hint = $('topic-name-hint');
+  if (hint) {
+    hint.textContent = _retroStartIndex !== null
+      ? 'This topic will be anchored back to the selected message.'
+      : 'Messages from this point forward will be grouped under this topic until you end it. You can run multiple topics in parallel.';
+  }
+  $('topic-name-modal').classList.remove('hidden');
+  requestAnimationFrame(() => $('topic-name-input').focus());
+}
+
+function closeTopicNameModal() {
+  _retroStartIndex = null;
+  $('topic-name-modal').classList.add('hidden');
+}
+
+// ── Retroactive end picker modal ──────────────────────────────────
+let _retroEndIndex    = null;
+let _loreEditUid      = null; // UID being edited in tome entry editor (null = new)
+let _currentTomeId    = null; // tome currently open in the entries view
+let tomeTimedEffects  = {}; // { [uid]: { stickyLeft: N, cooldownLeft: N } } — session only
+
+// Normalise legacy string position values ('before_char', etc.) to integers.
+function normEntryPos(pos) {
+  if (typeof pos === 'number') return pos;
+  const MAP = { 'before_char': 0, 'after_char': 1, 'sys_top': 2, 'sys_bottom': 3, 'at_depth': 4 };
+  return MAP[pos] ?? 0;
+}
+
+/** Normalize SillyTavern-format entry field names to Proto-Familiar native names in-place. */
+function normalizeEntry(entry) {
+  if ('key' in entry && !('keys' in entry))              entry.keys            = entry.key;
+  if ('order' in entry && !('insertion_order' in entry)) entry.insertion_order = entry.order;
+  if ('disable' in entry && !('enabled' in entry))       entry.enabled         = !entry.disable;
+  return entry;
+}
+
+function openRetroEndModal(openTopics, msgIndex) {
+  _retroEndIndex = msgIndex;
+  const list = $('retro-end-list');
+  list.innerHTML = '';
+  for (const topic of openTopics) {
+    const btn = document.createElement('button');
+    btn.className = 'retro-end-topic-btn';
+    btn.style.setProperty('--topic-c', topic.color);
+    btn.innerHTML =
+      `<span class="retro-end-dot"></span>` +
+      `<span>${esc(topic.label)}</span>`;
+    btn.addEventListener('click', () => {
+      const idx = _retroEndIndex;
+      closeRetroEndModal();
+      endTopicAtIndex(topic, idx);
+    });
+    list.appendChild(btn);
+  }
+  $('retro-end-modal').classList.remove('hidden');
+}
+
+function closeRetroEndModal() {
+  _retroEndIndex = null;
+  $('retro-end-modal').classList.add('hidden');
+}
+
+// ── Summary generation ────────────────────────────────────────────
+let _pendingSummaryTopic = null;
+
+async function generateTopicSummary(topic, rangeMessages) {
+  const convText = rangeMessages
+    .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
+    .join('\n\n');
+
+  const prompt = `You are writing a Tome entry for a Familiar (AI companion). The entry is private reference notes that get injected into the Familiar's context when its keywords appear in a future conversation. Follow the craft rules below carefully.
+
+Return ONLY valid JSON (no markdown fences, no commentary) with exactly these fields:
+{
+  "title":    "Short label for the entry comment (max 60 chars).",
+  "content":  "Familiar-perspective bullet guidance. See rules below.",
+  "keywords": ["conversational phrase 1", "conversational phrase 2", ...],
+  "sticky":   3
+}
+
+### Content rules (most important)
+Write content as the Familiar's private notes to themselves about this situation. NOT a summary of what happened.
+Structure:
+  1. One short framing line — what is happening and why (gives the Familiar understanding, not just rules).
+  2. 3–5 action bullets — what to do.
+  3. 1–2 prohibition bullets — what NOT to do. These are usually the most valuable: name the well-intentioned default response that would make things worse.
+Style:
+  - Second person, addressed to the Familiar. Use {{user}} wherever the user's name belongs.
+  - Practical, grounded, non-clinical. Notes, not a textbook.
+  - Short declarative bullets. The whole entry should be readable in 5–10 seconds.
+  - Do NOT include narrative summaries of "what they said" — distil the situation and the response, not the transcript.
+
+### Keyword rules
+Keywords are TRIGGERS, not labels. They must be phrases the user would literally say when this situation recurs — not the name of the topic.
+  - WRONG: "executive dysfunction", "rejection sensitive dysphoria", "hyperfocus".
+  - RIGHT: "don't know where to start", "did I say something wrong", "been at this for".
+Derive them by imagining what the user would actually type when the situation is happening, then extracting distinctive phrases.
+  - Prefer multi-word phrases over single common words (avoid bare "tired", "can't", "hard").
+  - 3–8 keywords. Each one specific enough not to fire in unrelated conversations.
+  - You may use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has 3+ predictable variants.
+
+### Sticky rules
+Pick a sticky value (integer, number of turns the entry stays active after first match):
+  - null = one-shot lore/fact that does not need persistence.
+  - 2    = brief states that typically resolve quickly.
+  - 3    = moderate states needing a few exchanges (distraction, sleep note, transition).
+  - 4–5  = complex/intense states taking multiple turns to navigate (paralysis, RSD, emotional dysregulation).
+  - 8+   = ongoing modes that should persist across the whole session.
+
+Conversation excerpt:
+${convText}`;
+
+  try {
+    const resp = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider:    state.provider,
+        apiKey:      state.apiKey,
+        model:       state.model,
+        messages:    [{ role: 'user', content: prompt }],
+        stream:      false,
+        temperature: 0.25,
+        max_tokens:  800,
+      }),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    const raw = data.choices?.[0]?.message?.content ?? '';
+    const jsonMatch = raw.match(/\{[\s\S]+\}/);
+    if (!jsonMatch) throw new Error('No JSON found in response');
+    const parsed = JSON.parse(jsonMatch[0]);
+    populateSummaryForm(parsed);
+  } catch (err) {
+    // Show editable blank form so user can write summary manually
+    populateSummaryForm({
+      title:    topic.label,
+      content:  '',
+      keywords: [],
+      sticky:   null,
+    });
+    // Surface error as placeholder hint
+    $('summary-content-input').placeholder = `Auto-generation failed: ${err.message}. Please write a summary manually.`;
+  }
+}
+
+async function regenerateSummary(topic) {
+  $('summary-regen-btn').disabled = true;
+  $('summary-save-btn').disabled  = true;
+  $('summary-generating-hint').classList.remove('hidden');
+  $('summary-form').classList.add('hidden');
+
+  const rangeMessages = [];
+  for (let i = topic.startIndex; i <= topic.endIndex; i++) {
+    const m = state.messages[i];
+    if (!m || m.role === 'tool') continue;
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
+    rangeMessages.push(m);
+  }
+  await generateTopicSummary(topic, rangeMessages);
+}
+
+function populateSummaryForm({ title, content, keywords, sticky }) {
+  $('summary-title-input').value   = title ?? '';
+  $('summary-content-input').value = content ?? '';
+  $('summary-keys-input').value    = Array.isArray(keywords) ? keywords.join(', ') : (keywords ?? '');
+  const stickyInput = $('summary-sticky-input');
+  if (stickyInput) {
+    stickyInput.value = (typeof sticky === 'number' && Number.isFinite(sticky) && sticky > 0) ? String(sticky) : '';
+  }
+  $('summary-generating-hint').classList.add('hidden');
+  $('summary-form').classList.remove('hidden');
+  $('summary-regen-btn').disabled = false;
+  $('summary-save-btn').disabled  = false;
+}
+
+// ── Summary modal ─────────────────────────────────────────────────
+function openSummaryModal(topic) {
+  _pendingSummaryTopic = topic;
+  $('summary-modal-title').textContent = `Tome entry: ${topic.label}`;
+  $('summary-generating-hint').classList.remove('hidden');
+  $('summary-form').classList.add('hidden');
+  $('summary-regen-btn').disabled = true;
+  $('summary-save-btn').disabled  = true;
+  $('summary-modal').classList.remove('hidden');
+}
+
+function closeSummaryModal() {
+  $('summary-modal').classList.add('hidden');
+  _pendingSummaryTopic = null;
+}
+
+async function savePendingSummary() {
+  const topic = _pendingSummaryTopic;
+  if (!topic) return;
+
+  const title    = $('summary-title-input').value.trim();
+  const content  = $('summary-content-input').value.trim();
+  const keysRaw  = $('summary-keys-input').value;
+  const keys     = keysRaw.split(',').map(k => k.trim()).filter(Boolean);
+  const stickyEl = $('summary-sticky-input');
+  const stickyN  = stickyEl ? parseInt(stickyEl.value, 10) : NaN;
+  const sticky   = Number.isFinite(stickyN) && stickyN > 0 ? stickyN : null;
+
+  if (!title || !content) {
+    alert('Please fill in at least a title and summary content before saving.');
+    return;
+  }
+
+  const uid = generateId();
+  const entry = {
+    uid,
+    comment:          title,
+    keys,
+    keysecondary:     [],
+    content,
+    constant:            false,
+    selective:           false,
+    selectiveLogic:      0,
+    enabled:             true,
+    position:            0,  // 0=before_char, 1=after_char, 2=sys_top, 3=sys_bottom, 4=at_depth
+    depth:               4,
+    role:                0,
+    scanDepth:           null,
+    caseSensitive:       null,
+    matchWholeWords:     null,
+    probability:         100,
+    sticky,
+    cooldown:            null,
+    preventRecursion:    false,
+    delayUntilRecursion: false,
+    excludeRecursion:    false,
+    group:               '',
+    groupWeight:         null,
+    insertion_order:  100,
+    created_at:       new Date().toISOString(),
+    learnedAt:        new Date().toISOString(),
+    session_id:       state.sessionId,
+    message_range:    [topic.startIndex, topic.endIndex],
+  };
+
+  try {
+    // Get or create the default tome, fetch fresh, merge, save
+    const targetTome = await getDefaultTomeForSaving();
+    if (!targetTome) throw new Error('No tome available for saving.');
+    const tRes = await fetch(`/api/tomes/${targetTome.id}`);
+    if (!tRes.ok) throw new Error(`HTTP ${tRes.status}`);
+    const tomeData = await tRes.json();
+    tomeData.entries[uid] = entry;
+    await fetch(`/api/tomes/${targetTome.id}`, {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries: tomeData.entries }),
+    });
+    state.tomeCache[targetTome.id] = tomeData;
+    // Link back to topic
+    topic.tomeEntryId = uid;
+    saveTopics();
+    closeSummaryModal();
+  } catch (err) {
+    alert(`Failed to save Tome entry: ${err.message}`);
+  }
+}
+
+// ── Tomes: server sync ───────────────────────────────────────────
+async function loadTomesFromServer() {
+  try {
+    const res  = await fetch('/api/tomes');
+    if (!res.ok) return;
+    const list = await res.json(); // array of { id, name, description, enabled, entryCount }
+    state.tomeRegistry = list;
+    // Pre-load enabled tomes into cache
+    await Promise.all(
+      list.filter(t => t.enabled).map(async t => {
+        try {
+          const r = await fetch(`/api/tomes/${t.id}`);
+          if (r.ok) state.tomeCache[t.id] = await r.json();
+        } catch { /* skip */ }
+      })
+    );
+  } catch { /* non-critical */ }
+}
+
+// ── Lorebook engine ───────────────────────────────────────────────
+
+/** Try to parse /pattern/flags regex from a keyword string. */
+function parseKeywordRegex(kw) {
+  const m = kw.match(/^\/(.+)\/([gimsuy]*)$/);
+  if (!m) return null;
+  try { return new RegExp(m[1], m[2] || ''); } catch { return null; }
+}
+
+/**
+ * Test a single keyword against haystack.
+ * Respects per-entry and global caseSensitive / matchWholeWords settings.
+ * Supports /regex/flags syntax.
+ */
+function matchKeyword(haystack, keyword, entry) {
+  const re = parseKeywordRegex(keyword);
+  if (re) return re.test(haystack);
+  const cs = entry.caseSensitive ?? state.tomeCaseSensitive ?? false;
+  const ww = entry.matchWholeWords ?? state.tomeMatchWholeWords ?? false;
+  const h  = cs ? haystack : haystack.toLowerCase();
+  const kw = cs ? keyword  : keyword.toLowerCase();
+  if (ww) {
+    const kwEscaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?:^|\\W)${kwEscaped}(?:$|\\W)`, cs ? '' : 'i').test(haystack);
+  }
+  return h.includes(kw);
+}
+
+/**
+ * Test secondary keys using the entry's selectiveLogic.
+ * 0=AND_ANY, 1=NOT_ANY, 2=AND_ALL, 3=NOT_ALL
+ */
+function testSecondaryLogic(corpus, entry) {
+  const keys = (entry.keysecondary ?? []).filter(k => k.trim());
+  if (!keys.length) return true;
+  const logic = entry.selectiveLogic ?? 0;
+  let allMatch = true;
+  for (const kw of keys) {
+    const m = matchKeyword(corpus, kw.trim(), entry);
+    if (!m) allMatch = false;
+    if (logic === 0 && m)  return true;  // AND_ANY: short-circuit on first match
+    if (logic === 1 && m)  return false; // NOT_ANY: short-circuit on any match
+    if (logic === 3 && !m) return true;  // NOT_ALL: short-circuit on first non-match
+  }
+  if (logic === 0) return false;   // AND_ANY: nothing matched
+  if (logic === 1) return true;    // NOT_ANY: nothing matched
+  if (logic === 2) return allMatch; // AND_ALL
+  if (logic === 3) return !allMatch; // NOT_ALL (fallthrough — all matched)
+  return true;
+}
+
+/**
+ * Build the text corpus from the last `depth` user/assistant messages
+ * plus the new user input (and optionally extra recursive content).
+ */
+function buildScanText(messages, userInput, depth, extra) {
+  const d = Math.max(0, depth || 0);
+  const relevant = messages.filter(m => m.role === 'user' || m.role === 'assistant');
+  const slice = d === 0 ? [] : relevant.slice(-d);
+  const parts = [...slice.map(m => m.content || ''), userInput];
+  if (extra) parts.push(extra);
+  return parts.filter(Boolean).join('\n');
+}
+
+/**
+ * Run one activation scan pass over all entries.
+ * isRecursion=true means we're in a recursive pass (applies excludeRecursion / delayUntilRecursion).
+ */
+function scanLoreEntries(entries, getCorpus, alreadyActivated, isRecursion) {
+  const newlyActivated = [];
+  for (const entry of entries) {
+    normalizeEntry(entry);
+    if (!entry.enabled) continue;
+    if (alreadyActivated.has(entry.uid)) continue;
+    if (isRecursion  && entry.excludeRecursion)    continue;
+    if (!isRecursion && entry.delayUntilRecursion) continue;
+
+    // delay: skip until enough conversation turns have passed
+    if ((entry.delay ?? 0) > 0 && (state.turnCount ?? 0) < entry.delay) continue;
+
+    // triggers: skip if current generation mode is not in the allowed list
+    if (entry.triggers?.length > 0 && !entry.triggers.includes(state.generationMode ?? 'normal')) continue;
+
+    // characterFilter: skip based on active entity name
+    if (entry.characterFilter) {
+      const names = entry.characterFilter.names ?? [];
+      if (names.length > 0) {
+        const nameMatch = names.some(n => n.toLowerCase() === (state.charName ?? '').toLowerCase());
+        if (entry.characterFilter.isExclude ? nameMatch : !nameMatch) continue;
+      }
+    }
+
+    const timed = tomeTimedEffects[entry.uid] ?? { stickyLeft: 0, cooldownLeft: 0 };
+    if (timed.cooldownLeft > 0) continue;       // on cooldown
+    if (timed.stickyLeft  > 0) { newlyActivated.push(entry); continue; } // sticky
+
+    if (entry.constant) { newlyActivated.push(entry); continue; }
+
+    // Probability check (100 always passes)
+    const prob = entry.probability ?? 100;
+    if (prob < 100 && Math.random() * 100 > prob) continue;
+
+    // Get corpus for this entry (per-entry scan depth override + match source flags)
+    const corpus = getCorpus(entry.scanDepth ?? null, entry);
+
+    // Primary key matching
+    const pkeys = (entry.keys ?? []).filter(k => k.trim());
+    if (!pkeys.length) continue; // no primary keys → never activates
+    if (!pkeys.some(k => matchKeyword(corpus, k.trim(), entry))) continue;
+
+    // Secondary key matching (selective)
+    if (entry.selective && (entry.keysecondary ?? []).filter(k => k.trim()).length > 0) {
+      if (!testSecondaryLogic(corpus, entry)) continue;
+    }
+
+    newlyActivated.push(entry);
+  }
+  return newlyActivated;
+}
+
+/** Apply group exclusion: only the highest-weight (lowest insertion_order on tie) entry per group activates. */
+function applyGroupLogic(entries) {
+  const groups  = new Map();
+  const result  = [];
+  for (const e of entries) {
+    const g = (e.group ?? '').trim();
+    if (g) { const arr = groups.get(g) ?? []; arr.push(e); groups.set(g, arr); }
+    else result.push(e);
+  }
+  for (const [, grp] of groups) {
+    // groupOverride entries win unconditionally; fall back to weight/order among overrides
+    const pool = grp.some(e => e.groupOverride) ? grp.filter(e => e.groupOverride) : grp;
+    pool.sort((a, b) => {
+      const wA = a.groupWeight ?? 100, wB = b.groupWeight ?? 100;
+      if (wA !== wB) return wB - wA;
+      return (a.insertion_order ?? 100) - (b.insertion_order ?? 100);
+    });
+    result.push(pool[0]);
+  }
+  return result;
+}
+
+/**
+ * Main tome activation engine.
+ * Returns { sys_top, before_char, after_char, sys_bottom, at_depth } arrays of activated entries.
+ * Aggregates entries from all enabled tomes cached in state.tomeCache.
+ */
+function activateTomeEntries(userInput) {
+  const empty = { sys_top: [], before_char: [], after_char: [], sys_bottom: [], at_depth: [] };
+  // Flatten all entries from all enabled (cached) tomes
+  const allEntries = Object.values(state.tomeCache)
+    .filter(tome => tome.enabled !== false)
+    .flatMap(tome => Object.values(tome.entries ?? {}));
+  if (!allEntries.length) return empty;
+
+  const globalDepth = state.tomeScanDepth ?? 4;
+  const messages    = state.messages;
+
+  // Age timed effects by one tick; capture which UIDs just exhausted sticky
+  const prevSticky = {};
+  for (const uid of Object.keys(tomeTimedEffects)) {
+    const e = tomeTimedEffects[uid];
+    prevSticky[uid] = e.stickyLeft;
+    if (e.stickyLeft  > 0) e.stickyLeft--;
+    if (e.cooldownLeft > 0) e.cooldownLeft--;
+  }
+
+  // Corpus getter factory
+  function makeGetCorpus(extra) {
+    return (depthOverride, entry) => {
+      const d = depthOverride !== null && depthOverride !== undefined ? depthOverride : globalDepth;
+      let text = buildScanText(messages, userInput, d, extra);
+      if (entry) {
+        // matchCharacterDescription / matchCharacterPersonality → Familiar's entity card
+        if ((entry.matchCharacterDescription || entry.matchCharacterPersonality) && state.characterProfile)
+          text += '\n' + state.characterProfile;
+        // matchPersonaDescription → user profile
+        if (entry.matchPersonaDescription && state.userProfile)
+          text += '\n' + state.userProfile;
+        // matchScenario → system prompt (closest equivalent)
+        if (entry.matchScenario && state.systemPrompt)
+          text += '\n' + state.systemPrompt;
+      }
+      return text;
+    };
+  }
+
+  // Initial scan pass
+  const activated = new Set();
+  for (const e of scanLoreEntries(allEntries, makeGetCorpus(''), activated, false)) {
+    activated.add(e.uid);
+  }
+
+  // Recursive passes
+  if (state.tomeRecursive) {
+    const maxSteps = state.tomeMaxRecursionSteps ?? 3;
+    let prevRecursionContent = '';
+    for (let step = 0; step < maxSteps; step++) {
+      const recursionContent = Array.from(activated)
+        .map(uid => allEntries.find(e => e.uid === uid))
+        .filter(e => e && !e.preventRecursion)
+        .map(e => e.content || '')
+        .join('\n');
+      if (!recursionContent || recursionContent === prevRecursionContent) break;
+      prevRecursionContent = recursionContent;
+      const newEntries = scanLoreEntries(allEntries, makeGetCorpus(recursionContent), activated, true);
+      if (!newEntries.length) break;
+      for (const e of newEntries) activated.add(e.uid);
+    }
+  }
+
+  // Resolve entries and apply group logic
+  let activatedEntries = Array.from(activated)
+    .map(uid => allEntries.find(e => e.uid === uid))
+    .filter(Boolean);
+  activatedEntries = applyGroupLogic(activatedEntries);
+
+  // Update timed effects for this activation pass
+  for (const e of activatedEntries) {
+    if (!tomeTimedEffects[e.uid]) tomeTimedEffects[e.uid] = { stickyLeft: 0, cooldownLeft: 0 };
+    if (e.sticky) tomeTimedEffects[e.uid].stickyLeft = e.sticky;
+  }
+  // Entries whose sticky just expired and weren't re-activated → start cooldown
+  const activatedSet = new Set(activatedEntries.map(e => e.uid));
+  for (const uid of Object.keys(prevSticky)) {
+    if (prevSticky[uid] > 0 && !(tomeTimedEffects[uid]?.stickyLeft > 0) && !activatedSet.has(uid)) {
+      const entry = allEntries.find(e => e.uid === uid);
+      if (entry?.cooldown) {
+        if (!tomeTimedEffects[uid]) tomeTimedEffects[uid] = { stickyLeft: 0, cooldownLeft: 0 };
+        tomeTimedEffects[uid].cooldownLeft = entry.cooldown;
+      }
+    }
+  }
+
+  // Sort by insertion_order then categorise by position
+  activatedEntries.sort((a, b) => (a.insertion_order ?? 100) - (b.insertion_order ?? 100));
+
+  return {
+    sys_top:     activatedEntries.filter(e => normEntryPos(e.position) === 2),
+    before_char: activatedEntries.filter(e => normEntryPos(e.position) === 0),
+    after_char:  activatedEntries.filter(e => normEntryPos(e.position) === 1),
+    sys_bottom:  activatedEntries.filter(e => normEntryPos(e.position) === 3),
+    at_depth:    activatedEntries.filter(e => normEntryPos(e.position) === 4),
+  };
+}
+
+// ── Tomes modal (manager) ─────────────────────────────────────────
+function openTomesModal() {
+  $('tomes-modal').classList.remove('hidden');
+  refreshTomesList();
+}
+
+function closeTomesModal() {
+  $('tomes-modal').classList.add('hidden');
+}
+
+async function refreshTomesList() {
+  await loadTomesFromServer();
+  const container = $('tomes-list');
+  container.innerHTML = '';
+  const tomes = state.tomeRegistry;
+  if (!tomes.length) {
+    container.innerHTML = '<p class="lorebook-empty">No tomes yet. Click <strong>+ New Tome</strong> to create one.</p>';
+    return;
+  }
+  for (const tome of tomes) {
+    const div = document.createElement('div');
+    div.className = 'lorebook-entry';
+    div.innerHTML = `
+      <div class="lorebook-entry-header">
+        <div class="lorebook-entry-title">${esc(tome.name ?? 'Untitled')}</div>
+        <div class="lorebook-entry-actions">
+          <button class="btn-ghost tome-open-btn" data-id="${esc(tome.id)}" title="View entries">Open</button>
+          <button class="btn-ghost tome-toggle-btn" data-id="${esc(tome.id)}" title="${tome.enabled ? 'Disable tome' : 'Enable tome'}">${tome.enabled ? 'Enabled' : 'Disabled'}</button>
+          <button class="btn-ghost lore-delete-btn" data-id="${esc(tome.id)}" title="Delete tome">✕</button>
+        </div>
+      </div>
+      ${tome.description ? `<div class="lorebook-entry-content">${esc(tome.description)}</div>` : ''}
+      <div class="lorebook-entry-meta">${tome.entryCount} entr${tome.entryCount !== 1 ? 'ies' : 'y'}</div>
+    `;
+    div.querySelector('.tome-open-btn').addEventListener('click', () => openTomeEntriesModal(tome.id));
+    div.querySelector('.tome-toggle-btn').addEventListener('click', () => toggleTomeEnabled(tome.id));
+    div.querySelector('.lore-delete-btn').addEventListener('click', () => deleteTome(tome.id));
+    container.appendChild(div);
+  }
+}
+
+async function toggleTomeEnabled(tomeId) {
+  const tome = state.tomeRegistry.find(t => t.id === tomeId);
+  if (!tome) return;
+  try {
+    await fetch(`/api/tomes/${tomeId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: !tome.enabled }),
+    });
+    await refreshTomesList();
+  } catch (err) {
+    alert(`Failed to update tome: ${err.message}`);
+  }
+}
+
+async function deleteTome(tomeId) {
+  const tome = state.tomeRegistry.find(t => t.id === tomeId);
+  if (!confirm(`Delete tome "${tome?.name ?? tomeId}" and all its entries? This cannot be undone.`)) return;
+  try {
+    await fetch(`/api/tomes/${tomeId}`, { method: 'DELETE' });
+    delete state.tomeCache[tomeId];
+    await refreshTomesList();
+  } catch (err) {
+    alert(`Failed to delete tome: ${err.message}`);
+  }
+}
+
+// ── New tome modal ────────────────────────────────────────────────
+function openNewTomeModal() {
+  $('new-tome-name-input').value = '';
+  $('new-tome-description-input').value = '';
+  $('new-tome-modal').classList.remove('hidden');
+  requestAnimationFrame(() => $('new-tome-name-input').focus());
+}
+
+function closeNewTomeModal() {
+  $('new-tome-modal').classList.add('hidden');
+}
+
+async function createNewTome() {
+  const name = $('new-tome-name-input').value.trim();
+  if (!name) { alert('Please enter a name for the tome.'); return; }
+  const description = $('new-tome-description-input').value.trim();
+  try {
+    const res = await fetch('/api/tomes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description }),
+    });
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to create tome.');
+    closeNewTomeModal();
+    await refreshTomesList();
+  } catch (err) {
+    alert(`Failed to create tome: ${err.message}`);
+  }
+}
+
+// ── Tome entries modal ─────────────────────────────────────────────
+function openTomeEntriesModal(tomeId) {
+  _currentTomeId = tomeId;
+  const tome = state.tomeRegistry.find(t => t.id === tomeId);
+  $('tome-entries-modal-title').textContent = tome?.name ?? 'Tome Entries';
+  $('tome-entries-modal').classList.remove('hidden');
+  refreshTomeEntriesList();
+}
+
+function closeTomeEntriesModal() {
+  $('tome-entries-modal').classList.add('hidden');
+  _currentTomeId = null;
+}
+
+async function refreshTomeEntriesList() {
+  if (!_currentTomeId) return;
+  const container = $('tome-entries-list');
+  container.innerHTML = '<p class="logs-loading">Loading\u2026</p>';
+  try {
+    const res = await fetch(`/api/tomes/${_currentTomeId}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const tome = await res.json();
+    state.tomeCache[_currentTomeId] = tome;
+    container.innerHTML = '';
+    const entries = Object.values(tome.entries ?? {});
+    if (!entries.length) {
+      container.innerHTML = '<p class="lorebook-empty">No entries in this tome yet. Click <strong>+ New</strong> to add one.</p>';
+      return;
+    }
+    entries.sort((a, b) => new Date(b.created_at ?? 0) - new Date(a.created_at ?? 0));
+    for (const entry of entries) {
+      const div = document.createElement('div');
+      div.className = 'lorebook-entry';
+      const keyTagsHtml = (entry.keys ?? []).slice(0, 8).map(k => `<span class="lorebook-key-tag">${esc(k)}</span>`).join('');
+      const dateStr = entry.created_at
+        ? new Date(entry.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
+        : '';
+      const posLabel = ['Before char', 'After char', 'Sys top', 'Sys bottom', '@Depth'][normEntryPos(entry.position)] ?? '';
+      const constBadge = entry.constant ? ' \u00b7 <strong>always-on</strong>' : '';
+      div.innerHTML = `
+        <div class="lorebook-entry-header">
+          <div class="lorebook-entry-title">${esc(entry.comment ?? 'Untitled')}</div>
+          <div class="lorebook-entry-actions">
+            <button class="btn-ghost lore-edit-btn" data-uid="${esc(entry.uid)}" title="Edit entry">Edit</button>
+            <button class="btn-ghost lore-toggle-btn" data-uid="${esc(entry.uid)}" title="${entry.enabled ? 'Disable entry' : 'Enable entry'}">${entry.enabled ? 'Enabled' : 'Disabled'}</button>
+            <button class="btn-ghost lore-delete-btn" data-uid="${esc(entry.uid)}" title="Delete entry">\u2715</button>
+          </div>
+        </div>
+        <div class="lorebook-entry-keys">${keyTagsHtml}</div>
+        <div class="lorebook-entry-content">${esc(entry.content ?? '')}</div>
+        <div class="lorebook-entry-meta">${esc(dateStr)}${constBadge} \u00b7 ${posLabel}</div>
+      `;
+      div.querySelector('.lore-edit-btn').addEventListener('click', () => openLoreEditor(entry.uid));
+      div.querySelector('.lore-toggle-btn').addEventListener('click', () => toggleTomeEntry(entry.uid));
+      div.querySelector('.lore-delete-btn').addEventListener('click', () => deleteTomeEntry(entry.uid));
+      container.appendChild(div);
+    }
+  } catch (err) {
+    container.innerHTML = `<p class="logs-error">\u26a0 Failed to load entries: ${esc(String(err.message))}</p>`;
+  }
+}
+
+async function toggleTomeEntry(uid) {
+  if (!_currentTomeId) return;
+  const tome = state.tomeCache[_currentTomeId];
+  if (!tome?.entries[uid]) return;
+  tome.entries[uid].enabled = !tome.entries[uid].enabled;
+  try {
+    await fetch(`/api/tomes/${_currentTomeId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries: tome.entries }),
+    });
+    refreshTomeEntriesList();
+  } catch (err) {
+    alert(`Failed to update entry: ${err.message}`);
+  }
+}
+
+async function deleteTomeEntry(uid) {
+  if (!_currentTomeId) return;
+  if (!confirm('Delete this entry? This cannot be undone.')) return;
+  try {
+    await fetch(`/api/tomes/${_currentTomeId}/entries/${uid}`, { method: 'DELETE' });
+    const tome = state.tomeCache[_currentTomeId];
+    if (tome?.entries) delete tome.entries[uid];
+    refreshTomeEntriesList();
+  } catch (err) {
+    alert(`Failed to delete entry: ${err.message}`);
+  }
+}
+
+/** Return the first enabled tome, or create a "General" tome if none exist. */
+async function getDefaultTomeForSaving() {
+  const enabled = state.tomeRegistry.filter(t => t.enabled);
+  if (enabled.length > 0) return enabled[0];
+  // Create a default tome
+  const res = await fetch('/api/tomes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'General', description: 'Default tome for session memories and topic summaries.' }),
+  });
+  if (!res.ok) throw new Error('Failed to create default tome.');
+  await loadTomesFromServer();
+  const { id } = await res.json();
+  return state.tomeRegistry.find(t => t.id === id) ?? state.tomeRegistry[0] ?? null;
+}
+
+// ── Tome entry editor ─────────────────────────────────────────────
+
+function openLoreEditor(uid) {
+  _loreEditUid = uid ?? null;
+  const entry  = uid ? (state.tomeCache[_currentTomeId]?.entries[uid] ?? {}) : {};
+
+  $('lore-editor-title').textContent = uid ? 'Edit Entry' : 'New Entry';
+
+  // Basic
+  $('lore-ed-comment').value    = entry.comment ?? '';
+  $('lore-ed-keys').value       = (entry.keys ?? []).join(', ');
+  $('lore-ed-content').value    = entry.content ?? '';
+  $('lore-ed-enabled').checked  = entry.enabled !== false;
+  $('lore-ed-constant').checked = entry.constant ?? false;
+  $('lore-ed-order').value      = entry.insertion_order ?? 100;
+
+  // Selective
+  const selective = entry.selective ?? false;
+  $('lore-ed-selective').checked = selective;
+  $('lore-ed-secondary-section').classList.toggle('hidden', !selective);
+  $('lore-ed-keysecondary').value = (entry.keysecondary ?? []).join(', ');
+  $('lore-ed-logic').value        = String(entry.selectiveLogic ?? 0);
+
+  // Scan & matching
+  const sd = entry.scanDepth;
+  $('lore-ed-scan-depth').value = (sd !== null && sd !== undefined) ? String(sd) : '';
+  const cs = entry.caseSensitive;
+  $('lore-ed-case').value       = cs === true ? 'true' : cs === false ? 'false' : '';
+  const ww = entry.matchWholeWords;
+  $('lore-ed-whole-word').value = ww === true ? 'true' : ww === false ? 'false' : '';
+
+  // Injection position
+  const pos = normEntryPos(entry.position);
+  $('lore-ed-position').value = String(pos);
+  const isAtDepth = pos === 4;
+  $('lore-ed-depth-field').classList.toggle('hidden', !isAtDepth);
+  $('lore-ed-role-field').classList.toggle('hidden', !isAtDepth);
+  $('lore-ed-depth').value = entry.depth ?? 4;
+  $('lore-ed-role').value  = String(entry.role ?? 0);
+
+  // Timing
+  const prob = entry.probability ?? 100;
+  $('lore-ed-probability').value     = prob;
+  $('lore-ed-prob-display').textContent = `${prob}%`;
+  const st = entry.sticky;
+  $('lore-ed-sticky').value   = (st !== null && st !== undefined) ? String(st) : '';
+  const cd = entry.cooldown;
+  $('lore-ed-cooldown').value = (cd !== null && cd !== undefined) ? String(cd) : '';
+
+  // Recursion
+  $('lore-ed-prevent-recursion').checked = entry.preventRecursion    ?? false;
+  $('lore-ed-delay-recursion').checked   = entry.delayUntilRecursion ?? false;
+  $('lore-ed-exclude-recursion').checked = entry.excludeRecursion    ?? false;
+
+  // Group
+  $('lore-ed-group').value        = entry.group ?? '';
+  const gw = entry.groupWeight;
+  $('lore-ed-group-weight').value = (gw !== null && gw !== undefined) ? String(gw) : '';
+
+  // learnedAt — read-only, shown only when the field is present
+  const learnedEl = $('lore-ed-learned-at');
+  if (learnedEl) {
+    if (entry.learnedAt) {
+      learnedEl.textContent = `Learned: ${new Date(entry.learnedAt).toLocaleString()}`;
+      learnedEl.classList.remove('hidden');
+    } else {
+      learnedEl.classList.add('hidden');
+    }
+  }
+
+  $('lore-editor-modal').classList.remove('hidden');
+}
+
+function closeLoreEditor() {
+  $('lore-editor-modal').classList.add('hidden');
+  _loreEditUid = null;
+}
+
+async function saveLoreEditorEntry() {
+  const content = $('lore-ed-content').value.trim();
+  if (!content) { alert('Content is required.'); return; }
+
+  const uid      = _loreEditUid || generateId();
+  const existing = _loreEditUid ? (state.lorebook.entries[uid] ?? {}) : {};
+
+  const keysRaw    = $('lore-ed-keys').value;
+  const keys       = keysRaw.split(',').map(k => k.trim()).filter(Boolean);
+  const ksecRaw    = $('lore-ed-keysecondary').value;
+  const keysecondary = ksecRaw.split(',').map(k => k.trim()).filter(Boolean);
+
+  const sdRaw      = $('lore-ed-scan-depth').value.trim();
+  const scanDepth  = sdRaw === '' ? null : Math.max(0, parseInt(sdRaw, 10) || 0);
+  const csVal      = $('lore-ed-case').value;
+  const caseSensitive   = csVal === 'true' ? true : csVal === 'false' ? false : null;
+  const wwVal      = $('lore-ed-whole-word').value;
+  const matchWholeWords = wwVal === 'true' ? true : wwVal === 'false' ? false : null;
+
+  const stRaw   = $('lore-ed-sticky').value.trim();
+  const sticky  = stRaw === '' ? null : Math.max(0, parseInt(stRaw, 10) || 0);
+  const cdRaw   = $('lore-ed-cooldown').value.trim();
+  const cooldown = cdRaw === '' ? null : Math.max(0, parseInt(cdRaw, 10) || 0);
+  const gwRaw   = $('lore-ed-group-weight').value.trim();
+  const groupWeight = gwRaw === '' ? null : Math.max(0, parseInt(gwRaw, 10) || 0);
+
+  const entry = {
+    ...existing,
+    uid,
+    comment:             $('lore-ed-comment').value.trim(),
+    keys,
+    keysecondary,
+    content,
+    constant:            $('lore-ed-constant').checked,
+    selective:           $('lore-ed-selective').checked,
+    selectiveLogic:      parseInt($('lore-ed-logic').value, 10) || 0,
+    enabled:             $('lore-ed-enabled').checked,
+    position:            parseInt($('lore-ed-position').value, 10) || 0,
+    depth:               parseInt($('lore-ed-depth').value, 10) || 4,
+    role:                parseInt($('lore-ed-role').value, 10) || 0,
+    insertion_order:     parseInt($('lore-ed-order').value, 10) || 100,
+    scanDepth,
+    caseSensitive,
+    matchWholeWords,
+    probability:         parseInt($('lore-ed-probability').value, 10) ?? 100,
+    sticky,
+    cooldown,
+    preventRecursion:    $('lore-ed-prevent-recursion').checked,
+    delayUntilRecursion: $('lore-ed-delay-recursion').checked,
+    excludeRecursion:    $('lore-ed-exclude-recursion').checked,
+    group:               $('lore-ed-group').value.trim(),
+    groupWeight,
+    created_at:          existing.created_at ?? new Date().toISOString(),
+    session_id:          existing.session_id ?? state.sessionId,
+    message_range:       existing.message_range ?? null,
+  };
+
+  try {
+    if (!_currentTomeId) throw new Error('No tome selected.');
+    const tomeRes = await fetch(`/api/tomes/${_currentTomeId}`);
+    if (!tomeRes.ok) throw new Error(`HTTP ${tomeRes.status}`);
+    const tomeData = await tomeRes.json();
+    tomeData.entries[uid] = entry;
+    await fetch(`/api/tomes/${_currentTomeId}`, {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries: tomeData.entries }),
+    });
+    state.tomeCache[_currentTomeId] = tomeData;
+    closeLoreEditor();
+    refreshTomeEntriesList();
+  } catch (err) {
+    alert(`Failed to save entry: ${err.message}`);
+  }
+}
+
+
