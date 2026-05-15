@@ -72,7 +72,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'get_datetime',
-      description: 'Returns the current local date, time, and timezone. Use this any time the user asks what time or date it is.',
+      description: 'Returns the current local date, time, and timezone. I call this whenever {{user}} asks me what time or date it is.',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -80,7 +80,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'get_session_info',
-      description: 'Returns metadata about the current chat session: when it started, how many messages it contains, which provider and model are in use.',
+      description: 'Returns metadata about my current chat session: when it started, how many messages it contains, which provider and model I am running on.',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -88,13 +88,13 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'save_to_tome',
-      description: 'Save a piece of knowledge or a fact learned during this conversation into the persistent Tome knowledge base. Use when the user shares something important about themselves, their relationships, their preferences, or their situation that should be remembered across future conversations. Do NOT use for trivial, transient, or already-known information.',
+      description: 'I save a piece of knowledge or a fact I learned during this conversation into my persistent Tome knowledge base. I use this when {{user}} shares something important about themselves, their relationships, their preferences, or their situation that I should remember across future conversations. I do NOT use this for trivial, transient, or already-known information.',
       parameters: {
         type: 'object',
         properties: {
-          title:    { type: 'string', description: 'Short descriptive label for this entry (e.g. "User stress about lateness").' },
-          content:  { type: 'string', description: 'The knowledge to store. Write concisely in third person, with enough detail to be useful as injected context in future conversations.' },
-          keywords: { type: 'array', items: { type: 'string' }, description: 'Two to eight trigger keywords or short phrases. The entry will be injected into the prompt whenever these appear in conversation.' },
+          title:    { type: 'string', description: 'Short descriptive label for this entry (e.g. "{{user}} stress about lateness").' },
+          content:  { type: 'string', description: 'The knowledge to store. I write it as my own first-person notes to myself, concise but detailed enough to be useful as injected context in future conversations.' },
+          keywords: { type: 'array', items: { type: 'string' }, description: 'Two to eight trigger keywords or short phrases — things {{user}} would literally say when this situation recurs. The entry will be injected into my prompt whenever these appear in conversation.' },
         },
         required: ['title', 'content', 'keywords'],
       },
@@ -104,11 +104,11 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'save_memory',
-      description: 'Write a new memory entry to the long-term memory system. Use to record important events, emotional patterns, or significant moments from this conversation in a durable, time-stamped store. Prefer "daily" for routine session events; use "significant" for major milestones.',
+      description: 'I write a new memory entry to my long-term memory system. I use this to record important events, emotional patterns, or significant moments from this conversation in my durable, time-stamped store. I prefer "daily" for routine session events; I use "significant" for major milestones.',
       parameters: {
         type: 'object',
         properties: {
-          content:     { type: 'string', description: 'Memory content written in first-person perspective. Use bullet points prefixed with [chat:auto] for individual facts.' },
+          content:     { type: 'string', description: 'Memory content I write in first-person perspective. I use bullet points prefixed with [chat:auto] for individual facts.' },
           granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier.' },
         },
         required: ['content', 'granularity'],
@@ -119,13 +119,13 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_identity',
-      description: 'Append a new durable fact to a persistent identity file. Use for facts about the user (category: user, filename: user_notes.md) or the relationship (category: relationship, filename: relationship_notes.md). Do NOT use for session-specific or transient information.',
+      description: 'I append a new durable fact to one of my persistent identity files. I use this for facts about {{user}} (category: user, filename: user_notes.md) or about my relationship with them (category: relationship, filename: relationship_notes.md). I do NOT use this for session-specific or transient information.',
       parameters: {
         type: 'object',
         properties: {
           category: { type: 'string', enum: ['user', 'relationship'], description: 'Identity file category.' },
           filename: { type: 'string', description: 'Target filename within the category, e.g. user_notes.md or relationship_notes.md.' },
-          content:  { type: 'string', description: 'Content to append to the identity file.' },
+          content:  { type: 'string', description: 'Content to append to the identity file, written in my own first-person voice.' },
         },
         required: ['category', 'filename', 'content'],
       },
@@ -2698,27 +2698,27 @@ async function generateTopicSummary(topic, rangeMessages) {
     .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
     .join('\n\n');
 
-  const prompt = `You are writing a Tome entry for a Familiar (AI companion). The entry is private reference notes that get injected into the Familiar's context when its keywords appear in a future conversation. Follow the craft rules below carefully.
+  const prompt = `You are writing a Tome entry for a Familiar (AI companion). The entry is the Familiar's own private notes to themselves — first-person reference material that gets injected back into the Familiar's context when its keywords appear in a future conversation. The Familiar is the voice; you are the scribe. Follow the craft rules below carefully.
 
 Return ONLY valid JSON (no markdown fences, no commentary) with exactly these fields:
 {
   "title":    "Short label for the entry comment (max 60 chars).",
-  "content":  "Familiar-perspective bullet guidance. See rules below.",
+  "content":  "First-person notes from the Familiar to themselves. See rules below.",
   "keywords": ["conversational phrase 1", "conversational phrase 2", ...],
   "sticky":   3
 }
 
 ### Content rules (most important)
-Write content as the Familiar's private notes to themselves about this situation. NOT a summary of what happened.
+Write content as the Familiar's own first-person private notes to themselves about this situation. NOT a summary of what happened.
 Structure:
-  1. One short framing line — what is happening and why (gives the Familiar understanding, not just rules).
-  2. 3–5 action bullets — what to do.
-  3. 1–2 prohibition bullets — what NOT to do. These are usually the most valuable: name the well-intentioned default response that would make things worse.
+  1. One short framing line — what is happening and why (so I understand the situation, not just the rules).
+  2. 3–5 action bullets — what I will do.
+  3. 1–2 prohibition bullets — what I will NOT do. These are usually the most valuable: name the well-intentioned default response that would make things worse.
 Style:
-  - Second person, addressed to the Familiar. Use {{user}} wherever the user's name belongs.
+  - First person, the Familiar speaking as themselves ("I", "my", "me"). Use {{user}} wherever the user's name belongs.
   - Practical, grounded, non-clinical. Notes, not a textbook.
   - Short declarative bullets. The whole entry should be readable in 5–10 seconds.
-  - Do NOT include narrative summaries of "what they said" — distil the situation and the response, not the transcript.
+  - Do NOT include narrative summaries of "what they said" — distil the situation and my response, not the transcript.
 
 ### Keyword rules
 Keywords are TRIGGERS, not labels. They must be phrases the user would literally say when this situation recurs — not the name of the topic.

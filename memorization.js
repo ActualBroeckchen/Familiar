@@ -144,14 +144,14 @@ function buildPrompt(messages) {
     .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
     .join('\n\n');
 
-  return `You are producing Tome entries for a Familiar (AI companion). Each entry is private reference notes that get injected into the Familiar's context when its keywords appear in a future conversation. Identify the distinct situational topics in the conversation below and write one entry per topic, following the craft rules carefully.
+  return `You are producing Tome entries for a Familiar (AI companion). Each entry is the Familiar's own private notes to themselves — first-person reference material that gets injected back into the Familiar's context when its keywords appear in a future conversation. The Familiar is the voice; you are the scribe. Identify the distinct situational topics in the conversation below and write one entry per topic, following the craft rules carefully.
 
 Return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
 {
   "topics": [
     {
       "title":    "Short label for the entry comment (max 60 chars)",
-      "content":  "Familiar-perspective bullet guidance — see content rules below",
+      "content":  "First-person notes from the Familiar to themselves — see content rules below",
       "keywords": ["conversational phrase 1", "conversational phrase 2"],
       "sticky":   3
     }
@@ -161,16 +161,16 @@ Return ONLY valid JSON with this exact shape (no markdown fences, no commentary)
 Identify 1–8 genuinely distinct topics. Merge closely related material rather than over-splitting. Each entry must be self-contained.
 
 ### Content rules (most important)
-Write content as the Familiar's private notes to themselves about this situation. NOT a summary of what happened.
+Write content as the Familiar's own first-person private notes to themselves about this situation. NOT a summary of what happened.
 Structure:
-  1. One short framing line — what is happening and why (gives the Familiar understanding, not just rules).
-  2. 3–5 action bullets — what to do.
-  3. 1–2 prohibition bullets — what NOT to do. Usually the most valuable: name the well-intentioned default response that would make things worse.
+  1. One short framing line — what is happening and why (so I understand the situation, not just the rules).
+  2. 3–5 action bullets — what I will do.
+  3. 1–2 prohibition bullets — what I will NOT do. Usually the most valuable: name the well-intentioned default response that would make things worse.
 Style:
-  - Second person, addressed to the Familiar. Use {{user}} wherever the user's name belongs.
+  - First person, the Familiar speaking as themselves ("I", "my", "me"). Use {{user}} wherever the user's name belongs.
   - Practical, grounded, non-clinical. Notes, not a textbook.
   - Short declarative bullets. The whole entry should be readable in 5–10 seconds.
-  - Do NOT include narrative summaries of "what they said" — distil the situation and the response, not the transcript.
+  - Do NOT include narrative summaries of "what they said" — distil the situation and my response, not the transcript.
 
 ### Keyword rules
 Keywords are TRIGGERS, not labels. They must be phrases the user would literally say when this situation recurs — not the name of the topic.

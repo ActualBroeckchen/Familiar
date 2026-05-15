@@ -98,7 +98,7 @@ The queue is persisted to `tomes/.memorization-queue.json` (git-ignored), so job
 | Field | Content |
 |---|---|
 | Comment (title) | A concise label for the situation |
-| Content | Familiar-perspective bullet guidance: a one-sentence framing line, action bullets, and one or two prohibition bullets — written in second person, using `{{user}}` where the user's name belongs |
+| Content | The Familiar's own first-person notes-to-self: a one-sentence framing line, action bullets ("what I will do"), and one or two prohibition bullets ("what I will NOT do") — using `{{user}}` where the user's name belongs |
 | Keys (keywords) | 3–8 conversational trigger phrases the user would actually say when the situation recurs |
 | Sticky | How many turns the entry stays active after first match (sized to how long the situation typically lasts) |
 | Position | `before_char` (default for memorized entries) |

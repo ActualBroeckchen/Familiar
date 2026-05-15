@@ -366,6 +366,110 @@ Adds a single entry to the first enabled Tome (or creates a "General" Tome if no
 
 ---
 
+## Session memorization
+
+The memorization queue is implemented in `memorization.js` and runs as an in-process worker on the server. Jobs persist to `tomes/.memorization-queue.json` so they survive tab close, idle rollover, and server restart. See [`sessions.md`](sessions.md#session-memorization) for the lifecycle and triggers.
+
+### `POST /api/memorize`
+
+Enqueue a memorization job. Accepts both `application/json` and `text/plain` JSON (the latter is what `navigator.sendBeacon` uses from the browser's `beforeunload` handler).
+
+**Request body:**
+
+```json
+{
+  "sessionId":    "550e8400-e29b-41d4-a716-446655440000",
+  "scope":        "session | topic",
+  "topicId":      "<topic id, when scope = topic>",
+  "messageRange": { "start": 0, "end": 42 },
+  "messages":     [ /* role + content turns */ ],
+  "provider":     "nanogpt",
+  "apiKey":       "sk-...",
+  "model":        "gpt-4o-mini"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `sessionId` | string (UUID) | Yes | Session the memorization belongs to |
+| `scope` | string | Yes | `"session"` for full-session memorization, `"topic"` for a topic-bounded range |
+| `topicId` | string | When `scope = topic` | Identifier of the topic being memorized |
+| `messageRange` | object | When `scope = topic` | `{ start, end }` indices into the supplied `messages` array |
+| `messages` | array | Yes | Conversation turns to summarise (user/assistant only — tool plumbing is filtered server-side) |
+| `provider` / `apiKey` / `model` | string | Yes | Provider credentials the worker uses for the LLM call |
+
+**Response (`202 Accepted`):**
+
+```json
+{ "jobId": "550e8400-e29b-41d4-a716-446655440000", "deduped": false }
+```
+
+`deduped` is `true` when an active job with the same `sessionId + scope + topicId + messageRange` already exists, in which case `jobId` is the existing job's id.
+
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| `400` | Invalid session ID, malformed body, or fewer than 2 readable messages |
+
+---
+
+### `GET /api/memorize`
+
+List every job in the queue. API keys and message bodies are stripped from the response.
+
+**Response:**
+
+```json
+[
+  {
+    "id":            "<job uuid>",
+    "sessionId":     "<session uuid>",
+    "scope":         "session",
+    "topicId":       null,
+    "status":        "pending | processing | done | failed",
+    "attempts":      0,
+    "createdAt":     "<ISO>",
+    "nextAttemptAt": "<ISO>",
+    "result":        { "entryCount": 3 },
+    "error":         null,
+    "acknowledged":  false
+  }
+]
+```
+
+---
+
+### `POST /api/memorize/:id/ack`
+
+Mark a terminal (`done` or `failed`) job as seen by the UI. Acknowledged jobs are pruned 24 hours later.
+
+**Response:** `{ "ok": true }`
+
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| `400` | `id` is not a UUID |
+| `404` | Job not found or not in a terminal state |
+
+---
+
+### `DELETE /api/memorize/:id`
+
+Cancel a pending job. Jobs already in `processing` cannot be cancelled.
+
+**Response:** `{ "ok": true }`
+
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| `400` | `id` is not a UUID |
+| `409` | Job not found or already running |
+
+---
+
 ## Entity-core
 
 These endpoints write through to the entity-core MCP subprocess via `thalamus.js`. They are exposed for the built-in `save_memory` and `update_identity` tools and degrade gracefully (`502`) when entity-core is unavailable.

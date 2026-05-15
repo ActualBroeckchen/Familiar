@@ -91,7 +91,7 @@ See [Tool Calling](tool-calling.md) for the full reference.
 | Enable tool use | Whether to send the tools array with each request |
 | Custom tools | Paste a JSON array of OpenAI function-calling definitions |
 
-Built-in tools: `get_datetime`, `get_session_info`.
+Built-in tools: `get_datetime`, `get_session_info`, `save_to_tome`, `save_memory`, `update_identity`. The two entity-core tools (`save_memory`, `update_identity`) degrade gracefully when entity-core is unreachable. See [Tool Calling](tool-calling.md) for parameter details.
 
 ---
 

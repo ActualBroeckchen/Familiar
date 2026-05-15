@@ -68,7 +68,7 @@ Project wiki pages are available in [`/wiki`](wiki/):
 | **Character profile** | Injected into the system message after the system prompt |
 | **User profile** | Injected into the system message after character profile |
 | **Post-history prompt** | Appended as a final user turn immediately before each AI response |
-| **Tool calling** | LLM can invoke built-in tools (`get_datetime`, `get_session_info`) or custom tools you define; multi-round loop up to 5 rounds |
+| **Tool calling** | LLM can invoke built-in tools (`get_datetime`, `get_session_info`, `save_to_tome`, `save_memory`, `update_identity`) or custom tools you define; multi-round loop up to 5 rounds |
 | **Custom tools** | Paste a JSON array of OpenAI-compatible function definitions; executed client-side |
 | **Topics** | Track named conversation threads with coloured gutter bars; start/end retroactively by clicking any message; parallel topics supported |
 | **Topic summaries** | On topic end, an AI-generated summary is reviewed, edited, and saved to a Tome with auto-suggested keywords |
@@ -142,7 +142,7 @@ You can browse, load, delete, or **memorize** any past session at any time via t
 Memorization is a **server-side queued job** that survives tab close, idle rollover, and server restart. The browser submits a payload to the server, the server-side worker calls the configured LLM, and entries are written to the dedicated **Session Memories** Tome (auto-created on first use). The model is asked to identify distinct topics and return structured JSON shaped by the [tome-writing-guide](docs/tome-writing-guide.md). Each topic becomes a lorebook entry containing:
 
 - A concise **title** (used as the entry comment)
-- **Familiar-perspective bullet content** — a one-sentence framing line followed by action bullets and one or two prohibition bullets, written in second person and using `{{user}}` where the user's name belongs
+- **Familiar-perspective bullet content** — the Familiar's own first-person notes-to-self: a one-sentence framing line followed by action bullets ("what I will do") and one or two prohibition bullets ("what I will NOT do"), using `{{user}}` where the user's name belongs
 - **3–8 conversational trigger keywords** — phrases the user would actually say when this situation recurs, not topic labels
 - A suggested **sticky** value sized to how long the situation typically persists
 
@@ -181,12 +181,15 @@ The **Enable tool use** checkbox controls whether the `tools` array is sent with
 
 #### Built-in tools
 
-| Tool | What it returns |
+| Tool | What it does |
 |---|---|
-| `get_datetime` | Current local date, time, and timezone |
-| `get_session_info` | Session start time, message count, provider, model, and ms since last message |
+| `get_datetime` | Returns the current local date, time, and timezone. |
+| `get_session_info` | Returns session start time, message count, provider, model, and ms since last message. |
+| `save_to_tome` | Saves a fact learned during the conversation as a new entry in the first enabled Tome, with trigger keywords for future activation. |
+| `save_memory` | Writes a new time-stamped entry to entity-core's long-term memory at the chosen granularity (`daily`/`weekly`/`monthly`/`yearly`/`significant`). |
+| `update_identity` | Appends a durable fact to one of entity-core's identity files (`user_notes.md` or `relationship_notes.md`). |
 
-Both tools are always available when tool use is enabled — they require no arguments.
+All five tools are always available when tool use is enabled. `get_datetime` and `get_session_info` take no arguments; the three write tools accept the parameters described in [`docs/tool-calling.md`](docs/tool-calling.md). The two entity-core tools degrade gracefully if entity-core is unreachable.
 
 #### Custom tools
 
@@ -355,16 +358,17 @@ Deletes the session log file. Returns `{ "ok": true }` on success.
 #### `GET /api/health`
 Returns `{ "ok": true }`. Useful for uptime checks.
 
-#### `GET /api/lorebook`
-Returns the full lorebook JSON `{ entries: { [uid]: entry } }`. Returns `{ entries: {} }` if no lorebook file exists yet.
+#### Tomes — `GET/POST /api/tomes`, `GET/PUT/PATCH/DELETE /api/tomes/:id`, `DELETE /api/tomes/:id/entries/:uid`, `POST /api/tomes/default/entries`, `GET /api/tomes/session-memories`
 
-#### `PUT /api/lorebook`
-Replaces the entire lorebook with the body supplied. The body must be `{ entries: { ... } }`.
+The lorebook is a multi-Tome system: each Tome is an independent JSON file in `tomes/` that can be enabled/disabled and contains its own entries. The full request/response shapes are documented in [`docs/api-reference.md`](docs/api-reference.md#tomes). The special **Session Memories** Tome is auto-created on first session memorization.
 
-#### `DELETE /api/lorebook/:uid`
-Removes a single entry by UID and rewrites the lorebook file. Returns `{ ok: true }`.
+#### Session memorization — `POST/GET /api/memorize`, `POST /api/memorize/:id/ack`, `DELETE /api/memorize/:id`
 
-The lorebook is stored as `lorebook.json` in the project root (next to `server.js`), automatically created on first save, and git-ignored.
+Queue endpoints for server-side memorization jobs. Full shapes in [`docs/api-reference.md`](docs/api-reference.md#session-memorization).
+
+#### Entity-core — `POST /api/entity/memory`, `POST /api/entity/identity`
+
+Write-through endpoints used by the `save_memory` and `update_identity` built-in tools. Full shapes in [`docs/api-reference.md`](docs/api-reference.md#entity-core).
 
 ---
 
@@ -372,20 +376,35 @@ The lorebook is stored as `lorebook.json` in the project root (next to `server.j
 
 ```
 /
-├── server.js          Express proxy + log/lorebook API (Node.js 18+, ESM)
-├── thalamus.js        entity-core MCP bridge — enriches every LLM request
+├── server.js                    Express server — chat proxy + log/tome/memorize/entity API (Node.js 18+, ESM)
+├── thalamus.js                  entity-core MCP bridge — enriches every LLM request
+├── memorization.js              Persistent server-side memorization queue + worker
 ├── package.json
 ├── .gitignore
-├── logs/              Session JSON files (auto-created, git-ignored)
-├── lorebook.json      Lorebook entries (auto-created, git-ignored)
+│
+├── Proto-Familiar.vbs           Windows tray-icon launcher (one-click entry point)
+├── Proto-Familiar.command       macOS double-click launcher
+├── install.sh / install.bat     Bash / batch installer (deps + entity-core clone)
+├── start.sh / start.bat         Bash / batch launcher (background, opens browser)
+├── stop.sh / stop.bat           Bash / batch shutdown
+│
+├── logs/                        Session JSON files (auto-created, git-ignored)
+├── tomes/                       Per-Tome JSON files (memorization queue lives here too, git-ignored)
+│
 ├── scripts/
-│   ├── import-entity.js  Import an existing entity-core data directory
-│   └── import-tome.js    Convert a SillyTavern lorebook export to a Proto-Familiar Tome
+│   ├── import-entity.js         Import an existing entity-core data directory
+│   ├── import-tome.js           Convert a SillyTavern lorebook export to a Proto-Familiar Tome
+│   ├── linux/install-desktop-entry.sh   Register Proto-Familiar in the Linux app menu
+│   └── win/{install,tray}.ps1   PowerShell installer + tray app (called by the .vbs launcher)
+│
 ├── public/
-│   ├── index.html     App shell (sidebar + chat pane + modals)
-│   ├── style.css      All styling — dark/light themes, responsive layout
-│   └── app.js         All frontend logic — state, API, rendering, topics, lorebook
-└── Research/          Background reading on architecture and mental-health AI
+│   ├── index.html               App shell (sidebar + chat pane + modals)
+│   ├── style.css                All styling — dark/light themes, responsive layout
+│   └── app.js                   All frontend logic — state, API, rendering, topics, tomes engine
+│
+├── docs/                        User-facing documentation (index.md is the table of contents)
+├── wiki/                        Short GitHub-wiki mirrors of the docs
+└── Research/                    Background reading on architecture and mental-health AI
 ```
 
 ---
@@ -507,7 +526,7 @@ My idea is to create an agentic caretaker for myself. As you can see I am starti
 
 However, I found some stuff potentially helpful for others. So I've made the repo public already. Have at it.
 
-See [`DEVELOPMENT_ROADMAP.md`](DEVELOPMENT_ROADMAP.md) for the full vision and phased plan.
+See [`docs/project-vision.md`](docs/project-vision.md) for the full vision and design principles.
 
 ---
 

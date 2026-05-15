@@ -25,8 +25,11 @@ All prompt fields support file import from `.txt`, `.md`, or `.json`.
 
 - Enable/disable tool use globally.
 - Built-in tools:
-  - `get_datetime`
-  - `get_session_info`
+  - `get_datetime` — current local date/time/timezone
+  - `get_session_info` — session start, message count, provider, model
+  - `save_to_tome` — save a fact into the first enabled Tome with trigger keywords
+  - `save_memory` — write a time-stamped entity-core memory at a chosen granularity
+  - `update_identity` — append a fact to an entity-core identity file (`user` or `relationship`)
 - Custom tools can be provided as an OpenAI-compatible JSON array.
 - Tool-call loop runs up to 5 rounds to avoid infinite recursion.
 

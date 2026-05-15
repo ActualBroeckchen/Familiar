@@ -25,8 +25,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOGS_DIR = path.join(__dirname, 'logs');
 mkdirSync(LOGS_DIR, { recursive: true });
 
-// Only allow UUID-shaped session IDs to prevent path traversal
-function isValidSessionId(id) {
+// Only allow UUID-shaped IDs to prevent path traversal and bound input size.
+// Used for session IDs, tome IDs, entry UIDs, and memorization job IDs — all
+// of which are generated via crypto.randomUUID() and share the same shape.
+function isValidUUID(id) {
   return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id);
 }
 
@@ -196,7 +198,7 @@ app.post('/api/debug-prompt', async (req, res) => {
 // POST /api/log — create or overwrite a session log file
 app.post('/api/log', async (req, res) => {
   const { sessionId, startedAt, endedAt, provider, model, messages } = req.body;
-  if (!isValidSessionId(sessionId))
+  if (!isValidUUID(sessionId))
     return res.status(400).json({ error: 'Invalid session ID.' });
   if (!Array.isArray(messages))
     return res.status(400).json({ error: 'messages must be an array.' });
@@ -238,7 +240,7 @@ app.get('/api/logs', async (_req, res) => {
 // GET /api/logs/:id — retrieve a full session log
 app.get('/api/logs/:id', async (req, res) => {
   const { id } = req.params;
-  if (!isValidSessionId(id))
+  if (!isValidUUID(id))
     return res.status(400).json({ error: 'Invalid session ID.' });
   try {
     const raw = await fsp.readFile(path.join(LOGS_DIR, `${id}.json`), 'utf8');
@@ -252,7 +254,7 @@ app.get('/api/logs/:id', async (req, res) => {
 // DELETE /api/logs/:id — remove a session log
 app.delete('/api/logs/:id', async (req, res) => {
   const { id } = req.params;
-  if (!isValidSessionId(id))
+  if (!isValidUUID(id))
     return res.status(400).json({ error: 'Invalid session ID.' });
   try {
     await fsp.unlink(path.join(LOGS_DIR, `${id}.json`));
@@ -269,13 +271,6 @@ app.get('/api/health', (_req, res) => res.json({ ok: true }));
 const TOMES_DIR = path.join(__dirname, 'tomes');
 mkdirSync(TOMES_DIR, { recursive: true });
 
-function isValidTomeId(id) {
-  return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id);
-}
-
-function isValidEntryUid(uid) {
-  return typeof uid === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uid);
-}
 
 // Returns the absolute path for a tome file, falling back to a directory scan
 // so that pre-existing tomes with non-UUID filenames (e.g. "ADHD-Tome.json") are found.
@@ -371,7 +366,7 @@ app.get('/api/tomes/session-memories', async (_req, res) => {
 // GET /api/tomes/:id — get a full tome with entries
 app.get('/api/tomes/:id', async (req, res) => {
   const { id } = req.params;
-  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
+  if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
   const tome = await readTome(id);
   if (!tome) return res.status(404).json({ error: 'Tome not found.' });
   res.json(tome);
@@ -380,7 +375,7 @@ app.get('/api/tomes/:id', async (req, res) => {
 // PUT /api/tomes/:id — save full tome (entries + optional metadata)
 app.put('/api/tomes/:id', async (req, res) => {
   const { id } = req.params;
-  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
+  if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
   const { name, description, enabled, entries } = req.body;
   if (!entries || typeof entries !== 'object' || Array.isArray(entries))
     return res.status(400).json({ error: 'entries object required.' });
@@ -388,7 +383,7 @@ app.put('/api/tomes/:id', async (req, res) => {
   if (!existing) return res.status(404).json({ error: 'Tome not found.' });
   const safe = {};
   for (const [uid, entry] of Object.entries(entries)) {
-    if (!isValidEntryUid(uid)) continue;
+    if (!isValidUUID(uid)) continue;
     safe[uid] = entry;
   }
   const updated = {
@@ -409,7 +404,7 @@ app.put('/api/tomes/:id', async (req, res) => {
 // PATCH /api/tomes/:id — update metadata only (name, description, enabled)
 app.patch('/api/tomes/:id', async (req, res) => {
   const { id } = req.params;
-  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
+  if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
   const tome = await readTome(id);
   if (!tome) return res.status(404).json({ error: 'Tome not found.' });
   if (req.body.name !== undefined) tome.name = String(req.body.name).trim() || tome.name;
@@ -426,7 +421,7 @@ app.patch('/api/tomes/:id', async (req, res) => {
 // DELETE /api/tomes/:id — delete a tome
 app.delete('/api/tomes/:id', async (req, res) => {
   const { id } = req.params;
-  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
+  if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
   try {
     await fsp.unlink(path.join(TOMES_DIR, `${id}.json`));
     res.json({ ok: true });
@@ -438,8 +433,8 @@ app.delete('/api/tomes/:id', async (req, res) => {
 // DELETE /api/tomes/:id/entries/:uid — remove a single entry
 app.delete('/api/tomes/:id/entries/:uid', async (req, res) => {
   const { id, uid } = req.params;
-  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
-  if (!isValidEntryUid(uid)) return res.status(400).json({ error: 'Invalid entry UID.' });
+  if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
+  if (!isValidUUID(uid)) return res.status(400).json({ error: 'Invalid entry UID.' });
   const tome = await readTome(id);
   if (!tome) return res.status(404).json({ error: 'Tome not found.' });
   if (!tome.entries?.[uid]) return res.status(404).json({ error: 'Entry not found.' });
@@ -545,7 +540,7 @@ app.post('/api/memorize', express.text({ type: ['text/plain', 'application/json'
     return res.status(400).json({ error: 'Request body required.' });
   }
   const { sessionId, scope, topicId, messageRange, messages, provider, apiKey, model } = body;
-  if (!isValidSessionId(sessionId))
+  if (!isValidUUID(sessionId))
     return res.status(400).json({ error: 'Invalid session ID.' });
   try {
     const { jobId, deduped } = await enqueueMemorization({
@@ -569,7 +564,7 @@ app.get('/api/memorize', async (_req, res) => {
 // POST /api/memorize/:id/ack — mark a terminal job as seen by the UI
 app.post('/api/memorize/:id/ack', async (req, res) => {
   const { id } = req.params;
-  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid job ID.' });
+  if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid job ID.' });
   const ok = await acknowledgeMemorizationJob(id);
   if (!ok) return res.status(404).json({ error: 'Job not found or not terminal.' });
   res.json({ ok: true });
@@ -578,7 +573,7 @@ app.post('/api/memorize/:id/ack', async (req, res) => {
 // DELETE /api/memorize/:id — cancel a pending job
 app.delete('/api/memorize/:id', async (req, res) => {
   const { id } = req.params;
-  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid job ID.' });
+  if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid job ID.' });
   const ok = await cancelMemorizationJob(id);
   if (!ok) return res.status(409).json({ error: 'Job not found or already running.' });
   res.json({ ok: true });

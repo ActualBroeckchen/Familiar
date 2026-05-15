@@ -31,7 +31,7 @@ Hover over any message and click the **□ Topic end** button. If more than one 
 When a topic ends, an LLM call is made to produce a tome entry for the messages within that topic's bounds. The prompt is shaped by [`docs/tome-writing-guide.md`](tome-writing-guide.md), so the model is asked for:
 
 - **Conversational trigger keywords** — phrases the user would actually say when the situation recurs, not topic labels.
-- **Familiar-perspective bullet content** — a short framing line followed by action and prohibition bullets, written in second person and using the `{{user}}` macro.
+- **Familiar-perspective bullet content** — the Familiar's own first-person notes-to-self: a short framing line followed by action and prohibition bullets ("what I will do" / "what I will NOT do"), using the `{{user}}` macro for the user's name.
 - **A sticky value** suggestion sized to how long the situation typically persists.
 
 A review dialog opens with:

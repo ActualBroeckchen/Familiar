@@ -4,7 +4,7 @@
 
 **Familiar** is a personal, agentic caretaker AI designed to help users with conditions like ADHD, depression, and agoraphobia thrive — not merely cope. It is named after the magical concept of a familiar: a companion that serves, complements, and supports its bond-holder.
 
-Proto-Familiar is the current working prototype. It validates the chat layer, memory architecture, and provider integrations while the larger agentic system is designed. The [Development Roadmap](../DEVELOPMENT_ROADMAP.md) describes the full planned system in detail.
+Proto-Familiar is the current working prototype. It validates the chat layer, memory architecture, and provider integrations while the larger agentic system is designed. The rest of this document describes the planned full system; the [Research/](../Research/) directory holds the background notes that fed into it.
 
 ---
 

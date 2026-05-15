@@ -19,4 +19,4 @@ Proto-Familiar is a local-first chat UI with:
 - built-in and custom tool definitions
 - session logs stored locally as JSON files
 
-For full project context, also review the root [README](../README.md) and [Development Roadmap](../DEVELOPMENT_ROADMAP.md).
+For full project context, also review the root [README](../README.md) and the [Project Vision](../docs/project-vision.md).
