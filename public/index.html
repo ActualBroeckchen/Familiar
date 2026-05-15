@@ -329,23 +329,27 @@
   <div class="modal-backdrop hidden" id="summary-modal" role="dialog" aria-modal="true" aria-labelledby="summary-modal-title">
     <div class="modal modal-wide">
       <div class="modal-header">
-        <h2 class="modal-title" id="summary-modal-title">Review Topic Summary</h2>
+        <h2 class="modal-title" id="summary-modal-title">Review Tome Entry</h2>
         <button class="icon-btn modal-close" id="summary-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
-        <p class="field-hint" id="summary-generating-hint">Generating summary… please wait.</p>
+        <p class="field-hint" id="summary-generating-hint">Generating tome entry… please wait.</p>
         <div id="summary-form" class="hidden">
           <div class="field">
-            <label for="summary-title-input">Title</label>
-            <input type="text" id="summary-title-input" placeholder="Topic title…" maxlength="100">
+            <label for="summary-title-input">Title <span class="label-hint">(used as the entry comment)</span></label>
+            <input type="text" id="summary-title-input" placeholder="Short label for this situation…" maxlength="100">
           </div>
           <div class="field">
-            <label for="summary-content-input">Summary</label>
-            <textarea id="summary-content-input" rows="6" placeholder="Summary content…"></textarea>
+            <label for="summary-content-input">Content <span class="label-hint">(Familiar-perspective bullets — framing line, action bullets, prohibition bullets)</span></label>
+            <textarea id="summary-content-input" rows="8" placeholder="{{user}} is in [situation] — [why].&#10;- Action bullet.&#10;- Action bullet.&#10;- Do not [common trap]."></textarea>
           </div>
           <div class="field">
-            <label for="summary-keys-input">Keywords <span class="label-hint">(comma-separated, trigger injection)</span></label>
-            <input type="text" id="summary-keys-input" placeholder="e.g. medication, therapy, schedule">
+            <label for="summary-keys-input">Keywords <span class="label-hint">(comma-separated conversational triggers — what {{user}} would actually say)</span></label>
+            <input type="text" id="summary-keys-input" placeholder="e.g. don't know where to start, been at this for, can't bring myself to">
+          </div>
+          <div class="field">
+            <label for="summary-sticky-input">Sticky <span class="label-hint">(turns the entry stays active after first match — blank = one-shot)</span></label>
+            <input type="number" id="summary-sticky-input" min="1" max="50" placeholder="e.g. 3">
           </div>
           <p class="field-hint summary-log-note">Full conversation context is preserved in the session log for reference.</p>
         </div>

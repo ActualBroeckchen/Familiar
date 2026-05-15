@@ -93,9 +93,9 @@ Built-in tools: `get_datetime`, `get_session_info`.
 See [Topics](topics.md) for the full reference.
 
 - **+ Topic** — start a named topic from the current message
-- **▷** on any past message — start a topic retroactively
-- **⬛** on any message — end an open topic at that point
-- On topic end, an LLM-generated summary is reviewed and optionally saved to a Tome
+- **▷ Topic start** on any past message — start a topic retroactively
+- **□ Topic end** on any message — end an open topic at that point
+- On topic end, an LLM-generated entry (written in the [tome-writing-guide](tome-writing-guide.md) style) is reviewed and optionally saved to a Tome
 
 ---
 

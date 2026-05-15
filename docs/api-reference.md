@@ -200,15 +200,16 @@ Creates a new Tome.
 }
 ```
 
-`name` is required. `description` and `enabled` are optional (defaults: `""`, `true`).
+`name` is required. `description` is optional (defaults to `""`). New tomes are always created enabled.
 
-**Response:** The full new Tome object including its generated `id` and empty `entries: {}`.
+**Response:** `{ "id": "<new tome uuid>" }`
 
 **Error responses:**
 
 | Status | Condition |
 |---|---|
 | `400` | `name` is missing or blank |
+| `500` | File system write failure |
 
 ---
 
@@ -274,7 +275,7 @@ Updates Tome metadata only (does not touch entries).
 
 All fields are optional; only provided fields are updated.
 
-**Response:** The updated Tome metadata (without entries).
+**Response:** `{ "ok": true }`
 
 **Error responses:**
 
@@ -282,6 +283,7 @@ All fields are optional; only provided fields are updated.
 |---|---|
 | `400` | Invalid Tome ID format |
 | `404` | Tome not found |
+| `500` | File system write failure |
 
 ---
 
@@ -305,6 +307,104 @@ Removes a single entry from a Tome by UID and rewrites the Tome file.
 |---|---|
 | `400` | Invalid Tome ID or entry UID format |
 | `404` | Tome or entry not found |
+
+---
+
+### `POST /api/tomes/default/entries`
+
+Adds a single entry to the first enabled Tome (or creates a "General" Tome if none exists). Used by the `save_to_tome` built-in tool so the model can write knowledge back mid-conversation.
+
+**Request body:**
+
+```json
+{
+  "comment":   "Short label",
+  "content":   "Entry body — required, max 16 KB.",
+  "keys":      ["keyword1", "keyword2"],
+  "learnedAt": "2026-05-11T14:30:00.000Z"
+}
+```
+
+`content` is required (max 16 KB). `keys` may be a string array or a comma-separated string. `comment` defaults to `"Auto-saved entry"` if omitted. `learnedAt` defaults to the current server time.
+
+**Response:** `{ "ok": true, "tomeId": "<uuid>", "uid": "<new entry uid>" }`
+
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| `400` | Missing/blank `content`, `content` exceeds 16 KB, or `comment` is not a string |
+| `500` | File system write failure |
+
+---
+
+## Entity-core
+
+These endpoints write through to the entity-core MCP subprocess via `thalamus.js`. They are exposed for the built-in `save_memory` and `update_identity` tools and degrade gracefully (`502`) when entity-core is unavailable.
+
+### `POST /api/entity/memory`
+
+Writes a new memory entry to the long-term memory system.
+
+**Request body:**
+
+```json
+{
+  "content":     "Memory text.",
+  "granularity": "daily",
+  "date":        "2026-05-11"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `content` | string | Yes | Memory body (max 8 KB) |
+| `granularity` | string | Yes | One of `daily`, `weekly`, `monthly`, `yearly`, `significant` |
+| `date` | string | No | Anchor date for the memory (defaults to today) |
+
+**Response:** `{ "ok": true }`
+
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| `400` | Missing/blank `content`, `content` exceeds 8 KB, or invalid `granularity` |
+| `502` | entity-core unavailable |
+
+---
+
+### `POST /api/entity/identity`
+
+Appends to or updates a section of an identity file.
+
+**Request body:**
+
+```json
+{
+  "category": "user",
+  "filename": "user_notes.md",
+  "heading":  "Preferences",
+  "content":  "Prefers morning meetings.",
+  "mode":     "append"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `category` | string | Yes | One of `self`, `user`, `relationship`, `custom` |
+| `filename` | string | Yes | Simple `.md` filename (letters, numbers, underscores) |
+| `content` | string | Yes | Content to write (max 8 KB) |
+| `mode` | string | No | `append` (default) or `update_section` |
+| `heading` | string | When `mode = update_section` | The heading whose section should be replaced |
+
+**Response:** `{ "ok": true }`
+
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| `400` | Invalid category, filename, missing content, or missing heading when `mode = update_section` |
+| `502` | entity-core unavailable |
 
 ---
 

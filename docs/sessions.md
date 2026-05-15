@@ -71,15 +71,16 @@ Tool-call turns (role `tool` and assistant turns containing `tool_calls`) are in
 
 ## Session Memorization
 
-When a session closes — either by the 3-hour idle timeout or by manually clearing the chat — the full conversation is automatically sent to the configured LLM. The model extracts distinct topics discussed and returns structured JSON. Each topic becomes a new entry in the **default Tome** (the first enabled Tome; if none exist, a "General" Tome is created automatically).
+When a session closes — either by the 3-hour idle timeout or by manually clearing the chat — the full conversation is automatically sent to the configured LLM. The model is prompted in the style of [`tome-writing-guide.md`](tome-writing-guide.md), splits the conversation into distinct situational topics, and returns structured JSON. Each topic becomes a new entry in the **default Tome** (the first enabled Tome; if none exist, a "General" Tome is created automatically).
 
 ### What Gets Saved Per Entry
 
 | Field | Content |
 |---|---|
-| Comment (title) | A concise label for the topic |
-| Content | A third-person narrative summary of key facts, decisions, and details worth remembering in future conversations |
-| Keys (keywords) | 3–8 trigger keywords for the entry |
+| Comment (title) | A concise label for the situation |
+| Content | Familiar-perspective bullet guidance: a one-sentence framing line, action bullets, and one or two prohibition bullets — written in second person, using `{{user}}` where the user's name belongs |
+| Keys (keywords) | 3–8 conversational trigger phrases the user would actually say when the situation recurs |
+| Sticky | How many turns the entry stays active after first match (sized to how long the situation typically lasts) |
 | Position | `before_char` (default for memorized entries) |
 
 ### Limits and Conditions

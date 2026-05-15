@@ -1350,23 +1350,50 @@ async function memorizeSessionToTome(messages, sessionId) {
     .join('\n\n');
 
   const prompt =
-`Analyze this conversation and identify the distinct topics discussed. For each topic produce a lorebook entry.
+`You are producing Tome entries for a Familiar (AI companion). Each entry is private reference notes that get injected into the Familiar's context when its keywords appear in a future conversation. Identify the distinct situational topics in the conversation below and write one entry per topic, following the craft rules carefully.
 
 Return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
 {
   "topics": [
     {
-      "title": "Concise descriptive title (max 60 chars)",
-      "content": "Comprehensive third-person summary: key facts, decisions, and details worth remembering in future conversations.",
-      "keywords": ["keyword1", "keyword2", "keyword3"]
+      "title":    "Short label for the entry comment (max 60 chars)",
+      "content":  "Familiar-perspective bullet guidance — see content rules below",
+      "keywords": ["conversational phrase 1", "conversational phrase 2"],
+      "sticky":   3
     }
   ]
 }
 
-Rules:
-- Identify 1–8 genuinely distinct topics. Merge closely related messages rather than over-splitting.
-- keywords: 3–8 terms per topic that would signal relevance when mentioned in a future conversation (names, concepts, places, medications, decisions, etc.).
-- Each entry must be self-contained and useful as a standalone memory.
+Identify 1–8 genuinely distinct topics. Merge closely related material rather than over-splitting. Each entry must be self-contained.
+
+### Content rules (most important)
+Write content as the Familiar's private notes to themselves about this situation. NOT a summary of what happened.
+Structure:
+  1. One short framing line — what is happening and why (gives the Familiar understanding, not just rules).
+  2. 3–5 action bullets — what to do.
+  3. 1–2 prohibition bullets — what NOT to do. Usually the most valuable: name the well-intentioned default response that would make things worse.
+Style:
+  - Second person, addressed to the Familiar. Use {{user}} wherever the user's name belongs.
+  - Practical, grounded, non-clinical. Notes, not a textbook.
+  - Short declarative bullets. The whole entry should be readable in 5–10 seconds.
+  - Do NOT include narrative summaries of "what they said" — distil the situation and the response, not the transcript.
+
+### Keyword rules
+Keywords are TRIGGERS, not labels. They must be phrases the user would literally say when this situation recurs — not the name of the topic.
+  - WRONG: "executive dysfunction", "rejection sensitive dysphoria", "hyperfocus".
+  - RIGHT: "don't know where to start", "did I say something wrong", "been at this for".
+Derive them by imagining what the user would actually type when the situation is happening, then extracting distinctive phrases.
+  - Prefer multi-word phrases over single common words (avoid bare "tired", "can't", "hard").
+  - 3–8 keywords per entry. Each one specific enough not to fire in unrelated conversations.
+  - You may use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has 3+ predictable variants.
+
+### Sticky rules
+Pick an integer sticky value per entry (number of turns the entry stays active after first match):
+  - null = one-shot lore/fact that does not need persistence.
+  - 2    = brief states that typically resolve quickly.
+  - 3    = moderate states needing a few exchanges.
+  - 4–5  = complex/intense states taking multiple turns to navigate.
+  - 8+   = ongoing modes that should persist across the whole session.
 
 Conversation:
 ${convText}`;
@@ -1414,6 +1441,8 @@ ${convText}`;
       const title   = (t.title   ?? '').trim();
       const content = (t.content ?? '').trim();
       if (!title || !content) continue;
+      const stickyN = parseInt(t.sticky, 10);
+      const sticky  = Number.isFinite(stickyN) && stickyN > 0 ? stickyN : null;
       const uid = generateId();
       tomeData.entries[uid] = {
         uid,
@@ -1432,7 +1461,7 @@ ${convText}`;
         caseSensitive:       null,
         matchWholeWords:     null,
         probability:         100,
-        sticky:              null,
+        sticky,
         cooldown:            null,
         preventRecursion:    false,
         delayUntilRecursion: false,
@@ -1931,12 +1960,12 @@ function startTopic(label, startIndex = null) {
     : (_retroStartIndex !== null ? _retroStartIndex : state.messages.length);
   _retroStartIndex = null;
   const topic = {
-    id:         generateId(),
+    id:           generateId(),
     label,
-    color:      nextTopicColor(),
-    startIndex: idx,
-    endIndex:   null,
-    lorebookEntryId: null,
+    color:        nextTopicColor(),
+    startIndex:   idx,
+    endIndex:     null,
+    tomeEntryId:  null,
   };
   state.topics.push(topic);
   saveTopics();
@@ -2167,16 +2196,44 @@ async function generateTopicSummary(topic, rangeMessages) {
     .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
     .join('\n\n');
 
-  const prompt = `Analyze the following conversation excerpt and produce a structured lorebook entry as a JSON object.
+  const prompt = `You are writing a Tome entry for a Familiar (AI companion). The entry is private reference notes that get injected into the Familiar's context when its keywords appear in a future conversation. Follow the craft rules below carefully.
 
-Return ONLY valid JSON with exactly these fields:
+Return ONLY valid JSON (no markdown fences, no commentary) with exactly these fields:
 {
-  "title": "Concise descriptive title (max 60 chars)",
-  "content": "A comprehensive third-person summary capturing key facts, decisions, and important details from the exchange.",
-  "keywords": ["keyword1", "keyword2", "keyword3"]
+  "title":    "Short label for the entry comment (max 60 chars).",
+  "content":  "Familiar-perspective bullet guidance. See rules below.",
+  "keywords": ["conversational phrase 1", "conversational phrase 2", ...],
+  "sticky":   3
 }
 
-The keywords array should contain 3–8 terms that would signal this entry is relevant when mentioned in a future conversation (names, concepts, topics discussed, medications, places, etc.).
+### Content rules (most important)
+Write content as the Familiar's private notes to themselves about this situation. NOT a summary of what happened.
+Structure:
+  1. One short framing line — what is happening and why (gives the Familiar understanding, not just rules).
+  2. 3–5 action bullets — what to do.
+  3. 1–2 prohibition bullets — what NOT to do. These are usually the most valuable: name the well-intentioned default response that would make things worse.
+Style:
+  - Second person, addressed to the Familiar. Use {{user}} wherever the user's name belongs.
+  - Practical, grounded, non-clinical. Notes, not a textbook.
+  - Short declarative bullets. The whole entry should be readable in 5–10 seconds.
+  - Do NOT include narrative summaries of "what they said" — distil the situation and the response, not the transcript.
+
+### Keyword rules
+Keywords are TRIGGERS, not labels. They must be phrases the user would literally say when this situation recurs — not the name of the topic.
+  - WRONG: "executive dysfunction", "rejection sensitive dysphoria", "hyperfocus".
+  - RIGHT: "don't know where to start", "did I say something wrong", "been at this for".
+Derive them by imagining what the user would actually type when the situation is happening, then extracting distinctive phrases.
+  - Prefer multi-word phrases over single common words (avoid bare "tired", "can't", "hard").
+  - 3–8 keywords. Each one specific enough not to fire in unrelated conversations.
+  - You may use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has 3+ predictable variants.
+
+### Sticky rules
+Pick a sticky value (integer, number of turns the entry stays active after first match):
+  - null = one-shot lore/fact that does not need persistence.
+  - 2    = brief states that typically resolve quickly.
+  - 3    = moderate states needing a few exchanges (distraction, sleep note, transition).
+  - 4–5  = complex/intense states taking multiple turns to navigate (paralysis, RSD, emotional dysregulation).
+  - 8+   = ongoing modes that should persist across the whole session.
 
 Conversation excerpt:
 ${convText}`;
@@ -2209,6 +2266,7 @@ ${convText}`;
       title:    topic.label,
       content:  '',
       keywords: [],
+      sticky:   null,
     });
     // Surface error as placeholder hint
     $('summary-content-input').placeholder = `Auto-generation failed: ${err.message}. Please write a summary manually.`;
@@ -2231,10 +2289,14 @@ async function regenerateSummary(topic) {
   await generateTopicSummary(topic, rangeMessages);
 }
 
-function populateSummaryForm({ title, content, keywords }) {
+function populateSummaryForm({ title, content, keywords, sticky }) {
   $('summary-title-input').value   = title ?? '';
   $('summary-content-input').value = content ?? '';
   $('summary-keys-input').value    = Array.isArray(keywords) ? keywords.join(', ') : (keywords ?? '');
+  const stickyInput = $('summary-sticky-input');
+  if (stickyInput) {
+    stickyInput.value = (typeof sticky === 'number' && Number.isFinite(sticky) && sticky > 0) ? String(sticky) : '';
+  }
   $('summary-generating-hint').classList.add('hidden');
   $('summary-form').classList.remove('hidden');
   $('summary-regen-btn').disabled = false;
@@ -2244,7 +2306,7 @@ function populateSummaryForm({ title, content, keywords }) {
 // ── Summary modal ─────────────────────────────────────────────────
 function openSummaryModal(topic) {
   _pendingSummaryTopic = topic;
-  $('summary-modal-title').textContent = `Summary: ${topic.label}`;
+  $('summary-modal-title').textContent = `Tome entry: ${topic.label}`;
   $('summary-generating-hint').classList.remove('hidden');
   $('summary-form').classList.add('hidden');
   $('summary-regen-btn').disabled = true;
@@ -2261,10 +2323,13 @@ async function savePendingSummary() {
   const topic = _pendingSummaryTopic;
   if (!topic) return;
 
-  const title   = $('summary-title-input').value.trim();
-  const content = $('summary-content-input').value.trim();
-  const keysRaw = $('summary-keys-input').value;
-  const keys    = keysRaw.split(',').map(k => k.trim()).filter(Boolean);
+  const title    = $('summary-title-input').value.trim();
+  const content  = $('summary-content-input').value.trim();
+  const keysRaw  = $('summary-keys-input').value;
+  const keys     = keysRaw.split(',').map(k => k.trim()).filter(Boolean);
+  const stickyEl = $('summary-sticky-input');
+  const stickyN  = stickyEl ? parseInt(stickyEl.value, 10) : NaN;
+  const sticky   = Number.isFinite(stickyN) && stickyN > 0 ? stickyN : null;
 
   if (!title || !content) {
     alert('Please fill in at least a title and summary content before saving.');
@@ -2289,7 +2354,7 @@ async function savePendingSummary() {
     caseSensitive:       null,
     matchWholeWords:     null,
     probability:         100,
-    sticky:              null,
+    sticky,
     cooldown:            null,
     preventRecursion:    false,
     delayUntilRecursion: false,
