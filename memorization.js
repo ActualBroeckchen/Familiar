@@ -35,8 +35,11 @@ const MAX_ATTEMPTS    = 5;
 const BACKOFF_MS      = [5_000, 30_000, 120_000, 600_000, 1_800_000]; // 5s, 30s, 2m, 10m, 30m
 const TICK_MS         = 5_000;
 const ACK_TTL_MS      = 24 * 60 * 60 * 1000; // prune acknowledged terminal jobs after a day
-const TOME_NAME       = 'Session Memories';
-const TOME_DESCRIPTION = 'Auto-generated entries from past conversations. Created on first session memorization.';
+export const SESSION_MEMORIES_TOME_NAME = 'Session Memories';
+export const SESSION_MEMORIES_TOME_DESC = 'Auto-generated entries from past conversations. Created on first session memorization.';
+// Aliases kept for the module-local code below.
+const TOME_NAME        = SESSION_MEMORIES_TOME_NAME;
+const TOME_DESCRIPTION = SESSION_MEMORIES_TOME_DESC;
 
 // ── Persistence ──────────────────────────────────────────────────
 
@@ -78,27 +81,37 @@ async function persistQueue() {
 
 // ── Tome helpers (parallel to server.js but standalone) ─────────
 
-async function findOrCreateSessionMemoriesTome() {
-  const files = await fsp.readdir(TOMES_DIR);
-  for (const f of files) {
-    if (!f.endsWith('.json') || f.startsWith('.')) continue;
-    try {
-      const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
-      const t = JSON.parse(raw);
-      if (t?.name === TOME_NAME) return { tome: t, file: path.join(TOMES_DIR, f) };
-    } catch { /* skip */ }
-  }
-  const id = randomUUID();
-  const tome = {
-    id,
-    name:        TOME_NAME,
-    description: TOME_DESCRIPTION,
-    enabled:     true,
-    entries:     {},
-  };
-  const file = path.join(TOMES_DIR, `${id}.json`);
-  await fsp.writeFile(file, JSON.stringify(tome, null, 2), 'utf8');
-  return { tome, file };
+// Process-wide mutex so concurrent callers (worker tick + HTTP endpoint)
+// can't both fail the scan and each create a new file.
+let _sessionMemoriesLock = Promise.resolve();
+
+export function findOrCreateSessionMemoriesTome() {
+  const run = _sessionMemoriesLock.then(async () => {
+    const files = await fsp.readdir(TOMES_DIR);
+    for (const f of files) {
+      if (!f.endsWith('.json') || f.startsWith('.')) continue;
+      try {
+        const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
+        const t = JSON.parse(raw);
+        if (t?.name === TOME_NAME) return { tome: t, file: path.join(TOMES_DIR, f) };
+      } catch { /* skip corrupt */ }
+    }
+    const id = randomUUID();
+    const tome = {
+      id,
+      name:        TOME_NAME,
+      description: TOME_DESCRIPTION,
+      enabled:     true,
+      entries:     {},
+    };
+    const file = path.join(TOMES_DIR, `${id}.json`);
+    await fsp.writeFile(file, JSON.stringify(tome, null, 2), 'utf8');
+    return { tome, file };
+  });
+  // Chain the lock on the run (swallowing rejection) so a failure doesn't
+  // permanently break the lock.
+  _sessionMemoriesLock = run.catch(() => {});
+  return run;
 }
 
 // Per-tome mutex so concurrent jobs writing to the same tome don't clobber each other.

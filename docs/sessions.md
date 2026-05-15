@@ -42,6 +42,7 @@ Load persisted settings + history from localStorage
 | **Tab close** | A `beforeunload` handler uses `navigator.sendBeacon` to enqueue the current session before the page unloads. |
 | **Topic end** | Clicking **□ Topic end** enqueues a topic-scoped memorization for that topic's message range, in addition to the existing topic summary. |
 | **Memorize now** | The **✦ Memorize now** button in the Chat sidebar enqueues the current session on demand without ending it. |
+| **Per-session Memorize button** | Each row in the Logs modal has a **Memorize** button. It opens a chooser with **Auto-summarize** (enqueue a job for that historical session and wait inline for the result) or **Manual topics** (open the session in a read-only viewer with topic-mark buttons and review each entry before saving). Both write to **Session Memories**. |
 
 ### Session ID and Timestamps
 
@@ -74,7 +75,7 @@ Tool-call turns (role `tool` and assistant turns containing `tool_calls`) are in
 
 ## Session Memorization
 
-Memorization is a **server-side queued job**. The browser submits a payload to `POST /api/memorize`; a worker in `memorization.js` calls the configured LLM, parses the response, and writes entries to the dedicated **Session Memories** Tome — auto-created on first use. The model is prompted in the style of [`tome-writing-guide.md`](tome-writing-guide.md), splits the conversation into distinct situational topics, and returns structured JSON.
+Memorization is a **server-side queued job**. The browser submits a payload to `POST /api/memorize`; a worker in `memorization.js` calls the configured LLM, parses the response, and writes entries to the dedicated **Session Memories** Tome — a system tome that is auto-created on first use, always present in the tome library, and the default target for every session memorization (automatic *or* manual). The find-or-create routine is shared between the worker and `GET /api/tomes/session-memories` via a process-wide mutex, so concurrent callers can't produce duplicates. The model is prompted in the style of [`tome-writing-guide.md`](tome-writing-guide.md), splits the conversation into distinct situational topics, and returns structured JSON.
 
 The queue is persisted to `tomes/.memorization-queue.json` (git-ignored), so jobs survive tab close, 3-hour idle rollover, and server restart. Any job left in `processing` after a restart is automatically re-queued.
 
@@ -87,6 +88,8 @@ The queue is persisted to `tomes/.memorization-queue.json` (git-ignored), so job
 | **Memorize now** button | `fetch` | Whole current session, on demand, without ending it |
 | `beforeunload` (tab close) | `navigator.sendBeacon` | Current session if it has messages and hasn't been beaconed already |
 | Topic end | `fetch` | Just that topic's message range |
+| Logs modal: **Memorize → Auto-summarize** | `fetch` | Any historical session, started from its row in the session browser |
+| Logs modal: **Memorize → Manual topics** | `fetch` (per topic) | Each topic range the user closes in the read-only viewer; one LLM call per topic |
 
 `sendBeacon` is used for terminal events because it survives the page unloading. Identical jobs (same `sessionId + scope + topicId + messageRange`) are deduplicated server-side, so double-triggering from `beforeunload` after a Clear is safe.
 
@@ -120,9 +123,10 @@ pending  ──►  processing  ──►  done       (entries written, ack pend
 | Endpoint | Purpose |
 |---|---|
 | `POST /api/memorize` | Enqueue a job. Accepts `application/json` (fetch) or `text/plain` JSON (sendBeacon). Returns `{ jobId, deduped }`. |
-| `GET /api/memorize` | List all jobs (sanitised — no API keys or message bodies). Used by the client poller. |
+| `GET /api/memorize` | List all jobs (sanitised — no API keys or message bodies). Used by the client poller and the in-context Auto-summarize poll. |
 | `POST /api/memorize/:id/ack` | Mark a terminal job as seen by the UI. |
 | `DELETE /api/memorize/:id` | Cancel a pending job. Returns 409 if the job is already running. |
+| `GET /api/tomes/session-memories` | Find-or-create the system **Session Memories** tome and return its metadata. Used by the manual-topics path to resolve the save target, and by the client on startup to ensure the tome is always listed in the library. |
 
 ### Limits and Conditions
 
@@ -155,3 +159,6 @@ Open **☰ → Logs** in the sidebar to browse all past sessions. From there you
 - View session metadata (provider, model, start/end time, message count)
 - Load a past session into the current chat
 - Delete a session log file
+- **Memorize** a past session — opens a chooser with two options:
+  - **Auto-summarize** — fetches the session log, enqueues a job via `POST /api/memorize`, and polls `GET /api/memorize` every 2 seconds until the worker finishes. The chooser shows live status (`Memorizing…`, `✓ N entries saved`, or the failure reason) plus a toast when it lands. Acknowledgement of the specific job is done inline so the background poller doesn't re-toast.
+  - **Manual topics** — opens the session in a read-only viewer with per-message **▷ Topic start** / **□ Topic end** buttons. Closing a topic opens the same summary modal as the live flow but routes the save to the Session Memories tome (no worker job — one LLM call per topic, reviewed before saving).

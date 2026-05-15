@@ -97,7 +97,7 @@ User types message
         ▼
 builApiMessages()
    ├── activateTomeEntries()   ← keyword scan across all enabled Tomes → inject at each position
-   ├── applyNameVars()          ← {{user}} / {{char}} substitution
+   ├── applyNameVars()          ← {{user}} / {{char}} / {{elapsedTime}} / {{timeSinceLastSession}} substitution
    └── assembles system + history + new user turn + post-history prompt
         │
         ▼

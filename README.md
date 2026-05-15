@@ -53,7 +53,7 @@ Project wiki pages are available in [`/wiki`](wiki/):
 | **Entity-core enrichment** | Automatically prepends the full identity layer (all four identity categories, XML-wrapped) + RAG memories + knowledge graph context to every system prompt via a local [entity-core](https://github.com/zarilewis/entity-core-alpha) MCP server |
 | **Prompt inspector** | Click the 🔍 button in the top bar after any message to see the complete prompt sent to the LLM — including entity-core identity, Tome injections, and memory context |
 | **Streaming** | Server-sent event streaming by default; toggle off for full-response mode |
-| **Name variables** | Set a User name and AI name in the sidebar; use `{{user}}` and `{{char}}` anywhere in prompts |
+| **Prompt macros** | `{{user}}` / `{{char}}` insert configured names; `{{elapsedTime}}` is the time between the two most recent user messages in this session (so the LLM can detect when the user returns after a long absence — surfaces once both messages are in saved history); `{{timeSinceLastSession}}` is the gap since the previous session ended. All durations render as `5m`, `2h 14m`, `3d 4h`, etc. |
 | **System prompt** | Free-text field or import from `.txt` / `.md` / `.json` |
 | **Character profile** | Injected into the system message after the system prompt |
 | **User profile** | Injected into the system message after character profile |
@@ -68,6 +68,7 @@ Project wiki pages are available in [`/wiki`](wiki/):
 | **Session browser** | In-app Logs modal to view, load, or delete any past session |
 | **Session auto-end** | After 3 hours of inactivity the session is closed and a new one starts automatically |
 | **Session memorization** | Sessions are queued for memorization on idle timeout, manual clear, tab close, topic end, or via the **Memorize now** button; a server-side worker calls the LLM, extracts 1–8 distinct topics, and saves each as an entry in the dedicated **Session Memories** Tome. Jobs survive tab close and server restart, with exponential backoff retry on failure |
+| **Per-session Memorize** | Each row in the Logs modal has a **Memorize** button that opens a chooser: **Auto-summarize** runs the worker over that session and shows the entry count inline, while **Manual topics** opens the session read-only so you can mark topic ranges by hand and review each entry before saving |
 | **Export** | Download conversation as a Markdown `.md` file (tool-call turns are omitted) |
 | **Regenerate** | Re-run the last AI response with the same user message |
 | **Themes** | Dark / light toggle |
@@ -124,7 +125,7 @@ Each log file is named `<uuid>.json` and contains:
 4. If you close the tab and reopen it after 3+ hours, the same check runs on startup: the old session is finalised silently and a new one starts.
 5. Manually clearing the chat (the **Clear** button) also closes and memorizes the current session before starting a fresh one.
 
-You can browse, load, or delete sessions at any time via the **☰ Logs** button in the Chat section of the sidebar.
+You can browse, load, delete, or **memorize** any past session at any time via the **☰ Logs** button in the Chat section of the sidebar. The per-row **Memorize** button opens a chooser with **Auto-summarize** (run the worker over the whole session and toast the result) and **Manual topics** (open the session in a read-only viewer with topic-mark buttons and review each entry before saving). Both write to the **Session Memories** tome.
 
 #### Session memorization
 
@@ -146,6 +147,8 @@ Between 1 and 8 entries are created per memorization job. A brief on-screen toas
 | **Memorize now** button (Chat sidebar) | The current session, on demand, without ending it |
 | Closing the tab mid-session (`beforeunload`) | The current session, delivered via `navigator.sendBeacon` |
 | Ending a topic (**□ Topic end**) | Only that topic's message range |
+| Logs modal **Memorize → Auto-summarize** on any past session | The full historical session — chooser modal shows live status, entry count on success, or the failure reason |
+| Logs modal **Memorize → Manual topics** on any past session | Each topic the user closes in the read-only viewer — one LLM call per topic, reviewed before saving (no worker queue involved) |
 
 **Conditions and limits:**
 - Jobs with fewer than 2 readable messages are rejected — too short to be worth summarising.

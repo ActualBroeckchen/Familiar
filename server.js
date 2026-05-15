@@ -16,6 +16,7 @@ import {
   acknowledgeJob as acknowledgeMemorizationJob,
   cancelJob as cancelMemorizationJob,
   startMemorizationWorker,
+  findOrCreateSessionMemoriesTome,
 } from './memorization.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -343,6 +344,27 @@ app.post('/api/tomes', async (req, res) => {
     res.json({ id });
   } catch {
     res.status(500).json({ error: 'Failed to create tome.' });
+  }
+});
+
+// GET /api/tomes/session-memories — find or create the special Session
+// Memories tome (the system tome that receives all session memorization
+// output, auto-summarized or manually marked). Always present: created on
+// first lookup. Shares find-or-create logic with the memorization worker
+// via memorization.js so concurrent calls can't produce duplicates.
+// Must be registered BEFORE GET /api/tomes/:id so it isn't shadowed.
+app.get('/api/tomes/session-memories', async (_req, res) => {
+  try {
+    const { tome } = await findOrCreateSessionMemoriesTome();
+    res.json({
+      id:          tome.id,
+      name:        tome.name,
+      description: tome.description ?? '',
+      enabled:     tome.enabled !== false,
+      entryCount:  Object.keys(tome.entries ?? {}).length,
+    });
+  } catch {
+    res.status(500).json({ error: 'Failed to find or create Session Memories tome.' });
   }
 });
 
