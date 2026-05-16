@@ -491,11 +491,16 @@ async function executeToolCall(name, argsJson) {
   if (Object.prototype.hasOwnProperty.call(BUILTIN_EXECUTORS, name)) {
     try {
       const args = argsJson ? JSON.parse(argsJson) : {};
-      return String(await BUILTIN_EXECUTORS[name](args));
+      const t0   = performance.now();
+      const out  = String(await BUILTIN_EXECUTORS[name](args));
+      debugRecord('tool', `${name} ok in ${Math.round(performance.now() - t0)}ms`);
+      return out;
     } catch (err) {
+      debugRecord('tool', `${name} FAILED: ${err.message}`);
       return `Error executing ${name}: ${err.message}`;
     }
   }
+  debugRecord('tool', `${name} (no client-side impl)`);
   return `Tool "${name}" has no client-side implementation. No result available.`;
 }
 
@@ -508,6 +513,31 @@ let lastMessage       = null;
 let elapsedTime       = 0;
 /** Handle for the 3-hour auto-end setTimeout. */
 let _sessionTimeoutId = null;
+
+// ── Diagnostic ring buffer ──────────────────────────────────────
+// Bounded log of recent app events for the Diagnostics report. Captures
+// uncaught errors, unhandled rejections, console.error/warn output,
+// failing network calls, and a few explicit checkpoints (sessions,
+// memorization, tool execution, knowledge edits). Kept small enough to
+// paste into a bug report without truncation.
+const DEBUG_LOG_CAP = 200;
+const debugLog = [];
+function debugRecord(type, detail) {
+  try {
+    debugLog.push({ ts: new Date().toISOString(), type, detail: String(detail).slice(0, 800) });
+    if (debugLog.length > DEBUG_LOG_CAP) debugLog.splice(0, debugLog.length - DEBUG_LOG_CAP);
+  } catch { /* never let logging break the app */ }
+}
+// Hook the console so existing console.error/warn calls land in the log
+// too, without changing what the developer sees in DevTools.
+(function installConsoleHooks() {
+  const origErr = console.error.bind(console);
+  const origWarn = console.warn.bind(console);
+  console.error = (...args) => { debugRecord('console.error', args.map(a => typeof a === 'string' ? a : (a?.message ?? JSON.stringify(a))).join(' ')); origErr(...args); };
+  console.warn  = (...args) => { debugRecord('console.warn',  args.map(a => typeof a === 'string' ? a : (a?.message ?? JSON.stringify(a))).join(' ')); origWarn(...args); };
+  window.addEventListener('error', e => debugRecord('window.error', `${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`));
+  window.addEventListener('unhandledrejection', e => debugRecord('unhandledrejection', e.reason?.message ?? e.reason ?? '?'));
+})();
 /** Milliseconds of inactivity before the current session is closed (3 h). */
 const SESSION_IDLE_MS = 3 * 60 * 60 * 1000;
 
@@ -1075,8 +1105,21 @@ function renderAllMessages() {
     const msg = state.messages[i];
 
     // Assistant message that contains tool_calls: render as tool-use block
-    // and consume the following 'tool' result messages.
+    // and consume the following 'tool' result messages. If the assistant
+    // ALSO produced narrative content alongside the tool call ("Let me look
+    // that up for you…"), render that as its own bubble FIRST — otherwise
+    // it disappears on every re-render even though it was visible during
+    // the original streaming response.
     if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+      const content = typeof msg.content === 'string' ? msg.content.trim() : '';
+      if (content) {
+        const html = renderMarkdown(content);
+        const { el, copyBtn } = createMessageEl('assistant', html, msg.timestamp);
+        el.dataset.msgIndex = String(i);
+        const captured = msg.content;
+        wireCopyButton(copyBtn, () => captured);
+        container.appendChild(el);
+      }
       const toolCalls = msg.tool_calls;
       const toolResults = [];
       i++;
@@ -1160,6 +1203,8 @@ async function sendMessage(userInput) {
   setTyping(true);
   setStatus('busy');
 
+  const sendStart = performance.now();
+  debugRecord('send', `provider=${state.provider} model=${state.model} streaming=${state.streaming} msgs=${apiMessages.length} input=${userInput.length}ch`);
   try {
     if (state.streaming) {
       await doStreamingRequest(apiMessages, userInput, userTimestamp);
@@ -1168,11 +1213,15 @@ async function sendMessage(userInput) {
     }
     setStatus('ok');
     state.turnCount = (state.turnCount ?? 0) + 1;
+    debugRecord('recv', `ok in ${Math.round(performance.now() - sendStart)}ms thalamus=${lastThalamusContext ? lastThalamusContext.length + 'ch' : 'none'}`);
   } catch (err) {
     setTyping(false);
     if (err.name !== 'AbortError') {
       appendErrorMessage(err.message || 'Request failed.');
       setStatus('err');
+      debugRecord('recv', `FAILED after ${Math.round(performance.now() - sendStart)}ms: ${err.message}`);
+    } else {
+      debugRecord('recv', `aborted after ${Math.round(performance.now() - sendStart)}ms`);
     }
   } finally {
     setInputLocked(false);
@@ -2267,6 +2316,21 @@ function init() {
     if (_pendingSummaryTopic) regenerateSummary(_pendingSummaryTopic);
   });
   $('summary-save-btn').addEventListener('click', savePendingSummary);
+
+  // Diagnostics
+  $('diagnostics-btn').addEventListener('click', openDiagnosticsModal);
+  $('diagnostics-modal-close').addEventListener('click', closeDiagnosticsModal);
+  $('diagnostics-modal').addEventListener('click', e => {
+    if (e.target === $('diagnostics-modal')) closeDiagnosticsModal();
+  });
+  $('diagnostics-copy').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText($('diagnostics-output').textContent);
+      $('diagnostics-copy').textContent = 'Copied ✓';
+      setTimeout(() => { $('diagnostics-copy').textContent = 'Copy'; }, 1500);
+    } catch { alert('Copy failed — select and copy manually.'); }
+  });
+  $('diagnostics-download').addEventListener('click', downloadDiagnosticReport);
 
   // Knowledge editor (entity-core)
   $('knowledge-btn').addEventListener('click', openKnowledgeModal);
@@ -3797,6 +3861,124 @@ async function getDefaultTomeForSaving() {
   await loadTomesFromServer();
   const { id } = await res.json();
   return state.tomeRegistry.find(t => t.id === id) ?? state.tomeRegistry[0] ?? null;
+}
+
+// ── Diagnostics ─────────────────────────────────────────────────────────
+//
+// On demand, gather a plain-text snapshot the user can paste into a bug
+// report. Combines navigator-derived system info, current Proto-Familiar
+// state, a live /api/health probe (so server-side timeouts / unreachable
+// servers show up immediately), and the recent in-app event log.
+
+async function buildDiagnosticReport() {
+  const nav  = navigator;
+  const scr  = screen;
+  const now  = new Date();
+  const lines = [];
+  const add = (k, v) => lines.push(`${k.padEnd(22)} ${v}`);
+  const section = title => { lines.push('', `── ${title} ${'─'.repeat(Math.max(0, 56 - title.length))}`); };
+
+  lines.push(`Proto-Familiar diagnostic report`);
+  lines.push(`generated: ${now.toISOString()} (${now.toString()})`);
+
+  section('System');
+  add('userAgent',           nav.userAgent ?? '?');
+  add('platform',            nav.platform ?? nav.userAgentData?.platform ?? '?');
+  add('language',            nav.language ?? '?');
+  add('hardwareConcurrency', nav.hardwareConcurrency ?? '?');
+  add('deviceMemory (GB)',   nav.deviceMemory ?? '?');
+  add('connection',          nav.connection ? `${nav.connection.effectiveType ?? '?'} ${nav.connection.downlink ?? '?'}Mb/s${nav.connection.rtt ? ` ${nav.connection.rtt}ms` : ''}` : '?');
+  add('online',              String(nav.onLine));
+  add('screen',              scr ? `${scr.width}×${scr.height} @ ${window.devicePixelRatio ?? 1}x dpr` : '?');
+  add('viewport',            `${window.innerWidth}×${window.innerHeight}`);
+  add('colorScheme',         (typeof window.matchMedia === 'function')
+                               ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+                               : '?');
+  try { add('timezone',      Intl.DateTimeFormat().resolvedOptions().timeZone ?? '?'); }
+  catch { add('timezone',    '?'); }
+
+  section('Proto-Familiar');
+  add('url',                 location.href);
+  add('provider',            state.provider ?? '?');
+  add('model',               state.model ?? '?');
+  add('apiKey set',          state.apiKey && state.apiKey.trim() ? 'yes' : 'no');
+  add('streaming',           String(state.streaming));
+  add('toolsEnabled',        String(state.toolsEnabled));
+  add('temperature',         String(state.temperature ?? '?'));
+  add('max_tokens',          String(state.maxTokens ?? '?'));
+  add('sessionId',           state.sessionId ?? '(none)');
+  add('sessionStartedAt',    state.sessionStartedAt ?? '(none)');
+  add('messages',            String(state.messages?.length ?? 0));
+  add('topics',              String(state.topics?.length ?? 0));
+  add('tomeRegistry',        String(state.tomeRegistry?.length ?? 0));
+  add('customTools',         state.customTools ? `${state.customTools.length} chars` : '(empty)');
+  add('lastThalamusContext', lastThalamusContext ? `${lastThalamusContext.length} chars` : '(none — no enriched response captured yet)');
+
+  // localStorage estimate (rough — only our own keys)
+  let lsBytes = 0;
+  try {
+    for (const k of Object.keys(localStorage)) lsBytes += (k.length + (localStorage.getItem(k)?.length ?? 0));
+  } catch { /* not available */ }
+  add('localStorage (bytes)', String(lsBytes));
+
+  section('Server probe (/api/health)');
+  const probeStart = performance.now();
+  try {
+    const r = await fetch('/api/health', { cache: 'no-store' });
+    const ms = Math.round(performance.now() - probeStart);
+    add('status', `${r.status} ${r.statusText}`);
+    add('roundTrip',  `${ms} ms`);
+  } catch (err) {
+    add('status', `FAILED: ${err.message}`);
+  }
+
+  section('Last sent prompt summary');
+  if (!lastSentMessages) {
+    lines.push('  (none — no message sent yet this session)');
+  } else {
+    add('messages',  String(lastSentMessages.length));
+    add('roles',     lastSentMessages.map(m => m.role).join(','));
+    add('system seg sources', (lastBuildSegments?.systemSegments ?? []).map(s => s.source).join(',') || '(none)');
+    add('at-depth lore splices', String((lastBuildSegments?.atDepthInjections ?? []).length));
+    add('thalamus injection', lastThalamusContext ? `${lastThalamusContext.length} chars` : 'none');
+  }
+
+  section(`Recent events (${debugLog.length} / cap ${DEBUG_LOG_CAP})`);
+  if (!debugLog.length) {
+    lines.push('  (no events captured yet)');
+  } else {
+    for (const e of debugLog.slice(-100)) {
+      lines.push(`  ${e.ts}  ${e.type.padEnd(20)} ${e.detail}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+async function openDiagnosticsModal() {
+  $('diagnostics-output').textContent = 'Gathering…';
+  $('diagnostics-modal').classList.remove('hidden');
+  try {
+    const text = await buildDiagnosticReport();
+    $('diagnostics-output').textContent = text;
+  } catch (err) {
+    $('diagnostics-output').textContent = `Failed to build report: ${err.message}`;
+  }
+}
+function closeDiagnosticsModal() { $('diagnostics-modal').classList.add('hidden'); }
+
+function downloadDiagnosticReport() {
+  const text = $('diagnostics-output').textContent;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `proto-familiar-diagnostics-${stamp}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // ── Knowledge editor (entity-core: memories, identity, graph, snapshots) ─

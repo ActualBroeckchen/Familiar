@@ -151,6 +151,20 @@ Each colored segment shows a chip with its source label and a left rule in the m
 
 ---
 
+## Diagnostics report
+
+Sidebar **🩺 Generate diagnostic report** (under "Diagnostics") opens a plain-text snapshot the user can paste into a bug report or download as a `.txt`. The report bundles:
+
+- **System** — userAgent, platform, language, hardware concurrency, device memory, network connection (effective type / downlink / RTT when available), online status, screen + viewport size, dpr, color scheme, timezone.
+- **Proto-Familiar** — provider / model / streaming / tool-enabled settings, current session id and start time, message / topic / tome counts, custom-tools size, last thalamus injection size, localStorage usage estimate.
+- **Server probe** — a live `GET /api/health` round-trip with status and timing (catches "server died" symptoms immediately).
+- **Last sent prompt summary** — message count, role sequence, system-segment sources, at-depth lore splice count, and thalamus injection size for the previous turn (uses the same provenance the [Prompt Inspector](#prompt-inspector) renders).
+- **Recent events** — a bounded ring buffer (cap 200) capturing `window.error`, unhandled rejections, every `console.error` / `console.warn`, plus explicit checkpoints at message send / receive (with elapsed ms) and every built-in tool execution (name + success/fail). Each line is ISO-stamped.
+
+Nothing is sent anywhere — the report is generated client-side. Copy to clipboard or download `proto-familiar-diagnostics-<timestamp>.txt`.
+
+---
+
 ## Responsive Layout
 
 | Screen size | Layout |

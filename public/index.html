@@ -231,6 +231,20 @@
           </div>
         </div>
 
+        <!-- Diagnostics -->
+        <div class="sidebar-section collapsible collapsed" id="section-debug">
+          <button class="section-label collapse-toggle" aria-expanded="false" aria-controls="content-debug">
+            Diagnostics
+            <span class="chevron">▾</span>
+          </button>
+          <div class="section-content" id="content-debug">
+            <p class="field-hint">Generate a plain-text report with system info, the recent in-app event log, and the last sent prompt summary. Paste into a bug report.</p>
+            <div class="action-row" style="margin-top:4px">
+              <button id="diagnostics-btn" class="btn-secondary">🩺 Generate diagnostic report</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Knowledge editor (entity-core) -->
         <div class="sidebar-section collapsible collapsed" id="section-knowledge">
           <button class="section-label collapse-toggle" aria-expanded="false" aria-controls="content-knowledge">
@@ -375,6 +389,24 @@
         <button class="btn-ghost" id="summary-discard-btn">Discard</button>
         <button class="btn-secondary" id="summary-regen-btn" disabled>↻ Regenerate</button>
         <button class="btn-send" id="summary-save-btn" disabled>Save to Tome</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Diagnostics modal -->
+  <div class="modal-backdrop hidden" id="diagnostics-modal" role="dialog" aria-modal="true" aria-labelledby="diagnostics-modal-title">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2 class="modal-title" id="diagnostics-modal-title">Diagnostic report</h2>
+        <button class="icon-btn modal-close" id="diagnostics-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="field-hint">A snapshot of system info, Proto-Familiar state, and the recent in-app event log. Nothing is sent anywhere — copy or download to share.</p>
+        <pre id="diagnostics-output" class="pi-pre" style="max-height: 65vh;"></pre>
+      </div>
+      <div class="modal-footer">
+        <button id="diagnostics-copy"     class="btn-secondary">Copy</button>
+        <button id="diagnostics-download" class="btn-secondary">Download .txt</button>
       </div>
     </div>
   </div>
