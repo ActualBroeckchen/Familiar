@@ -124,12 +124,15 @@ See [Sessions & Memorization](sessions.md) for the full reference.
 
 ## Prompt Inspector
 
-Click the **🔍** button in the top bar after any message to see the complete prompt that was sent to the LLM, including:
-- The full entity-core identity, memory, and knowledge-graph block
-- All active Tome injections at every position
-- The assembled conversation history
+Click the **🔍** button in the top bar after sending a message to see the complete prompt that was actually sent to the LLM on the previous turn, color-coded by source:
 
-Messages are shown in colour-coded, collapsible panels with per-message Copy buttons. Uses `POST /api/debug-prompt` — no upstream LLM call is made.
+- **Entity-Core (Thalamus)** — the block server-side `thalamus.enrich()` prepended; captured from the live `/api/chat` response so you see exactly what was injected, not a re-derived preview
+- **System prompt**, **Character profile**, **User profile** — the configured base segments
+- **Lore — system top / before character / after character / system bottom / injected at depth** — every Tome entry the activation engine matched, grouped by injection position
+- **Post-history prompt** — the trailing user instruction (if configured)
+- **History turns** — user/assistant/tool messages, role-tinted but uncolored otherwise
+
+Each colored segment shows a chip with its source label and a left rule in the matching color. The legend strip at the top of the inspector lists every source the current view recognises. Each message has a Copy button for the raw text. Per-source attribution comes from `lastBuildSegments` (recorded by `buildApiMessages` at send time) and the `_thalamus` envelope the server emits on every `/api/chat` response. The standalone `POST /api/debug-prompt` endpoint still exists for offline previewing without making an upstream call.
 
 ---
 

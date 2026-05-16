@@ -50,8 +50,8 @@ server.js  (Express, Node 18+, ESM)
 ### `server.js`
 
 The Express server handles:
-- **`POST /api/chat`** — validates the request, calls `thalamus.js:enrich()` to prepend entity-core context to the system message, then proxies the enriched request to the upstream LLM provider. Supports both streaming (SSE) and non-streaming modes.
-- **`POST /api/debug-prompt`** — returns the enriched message array without calling any upstream LLM; used by the prompt inspector UI.
+- **`POST /api/chat`** — validates the request, calls `thalamus.js:enrich()` to prepend entity-core context to the system message, then proxies the enriched request to the upstream LLM provider. Supports both streaming (SSE) and non-streaming modes. Attaches a `_thalamus` envelope (`{ entityContext }`) to every successful response — on the non-streaming path as a top-level JSON field, on the streaming path as the first SSE `data:` line, so the prompt inspector can show the actual injected text.
+- **`POST /api/debug-prompt`** — returns the enriched message array without calling any upstream LLM; available for offline preview. The live prompt inspector reads the `_thalamus` envelope from `/api/chat` instead, so what it shows reflects the actual injection rather than a re-derived preview that could drift after intervening memory or identity writes.
 - **Log endpoints** (`/api/log`, `/api/logs`, `/api/logs/:id`, `DELETE /api/logs/:id`) — persist and retrieve session JSON files from the `logs/` directory.
 - **Tome endpoints** (`GET /api/tomes`, `POST /api/tomes`, `GET /api/tomes/:id`, `PUT /api/tomes/:id`, `PATCH /api/tomes/:id`, `DELETE /api/tomes/:id`, `DELETE /api/tomes/:id/entries/:uid`) — manage individual Tome files in the `tomes/` directory.
 - **Memorization endpoints** (`POST /api/memorize`, `GET /api/memorize`, `POST /api/memorize/:id/ack`, `DELETE /api/memorize/:id`) — enqueue, list, acknowledge, and cancel session-memorization jobs. The `POST` endpoint accepts both `application/json` (fetch) and `text/plain` JSON (sendBeacon, used in the browser's `beforeunload` handler).

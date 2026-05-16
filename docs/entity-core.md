@@ -108,7 +108,7 @@ Files sorted alphabetically.
 
 ## Prompt Inspector
 
-To see exactly what was sent to the LLM on any given message — including the full entity-core block, all lorebook injections, and the conversation history — click the **🔍 magnifying glass** button in the top bar after sending a message.
+To see exactly what was sent to the LLM on the previous turn — including the full entity-core block, all lorebook injections, and the conversation history — click the **🔍 magnifying glass** button in the top bar after sending a message. The entity-core block is captured from a `_thalamus` envelope the server attaches to every `/api/chat` response (both streaming and non-streaming), so the inspector shows the actual injected text rather than a re-derived preview that could drift if intervening memory or identity writes have changed what `enrich()` would now return. See [Prompt Inspector](features.md#prompt-inspector) for the full source palette.
 
 The inspector calls `POST /api/debug-prompt` with the current message array and displays each message in a colour-coded, collapsible panel with per-message Copy buttons. No API call is made to the upstream LLM.
 

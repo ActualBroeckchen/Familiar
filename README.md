@@ -61,7 +61,7 @@ Project wiki pages are available in [`/wiki`](wiki/):
 |---|---|
 | **Providers** | NanoGPT (OpenAI-compatible) · Z.ai Standard API · Z.ai Coding Plan |
 | **Entity-core enrichment** | Automatically prepends the full identity layer (all four identity categories, XML-wrapped) + RAG memories + knowledge graph context to every system prompt via a local [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) MCP server |
-| **Prompt inspector** | Click the 🔍 button in the top bar after any message to see the complete prompt sent to the LLM — including entity-core identity, Tome injections, and memory context |
+| **Prompt inspector** | Click the 🔍 button in the top bar after any message to see the complete prompt actually sent to the LLM, color-coded by source — entity-core block (captured live from the response, not re-derived), each lorebook injection by position, base system / character / user profile, post-history prompt, and the conversation history |
 | **Streaming** | Server-sent event streaming by default; toggle off for full-response mode |
 | **Prompt macros** | `{{user}}` / `{{char}}` insert configured names; `{{elapsedTime}}` is the time between the two most recent user messages in this session (so the LLM can detect when the user returns after a long absence — surfaces once both messages are in saved history); `{{timeSinceLastSession}}` is the gap since the previous session ended. All durations render as `5m`, `2h 14m`, `3d 4h`, etc. |
 | **System prompt** | Free-text field or import from `.txt` / `.md` / `.json` |
@@ -459,7 +459,7 @@ If entity-core is unreachable, `enrich()` logs the problem and returns an empty 
 
 #### Prompt inspector
 
-To see exactly what was sent to the LLM on any given message — including the full entity-core block, all lorebook injections, and the conversation history — click the **⊕ magnifying glass** button in the top bar. The inspector fetches the enriched prompt from the server and displays each message in a colour-coded, collapsible panel with per-message Copy buttons.
+To see exactly what was sent to the LLM on the previous turn — including the full entity-core block, every lorebook injection, and the conversation history — click the **⊕ magnifying glass** button in the top bar. The inspector renders each segment color-coded by source: the entity-core block (Thalamus) is captured from a `_thalamus` envelope the server attaches to every `/api/chat` response (so it reflects the live enrichment, not a re-derived preview), and the lorebook / system / character / user / post-history segments come from `buildApiMessages`'s recorded provenance. Each segment shows a labelled chip and a left-rule in its source color; per-message Copy buttons stay available for the raw text.
 
 #### Setup
 

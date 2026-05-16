@@ -42,17 +42,21 @@ Proxies a chat completion request to the selected LLM provider. Supports both st
 
 **Streaming response (`stream: true`):**
 
-Returns `Content-Type: text/event-stream`. Events follow the OpenAI SSE format:
+Returns `Content-Type: text/event-stream`. The first `data:` line is a `_thalamus` envelope carrying the entity-core block this request was actually enriched with (omitted entirely when `enrich()` returned empty); the remaining events follow the OpenAI SSE format:
 
 ```
+data: {"_thalamus":{"entityContext":"<my_identity>\n…\n</my_identity>\n\n<memories>\n…"}}
+
 data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}
 
 data: [DONE]
 ```
 
+Clients should route on the presence of `_thalamus` and skip the normal `choices` parsing for that line.
+
 **Non-streaming response (`stream: false`):**
 
-Returns the provider's JSON response verbatim with the provider's original HTTP status code.
+Returns the provider's JSON response with the provider's original HTTP status code. On a successful response the server parses the JSON and attaches a top-level `_thalamus: { entityContext }` field carrying the actual injected block (omitted when `enrich()` returned empty or the upstream body wasn't JSON).
 
 **Error responses:**
 
@@ -65,7 +69,7 @@ Returns the provider's JSON response verbatim with the provider's original HTTP 
 
 ### `POST /api/debug-prompt`
 
-Returns the full enriched message array that would be sent to the LLM for a given conversation payload — including the entity-core context block — **without** making any upstream API call. Used by the prompt inspector UI.
+Returns the full enriched message array that would be sent to the LLM for a given conversation payload — including the entity-core context block — **without** making any upstream API call. Available for offline previewing. The live prompt inspector no longer uses this endpoint; it reads the `_thalamus` envelope that `POST /api/chat` attaches to every response, so it reflects the actual injection rather than a re-derived preview.
 
 **Request body:**
 

@@ -465,38 +465,34 @@ function toApiMessage({ role, content, tool_calls, tool_call_id }) {
  */
 function buildApiMessages(userInput) {
   const msgs = [];
+  // Provenance for the prompt inspector. Each entry is { source, text }
+  // where source is one of: lore-sys-top, system-prompt, lore-before-char,
+  // character-profile, lore-after-char, user-profile, lore-sys-bottom.
+  const systemSegments = [];
+  // History splices for at-depth lore: { index, content } where index is
+  // the position in the final `msgs` array (after any system message).
+  const atDepthInjections = [];
 
   // ── Activate lorebook entries ────────────────────────────────
   const lore = activateTomeEntries(userInput);
   const joinLore = (entries) =>
     entries.map(e => applyNameVars(e.content.trim())).filter(Boolean).join('\n\n---\n\n');
+  const pushSeg = (source, text) => {
+    const t = text?.trim();
+    if (t) systemSegments.push({ source, text: t });
+  };
 
   // ── System message ────────────────────────────────────────────
-  const systemParts = [];
+  if (lore.sys_top.length)         pushSeg('lore-sys-top',     joinLore(lore.sys_top));
+  if (state.systemPrompt.trim())   pushSeg('system-prompt',    applyNameVars(state.systemPrompt.trim()));
+  if (lore.before_char.length)     pushSeg('lore-before-char', joinLore(lore.before_char));
+  if (state.characterProfile.trim()) pushSeg('character-profile', '[Character Profile]\n' + applyNameVars(state.characterProfile.trim()));
+  if (lore.after_char.length)      pushSeg('lore-after-char',  joinLore(lore.after_char));
+  if (state.userProfile.trim())    pushSeg('user-profile',     '[User Profile]\n' + applyNameVars(state.userProfile.trim()));
+  if (lore.sys_bottom.length)      pushSeg('lore-sys-bottom',  joinLore(lore.sys_bottom));
 
-  // Position 2 — top of system message
-  if (lore.sys_top.length) systemParts.push(joinLore(lore.sys_top));
-
-  if (state.systemPrompt.trim())
-    systemParts.push(applyNameVars(state.systemPrompt.trim()));
-
-  // Position 0 — before character profile
-  if (lore.before_char.length) systemParts.push(joinLore(lore.before_char));
-
-  if (state.characterProfile.trim())
-    systemParts.push('[Character Profile]\n' + applyNameVars(state.characterProfile.trim()));
-
-  // Position 1 — after character profile
-  if (lore.after_char.length) systemParts.push(joinLore(lore.after_char));
-
-  if (state.userProfile.trim())
-    systemParts.push('[User Profile]\n' + applyNameVars(state.userProfile.trim()));
-
-  // Position 3 — bottom of system message
-  if (lore.sys_bottom.length) systemParts.push(joinLore(lore.sys_bottom));
-
-  if (systemParts.length)
-    msgs.push({ role: 'system', content: systemParts.join('\n\n---\n\n') });
+  if (systemSegments.length)
+    msgs.push({ role: 'system', content: systemSegments.map(s => s.text).join('\n\n---\n\n') });
 
   // ── History + position-4 (@depth) injections ─────────────────
   // Clone history as clean API messages so we can splice into it
@@ -505,14 +501,20 @@ function buildApiMessages(userInput) {
   // Sort at_depth entries deepest-first so splice positions stay consistent
   const atDepthSorted = [...lore.at_depth].sort((a, b) => (b.depth ?? 4) - (a.depth ?? 4));
   const roleNames = ['system', 'user', 'assistant'];
+  const atDepthInsertedAt = []; // track splice positions within histMsgs
   for (const entry of atDepthSorted) {
     const d    = Math.max(0, entry.depth ?? 4);
     const role = roleNames[entry.role ?? 0] ?? 'system';
     const idx  = Math.max(0, histMsgs.length - d);
     histMsgs.splice(idx, 0, { role, content: applyNameVars(entry.content.trim()) });
+    atDepthInsertedAt.push(idx);
   }
 
+  const histStartIdx = msgs.length;
   msgs.push(...histMsgs);
+  for (const localIdx of atDepthInsertedAt) {
+    atDepthInjections.push({ indexInFinal: histStartIdx + localIdx });
+  }
 
   // ── New user turn ─────────────────────────────────────────────
   msgs.push({ role: 'user', content: userInput });
@@ -521,6 +523,7 @@ function buildApiMessages(userInput) {
   if (state.postHistoryPrompt.trim())
     msgs.push({ role: 'user', content: applyNameVars(state.postHistoryPrompt.trim()) });
 
+  lastBuildSegments = { systemSegments, atDepthInjections };
   return msgs;
 }
 
@@ -837,6 +840,10 @@ let abortController = null;
 
 /** The last messages array sent to /api/chat (client-side, pre-enrichment). */
 let lastSentMessages = null;
+/** Per-segment provenance for the system message of the last build. See buildApiMessages. */
+let lastBuildSegments = null;
+/** The entity-core block that the server actually prepended to the last request's system message. */
+let lastThalamusContext = null;
 
 async function sendMessage(userInput) {
   userInput = userInput.trim();
@@ -869,6 +876,7 @@ async function sendMessage(userInput) {
   const userTimestamp = now;
   const apiMessages   = buildApiMessages(userInput);
   lastSentMessages    = apiMessages;
+  lastThalamusContext = null; // wait for the live answer to populate this
 
   // Optimistic UI
   appendUserMessage(userInput, userTimestamp);
@@ -955,6 +963,13 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
 
         try {
           const parsed = JSON.parse(raw);
+          // Sidecar envelope from server: the entity-core block thalamus
+          // actually prepended to this request's system message. Arrives
+          // before the upstream stream so the prompt inspector has it.
+          if (parsed._thalamus) {
+            lastThalamusContext = parsed._thalamus.entityContext ?? null;
+            continue;
+          }
           const choice = parsed.choices?.[0];
           const delta  = choice?.delta;
           if (choice?.finish_reason) finishReason = choice.finish_reason;
@@ -1064,6 +1079,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
     if (!response.ok || data.error) {
       throw new Error(data.error || `API error ${response.status}`);
     }
+    if (data._thalamus) lastThalamusContext = data._thalamus.entityContext ?? null;
 
     const choice      = data.choices?.[0];
     const message     = choice?.message;
@@ -1124,6 +1140,7 @@ async function regenerateLastResponse() {
   const userTimestamp = origUserTimestamp || new Date().toISOString();
   const apiMessages   = buildApiMessages(lastUserInput);
   lastSentMessages    = apiMessages;
+  lastThalamusContext = null;
   appendUserMessage(lastUserInput, userTimestamp);
   setInputLocked(true);
   setTyping(true);
@@ -1547,39 +1564,113 @@ function showMemorizationFailureNotice(reason) {
 }
 
 // ── Prompt inspector modal ───────────────────────────────────
+
+// Human-readable labels for each prompt-segment source. The CSS class
+// `pi-src-<source>` controls the chip + left-rule colour.
+const PI_SOURCE_LABELS = {
+  'thalamus':          'Entity-Core (Thalamus)',
+  'lore-sys-top':      'Lore · system top',
+  'lore-before-char':  'Lore · before character',
+  'lore-after-char':   'Lore · after character',
+  'lore-sys-bottom':   'Lore · system bottom',
+  'lore-at-depth':     'Lore · injected at depth',
+  'system-prompt':     'System prompt',
+  'character-profile': 'Character profile',
+  'user-profile':      'User profile',
+  'post-history':      'Post-history prompt',
+};
+
+function piSegmentEl(source, text) {
+  const seg = document.createElement('div');
+  seg.className = `pi-seg pi-src-${source}`;
+  const chip = document.createElement('span');
+  chip.className = 'pi-chip';
+  chip.textContent = PI_SOURCE_LABELS[source] ?? source;
+  const pre = document.createElement('pre');
+  pre.className = 'pi-pre';
+  pre.textContent = text;
+  seg.appendChild(chip);
+  seg.appendChild(pre);
+  return seg;
+}
+
 function openPromptInspector() {
   const body = $('prompt-inspector-body');
+  body.innerHTML = '';
   if (!lastSentMessages) {
     body.innerHTML = '<p class="logs-empty">Send a message first.</p>';
-  } else {
-    body.innerHTML = '';
-    for (const msg of lastSentMessages) {
-      const div = document.createElement('div');
-      div.className = 'pi-msg';
-      const roleClass = `pi-role-${msg.role ?? 'user'}`;
-      const contentText = typeof msg.content === 'string'
-        ? msg.content
-        : JSON.stringify(msg.content ?? msg.tool_calls ?? '', null, 2);
-      const copyBtn = document.createElement('button');
-      copyBtn.className = 'btn-ghost pi-copy';
-      copyBtn.textContent = 'Copy';
-      wireCopyButton(copyBtn, () => contentText);
-      div.innerHTML = `<span class="pi-role ${roleClass}">${esc(msg.role ?? 'user')}</span>`;
-      const details = document.createElement('details');
-      details.open = msg.role === 'system' || lastSentMessages.length <= 6;
-      const summary = document.createElement('summary');
-      summary.className = 'pi-summary';
-      summary.textContent = contentText.slice(0, 120).replace(/\n/g, ' ');
+    $('prompt-inspector-modal').classList.remove('hidden');
+    return;
+  }
+
+  // Legend strip
+  const legend = document.createElement('div');
+  legend.className = 'pi-legend';
+  for (const src of ['thalamus', 'system-prompt', 'character-profile', 'user-profile',
+                     'lore-sys-top', 'lore-before-char', 'lore-after-char', 'lore-sys-bottom',
+                     'lore-at-depth', 'post-history']) {
+    const chip = document.createElement('span');
+    chip.className = `pi-chip pi-src-${src}`;
+    chip.textContent = PI_SOURCE_LABELS[src];
+    legend.appendChild(chip);
+  }
+  body.appendChild(legend);
+
+  // Note about provenance freshness
+  if (!lastThalamusContext) {
+    const note = document.createElement('p');
+    note.className = 'field-hint';
+    note.textContent = 'No entity-core block in the last response. Thalamus may have returned empty (no enrichment), or the request hadn\'t completed yet — re-open after the next reply lands.';
+    body.appendChild(note);
+  }
+
+  const atDepthSet = new Set((lastBuildSegments?.atDepthInjections ?? []).map(a => a.indexInFinal));
+
+  lastSentMessages.forEach((msg, idx) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'pi-msg';
+    const roleClass = `pi-role-${msg.role ?? 'user'}`;
+    const role = msg.role ?? 'user';
+
+    const header = document.createElement('div');
+    header.className = 'pi-msg-header';
+    header.innerHTML = `<span class="pi-role ${roleClass}">${esc(role)}</span>`;
+    const fullText = typeof msg.content === 'string'
+      ? msg.content
+      : JSON.stringify(msg.content ?? msg.tool_calls ?? '', null, 2);
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'btn-ghost pi-copy';
+    copyBtn.textContent = 'Copy';
+    wireCopyButton(copyBtn, () => fullText);
+    header.appendChild(copyBtn);
+    wrap.appendChild(header);
+
+    // System message: split by source. Includes the entity-core block as its
+    // own first segment when present, then each tracked build segment.
+    if (role === 'system' && idx === 0 && lastBuildSegments?.systemSegments?.length) {
+      if (lastThalamusContext) {
+        wrap.appendChild(piSegmentEl('thalamus', lastThalamusContext));
+      }
+      for (const seg of lastBuildSegments.systemSegments) {
+        wrap.appendChild(piSegmentEl(seg.source, seg.text));
+      }
+    } else if (atDepthSet.has(idx)) {
+      // History splice from an at-depth lore entry.
+      wrap.appendChild(piSegmentEl('lore-at-depth', fullText));
+    } else if (msg === lastSentMessages[lastSentMessages.length - 1]
+               && state.postHistoryPrompt.trim()
+               && fullText.trim() === applyNameVars(state.postHistoryPrompt.trim())) {
+      wrap.appendChild(piSegmentEl('post-history', fullText));
+    } else {
+      // Plain history / user / assistant / tool message — neutral rendering.
       const pre = document.createElement('pre');
       pre.className = 'pi-pre';
-      pre.textContent = contentText;
-      details.appendChild(summary);
-      details.appendChild(pre);
-      div.appendChild(details);
-      div.appendChild(copyBtn);
-      body.appendChild(div);
+      pre.textContent = fullText;
+      wrap.appendChild(pre);
     }
-  }
+    body.appendChild(wrap);
+  });
+
   $('prompt-inspector-modal').classList.remove('hidden');
 }
 

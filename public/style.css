@@ -1348,6 +1348,71 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
   margin-top: 2px;
 }
 
+.pi-msg-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pi-msg-header .pi-copy { margin-left: auto; align-self: center; margin-top: 0; }
+
+/* Color-coded provenance segments inside the prompt inspector. */
+.pi-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 0 12px;
+  border-bottom: 1px dashed var(--border-light);
+  margin-bottom: 8px;
+}
+.pi-chip {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-raise);
+  color: var(--text-dim);
+  border: 1px solid var(--border-light);
+}
+
+.pi-seg {
+  border-left: 3px solid var(--border);
+  padding: 4px 0 4px 10px;
+  margin: 6px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pi-seg .pi-pre { background: var(--bg); }
+.pi-seg .pi-chip { align-self: flex-start; }
+
+/* Per-source palette. Each rule sets the left rule and the chip in unison. */
+.pi-src-thalamus           { border-left-color: #cba6f7; }
+.pi-src-thalamus .pi-chip  { color: #cba6f7; background: rgba(203,166,247,0.10); border-color: rgba(203,166,247,0.40); }
+
+.pi-src-system-prompt          { border-left-color: var(--warn-color); }
+.pi-src-system-prompt .pi-chip { color: var(--warn-color); background: rgba(249,226,175,0.10); border-color: rgba(249,226,175,0.40); }
+
+.pi-src-character-profile          { border-left-color: #f5c2e7; }
+.pi-src-character-profile .pi-chip { color: #f5c2e7; background: rgba(245,194,231,0.10); border-color: rgba(245,194,231,0.40); }
+
+.pi-src-user-profile           { border-left-color: var(--accent); }
+.pi-src-user-profile .pi-chip  { color: var(--accent); background: var(--accent-dim); border-color: rgba(137,180,250,0.40); }
+
+.pi-src-lore-sys-top,
+.pi-src-lore-before-char,
+.pi-src-lore-after-char,
+.pi-src-lore-sys-bottom,
+.pi-src-lore-at-depth          { border-left-color: var(--success-color); }
+.pi-src-lore-sys-top .pi-chip,
+.pi-src-lore-before-char .pi-chip,
+.pi-src-lore-after-char .pi-chip,
+.pi-src-lore-sys-bottom .pi-chip,
+.pi-src-lore-at-depth .pi-chip { color: var(--success-color); background: rgba(166,227,161,0.10); border-color: rgba(166,227,161,0.40); }
+
+.pi-src-post-history           { border-left-color: #fab387; }
+.pi-src-post-history .pi-chip  { color: #fab387; background: rgba(250,179,135,0.10); border-color: rgba(250,179,135,0.40); }
+
 .modal-footer {
   display: flex;
   align-items: center;

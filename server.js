@@ -128,6 +128,17 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     const text = await upstream.text();
     res.status(upstream.status);
     res.setHeader('Content-Type', 'application/json');
+    // Attach the actual entity-core block that thalamus injected, so the
+    // client's prompt inspector can show what was sent verbatim (without
+    // re-running enrich() and risking drift). On parse failure or upstream
+    // error, fall through to a raw passthrough.
+    if (entityContext && upstream.ok) {
+      try {
+        const parsed = JSON.parse(text);
+        parsed._thalamus = { entityContext };
+        return res.send(JSON.stringify(parsed));
+      } catch { /* upstream returned non-JSON — pass through unchanged */ }
+    }
     return res.send(text);
   }
 
@@ -142,6 +153,15 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('X-Accel-Buffering', 'no'); // Disable nginx buffering if behind a proxy
+
+  // Emit the thalamus envelope as the first SSE data event, BEFORE the
+  // upstream stream, so the client has it by the time the prompt inspector
+  // could be opened. Uses the same `data: ` line format as the upstream
+  // SSE stream; the client routes on the presence of `_thalamus` instead
+  // of `choices`.
+  if (entityContext) {
+    res.write(`data: ${JSON.stringify({ _thalamus: { entityContext } })}\n\n`);
+  }
 
   const reader = upstream.body.getReader();
   try {
