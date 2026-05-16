@@ -22,7 +22,7 @@ A lightweight, self-hosted chat UI for [z.ai](https://api.z.ai) and [NanoGPT](ht
 
 Everything runs locally at **http://localhost:3000** — your API key never leaves your machine. Set `PORT=8080` (env var, or `PORT=8080 ./start.sh`) to change the port.
 
-**Updating an existing install:** re-run the same installer. It detects `node_modules/` and switches to update mode — `git pull --ff-only` on Proto-Familiar, `git fetch && checkout <pinned tag>` on entity-core, idempotent `npm install` + `deno cache`. Skips prerequisite installs and shortcut creation. See [docs/getting-started.md#updating-an-existing-install](docs/getting-started.md#updating-an-existing-install) for the details.
+**Updating an existing install:** re-run the same installer. It detects `node_modules/` and switches to update mode. Before any git op runs, `tomes/`, `logs/`, and entity-core's `data/` directory are copied to `.pf-backups/<timestamp>/` as a safety net. Then `git pull --ff-only` on Proto-Familiar (refuses non-FF merges; your work tree stays put on conflict), `git fetch && checkout <pinned tag>` on entity-core (whose `data/` is gitignored, never touched), idempotent `npm install` + `deno cache`. Node/Deno/Git are reinstalled if missing in either mode; only shortcut creation is skipped on update. See [docs/getting-started.md#updating-an-existing-install](docs/getting-started.md#updating-an-existing-install) for the protection table.
 
 **Manual / advanced:**
 

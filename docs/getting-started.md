@@ -103,14 +103,27 @@ Re-run the same installer you used for the first install:
 - **macOS:** double-click `Proto-Familiar.command`, or `./install.sh` from a terminal.
 - **Linux:** `./install.sh`.
 
-The installer detects the existing install via the `node_modules/` directory and switches to **update mode**:
+The installer detects the existing install via the `node_modules/` directory and switches to **update mode**. The flow:
 
-1. `git pull --ff-only` on the Proto-Familiar repo (skipped if the directory isn't a git checkout or pull fails — no merge surprises).
-2. `git fetch && git checkout <pinned tag>` on the entity-core-alpha sibling (idempotent — only does work if the tag has moved).
-3. `npm install` to pick up any new Node deps.
-4. `deno cache` to pick up any new entity-core Deno deps (only fetches what's missing).
+1. **Defensive backup** — `tomes/`, `logs/`, and entity-core's `data/` directory (if non-empty) are copied to `.pf-backups/<UTC-timestamp>/` inside the project root *before* any git operation runs. Safety net even though the git ops below are designed not to touch user data.
+2. **`git pull --ff-only`** on the Proto-Familiar repo. Skipped if the directory isn't a git checkout. The `--ff-only` flag means git refuses any non-fast-forward merge — if you're on a non-default branch, have local commits, or have uncommitted changes that would conflict, the pull aborts with a warning and the work tree is left exactly as you had it.
+3. **Node / Deno / Git checks**, with auto-install of anything missing (same as fresh install — your environment catches up if a new release added a requirement).
+4. **`npm install`** to pick up any new Node deps.
+5. **`git fetch && git checkout <pinned tag>`** on entity-core-alpha (idempotent — only does work if the tag bumped). entity-core's runtime `data/` directory is gitignored at both the workspace and package root, so this never touches your identity files, memory markdown, or SQLite store.
+6. **`deno cache`** to pick up any new entity-core Deno deps (only fetches what's missing).
 
-Update mode skips the Node / Deno / Git prerequisite installs and the shortcut creation, so nothing reinstalls or overwrites that's already in place. If you've made local commits or are on a non-default branch the `git pull --ff-only` will fail safely (a warning, no merge) and the rest still runs.
+Update mode skips only the shortcut / desktop-entry creation, since those are already in place.
+
+**What's protected:**
+
+| Data | Where it lives | Protected by |
+|---|---|---|
+| User-saved tomes (`<uuid>.json`) | `tomes/` | Untracked filenames; git never touches them. Also copied into `.pf-backups/` |
+| Built-in tome content you edited | `tomes/ADHD-Tome.json`, etc. | If upstream changed the same file, `git pull --ff-only` refuses the merge and warns. Also copied into `.pf-backups/` |
+| Session logs | `logs/` | Gitignored. Also copied into `.pf-backups/` |
+| entity-core identity files, memory markdown, SQLite store | `entity-core-alpha/packages/entity-core/data/` | Gitignored at both workspace and package roots; never touched by `git checkout <tag>`. Also copied into `.pf-backups/` |
+
+If you ever need to roll back, the contents of `.pf-backups/<timestamp>/` mirror the project tree — copy any subtree back over the live one. Old backups can be removed by hand; nothing prunes them automatically.
 
 ---
 

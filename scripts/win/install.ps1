@@ -5,10 +5,12 @@
 #   its Deno module graph, and creates Desktop + Start Menu shortcuts.
 #
 # Update mode: triggered automatically when node_modules\ already exists.
-#   Pulls latest Proto-Familiar (`git pull --ff-only`), refreshes
-#   entity-core to the pinned tag, re-runs the idempotent npm install +
-#   deno cache. Skips the winget prerequisite installs and the shortcut
-#   creation since they're already in place.
+#   Takes a defensive backup of tomes\, logs\, and entity-core data\
+#   into .pf-backups\<timestamp>\ BEFORE any git op runs, then pulls
+#   latest Proto-Familiar (`git pull --ff-only`), refreshes entity-core
+#   to the pinned tag, and re-runs the idempotent npm install + deno
+#   cache. Node/Deno/Git auto-install still runs if any is missing — the
+#   only thing skipped in update mode is the shortcut creation.
 
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -16,6 +18,7 @@ $parentDir   = Split-Path -Parent $projectRoot
 $entityCoreDir = Join-Path $parentDir "entity-core-alpha"
 $entityCoreRepo = "https://github.com/PsycherosAI/Psycheros.git"
 $entityCoreTag  = "entity-core-v0.2.2"
+$backupRoot    = Join-Path $projectRoot ".pf-backups"
 
 function Have($cmd) { [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
 function Refresh-Path {
@@ -28,10 +31,7 @@ function Ok($msg)    { Write-Host "    $msg" -ForegroundColor Green }
 function Warn($msg)  { Write-Host "!!  $msg" -ForegroundColor Yellow }
 function Fail($msg)  { Write-Host "XX  $msg" -ForegroundColor Red; Read-Host "Press Enter to close"; exit 1 }
 
-# Detect mode: an existing node_modules means we're updating, not
-# setting up from scratch. Both paths run the same idempotent steps
-# (npm install, deno cache); update mode skips the winget prerequisite
-# install attempts and the shortcut creation.
+# Detect mode: existing node_modules => update.
 $updateMode = Test-Path (Join-Path $projectRoot "node_modules")
 
 Clear-Host
@@ -43,18 +43,46 @@ if ($updateMode) {
 Write-Host "Project: $projectRoot"
 Write-Host ""
 
-# --- Pull latest Proto-Familiar (update mode only) -------------------
+# --- Pre-pull data backup (update mode only) ---
+# Defensive copy of at-risk dirs into .pf-backups\<timestamp>\ before any
+# git op. Safety net on top of git's own protections.
+$anythingBackedUp = $false
+$backupDir = $null
+if ($updateMode) {
+    $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
+    $backupDir = Join-Path $backupRoot $stamp
+    $sources = @(
+        @{ Path = (Join-Path $projectRoot "tomes"); Rel = "tomes" },
+        @{ Path = (Join-Path $projectRoot "logs");  Rel = "logs"  },
+        @{ Path = (Join-Path $entityCoreDir "packages\entity-core\data"); Rel = "entity-core-alpha\packages\entity-core\data" },
+        @{ Path = (Join-Path $entityCoreDir "data"); Rel = "entity-core-alpha\data" }
+    )
+    foreach ($s in $sources) {
+        if ((Test-Path $s.Path) -and ((Get-ChildItem $s.Path -Force | Measure-Object).Count -gt 0)) {
+            $dest = Join-Path $backupDir $s.Rel
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
+            Copy-Item -Recurse -Force -Path $s.Path -Destination $dest
+            $anythingBackedUp = $true
+        }
+    }
+    if ($anythingBackedUp) {
+        Ok "User data backed up to $backupDir\"
+        Ok "  (tomes\, logs\, entity-core data\ — restore by copying back if needed)"
+    }
+}
+
+# --- Pull latest Proto-Familiar (update mode only) ---
 if ($updateMode -and (Test-Path (Join-Path $projectRoot ".git")) -and (Have "git")) {
     Step "Pulling latest Proto-Familiar (git pull --ff-only)..."
     Push-Location $projectRoot
     try {
         & git pull --ff-only
-        if ($LASTEXITCODE -ne 0) { Warn "git pull --ff-only failed. Continuing with current checkout." }
+        if ($LASTEXITCODE -ne 0) { Warn "git pull --ff-only failed. Work tree is unchanged." }
     } finally { Pop-Location }
 }
 
 $haveWinget = Have "winget"
-if (-not $updateMode -and -not $haveWinget) {
+if (-not $haveWinget) {
     Warn "winget not found - prerequisites must be installed manually if missing."
     Warn "  Node.js 18+:  https://nodejs.org/"
     Warn "  Deno 2+:      https://deno.com/"
@@ -62,16 +90,14 @@ if (-not $updateMode -and -not $haveWinget) {
     Write-Host ""
 }
 
-# --- Node.js ---
+# --- Node.js (install if missing, in both modes) ---
 Step "Checking Node.js..."
 if (-not (Have "node")) {
-    if (-not $updateMode -and $haveWinget) {
+    if ($haveWinget) {
         Step "Installing Node.js LTS via winget (per-user, no admin needed)..."
         winget install --id OpenJS.NodeJS.LTS --scope user --silent `
             --accept-source-agreements --accept-package-agreements
         Refresh-Path
-    } elseif ($updateMode) {
-        Fail "Node.js missing from PATH despite an existing install. Open a new terminal and re-run, or reinstall Node from https://nodejs.org/."
     } else {
         Fail "Node.js is required. Install from https://nodejs.org/ and re-run."
     }
@@ -82,10 +108,10 @@ $nodeMajor = [int]($nodeVersion.Split('.')[0])
 if ($nodeMajor -lt 18) { Fail "Node.js $nodeVersion detected; Proto-Familiar needs 18+." }
 Ok "Node.js v$nodeVersion"
 
-# --- Deno (recommended) ---
+# --- Deno (install if missing, in both modes) ---
 Step "Checking Deno..."
 if (-not (Have "deno")) {
-    if (-not $updateMode -and $haveWinget) {
+    if ($haveWinget) {
         Step "Installing Deno via winget..."
         try {
             winget install --id DenoLand.Deno --scope user --silent `
@@ -98,10 +124,10 @@ if (-not (Have "deno")) {
 }
 if (Have "deno") { Ok "Deno present" } else { Warn "Deno missing (Proto-Familiar will still run without entity-core)" }
 
-# --- Git ---
+# --- Git (install if missing, in both modes) ---
 Step "Checking Git..."
 if (-not (Have "git")) {
-    if (-not $updateMode -and $haveWinget) {
+    if ($haveWinget) {
         Step "Installing Git via winget..."
         try {
             winget install --id Git.Git --scope user --silent `
@@ -122,6 +148,8 @@ try {
 Ok "Dependencies up to date"
 
 # --- entity-core: clone (install) or refresh to pinned tag (update) ---
+# entity-core's runtime data\ is gitignored at both workspace and package
+# root, so `git checkout <tag>` never touches user data.
 Step "Setting up entity-core-alpha..."
 if (Test-Path $entityCoreDir) {
     if ($updateMode -and (Test-Path (Join-Path $entityCoreDir ".git")) -and (Have "git")) {
@@ -149,8 +177,6 @@ if (Test-Path $entityCoreDir) {
 }
 
 # --- entity-core dependency pre-cache (idempotent) ---
-# Psycheros is now a Deno workspace; entity-core lives at packages/entity-core.
-# Older releases kept it at the repo root, so probe both and prefer the workspace path.
 $entityCorePkg = $null
 if (Test-Path (Join-Path $entityCoreDir "packages\entity-core\src\mod.ts")) {
     $entityCorePkg = Join-Path $entityCoreDir "packages\entity-core"
@@ -170,8 +196,6 @@ if ($entityCorePkg -and (Have "deno")) {
 }
 
 # --- Shortcuts (install mode only) ---
-# The Desktop / Start Menu shortcuts already exist on an update; recreating
-# them is harmless but adds noise. Skip for clarity.
 if (-not $updateMode) {
     Step "Creating Desktop and Start Menu shortcuts..."
     $launcher  = Join-Path $projectRoot "Proto-Familiar.vbs"
@@ -198,6 +222,7 @@ if (-not $updateMode) {
 Write-Host ""
 if ($updateMode) {
     Write-Host "Update complete." -ForegroundColor Green
+    if ($anythingBackedUp) { Write-Host "Pre-update backup: $backupDir" -ForegroundColor Green }
 } else {
     Write-Host "Install complete." -ForegroundColor Green
 }
