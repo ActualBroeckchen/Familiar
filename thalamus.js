@@ -440,20 +440,35 @@ export async function getGraphSubgraph({ nodeId, depth = 1 }) {
 
 // Aggregate every node and every edge into one payload for the Map view.
 // entity-core has no "list all edges" tool, so we walk each node's 1-hop
-// subgraph in parallel and deduplicate edges by id.
-export async function getFullGraph({ type, limit = 500 } = {}) {
+// subgraph and deduplicate edges by id. Concurrency is capped so we don't
+// open hundreds of simultaneous tool calls against the MCP server, and
+// edges to nodes outside the (possibly type-filtered) visible set are
+// dropped so the legend matches what's actually drawn.
+export async function getFullGraph({ type, limit = 500, concurrency = 16 } = {}) {
   const nodeResp = await listGraphNodes({ type, limit });
   const nodes    = nodeResp.nodes ?? nodeResp.results ?? [];
+  const nodeIds  = new Set(nodes.map(n => n.id));
   const edgeMap  = new Map();
-  const subgraphs = await Promise.all(
-    nodes.map(n => getGraphSubgraph({ nodeId: n.id, depth: 1 }).catch(() => null)),
-  );
-  for (const sg of subgraphs) {
-    if (!sg) continue;
-    for (const e of sg.edges ?? []) {
-      if (e && e.id && !edgeMap.has(e.id)) edgeMap.set(e.id, e);
+
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < nodes.length) {
+      const i = cursor++;
+      const sg = await getGraphSubgraph({ nodeId: nodes[i].id, depth: 1 }).catch(() => null);
+      if (!sg) continue;
+      for (const e of sg.edges ?? []) {
+        if (!e || !e.id || edgeMap.has(e.id)) continue;
+        if (!nodeIds.has(e.fromId) || !nodeIds.has(e.toId)) continue;
+        edgeMap.set(e.id, e);
+      }
     }
-  }
+  };
+  const workers = Array.from(
+    { length: Math.min(concurrency, nodes.length) || 1 },
+    () => worker(),
+  );
+  await Promise.all(workers);
+
   return { nodes, edges: Array.from(edgeMap.values()) };
 }
 

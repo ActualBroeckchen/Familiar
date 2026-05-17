@@ -2344,10 +2344,12 @@ function init() {
   $('ke-mem-refresh').addEventListener('click', keLoadMemories);
   $('ke-mem-granularity').addEventListener('change', keLoadMemories);
   $('ke-graph-refresh').addEventListener('click', () => {
+    keGraphClosePopover();
     if (_keGraphView === 'map') keLoadGraphMap();
     else keLoadGraphNodes();
   });
   $('ke-graph-type').addEventListener('change', () => {
+    keGraphClosePopover();
     if (_keGraphView === 'map') keLoadGraphMap();
     else keLoadGraphNodes();
   });
@@ -4003,9 +4005,13 @@ let _keSizeObserver = null;
 function openKnowledgeModal() {
   $('knowledge-modal').classList.remove('hidden');
   keRestoreModalSize();
+  keGraphClosePopover();
   keSwitchTab('memories');
 }
-function closeKnowledgeModal() { $('knowledge-modal').classList.add('hidden'); }
+function closeKnowledgeModal() {
+  $('knowledge-modal').classList.add('hidden');
+  keGraphClosePopover();
+}
 
 function keRestoreModalSize() {
   const el = $('knowledge-modal-inner');
@@ -4242,6 +4248,7 @@ const KE_GRAPH_NODE_R   = 6;
 const KE_GRAPH_LABEL_ZOOM = 1.4;
 
 function keSetGraphView(view) {
+  const changed = (view !== _keGraphView);
   _keGraphView = view;
   $('ke-graph-view-list').classList.toggle('ke-view-active', view === 'list');
   $('ke-graph-view-map').classList.toggle('ke-view-active',  view === 'map');
@@ -4249,6 +4256,9 @@ function keSetGraphView(view) {
   $('ke-graph-view-map').setAttribute('aria-selected',  view === 'map'  ? 'true' : 'false');
   $('ke-graph-split').classList.toggle('hidden', view !== 'list');
   $('ke-graph-map').classList.toggle('hidden',   view !== 'map');
+  // Popover is anchored to a specific (possibly stale) node, so leaving
+  // the map view, or refreshing it, should dismiss it.
+  if (changed) keGraphClosePopover();
   if (view === 'map') {
     keInitGraphMapOnce();
     keLoadGraphMap();
@@ -4285,9 +4295,12 @@ function keInitGraphMapOnce() {
       _keGraph.tx = _keGraph.drag.tx + dx;
       _keGraph.ty = _keGraph.drag.ty + dy;
       keGraphRequestDraw();
-    } else if (_keGraphView === 'map' && !$('ke-graph-map').classList.contains('hidden')) {
-      keGraphUpdateHover(e);
+      return;
     }
+    if (_keGraphView !== 'map') return;
+    if ($('knowledge-modal').classList.contains('hidden')) return;
+    if ($('ke-graph-map').classList.contains('hidden'))   return;
+    keGraphUpdateHover(e);
   });
   window.addEventListener('mouseup', e => {
     if (!_keGraph.drag) return;
@@ -4590,27 +4603,31 @@ function keGraphUpdateHover(e) {
   const changed = (hover?.ref !== _keGraph.hover?.ref);
   _keGraph.hover = hover;
   const tip = $('ke-graph-tooltip');
-  if (!hover) {
+  // Suppress the tooltip while the editor popover is open — they'd
+  // stack and the popover content is more authoritative.
+  const popoverOpen = !$('ke-graph-popover').classList.contains('hidden');
+  if (!hover || popoverOpen) {
     tip.classList.add('hidden');
-  } else {
-    if (hover.kind === 'node') {
-      const n = hover.ref;
-      tip.innerHTML = `<div class="ke-graph-tooltip-title">${esc(n.label ?? n.id)}</div>
-        <div class="ke-graph-tooltip-sub">${esc(n.type ?? 'untyped')}</div>
-        ${n.description ? `<div>${esc(String(n.description).slice(0, 160))}</div>` : ''}`;
-    } else {
-      const ed = hover.ref;
-      const a  = _keGraph.nodeById.get(ed.fromId);
-      const b  = _keGraph.nodeById.get(ed.toId);
-      const w  = typeof ed.weight === 'number' ? ed.weight.toFixed(2) : '—';
-      tip.innerHTML = `<div class="ke-graph-tooltip-title">${esc(ed.type ?? ed.customType ?? 'related')}</div>
-        <div class="ke-graph-tooltip-sub">${esc(a?.label ?? ed.fromId)} → ${esc(b?.label ?? ed.toId)}</div>
-        <div class="ke-graph-tooltip-sub">weight: ${esc(w)}</div>`;
-    }
-    tip.style.left = `${sx + 12}px`;
-    tip.style.top  = `${sy + 12}px`;
-    tip.classList.remove('hidden');
+    if (changed) keGraphRequestDraw();
+    return;
   }
+  if (hover.kind === 'node') {
+    const n = hover.ref;
+    tip.innerHTML = `<div class="ke-graph-tooltip-title">${esc(n.label ?? n.id)}</div>
+      <div class="ke-graph-tooltip-sub">${esc(n.type ?? 'untyped')}</div>
+      ${n.description ? `<div>${esc(String(n.description).slice(0, 160))}</div>` : ''}`;
+  } else {
+    const ed = hover.ref;
+    const a  = _keGraph.nodeById.get(ed.fromId);
+    const b  = _keGraph.nodeById.get(ed.toId);
+    const w  = typeof ed.weight === 'number' ? ed.weight.toFixed(2) : '—';
+    tip.innerHTML = `<div class="ke-graph-tooltip-title">${esc(ed.type ?? ed.customType ?? 'related')}</div>
+      <div class="ke-graph-tooltip-sub">${esc(a?.label ?? ed.fromId)} → ${esc(b?.label ?? ed.toId)}</div>
+      <div class="ke-graph-tooltip-sub">weight: ${esc(w)}</div>`;
+  }
+  tip.style.left = `${sx + 12}px`;
+  tip.style.top  = `${sy + 12}px`;
+  tip.classList.remove('hidden');
   if (changed) keGraphRequestDraw();
 }
 
