@@ -5,10 +5,11 @@
 set -e
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-PORT="${PORT:-7842}"
+PORT="${PORT:-8742}"
 URL="http://localhost:$PORT"
-# TAILSCALE=1 binds the server to 0.0.0.0 so other devices on your Tailnet
-# (or LAN) can reach the UI. Default is loopback-only.
+# TAILSCALE=1 seeds the in-UI "Access from other devices" toggle to ON when
+# .proto-familiar-config.json doesn't exist yet. Once you've used the in-UI
+# toggle, that file is the source of truth and this env var is ignored.
 TAILSCALE="${TAILSCALE:-0}"
 PID_FILE="$SCRIPT_DIR/.proto-familiar.pid"
 LOG_FILE="$SCRIPT_DIR/.proto-familiar.log"

@@ -4,10 +4,11 @@ REM Proto-Familiar launcher (Windows) - double-click to run.
 setlocal EnableDelayedExpansion
 set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
-if "%PORT%"=="" set "PORT=7842"
+if "%PORT%"=="" set "PORT=8742"
 set "URL=http://localhost:%PORT%"
-REM TAILSCALE=1 binds to 0.0.0.0 so other devices on your Tailnet / LAN can
-REM reach the UI. Default is loopback-only.
+REM TAILSCALE=1 seeds the in-UI "Access from other devices" toggle to ON when
+REM .proto-familiar-config.json doesn't exist yet. Once you've used the in-UI
+REM toggle, that file is the source of truth and this env var is ignored.
 if "%TAILSCALE%"=="" set "TAILSCALE=0"
 set "PID_FILE=%SCRIPT_DIR%\.proto-familiar.pid"
 set "LOG_FILE=%SCRIPT_DIR%\.proto-familiar.log"

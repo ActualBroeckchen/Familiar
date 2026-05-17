@@ -7,7 +7,7 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { mkdirSync, promises as fsp } from 'fs';
+import { mkdirSync, readFileSync, promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -47,7 +47,50 @@ function isValidUUID(id) {
 }
 
 const app = express();
+app.set('trust proxy', 'loopback');
 app.use(express.json({ limit: '4mb' }));
+
+// ── Runtime Tailscale / external-access gate ─────────────────────
+// Server binds to 0.0.0.0 by default so the in-UI toggle can flip
+// external access at runtime without a restart. Until the toggle is
+// on, this middleware drops anything that isn't a loopback request,
+// so the default posture matches the historical localhost-only bind.
+const TAILSCALE_CONFIG_FILE = path.join(__dirname, '.proto-familiar-config.json');
+
+function loadTailscaleConfig() {
+  try {
+    const raw = readFileSync(TAILSCALE_CONFIG_FILE, 'utf8');
+    const obj = JSON.parse(raw);
+    return { enabled: !!obj.tailscaleEnabled };
+  } catch {
+    return { enabled: /^(1|true|yes)$/i.test(process.env.TAILSCALE || '') };
+  }
+}
+async function saveTailscaleConfig(cfg) {
+  await fsp.writeFile(
+    TAILSCALE_CONFIG_FILE,
+    JSON.stringify({ tailscaleEnabled: !!cfg.enabled }, null, 2),
+    'utf8'
+  );
+}
+const tailscaleState = { enabled: loadTailscaleConfig().enabled };
+
+function isLoopbackIp(ip) {
+  if (!ip) return false;
+  if (ip === '::1') return true;
+  let v = ip;
+  if (v.startsWith('::ffff:')) v = v.slice(7);
+  return v.startsWith('127.');
+}
+
+app.use((req, res, next) => {
+  if (tailscaleState.enabled) return next();
+  if (isLoopbackIp(req.ip)) return next();
+  res.status(403)
+    .type('text/plain')
+    .send('Proto-Familiar is configured for localhost only. Enable the Tailscale toggle in the top bar to allow access from other devices.');
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Provider base URLs — all use OpenAI-compatible chat completions format
@@ -876,19 +919,16 @@ app.post('/api/entity/snapshots/:id/restore', async (req, res) => {
   res.json(result.result);
 });
 
-const PORT = Number(process.env.PORT) || 7842;
+const PORT = Number(process.env.PORT) || 8742;
 
-// HOST controls the bind address. Default is `localhost` (loopback only) so
-// the API key and prompt-inspector endpoint stay on the local machine. Set
-// HOST=0.0.0.0 — or, equivalently, TAILSCALE=1 — to expose Proto-Familiar to
-// other devices on your LAN / Tailnet. Tailscale handles auth and encryption
-// at the network layer; on a plain LAN, anyone who can reach the port can
-// use the proxy.
-const TAILSCALE_ENABLED = /^(1|true|yes)$/i.test(process.env.TAILSCALE || '');
-const HOST = process.env.HOST || (TAILSCALE_ENABLED ? '0.0.0.0' : 'localhost');
+// Bind address. Defaults to 0.0.0.0 so the in-UI Tailscale toggle can flip
+// external access at runtime. Until the toggle is on, the gate middleware
+// above rejects every non-loopback request, so the effective behavior
+// matches the historical localhost-only bind.
+const HOST = process.env.HOST || '0.0.0.0';
 
 // Best-effort Tailscale lookup. Failures (CLI missing, not logged in, not
-// running) are silent — we just don't print Tailscale URLs.
+// running) are silent — we just don't report Tailscale URLs.
 async function detectTailscale() {
   try {
     const { stdout: ipOut } = await execFileP('tailscale', ['ip', '-4'], { timeout: 2000 });
@@ -907,18 +947,44 @@ async function detectTailscale() {
   }
 }
 
+app.get('/api/tailscale', async (_req, res) => {
+  const ts = await detectTailscale();
+  res.json({
+    enabled: tailscaleState.enabled,
+    port: PORT,
+    hostname: ts?.hostname || null,
+    ipv4: ts?.ipv4 || null,
+    available: ts !== null,
+  });
+});
+
+app.post('/api/tailscale', async (req, res) => {
+  const { enabled } = req.body ?? {};
+  if (typeof enabled !== 'boolean') return badRequest(res, 'enabled (boolean) is required');
+  tailscaleState.enabled = enabled;
+  try { await saveTailscaleConfig(tailscaleState); }
+  catch (err) { return res.status(500).json({ error: `failed to persist config: ${err.message}` }); }
+  const ts = await detectTailscale();
+  res.json({
+    enabled: tailscaleState.enabled,
+    port: PORT,
+    hostname: ts?.hostname || null,
+    ipv4: ts?.ipv4 || null,
+    available: ts !== null,
+  });
+});
+
 app.listen(PORT, HOST, async () => {
   const lines = ['', 'Proto-Familiar running at:'];
-  if (HOST === '0.0.0.0' || HOST === '::') {
-    lines.push(`  http://localhost:${PORT}`);
+  lines.push(`  http://localhost:${PORT}`);
+  if (tailscaleState.enabled) {
     const ts = await detectTailscale();
     if (ts?.hostname) lines.push(`  http://${ts.hostname}:${PORT}    (Tailscale)`);
     if (ts?.ipv4)     lines.push(`  http://${ts.ipv4}:${PORT}    (Tailscale IPv4)`);
     if (!ts) lines.push(`  (other devices: use this machine's LAN/Tailscale address on port ${PORT})`);
-    lines.push('  WARNING: server is bound to all interfaces. API key proxying and');
-    lines.push('  /api/debug-prompt are reachable from any device that can hit this port.');
+    lines.push('  External-device access is ENABLED. Toggle off in the top bar to lock back down.');
   } else {
-    lines.push(`  http://${HOST}:${PORT}`);
+    lines.push('  External-device access is disabled. Toggle the Tailscale icon in the top bar to enable.');
   }
   console.log(lines.join('\n') + '\n');
   startMemorizationWorker();

@@ -399,6 +399,105 @@ button { cursor: pointer; font-family: var(--font); }
   opacity: 0.35;
   cursor: not-allowed;
 }
+.icon-btn.is-active {
+  color: var(--accent, #4ade80);
+  background: color-mix(in srgb, var(--accent, #4ade80) 15%, transparent);
+}
+
+/* ── Tailscale toggle + popover ──────────────────────────────── */
+.tailscale-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.tailscale-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 280px;
+  padding: 12px;
+  background: var(--surface, #1e1e22);
+  border: 1px solid var(--border, #333);
+  border-radius: var(--radius, 8px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+  font-size: 0.85rem;
+  color: var(--text, #eee);
+}
+.tailscale-popover.hidden { display: none; }
+.tailscale-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.tailscale-state-label { font-weight: 600; }
+.tailscale-status {
+  margin: 0 0 8px 0;
+  color: var(--text-dim, #999);
+  font-size: 0.8rem;
+}
+.tailscale-urls {
+  list-style: none;
+  margin: 0 0 8px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tailscale-urls li {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.75rem;
+  word-break: break-all;
+}
+.tailscale-urls a {
+  color: var(--accent, #4ade80);
+  text-decoration: none;
+}
+.tailscale-urls a:hover { text-decoration: underline; }
+.tailscale-hint {
+  margin: 0;
+  color: var(--text-dim, #999);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+/* Minimal on/off switch */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+}
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.switch-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--surface-raise, #444);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.switch-slider::before {
+  content: "";
+  position: absolute;
+  height: 14px;
+  width: 14px;
+  left: 3px;
+  top: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.15s;
+}
+.switch input:checked + .switch-slider {
+  background: var(--accent, #4ade80);
+}
+.switch input:checked + .switch-slider::before {
+  transform: translateX(16px);
+}
 
 /* ── Chat pane ───────────────────────────────────────────────── */
 .chat-pane {

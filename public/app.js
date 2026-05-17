@@ -2389,6 +2389,94 @@ function closePromptInspector() {
   $('prompt-inspector-modal').classList.add('hidden');
 }
 
+// ── Tailscale / external-access toggle ──────────────────────
+async function fetchTailscaleState() {
+  const r = await fetch('/api/tailscale');
+  if (!r.ok) throw new Error(`tailscale state HTTP ${r.status}`);
+  return r.json();
+}
+async function setTailscaleEnabled(enabled) {
+  const r = await fetch('/api/tailscale', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!r.ok) throw new Error(`tailscale toggle HTTP ${r.status}`);
+  return r.json();
+}
+function renderTailscaleState(state) {
+  const btn       = $('tailscale-btn');
+  const sw        = $('tailscale-switch');
+  const statusEl  = $('tailscale-status');
+  const urlsEl    = $('tailscale-urls');
+  btn.classList.toggle('is-active', !!state.enabled);
+  btn.setAttribute('aria-pressed', state.enabled ? 'true' : 'false');
+  btn.title = state.enabled
+    ? 'External-device access ON (click for URLs)'
+    : 'External-device access OFF (click to enable)';
+  sw.checked = !!state.enabled;
+
+  urlsEl.innerHTML = '';
+  if (state.enabled) {
+    if (state.hostname) {
+      const url = `http://${state.hostname}:${state.port}`;
+      urlsEl.insertAdjacentHTML('beforeend',
+        `<li>Tailscale: <a href="${url}" target="_blank" rel="noopener">${url}</a></li>`);
+    }
+    if (state.ipv4) {
+      const url = `http://${state.ipv4}:${state.port}`;
+      urlsEl.insertAdjacentHTML('beforeend',
+        `<li>Tailscale IPv4: <a href="${url}" target="_blank" rel="noopener">${url}</a></li>`);
+    }
+    if (!state.hostname && !state.ipv4) {
+      statusEl.textContent = state.available
+        ? 'Tailscale CLI found but no addresses returned. Use this machine\'s LAN IP on port ' + state.port + '.'
+        : 'Tailscale CLI not detected. Use this machine\'s LAN/Tailscale address on port ' + state.port + '.';
+    } else {
+      statusEl.textContent = 'Open one of these on any device on your tailnet:';
+    }
+  } else {
+    statusEl.textContent = 'Off — only this machine can reach Proto-Familiar.';
+  }
+}
+function initTailscaleToggle() {
+  const btn      = $('tailscale-btn');
+  const popover  = $('tailscale-popover');
+  const sw       = $('tailscale-switch');
+
+  fetchTailscaleState().then(renderTailscaleState).catch(err => {
+    console.warn('tailscale state load failed', err);
+  });
+
+  btn.addEventListener('click', async () => {
+    const willOpen = popover.classList.contains('hidden');
+    popover.classList.toggle('hidden');
+    if (willOpen) {
+      try { renderTailscaleState(await fetchTailscaleState()); }
+      catch (err) { console.warn('tailscale refresh failed', err); }
+    }
+  });
+
+  // Click-outside to dismiss
+  document.addEventListener('click', e => {
+    if (popover.classList.contains('hidden')) return;
+    if (e.target === btn || btn.contains(e.target)) return;
+    if (popover.contains(e.target)) return;
+    popover.classList.add('hidden');
+  });
+
+  sw.addEventListener('change', async () => {
+    const next = sw.checked;
+    try {
+      const state = await setTailscaleEnabled(next);
+      renderTailscaleState(state);
+    } catch (err) {
+      console.error('tailscale toggle failed', err);
+      sw.checked = !next; // revert
+    }
+  });
+}
+
 // ── Logs modal ──────────────────────────────────────────────
 function openLogsModal() {
   $('logs-modal').classList.remove('hidden');
@@ -2714,6 +2802,9 @@ function init() {
   $('prompt-inspector-modal').addEventListener('click', e => {
     if (e.target === $('prompt-inspector-modal')) closePromptInspector();
   });
+
+  // ── Tailscale / external-access toggle ───────────────────────
+  initTailscaleToggle();
 
   // ── Logs modal ────────────────────────────────────────────
   $('logs-btn').addEventListener('click', openLogsModal);

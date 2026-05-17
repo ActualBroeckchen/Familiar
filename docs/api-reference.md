@@ -1,6 +1,6 @@
 # API Reference
 
-All endpoints are served by the Express server at `http://localhost:7842` (or your configured port). The server is a local proxy — it is not intended to be exposed to the public internet without additional authentication. For accessing the UI from another device, prefer the Tailscale opt-in described in [Getting Started → Access from other devices](getting-started.md#access-from-other-devices-tailscale--lan).
+All endpoints are served by the Express server at `http://localhost:8742` (or your configured port). The server is a local proxy — it is not intended to be exposed to the public internet without additional authentication. For accessing the UI from another device, prefer the Tailscale opt-in described in [Getting Started → Access from other devices](getting-started.md#access-from-other-devices-tailscale--lan).
 
 ---
 
@@ -90,6 +90,43 @@ The same messages array with entity-core enrichment prepended to the system mess
 | Status | Condition |
 |---|---|
 | `400` | `messages` is missing or not a non-empty array |
+
+---
+
+## Tailscale toggle
+
+### `GET /api/tailscale`
+
+Returns the current state of the "Access from other devices" toggle plus any auto-detected Tailscale identifiers.
+
+**Response:**
+
+```json
+{
+  "enabled":   false,
+  "port":      8742,
+  "hostname":  "my-laptop.tail1234.ts.net",
+  "ipv4":      "100.x.y.z",
+  "available": true
+}
+```
+
+`hostname` / `ipv4` are `null` when the `tailscale` CLI isn't installed or returns nothing. `available` reflects whether the CLI ran successfully.
+
+### `POST /api/tailscale`
+
+Updates the toggle and persists it to `.proto-familiar-config.json`. Returns the same shape as `GET`.
+
+**Request body:** `{ "enabled": true }`
+
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| `400` | `enabled` is missing or not a boolean |
+| `500` | Failed to persist config file |
+
+When `enabled` is `false`, the gate middleware drops every non-loopback request with `403`. When `true`, any device that can reach the host on the configured port can use the proxy — there is no per-device auth, so only flip on when you trust the network.
 
 ---
 

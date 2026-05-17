@@ -20,7 +20,7 @@ if (-not $mutex.WaitOne(0, $false)) {
 
 # --- Paths and state ---
 $script:projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$script:port        = if ($env:PORT) { $env:PORT } else { "7842" }
+$script:port        = if ($env:PORT) { $env:PORT } else { "8742" }
 $script:url         = "http://localhost:$($script:port)"
 $script:tailscale   = if ($env:TAILSCALE) { $env:TAILSCALE } else { "0" }
 $script:pidFile     = Join-Path $script:projectRoot ".proto-familiar.pid"

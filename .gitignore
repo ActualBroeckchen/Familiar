@@ -7,4 +7,5 @@ logs/
 tomes/.memorization-queue.json
 tomes/.memorization-queue.json.tmp
 .proto-familiar.pid
+.proto-familiar-config.json
 .pf-backups/
