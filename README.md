@@ -12,7 +12,19 @@ A lightweight, self-hosted chat UI for [z.ai](https://api.z.ai) and [NanoGPT](ht
 - [Node.js](https://nodejs.org/) 18 or newer
 - [Deno](https://deno.com/) 2+ (only required if using the entity-core identity layer)
 
-### Quick Start
+### Quick Start (one double-click)
+
+| OS | First-run | Launch | Stop |
+|---|---|---|---|
+| **Windows** | Double-click `Proto-Familiar.vbs`. It auto-installs Node, Deno, and Git via `winget` (no admin needed — `--scope user`), runs `npm install`, clones entity-core, and creates Desktop + Start Menu shortcuts. | Double-click the **Proto-Familiar** Desktop shortcut (or `Proto-Familiar.vbs`). A tray icon appears; the browser opens automatically. Left-click the icon to re-open the browser. | Right-click the tray icon → **Quit**. Cleanly stops both Proto-Familiar and entity-core. |
+| **macOS** | Double-click `Proto-Familiar.command` in Finder. First run installs dependencies; subsequent runs just start it. | Double-click `Proto-Familiar.command`. Browser opens automatically. | Press **Ctrl-C** in the Terminal window, then close the window. |
+| **Linux** | Run `./install.sh` once. It installs Node deps, clones entity-core, and registers a **Proto-Familiar** entry in your application menu. | Search **Proto-Familiar** in your app launcher, or `./start.sh`. | `./stop.sh` |
+
+Everything runs locally at **http://localhost:3000** — your API key never leaves your machine. Set `PORT=8080` (env var, or `PORT=8080 ./start.sh`) to change the port.
+
+**Updating an existing install:** re-run the same installer. It detects `node_modules/` and switches to update mode. Before any git op runs, `tomes/`, `logs/`, and entity-core's `data/` directory are copied to `.pf-backups/<timestamp>/` as a safety net. Then `git pull --ff-only` on Proto-Familiar (refuses non-FF merges; your work tree stays put on conflict), `git fetch && checkout <pinned tag>` on entity-core (whose `data/` is gitignored, never touched), idempotent `npm install` + `deno cache`. Node/Deno/Git are reinstalled if missing in either mode; only shortcut creation is skipped on update. See [docs/getting-started.md#updating-an-existing-install](docs/getting-started.md#updating-an-existing-install) for the protection table.
+
+**Manual / advanced:**
 
 ```bash
 # 1. Install dependencies
@@ -50,24 +62,28 @@ Project wiki pages are available in [`/wiki`](wiki/):
 | Feature | Details |
 |---|---|
 | **Providers** | NanoGPT (OpenAI-compatible) · Z.ai Standard API · Z.ai Coding Plan |
-| **Entity-core enrichment** | Automatically prepends the full identity layer (all four identity categories, XML-wrapped) + RAG memories + knowledge graph context to every system prompt via a local [entity-core](https://github.com/zarilewis/entity-core-alpha) MCP server |
-| **Prompt inspector** | Click the 🔍 button in the top bar after any message to see the complete prompt sent to the LLM — including entity-core identity, Tome injections, and memory context |
+| **Entity-core enrichment** | Automatically prepends the full identity layer (all four identity categories, XML-wrapped) + RAG memories + knowledge graph context to every system prompt via a local [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) MCP server |
+| **Knowledge editor** | Sidebar **🧠 Open Knowledge editor** modal with four tabs: Memories (browse / edit / delete / supersede by date), Graph (full CRUD on nodes and edges across two view modes — see next row), Identity (per-section editor across self / user / relationship / custom files), Snapshots (one-click restore of any auto- or user-created snapshot). Resizable from the bottom-right corner with the size remembered per-modal; only the ✕ closes it. Every destructive op auto-snapshots entity-core first |
+| **Knowledge graph (Map view)** | The Graph tab's **List / Map** toggle switches to a canvas rendering of the entire graph as colored dots and curves. Node hue encodes type (deterministic per-graph palette spread across 24 hues so adjacent type names don't collide); edge hue encodes relationship type, with saturation / lightness / alpha scaled to the edge's weight. Wheel to zoom, drag to pan, hover for a tooltip (hit-tested against the actual Bézier curve), zoom past ~1.4× to see every label. Click a dot to open a draggable popover editor: label / type / description with autocompletion, a weighted edge list with inline ✎ edit and ✕ delete, and an **+ Add edge** form with target-label and relationship-type autocompletion. **+ Node** in the toolbar creates a node inline. Layout preserves positions across reloads so adding an edge doesn't reshuffle the map |
+| **Diagnostics report** | Sidebar **🩺 Generate diagnostic report** opens a client-side plain-text snapshot — system info (UA, hardware, network, viewport, timezone), Proto-Familiar state (provider, model, session, counts), a live `/api/health` round-trip, the last sent prompt's provenance, and a bounded ring buffer of recent in-app events (errors, console warnings, send/receive checkpoints, tool executions). Copy or download as `.txt`. Nothing leaves the browser. Common failure modes and their fixes live in [`docs/troubleshooting.md`](docs/troubleshooting.md) |
+| **Prompt inspector** | Click the 🔍 button in the top bar after any message to see the complete prompt actually sent to the LLM, color-coded by source — entity-core block (captured live from the response, not re-derived), each lorebook injection by position, base system / character / user profile, post-history prompt, and the conversation history |
 | **Streaming** | Server-sent event streaming by default; toggle off for full-response mode |
-| **Name variables** | Set a User name and AI name in the sidebar; use `{{user}}` and `{{char}}` anywhere in prompts |
+| **Prompt macros** | `{{user}}` / `{{char}}` insert configured names; `{{elapsedTime}}` is the time between the two most recent user messages in this session (so the LLM can detect when the user returns after a long absence — surfaces once both messages are in saved history); `{{timeSinceLastSession}}` is the gap since the previous session ended. All durations render as `5m`, `2h 14m`, `3d 4h`, etc. |
 | **System prompt** | Free-text field or import from `.txt` / `.md` / `.json` |
 | **Character profile** | Injected into the system message after the system prompt |
 | **User profile** | Injected into the system message after character profile |
 | **Post-history prompt** | Appended as a final user turn immediately before each AI response |
-| **Tool calling** | LLM can invoke built-in tools (`get_datetime`, `get_session_info`) or custom tools you define; multi-round loop up to 5 rounds |
+| **Tool calling** | LLM can invoke built-in tools (`get_datetime`, `get_session_info`, `save_to_tome`, `save_memory`, `update_identity`) or custom tools you define; multi-round loop up to 5 rounds |
 | **Custom tools** | Paste a JSON array of OpenAI-compatible function definitions; executed client-side |
 | **Topics** | Track named conversation threads with coloured gutter bars; start/end retroactively by clicking any message; parallel topics supported |
 | **Topic summaries** | On topic end, an AI-generated summary is reviewed, edited, and saved to a Tome with auto-suggested keywords |
-| **Tomes** | Plug-and-play multi-tome knowledge base — each Tome is an independent file you can enable/disable; the full SillyTavern-compatible World Info engine (keyword injection, 5 injection positions, selective logic, recursion, timed effects, group exclusion) aggregates entries across all enabled Tomes; see [docs/tomes.md](docs/tomes.md) |
+| **Tomes** | Plug-and-play multi-tome knowledge base — each Tome is an independent file you can enable/disable; the full SillyTavern-compatible World Info engine (keyword injection, 5 injection positions, selective logic, recursion, timed effects, group exclusion) aggregates entries across all enabled Tomes; see [docs/tomes.md](docs/tomes.md). Both the entries list and the per-entry editor are resizable (size remembered per-modal in localStorage); only the ✕ closes them |
 | **Message timestamps** | Every message is stamped `HH:MM` (today) or `Mon DD HH:MM` (older) |
 | **Session logging** | Conversations saved as JSON files in `logs/` with start + end timestamps |
 | **Session browser** | In-app Logs modal to view, load, or delete any past session |
 | **Session auto-end** | After 3 hours of inactivity the session is closed and a new one starts automatically |
-| **Session memorization** | On every session close (idle timeout or manual clear), the LLM automatically extracts 1–8 distinct topics and saves each as a Tome entry with keywords; a toast confirms the count |
+| **Session memorization** | Sessions are queued for memorization on idle timeout, manual clear, tab close, topic end, or via the **Memorize now** button; a server-side worker calls the LLM, extracts 1–8 distinct topics, and saves each as an entry in the dedicated **Session Memories** Tome. Jobs survive tab close and server restart, with exponential backoff retry on failure |
+| **Per-session Memorize** | Each row in the Logs modal has a **Memorize** button that opens a chooser: **Auto-summarize** runs the worker over that session and shows the entry count inline, while **Manual topics** opens the session read-only so you can mark topic ranges by hand and review each entry before saving |
 | **Export** | Download conversation as a Markdown `.md` file (tool-call turns are omitted) |
 | **Regenerate** | Re-run the last AI response with the same user message |
 | **Themes** | Dark / light toggle |
@@ -124,25 +140,39 @@ Each log file is named `<uuid>.json` and contains:
 4. If you close the tab and reopen it after 3+ hours, the same check runs on startup: the old session is finalised silently and a new one starts.
 5. Manually clearing the chat (the **Clear** button) also closes and memorizes the current session before starting a fresh one.
 
-You can browse, load, or delete sessions at any time via the **☰ Logs** button in the Chat section of the sidebar.
+You can browse, load, delete, or **memorize** any past session at any time via the **☰ Logs** button in the Chat section of the sidebar. The per-row **Memorize** button opens a chooser with **Auto-summarize** (run the worker over the whole session and toast the result) and **Manual topics** (open the session in a read-only viewer with topic-mark buttons and review each entry before saving). Both write to the **Session Memories** tome.
 
 #### Session memorization
 
-When a session closes — either by the 3-hour idle timeout or by manually clearing the chat — the full conversation is automatically sent to the configured LLM. The model is asked to identify the distinct topics discussed and return structured JSON shaped by the [tome-writing-guide](docs/tome-writing-guide.md). Each topic becomes a lorebook entry containing:
+Memorization is a **server-side queued job** that survives tab close, idle rollover, and server restart. The browser submits a payload to the server, the server-side worker calls the configured LLM, and entries are written to the dedicated **Session Memories** Tome (auto-created on first use). The model is asked to identify distinct topics and return structured JSON shaped by the [tome-writing-guide](docs/tome-writing-guide.md). Each topic becomes a lorebook entry containing:
 
 - A concise **title** (used as the entry comment)
-- **Familiar-perspective bullet content** — a one-sentence framing line followed by action bullets and one or two prohibition bullets, written in second person and using `{{user}}` where the user's name belongs
+- **Familiar-perspective bullet content** — the Familiar's own first-person notes-to-self: a one-sentence framing line followed by action bullets ("what I will do") and one or two prohibition bullets ("what I will NOT do"), using `{{user}}` where the user's name belongs
 - **3–8 conversational trigger keywords** — phrases the user would actually say when this situation recurs, not topic labels
 - A suggested **sticky** value sized to how long the situation typically persists
 
-Between 1 and 8 entries are created per session. A brief on-screen toast confirms how many were saved (e.g. *"3 lorebook entries memorized from the last session."*).
+Between 1 and 8 entries are created per memorization job. A brief on-screen toast confirms how many were saved once the job completes (e.g. *"3 lorebook entries memorized from the last session."*); a separate toast surfaces any failure.
+
+**When memorization is enqueued:**
+
+| Trigger | Scope |
+|---|---|
+| 3-hour idle timeout | The full session that just closed |
+| Manual **Clear** button | The full session being cleared |
+| **Memorize now** button (Chat sidebar) | The current session, on demand, without ending it |
+| Closing the tab mid-session (`beforeunload`) | The current session, delivered via `navigator.sendBeacon` |
+| Ending a topic (**□ Topic end**) | Only that topic's message range |
+| Logs modal **Memorize → Auto-summarize** on any past session | The full historical session — chooser modal shows live status, entry count on success, or the failure reason |
+| Logs modal **Memorize → Manual topics** on any past session | Each topic the user closes in the read-only viewer — one LLM call per topic, reviewed before saving (no worker queue involved) |
 
 **Conditions and limits:**
-- Sessions with fewer than 4 readable messages are skipped — too short to be worth summarising.
-- If no API key is configured, memorization is silently skipped.
-- The call runs entirely in the background after the new session has already started, so it never blocks the UI.
-- Entries are fetched fresh from the server before writing to avoid overwriting any changes made in the new session.
-- Entries created this way are indistinguishable from hand-crafted lorebook entries and can be edited, disabled, or deleted in the Lorebook modal.
+- Jobs with fewer than 2 readable messages are rejected — too short to be worth summarising.
+- If no API key is configured, memorization is skipped.
+- The queue is persisted to `tomes/.memorization-queue.json` (git-ignored). It contains the API key on disk; matches the existing local-only posture of `logs/` and `tomes/`.
+- Failures retry with exponential backoff (5s → 30s → 2m → 10m → 30m, max 5 attempts) before the job is marked failed and toasted to the user.
+- Concurrent jobs writing to the same Tome are serialised by a per-file mutex on the server, so entries are never clobbered.
+- Identical jobs (same session, scope, topic, and message range) are deduplicated, so retrying or double-triggering is safe.
+- Entries created by memorization are indistinguishable from hand-crafted lorebook entries and can be edited, disabled, or deleted in the Lorebook modal.
 
 ---
 
@@ -156,12 +186,24 @@ The **Enable tool use** checkbox controls whether the `tools` array is sent with
 
 #### Built-in tools
 
-| Tool | What it returns |
+| Tool | What it does |
 |---|---|
-| `get_datetime` | Current local date, time, and timezone |
-| `get_session_info` | Session start time, message count, provider, model, and ms since last message |
+| `get_datetime` | Returns the current local date, time, and timezone. |
+| `get_session_info` | Returns session start time, message count, provider, model, and ms since last message. |
+| `save_to_tome` | Saves a fact learned during the conversation as a new entry in the first enabled Tome, with trigger keywords for future activation. |
+| `save_memory` | Writes a new time-stamped entry to entity-core's long-term memory at the chosen granularity (`daily`/`weekly`/`monthly`/`yearly`/`significant`). |
+| `update_identity` | Appends a durable fact to one of entity-core's identity files (`user_notes.md` or `relationship_notes.md`). |
+| `find_graph_node` | Looks up the underlying graph id for an entity by name (e.g. `"Chen"` → `1747...c4d8`). Used before the editing tools when the entity isn't in the prompt's graph-ids legend. |
+| `find_graph_edges` | Lists a node's 1-hop edges with their ids, ready to paste into the edge editing tools. |
+| `update_memory` | Overwrites an existing memory entry to correct an inaccuracy. Auto-snapshots first. |
+| `delete_memory` | Permanently deletes a memory entry. Use only when fully obsolete; prefer `save_memory` (contradicting newer entry) when the change has historical value. Auto-snapshots first. |
+| `rewrite_identity_section` | Replaces one section of an identity file. Stronger than the append-only `update_identity` when an existing section has gone stale. Auto-snapshots first. |
+| `update_graph_node` | Renames or re-describes an entity in the knowledge graph. |
+| `delete_graph_node` | Deletes a knowledge-graph entity and ALL its edges. For "no longer related" prefer `delete_graph_edge`. Auto-snapshots first. |
+| `update_graph_edge` | Changes a relationship's type or weight. |
+| `delete_graph_edge` | Removes one relationship between two entities while keeping the entities. Auto-snapshots first. |
 
-Both tools are always available when tool use is enabled — they require no arguments.
+All fourteen tools are always available when tool use is enabled. `get_datetime` and `get_session_info` take no arguments; the others accept the parameters described in [`docs/tool-calling.md`](docs/tool-calling.md). The twelve entity-core tools degrade gracefully if entity-core is unreachable. Each editing tool's description carries first-person guidance on when to append vs. update vs. delete — the model is told to err toward preservation when uncertain, and to supersede stale memories with a newer dated entry rather than deleting outright when the change has historical value. The enriched prompt's graph block ends with a compact id legend so common edits don't need a `find_graph_*` round-trip.
 
 #### Custom tools
 
@@ -186,10 +228,10 @@ Tool-call turns are stored in the session log but are stripped from chat exports
 Topics let you tag a slice of conversation with a label and track it with a coloured bar in the message gutter.
 
 - **Start a topic** — click the **+ Topic** button in the input bar, give it a name (or leave blank), and messages from that point forward are grouped under it. Multiple topics can run in parallel.
-- **End a topic** — click the **□ Topic end** button that appears on any message while hovering. If multiple open topics include that message, a picker appears.
+- **End a topic** — click the **□ Topic end** button that appears on any message while hovering, or click the active topic pill above the input bar. If multiple open topics include that message, a picker appears. The summary review dialog always opens, even with no API key — it drops into a blank manual form with a hint when auto-generation isn't possible.
 - **Retroactive start** — click the **▷ Topic start** button on any past message to begin a topic from that point instead of the present.
 - **Open topic indicator** — the gutter bar for an open topic extends to the bottom of the message list with a pulsing dot, keeping it visible while it is still active.
-- **Auto-summary** — when a topic ends, the LLM is prompted in the style of [docs/tome-writing-guide.md](docs/tome-writing-guide.md): conversational trigger keywords, Familiar-perspective bullet content, and a suggested sticky value. You can edit any field and save it to a Tome as a new entry.
+- **Auto-summary** — when a topic ends, the LLM is prompted in the style of [docs/tome-writing-guide.md](docs/tome-writing-guide.md): conversational trigger keywords, Familiar-perspective bullet content, and a suggested sticky value. If you named the topic yourself, the label is forwarded to the summarizer as a "focus topic" so the entry centers on that subject and skips tangential threads. You can edit any field and save it to a Tome as a new entry.
 
 ---
 
@@ -330,16 +372,17 @@ Deletes the session log file. Returns `{ "ok": true }` on success.
 #### `GET /api/health`
 Returns `{ "ok": true }`. Useful for uptime checks.
 
-#### `GET /api/lorebook`
-Returns the full lorebook JSON `{ entries: { [uid]: entry } }`. Returns `{ entries: {} }` if no lorebook file exists yet.
+#### Tomes — `GET/POST /api/tomes`, `GET/PUT/PATCH/DELETE /api/tomes/:id`, `DELETE /api/tomes/:id/entries/:uid`, `POST /api/tomes/default/entries`, `GET /api/tomes/session-memories`
 
-#### `PUT /api/lorebook`
-Replaces the entire lorebook with the body supplied. The body must be `{ entries: { ... } }`.
+The lorebook is a multi-Tome system: each Tome is an independent JSON file in `tomes/` that can be enabled/disabled and contains its own entries. The full request/response shapes are documented in [`docs/api-reference.md`](docs/api-reference.md#tomes). The special **Session Memories** Tome is auto-created on first session memorization.
 
-#### `DELETE /api/lorebook/:uid`
-Removes a single entry by UID and rewrites the lorebook file. Returns `{ ok: true }`.
+#### Session memorization — `POST/GET /api/memorize`, `POST /api/memorize/:id/ack`, `DELETE /api/memorize/:id`
 
-The lorebook is stored as `lorebook.json` in the project root (next to `server.js`), automatically created on first save, and git-ignored.
+Queue endpoints for server-side memorization jobs. Full shapes in [`docs/api-reference.md`](docs/api-reference.md#session-memorization).
+
+#### Entity-core — `POST /api/entity/memory`, `POST /api/entity/identity`
+
+Write-through endpoints used by the `save_memory` and `update_identity` built-in tools. Full shapes in [`docs/api-reference.md`](docs/api-reference.md#entity-core).
 
 ---
 
@@ -347,27 +390,42 @@ The lorebook is stored as `lorebook.json` in the project root (next to `server.j
 
 ```
 /
-├── server.js          Express proxy + log/lorebook API (Node.js 18+, ESM)
-├── thalamus.js        entity-core MCP bridge — enriches every LLM request
+├── server.js                    Express server — chat proxy + log/tome/memorize/entity API (Node.js 18+, ESM)
+├── thalamus.js                  entity-core MCP bridge — enriches every LLM request
+├── memorization.js              Persistent server-side memorization queue + worker
 ├── package.json
 ├── .gitignore
-├── logs/              Session JSON files (auto-created, git-ignored)
-├── lorebook.json      Lorebook entries (auto-created, git-ignored)
+│
+├── Proto-Familiar.vbs           Windows tray-icon launcher (one-click entry point)
+├── Proto-Familiar.command       macOS double-click launcher
+├── install.sh / install.bat     Bash / batch installer (deps + entity-core clone)
+├── start.sh / start.bat         Bash / batch launcher (background, opens browser)
+├── stop.sh / stop.bat           Bash / batch shutdown
+│
+├── logs/                        Session JSON files (auto-created, git-ignored)
+├── tomes/                       Per-Tome JSON files (memorization queue lives here too, git-ignored)
+│
 ├── scripts/
-│   ├── import-entity.js  Import an existing entity-core data directory
-│   └── import-tome.js    Convert a SillyTavern lorebook export to a Proto-Familiar Tome
+│   ├── import-entity.js         Import an existing entity-core data directory
+│   ├── import-tome.js           Convert a SillyTavern lorebook export to a Proto-Familiar Tome
+│   ├── linux/install-desktop-entry.sh   Register Proto-Familiar in the Linux app menu
+│   └── win/{install,tray}.ps1   PowerShell installer + tray app (called by the .vbs launcher)
+│
 ├── public/
-│   ├── index.html     App shell (sidebar + chat pane + modals)
-│   ├── style.css      All styling — dark/light themes, responsive layout
-│   └── app.js         All frontend logic — state, API, rendering, topics, lorebook
-└── Research/          Background reading on architecture and mental-health AI
+│   ├── index.html               App shell (sidebar + chat pane + modals)
+│   ├── style.css                All styling — dark/light themes, responsive layout
+│   └── app.js                   All frontend logic — state, API, rendering, topics, tomes engine
+│
+├── docs/                        User-facing documentation (index.md is the table of contents)
+├── wiki/                        Short GitHub-wiki mirrors of the docs
+└── Research/                    Background reading on architecture and mental-health AI
 ```
 
 ---
 
 ### Entity-Core Identity Layer
 
-Familiar optionally connects to a local [entity-core-alpha](https://github.com/zarilewis/entity-core-alpha) MCP server to ground every LLM request in persistent identity and memory. This is wired through `thalamus.js`.
+Familiar optionally connects to a local [entity-core-alpha](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) MCP server to ground every LLM request in persistent identity and memory. This is wired through `thalamus.js`.
 
 #### How it works
 
@@ -415,13 +473,13 @@ If entity-core is unreachable, `enrich()` logs the problem and returns an empty 
 
 #### Prompt inspector
 
-To see exactly what was sent to the LLM on any given message — including the full entity-core block, all lorebook injections, and the conversation history — click the **⊕ magnifying glass** button in the top bar. The inspector fetches the enriched prompt from the server and displays each message in a colour-coded, collapsible panel with per-message Copy buttons.
+To see exactly what was sent to the LLM on the previous turn — including the full entity-core block, every lorebook injection, and the conversation history — click the **⊕ magnifying glass** button in the top bar. The inspector renders each segment color-coded by source: the entity-core block (Thalamus) is captured from a `_thalamus` envelope the server attaches to every `/api/chat` response (so it reflects the live enrichment, not a re-derived preview), and the lorebook / system / character / user / post-history segments come from `buildApiMessages`'s recorded provenance. Each segment shows a labelled chip and a left-rule in its source color; per-message Copy buttons stay available for the raw text.
 
 #### Setup
 
-1. Clone [entity-core-alpha](https://github.com/zarilewis/entity-core-alpha) as a sibling directory:
+1. Clone [entity-core-alpha](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) as a sibling directory:
    ```bash
-   git clone https://github.com/zarilewis/entity-core-alpha ../entity-core-alpha
+   git clone https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2 ../entity-core-alpha
    ```
 2. Follow its README to populate `data/` with identity files and memories.
 3. Start Familiar normally — `thalamus.js` spawns entity-core automatically.
@@ -482,7 +540,7 @@ My idea is to create an agentic caretaker for myself. As you can see I am starti
 
 However, I found some stuff potentially helpful for others. So I've made the repo public already. Have at it.
 
-See [`DEVELOPMENT_ROADMAP.md`](DEVELOPMENT_ROADMAP.md) for the full vision and phased plan.
+See [`docs/project-vision.md`](docs/project-vision.md) for the full vision and design principles.
 
 ---
 
@@ -583,5 +641,5 @@ SillyTavern's universal adapter architecture. Chat Completions API (OpenAI-compa
 
 ## Acknowledgements
 
-Huge thanks to **[zarilewis](https://github.com/zarilewis)** for creating [entity-core-alpha](https://github.com/zarilewis/entity-core-alpha) — the MCP server that powers Familiar's identity and memory layer. entity-core provides the persistent self-model, RAG memory, and knowledge graph that make it possible for Familiar to maintain consistent character values, voice, and relational context across conversations. None of the identity injection work in this project would exist without it.
+Huge thanks to **[zarilewis](https://github.com/zarilewis)** for creating [entity-core-alpha](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) — the MCP server that powers Familiar's identity and memory layer. entity-core provides the persistent self-model, RAG memory, and knowledge graph that make it possible for Familiar to maintain consistent character values, voice, and relational context across conversations. None of the identity injection work in this project would exist without it.
 

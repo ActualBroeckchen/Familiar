@@ -11,18 +11,20 @@ Browser (public/)
     ▼
 server.js  (Express, Node 18+, ESM)
     │
-    ├── thalamus.js  ──►  entity-core-alpha  (Deno, stdio MCP)
+    ├── thalamus.js       ──►  entity-core-alpha  (Deno, stdio MCP)
+    ├── memorization.js   ──►  persistent queue + worker for session memorization
     │
     ├── logs/         (session JSON files, git-ignored)
-    └── tomes/        (per-Tome JSON files, git-ignored)
+    └── tomes/        (per-Tome JSON files; queue file .memorization-queue.json git-ignored)
 ```
 
 ## File Structure
 
 ```
 /
-├── server.js            Express server — API proxy, log/tome endpoints
+├── server.js            Express server — API proxy, log/tome/memorize endpoints
 ├── thalamus.js          Entity-core MCP bridge — enriches every LLM request
+├── memorization.js      Session-memorization queue + worker (persistent, retrying)
 ├── package.json
 ├── .gitignore
 │
@@ -48,12 +50,23 @@ server.js  (Express, Node 18+, ESM)
 ### `server.js`
 
 The Express server handles:
-- **`POST /api/chat`** — validates the request, calls `thalamus.js:enrich()` to prepend entity-core context to the system message, then proxies the enriched request to the upstream LLM provider. Supports both streaming (SSE) and non-streaming modes.
-- **`POST /api/debug-prompt`** — returns the enriched message array without calling any upstream LLM; used by the prompt inspector UI.
+- **`POST /api/chat`** — validates the request, calls `thalamus.js:enrich()` to prepend entity-core context to the system message, then proxies the enriched request to the upstream LLM provider. Supports both streaming (SSE) and non-streaming modes. Attaches a `_thalamus` envelope (`{ entityContext }`) to every successful response — on the non-streaming path as a top-level JSON field, on the streaming path as the first SSE `data:` line, so the prompt inspector can show the actual injected text.
+- **`POST /api/debug-prompt`** — returns the enriched message array without calling any upstream LLM; available for offline preview. The live prompt inspector reads the `_thalamus` envelope from `/api/chat` instead, so what it shows reflects the actual injection rather than a re-derived preview that could drift after intervening memory or identity writes.
 - **Log endpoints** (`/api/log`, `/api/logs`, `/api/logs/:id`, `DELETE /api/logs/:id`) — persist and retrieve session JSON files from the `logs/` directory.
 - **Tome endpoints** (`GET /api/tomes`, `POST /api/tomes`, `GET /api/tomes/:id`, `PUT /api/tomes/:id`, `PATCH /api/tomes/:id`, `DELETE /api/tomes/:id`, `DELETE /api/tomes/:id/entries/:uid`) — manage individual Tome files in the `tomes/` directory.
+- **Memorization endpoints** (`POST /api/memorize`, `GET /api/memorize`, `POST /api/memorize/:id/ack`, `DELETE /api/memorize/:id`) — enqueue, list, acknowledge, and cancel session-memorization jobs. The `POST` endpoint accepts both `application/json` (fetch) and `text/plain` JSON (sendBeacon, used in the browser's `beforeunload` handler).
 - **`GET /api/health`** — lightweight uptime probe.
 - **Static file serving** — serves `public/` at the root.
+
+### `memorization.js`
+
+Server-side session-memorization queue:
+- Loads / persists a JSON queue at `tomes/.memorization-queue.json` (atomic write via `tmp` + rename, single-writer mutex). Git-ignored because each job contains the user's API key.
+- A single in-process worker ticks every 5 seconds, picks the next `pending` job whose `nextAttemptAt` has elapsed, calls the configured LLM provider directly (same `PROVIDER_URLS` map as `server.js`), parses the JSON response, and writes entries to the dedicated **Session Memories** Tome — creating it if it doesn't exist yet.
+- Writes go through a per-Tome-file mutex (`withTomeLock`) so concurrent jobs writing to the same Tome serialise their read-modify-write cycles and never clobber each other.
+- Failed jobs retry with exponential backoff (5s → 30s → 2m → 10m → 30m, max 5 attempts), then transition to `failed`. Jobs left in `processing` after a server restart are automatically requeued.
+- Idempotency: enqueueing a job with the same `sessionId + scope + topicId + messageRange` as an already-active job returns the existing `jobId` with `deduped: true`.
+- Terminal jobs (`done` / `failed`) stay in the queue with their result/error until the client acknowledges them, then are pruned after 24 hours.
 
 ### `thalamus.js`
 
@@ -73,7 +86,7 @@ All frontend logic in a single ES5-style script:
 - **Tome engine** — full SillyTavern-compatible World Info implementation across multiple Tomes: keyword scanning, injection positions, selective logic, timed effects (sticky/cooldown), recursion, and group exclusion. Entries are aggregated from all enabled Tomes before activation.
 - **Tool calling loop** — sends tools with each request, executes results client-side, and re-sends up to 5 rounds.
 - **Topics** — tracks named conversation slices with coloured gutter bars; triggers LLM-generated summaries saved to a Tome on topic end.
-- **Session memorization** — on session close, sends the full conversation to the LLM and saves the extracted topics as entries in the default Tome.
+- **Session memorization** — enqueues a job to the server (`POST /api/memorize`) on idle timeout, manual Clear, tab close (`beforeunload` via `navigator.sendBeacon`), topic end, or the **Memorize now** button. Polls `GET /api/memorize` every 30 seconds (and on window focus) to toast completed or failed jobs, then ACKs them. The LLM call and Tome write happen entirely server-side in `memorization.js`.
 - **UI rendering** — renders messages, tool-call blocks, topic bars, modals, and settings panels.
 
 ## Data Flow — Single Chat Request
@@ -84,7 +97,7 @@ User types message
         ▼
 builApiMessages()
    ├── activateTomeEntries()   ← keyword scan across all enabled Tomes → inject at each position
-   ├── applyNameVars()          ← {{user}} / {{char}} substitution
+   ├── applyNameVars()          ← {{user}} / {{char}} / {{elapsedTime}} / {{timeSinceLastSession}} substitution
    └── assembles system + history + new user turn + post-history prompt
         │
         ▼

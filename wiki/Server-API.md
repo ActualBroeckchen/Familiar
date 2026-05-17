@@ -7,7 +7,9 @@ The server is implemented in `server.js` (Express, Node.js 18+, ESM).
 - Serves static frontend from `public/`
 - Proxies chat requests to provider endpoints
 - Persists session logs to `logs/`
-- Validates session IDs with a strict UUID pattern before file access
+- Stores Tomes as per-file JSON in `tomes/`
+- Runs a persistent server-side memorization worker
+- Validates all path-bearing IDs against a single strict UUID regex (`isValidUUID`) before file access
 
 ## Endpoints
 
@@ -54,6 +56,36 @@ Returns full JSON for one saved session.
 
 Deletes one saved session log.
 
+### Tomes
+
+- `GET /api/tomes` — list all Tomes (metadata + entry count)
+- `POST /api/tomes` — create a new Tome (`{ name, description? }`)
+- `GET /api/tomes/session-memories` — find or create the special **Session Memories** Tome
+- `GET /api/tomes/:id` — full Tome with all entries
+- `PUT /api/tomes/:id` — replace entries (optionally update metadata)
+- `PATCH /api/tomes/:id` — update metadata only
+- `DELETE /api/tomes/:id` — delete a Tome file
+- `DELETE /api/tomes/:id/entries/:uid` — delete a single entry
+- `POST /api/tomes/default/entries` — append a single entry to the first enabled Tome (used by the `save_to_tome` built-in tool)
+
+### Session memorization
+
+- `POST /api/memorize` — enqueue a memorization job (accepts `application/json` or `text/plain` JSON via `sendBeacon`)
+- `GET /api/memorize` — list all jobs (sanitised — no API keys or message bodies)
+- `POST /api/memorize/:id/ack` — mark a terminal job as seen by the UI
+- `DELETE /api/memorize/:id` — cancel a pending job
+
+### Entity-core write-through
+
+- `POST /api/entity/memory` — write a long-term memory entry (`save_memory` tool)
+- `POST /api/entity/identity` — append to or update a section of an identity file (`update_identity` tool)
+
+### `POST /api/debug-prompt`
+
+Returns the full enriched message array that would be sent to the LLM, without calling any upstream provider. Used by the prompt inspector.
+
 ### `GET /api/health`
 
 Returns `{ "ok": true }`.
+
+For full request/response shapes see [`docs/api-reference.md`](../docs/api-reference.md).

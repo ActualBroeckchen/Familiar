@@ -91,11 +91,22 @@ if (!existsSync(sourceDataDir)) {
 // ── Resolve destination data directory ───────────────────────────────────────
 
 // Mirror the same resolution logic as thalamus.js:
-//   ENTITY_CORE_PATH points to src/mod.ts, so the root is two levels up.
+//   $ENTITY_CORE_PATH (mod.ts) → its root is two levels up.
+//   Otherwise probe both the Deno-workspace path
+//   (../entity-core-alpha/packages/entity-core) and the legacy
+//   top-level path (../entity-core-alpha), preferring the workspace one.
 const entityCorePath = process.env.ENTITY_CORE_PATH;
-const entityCoreRoot = entityCorePath
-  ? resolve(dirname(dirname(entityCorePath)))            // .../entity-core-alpha
-  : resolve(__dirname, '..', '..', 'entity-core-alpha'); // sibling default
+let entityCoreRoot;
+if (entityCorePath) {
+  entityCoreRoot = resolve(dirname(dirname(entityCorePath)));
+} else {
+  const alpha     = resolve(__dirname, '..', '..', 'entity-core-alpha');
+  const workspace = join(alpha, 'packages', 'entity-core');
+  const legacy    = alpha;
+  entityCoreRoot = existsSync(join(workspace, 'src', 'mod.ts')) ? workspace
+                 : existsSync(join(legacy,    'src', 'mod.ts')) ? legacy
+                 : workspace; // default to the current layout for errors
+}
 
 const destEnvPath = join(entityCoreRoot, '.env');
 const destDataRelative = readEnvVar(destEnvPath, 'ENTITY_CORE_DATA_DIR') ?? './data';

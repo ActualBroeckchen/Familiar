@@ -72,7 +72,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'get_datetime',
-      description: 'Returns the current local date, time, and timezone. Use this any time the user asks what time or date it is.',
+      description: 'Returns the current local date, time, and timezone. I call this whenever {{user}} asks me what time or date it is.',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -80,7 +80,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'get_session_info',
-      description: 'Returns metadata about the current chat session: when it started, how many messages it contains, which provider and model are in use.',
+      description: 'Returns metadata about my current chat session: when it started, how many messages it contains, which provider and model I am running on.',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -88,13 +88,13 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'save_to_tome',
-      description: 'Save a piece of knowledge or a fact learned during this conversation into the persistent Tome knowledge base. Use when the user shares something important about themselves, their relationships, their preferences, or their situation that should be remembered across future conversations. Do NOT use for trivial, transient, or already-known information.',
+      description: 'I save a piece of knowledge or a fact I learned during this conversation into my persistent Tome knowledge base. I use this when {{user}} shares something important about themselves, their relationships, their preferences, or their situation that I should remember across future conversations. I do NOT use this for trivial, transient, or already-known information.',
       parameters: {
         type: 'object',
         properties: {
-          title:    { type: 'string', description: 'Short descriptive label for this entry (e.g. "User stress about lateness").' },
-          content:  { type: 'string', description: 'The knowledge to store. Write concisely in third person, with enough detail to be useful as injected context in future conversations.' },
-          keywords: { type: 'array', items: { type: 'string' }, description: 'Two to eight trigger keywords or short phrases. The entry will be injected into the prompt whenever these appear in conversation.' },
+          title:    { type: 'string', description: 'Short descriptive label for this entry (e.g. "{{user}} stress about lateness").' },
+          content:  { type: 'string', description: 'The knowledge to store. I write it as my own first-person notes to myself, concise but detailed enough to be useful as injected context in future conversations.' },
+          keywords: { type: 'array', items: { type: 'string' }, description: 'Two to eight trigger keywords or short phrases — things {{user}} would literally say when this situation recurs. The entry will be injected into my prompt whenever these appear in conversation.' },
         },
         required: ['title', 'content', 'keywords'],
       },
@@ -104,11 +104,11 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'save_memory',
-      description: 'Write a new memory entry to the long-term memory system. Use to record important events, emotional patterns, or significant moments from this conversation in a durable, time-stamped store. Prefer "daily" for routine session events; use "significant" for major milestones.',
+      description: 'I write a new memory entry to my long-term memory system. I use this to record important events, emotional patterns, or significant moments from this conversation in my durable, time-stamped store. I prefer "daily" for routine session events; I use "significant" for major milestones.',
       parameters: {
         type: 'object',
         properties: {
-          content:     { type: 'string', description: 'Memory content written in first-person perspective. Use bullet points prefixed with [chat:auto] for individual facts.' },
+          content:     { type: 'string', description: 'Memory content I write in first-person perspective. I use bullet points prefixed with [chat:auto] for individual facts.' },
           granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier.' },
         },
         required: ['content', 'granularity'],
@@ -119,15 +119,170 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_identity',
-      description: 'Append a new durable fact to a persistent identity file. Use for facts about the user (category: user, filename: user_notes.md) or the relationship (category: relationship, filename: relationship_notes.md). Do NOT use for session-specific or transient information.',
+      description: 'I append a new durable fact to one of my persistent identity files. I use this for facts about {{user}} (category: user, filename: user_notes.md) or about my relationship with them (category: relationship, filename: relationship_notes.md). I do NOT use this for session-specific or transient information. When to choose append vs. rewrite_identity_section: I APPEND when adding a new fact that complements what is already there; I REWRITE a section when an existing section is now misleading or incomplete and a partial correction would leave it confusing.',
       parameters: {
         type: 'object',
         properties: {
           category: { type: 'string', enum: ['user', 'relationship'], description: 'Identity file category.' },
           filename: { type: 'string', description: 'Target filename within the category, e.g. user_notes.md or relationship_notes.md.' },
-          content:  { type: 'string', description: 'Content to append to the identity file.' },
+          content:  { type: 'string', description: 'Content to append to the identity file, written in my own first-person voice.' },
         },
         required: ['category', 'filename', 'content'],
+      },
+    },
+  },
+  // ── Knowledge-editing tools ───────────────────────────────────────────
+  // The Familiar can correct stale or wrong information in memory / identity
+  // / graph instead of letting it pile up. Each destructive op auto-snapshots
+  // entity-core first, so the user can roll back via the Knowledge editor.
+  // Editing principles (apply to every tool below):
+  //   • APPEND when the new information adds to an existing record without
+  //     contradicting it. Append is non-destructive and reversible by deletion.
+  //   • UPDATE / REWRITE when the existing record is now inaccurate or
+  //     incomplete in a way that a partial addition would not fix.
+  //   • DELETE when the record is fully obsolete or was wrong in the first
+  //     place, and keeping it would mislead future-me. If the change has
+  //     historical value ("they were on vacation, now back"), prefer writing
+  //     a newer memory that contradicts the stale one rather than deleting —
+  //     the recency-decay scoring will demote the stale entry on its own.
+  //   • If unsure, write a new note instead of editing or deleting an
+  //     existing one. Erring toward preservation is cheaper than restoring.
+  {
+    type: 'function',
+    function: {
+      name: 'update_memory',
+      description: 'I overwrite an existing memory entry to correct an inaccuracy. I use this when the entry is incomplete or partially wrong but the core record (this date, this granularity) is still the right place for the fact. I do NOT use this to record new information — that is save_memory. I do NOT use this to remove information — that is delete_memory. When the change is "X was true, now Y is true," prefer save_memory with today\'s date so the history is preserved.',
+      parameters: {
+        type: 'object',
+        properties: {
+          granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier of the entry to overwrite.' },
+          date:        { type: 'string', description: 'Date of the entry, in the same format the entry was stored (e.g. YYYY-MM-DD for daily).' },
+          content:     { type: 'string', description: 'The full new contents. This REPLACES the entry — include everything I want to keep, not just the diff.' },
+        },
+        required: ['granularity', 'date', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_memory',
+      description: 'I permanently delete a memory entry. I use this only when the entry is fully wrong or no longer relevant, and keeping it would mislead future-me. If the change has historical value ("they were on vacation last week, back now"), I do NOT delete — I write a new contradicting memory with save_memory instead, and let recency-decay demote the stale one. Entity-core auto-snapshots before each delete so a mistake is recoverable from the Knowledge editor.',
+      parameters: {
+        type: 'object',
+        properties: {
+          granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier of the entry to delete.' },
+          date:        { type: 'string', description: 'Date of the entry, in the same format the entry was stored.' },
+        },
+        required: ['granularity', 'date'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'rewrite_identity_section',
+      description: 'I replace one section of an identity file with new content. I use this when an existing section is now misleading or has accumulated stale notes and a clean rewrite serves future-me better than appending a correction. For NEW facts that just need to land somewhere, I use update_identity (append). For removing only a small piece, prefer rewriting the whole section over deletion.',
+      parameters: {
+        type: 'object',
+        properties: {
+          category: { type: 'string', enum: ['self', 'user', 'relationship', 'custom'], description: 'Identity file category.' },
+          filename: { type: 'string', description: 'Target filename, e.g. user_notes.md.' },
+          section:  { type: 'string', description: 'The markdown heading of the section to rewrite (without leading #s), e.g. "Sleep patterns".' },
+          content:  { type: 'string', description: 'New full contents for that section, in my first-person voice. Will REPLACE the section body.' },
+        },
+        required: ['category', 'filename', 'section', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'find_graph_node',
+      description: 'I look up the underlying graph id(s) for an entity by name. I use this before update_graph_node or delete_graph_node when I only have the human-readable label (from the graph block in my context) and need the id to pass to the editing tool. Returns the top matching nodes with their ids, types, and descriptions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'The entity name or fragment to search for (e.g. "Chen", "vacation").' },
+          type:  { type: 'string', description: 'Optional: restrict matches to a single node type (e.g. "person", "place").' },
+          limit: { type: 'number', description: 'Optional: max matches to return (default 10).' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'find_graph_edges',
+      description: 'I list the edges connected to a graph node (1-hop neighbours), with each edge\'s id. I use this before update_graph_edge or delete_graph_edge to look up an edge id from the relationship I want to change. Pass the node id (resolve it with find_graph_node first if I only have a label).',
+      parameters: {
+        type: 'object',
+        properties: {
+          nodeId: { type: 'string', description: 'The graph id of the node whose edges I want to see.' },
+          depth:  { type: 'number', description: 'Optional: traversal depth (1–3, default 1).' },
+        },
+        required: ['nodeId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_graph_node',
+      description: 'I rename or re-describe an entity (person, place, project, etc.) in my knowledge graph. I use this when the node\'s label or description is wrong, outdated, or imprecise. I do NOT use this to record a new relationship — that is what edges are for. The graph block in my context lists ids at the bottom; if the entity I want isn\'t listed there, I call find_graph_node first to look the id up.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id:          { type: 'string', description: 'The id of the node to update (from earlier graph context).' },
+          label:       { type: 'string', description: 'New display label. Omit to leave unchanged.' },
+          description: { type: 'string', description: 'New description. Omit to leave unchanged.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_graph_node',
+      description: 'I delete an entity from my knowledge graph along with its edges. I use this only when the node is clearly an error (duplicate, wrong entity entirely) or refers to something that no longer exists in any meaningful sense. For "this relationship is no longer true" (e.g. they\'re no longer on vacation), I delete the EDGE, not the node — the person/place still exists. If the entity\'s id isn\'t in the graph block\'s ids legend, I call find_graph_node first to resolve the label.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The id of the node to delete.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_graph_edge',
+      description: 'I change the relationship type or strength of an existing edge in my knowledge graph. I use this when the relationship still holds but is mis-typed or its confidence has shifted ("acquaintance" → "close friend"). For a relationship that USED to be true and is now false, I delete the edge instead. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`. If the edge I want isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id:     { type: 'string', description: 'The id of the edge to update.' },
+          type:   { type: 'string', description: 'New relationship type. Omit to leave unchanged.' },
+          weight: { type: 'number', description: 'New confidence/strength weight in [0, 1]. Omit to leave unchanged.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_graph_edge',
+      description: 'I delete a single relationship between two graph entities while keeping the entities themselves. This is the right tool for "X is no longer at Y" or "X no longer works with Y." The connection vanishes; both entities remain available for future relationships. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`; if the edge I need isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up. Entity-core auto-snapshots before each delete.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The id of the edge to delete.' },
+        },
+        required: ['id'],
       },
     },
   },
@@ -196,6 +351,127 @@ const BUILTIN_EXECUTORS = {
       return `Failed to update identity: ${err.message}`;
     }
   },
+
+  // ── Knowledge-editing executors ────────────────────────────────────
+  // Each one calls a server endpoint that auto-snapshots entity-core before
+  // the destructive op. Return strings the model can read back.
+
+  update_memory: async ({ granularity, date, content }) => {
+    try {
+      const res = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`, {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ content, editedBy: 'familiar-toolcall' }),
+      });
+      const data = await res.json();
+      if (!res.ok) return `Failed to update memory: ${data.error ?? res.status}`;
+      return `Memory ${granularity}/${date} updated.`;
+    } catch (err) { return `Failed to update memory: ${err.message}`; }
+  },
+
+  delete_memory: async ({ granularity, date }) => {
+    try {
+      const res = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) return `Failed to delete memory: ${data.error ?? res.status}`;
+      return `Memory ${granularity}/${date} deleted (snapshot saved — recoverable from the Knowledge editor).`;
+    } catch (err) { return `Failed to delete memory: ${err.message}`; }
+  },
+
+  rewrite_identity_section: async ({ category, filename, section, content }) => {
+    try {
+      const path = `/api/entity/identity/${encodeURIComponent(category)}/${encodeURIComponent(filename)}/sections/${encodeURIComponent(section)}`;
+      const res  = await fetch(path, {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ content }),
+      });
+      const data = await res.json();
+      if (!res.ok) return `Failed to rewrite section: ${data.error ?? res.status}`;
+      return `Section "${section}" of ${category}/${filename} rewritten.`;
+    } catch (err) { return `Failed to rewrite section: ${err.message}`; }
+  },
+
+  find_graph_node: async ({ query, type, limit }) => {
+    try {
+      const params = new URLSearchParams({ q: query });
+      if (type)  params.set('type', type);
+      if (limit) params.set('limit', String(limit));
+      const res = await fetch(`/api/entity/graph/search?${params}`);
+      const data = await res.json();
+      if (!res.ok) return `Failed to search graph: ${data.error ?? res.status}`;
+      const items = (data.results ?? []).map(r => r.node ? r.node : r).filter(n => n && n.id);
+      if (!items.length) return `No graph nodes matched "${query}".`;
+      return items.map(n => `${n.label ?? '(no label)'} (id=${n.id}, type=${n.type ?? '?'})${n.description ? ' — ' + n.description : ''}`).join('\n');
+    } catch (err) { return `Failed to search graph: ${err.message}`; }
+  },
+
+  find_graph_edges: async ({ nodeId, depth }) => {
+    try {
+      const params = new URLSearchParams();
+      if (depth) params.set('depth', String(depth));
+      const url = `/api/entity/graph/nodes/${encodeURIComponent(nodeId)}/subgraph` + (params.toString() ? `?${params}` : '');
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!res.ok) return `Failed to list edges: ${data.error ?? res.status}`;
+      const nodes = data.nodes ?? [];
+      const edges = data.edges ?? [];
+      if (!edges.length) return `Node ${nodeId} has no edges in scope.`;
+      const labelOf = id => nodes.find(n => n.id === id)?.label ?? id;
+      return edges.map(e => `${labelOf(e.fromId)} -${e.type}-> ${labelOf(e.toId)} (id=${e.id})`).join('\n');
+    } catch (err) { return `Failed to list edges: ${err.message}`; }
+  },
+
+  update_graph_node: async ({ id, label, description, type }) => {
+    try {
+      const body = {};
+      if (label       !== undefined) body.label       = label;
+      if (description !== undefined) body.description = description;
+      if (type        !== undefined) body.type        = type;
+      const res = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(id)}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) return `Failed to update graph node: ${data.error ?? res.status}`;
+      return `Graph node ${id} updated.`;
+    } catch (err) { return `Failed to update graph node: ${err.message}`; }
+  },
+
+  delete_graph_node: async ({ id }) => {
+    try {
+      const res = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) return `Failed to delete graph node: ${data.error ?? res.status}`;
+      return `Graph node ${id} deleted (snapshot saved).`;
+    } catch (err) { return `Failed to delete graph node: ${err.message}`; }
+  },
+
+  update_graph_edge: async ({ id, type, weight }) => {
+    try {
+      const body = {};
+      if (type   !== undefined) body.type   = type;
+      if (weight !== undefined) body.weight = weight;
+      const res = await fetch(`/api/entity/graph/edges/${encodeURIComponent(id)}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) return `Failed to update graph edge: ${data.error ?? res.status}`;
+      return `Graph edge ${id} updated.`;
+    } catch (err) { return `Failed to update graph edge: ${err.message}`; }
+  },
+
+  delete_graph_edge: async ({ id }) => {
+    try {
+      const res = await fetch(`/api/entity/graph/edges/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) return `Failed to delete graph edge: ${data.error ?? res.status}`;
+      return `Graph edge ${id} deleted (snapshot saved).`;
+    } catch (err) { return `Failed to delete graph edge: ${err.message}`; }
+  },
 };
 
 /** Returns the full tools array (built-ins + valid user-defined tools). */
@@ -215,11 +491,16 @@ async function executeToolCall(name, argsJson) {
   if (Object.prototype.hasOwnProperty.call(BUILTIN_EXECUTORS, name)) {
     try {
       const args = argsJson ? JSON.parse(argsJson) : {};
-      return String(await BUILTIN_EXECUTORS[name](args));
+      const t0   = performance.now();
+      const out  = String(await BUILTIN_EXECUTORS[name](args));
+      debugRecord('tool', `${name} ok in ${Math.round(performance.now() - t0)}ms`);
+      return out;
     } catch (err) {
+      debugRecord('tool', `${name} FAILED: ${err.message}`);
       return `Error executing ${name}: ${err.message}`;
     }
   }
+  debugRecord('tool', `${name} (no client-side impl)`);
   return `Tool "${name}" has no client-side implementation. No result available.`;
 }
 
@@ -232,6 +513,31 @@ let lastMessage       = null;
 let elapsedTime       = 0;
 /** Handle for the 3-hour auto-end setTimeout. */
 let _sessionTimeoutId = null;
+
+// ── Diagnostic ring buffer ──────────────────────────────────────
+// Bounded log of recent app events for the Diagnostics report. Captures
+// uncaught errors, unhandled rejections, console.error/warn output,
+// failing network calls, and a few explicit checkpoints (sessions,
+// memorization, tool execution, knowledge edits). Kept small enough to
+// paste into a bug report without truncation.
+const DEBUG_LOG_CAP = 200;
+const debugLog = [];
+function debugRecord(type, detail) {
+  try {
+    debugLog.push({ ts: new Date().toISOString(), type, detail: String(detail).slice(0, 800) });
+    if (debugLog.length > DEBUG_LOG_CAP) debugLog.splice(0, debugLog.length - DEBUG_LOG_CAP);
+  } catch { /* never let logging break the app */ }
+}
+// Hook the console so existing console.error/warn calls land in the log
+// too, without changing what the developer sees in DevTools.
+(function installConsoleHooks() {
+  const origErr = console.error.bind(console);
+  const origWarn = console.warn.bind(console);
+  console.error = (...args) => { debugRecord('console.error', args.map(a => typeof a === 'string' ? a : (a?.message ?? JSON.stringify(a))).join(' ')); origErr(...args); };
+  console.warn  = (...args) => { debugRecord('console.warn',  args.map(a => typeof a === 'string' ? a : (a?.message ?? JSON.stringify(a))).join(' ')); origWarn(...args); };
+  window.addEventListener('error', e => debugRecord('window.error', `${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`));
+  window.addEventListener('unhandledrejection', e => debugRecord('unhandledrejection', e.reason?.message ?? e.reason ?? '?'));
+})();
 /** Milliseconds of inactivity before the current session is closed (3 h). */
 const SESSION_IDLE_MS = 3 * 60 * 60 * 1000;
 
@@ -249,11 +555,12 @@ const state = {
   characterProfile:  '',
   userProfile:       '',
   postHistoryPrompt: '',
-  sessionId:         null,   // UUID, created at init or on clear
-  sessionStartedAt:  null,   // ISO timestamp
-  sessionEndedAt:    null,   // ISO timestamp — set when session is auto-ended
-  lastMessage:       null,   // ISO timestamp — mirrors the module-level lastMessage
-  messages:          [],     // { role, content, timestamp }[]
+  sessionId:               null,   // UUID, created at init or on clear
+  sessionStartedAt:        null,   // ISO timestamp
+  sessionEndedAt:          null,   // ISO timestamp — set when session is auto-ended
+  previousSessionEndedAt:  null,   // ISO timestamp of the most recent prior session's endedAt — drives {{timeSinceLastSession}}
+  lastMessage:             null,   // ISO timestamp — mirrors the module-level lastMessage
+  messages:                [],     // { role, content, timestamp }[]
   // ── Tool calling ──────────────────────────────────────────
   toolsEnabled:      true,   // whether to send tools array with each request
   customTools:       '',     // JSON array string of user-defined tool definitions
@@ -335,15 +642,108 @@ async function saveToServer() {
   } catch { /* non-critical */ }
 }
 
-// ── Name variable substitution ──────────────────────────────────
+// ── Macro substitution ──────────────────────────────────────────
 /**
- * Replace {{user}} and {{char}} in a prompt string with the
- * configured user/AI display names.
+ * Format a millisecond duration as a compact human string: "47s", "5m",
+ * "2h 14m", "3d 4h", or "just now" when under a minute.
+ */
+function formatDuration(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return 'unknown';
+  if (ms < 60_000) return ms < 5_000 ? 'just now' : `${Math.floor(ms / 1000)}s`;
+  const min  = Math.floor(ms / 60_000);
+  const hour = Math.floor(min / 60);
+  const day  = Math.floor(hour / 24);
+  if (day  >= 1) return `${day}d ${hour % 24}h`;
+  if (hour >= 1) return `${hour}h ${min % 60}m`;
+  return `${min}m`;
+}
+
+/**
+ * Milliseconds between the timestamps of the two most recent USER messages
+ * in `state.messages`. Returns null when fewer than two timestamped user
+ * messages exist.
+ *
+ * This is intentionally history-only — no synthesized `Date.now()` — so the
+ * macro is detecting "user returned after a long absence" by comparing the
+ * timestamps of two messages that are both actually in the saved chat
+ * history. Every message is dated and timestamped on send, so once the new
+ * user turn lands the gap surfaces on the next prompt build.
+ *
+ * Stays inside `state.messages`, so it can't accidentally cross a session
+ * boundary the way the legacy module-level `elapsedTime` field can after a
+ * state restore.
+ */
+function elapsedBetweenUserMessages() {
+  const stamps = [];
+  for (let i = state.messages.length - 1; i >= 0 && stamps.length < 2; i--) {
+    const m = state.messages[i];
+    if (m?.role === 'user' && m.timestamp) {
+      const t = new Date(m.timestamp).getTime();
+      if (Number.isFinite(t)) stamps.push(t);
+    }
+  }
+  if (stamps.length < 2) return null;
+  return stamps[0] - stamps[1];
+}
+
+/**
+ * Milliseconds since the most recent prior session ended, based on
+ * `state.previousSessionEndedAt` (maintained on session-boundary events
+ * and refreshed from /api/logs when the cache is missing).
+ */
+function timeSinceLastSessionEnded() {
+  if (!state.previousSessionEndedAt) return null;
+  const t = new Date(state.previousSessionEndedAt).getTime();
+  if (!Number.isFinite(t)) return null;
+  return Date.now() - t;
+}
+
+/**
+ * Refresh `state.previousSessionEndedAt` from the server's session list,
+ * picking the most recent `endedAt` among logs that aren't the current
+ * session. Used on cold start and when loading a different historical
+ * session — both cases where localStorage may not reflect what the
+ * server knows.
+ */
+async function refreshPreviousSessionEndedAt() {
+  try {
+    const res = await fetch('/api/logs');
+    if (!res.ok) return;
+    const list = await res.json();
+    let latest = null;
+    for (const s of list) {
+      if (!s?.endedAt) continue;
+      if (s.sessionId === state.sessionId) continue;
+      const t = new Date(s.endedAt).getTime();
+      if (!Number.isFinite(t)) continue;
+      if (latest === null || t > new Date(latest).getTime()) latest = s.endedAt;
+    }
+    if (latest && latest !== state.previousSessionEndedAt) {
+      state.previousSessionEndedAt = latest;
+      saveSettings();
+    }
+  } catch { /* best-effort cache refresh */ }
+}
+
+/**
+ * Replace prompt macros with their current values:
+ *   {{user}}                — configured user display name
+ *   {{char}}                — configured AI display name
+ *   {{elapsedTime}}         — duration between the last two user messages
+ *   {{timeSinceLastSession}} — duration since the previous session ended
  */
 function applyNameVars(text) {
   return text
     .replace(/\{\{user\}\}/gi, state.userName || 'User')
-    .replace(/\{\{char\}\}/gi, state.charName || 'Assistant');
+    .replace(/\{\{char\}\}/gi, state.charName || 'Assistant')
+    .replace(/\{\{elapsedTime\}\}/gi, () => {
+      const ms = elapsedBetweenUserMessages();
+      return ms !== null ? formatDuration(ms) : 'no prior user message';
+    })
+    .replace(/\{\{timeSinceLastSession\}\}/gi, () => {
+      const ms = timeSinceLastSessionEnded();
+      return ms !== null ? formatDuration(ms) : 'no prior session';
+    });
 }
 
 // ── Message building ─────────────────────────────────────────────
@@ -371,38 +771,34 @@ function toApiMessage({ role, content, tool_calls, tool_call_id }) {
  */
 function buildApiMessages(userInput) {
   const msgs = [];
+  // Provenance for the prompt inspector. Each entry is { source, text }
+  // where source is one of: lore-sys-top, system-prompt, lore-before-char,
+  // character-profile, lore-after-char, user-profile, lore-sys-bottom.
+  const systemSegments = [];
+  // History splices for at-depth lore: { index, content } where index is
+  // the position in the final `msgs` array (after any system message).
+  const atDepthInjections = [];
 
   // ── Activate lorebook entries ────────────────────────────────
   const lore = activateTomeEntries(userInput);
   const joinLore = (entries) =>
     entries.map(e => applyNameVars(e.content.trim())).filter(Boolean).join('\n\n---\n\n');
+  const pushSeg = (source, text) => {
+    const t = text?.trim();
+    if (t) systemSegments.push({ source, text: t });
+  };
 
   // ── System message ────────────────────────────────────────────
-  const systemParts = [];
+  if (lore.sys_top.length)         pushSeg('lore-sys-top',     joinLore(lore.sys_top));
+  if (state.systemPrompt.trim())   pushSeg('system-prompt',    applyNameVars(state.systemPrompt.trim()));
+  if (lore.before_char.length)     pushSeg('lore-before-char', joinLore(lore.before_char));
+  if (state.characterProfile.trim()) pushSeg('character-profile', '[Character Profile]\n' + applyNameVars(state.characterProfile.trim()));
+  if (lore.after_char.length)      pushSeg('lore-after-char',  joinLore(lore.after_char));
+  if (state.userProfile.trim())    pushSeg('user-profile',     '[User Profile]\n' + applyNameVars(state.userProfile.trim()));
+  if (lore.sys_bottom.length)      pushSeg('lore-sys-bottom',  joinLore(lore.sys_bottom));
 
-  // Position 2 — top of system message
-  if (lore.sys_top.length) systemParts.push(joinLore(lore.sys_top));
-
-  if (state.systemPrompt.trim())
-    systemParts.push(applyNameVars(state.systemPrompt.trim()));
-
-  // Position 0 — before character profile
-  if (lore.before_char.length) systemParts.push(joinLore(lore.before_char));
-
-  if (state.characterProfile.trim())
-    systemParts.push('[Character Profile]\n' + applyNameVars(state.characterProfile.trim()));
-
-  // Position 1 — after character profile
-  if (lore.after_char.length) systemParts.push(joinLore(lore.after_char));
-
-  if (state.userProfile.trim())
-    systemParts.push('[User Profile]\n' + applyNameVars(state.userProfile.trim()));
-
-  // Position 3 — bottom of system message
-  if (lore.sys_bottom.length) systemParts.push(joinLore(lore.sys_bottom));
-
-  if (systemParts.length)
-    msgs.push({ role: 'system', content: systemParts.join('\n\n---\n\n') });
+  if (systemSegments.length)
+    msgs.push({ role: 'system', content: systemSegments.map(s => s.text).join('\n\n---\n\n') });
 
   // ── History + position-4 (@depth) injections ─────────────────
   // Clone history as clean API messages so we can splice into it
@@ -411,14 +807,20 @@ function buildApiMessages(userInput) {
   // Sort at_depth entries deepest-first so splice positions stay consistent
   const atDepthSorted = [...lore.at_depth].sort((a, b) => (b.depth ?? 4) - (a.depth ?? 4));
   const roleNames = ['system', 'user', 'assistant'];
+  const atDepthInsertedAt = []; // track splice positions within histMsgs
   for (const entry of atDepthSorted) {
     const d    = Math.max(0, entry.depth ?? 4);
     const role = roleNames[entry.role ?? 0] ?? 'system';
     const idx  = Math.max(0, histMsgs.length - d);
     histMsgs.splice(idx, 0, { role, content: applyNameVars(entry.content.trim()) });
+    atDepthInsertedAt.push(idx);
   }
 
+  const histStartIdx = msgs.length;
   msgs.push(...histMsgs);
+  for (const localIdx of atDepthInsertedAt) {
+    atDepthInjections.push({ indexInFinal: histStartIdx + localIdx });
+  }
 
   // ── New user turn ─────────────────────────────────────────────
   msgs.push({ role: 'user', content: userInput });
@@ -427,6 +829,7 @@ function buildApiMessages(userInput) {
   if (state.postHistoryPrompt.trim())
     msgs.push({ role: 'user', content: applyNameVars(state.postHistoryPrompt.trim()) });
 
+  lastBuildSegments = { systemSegments, atDepthInjections };
   return msgs;
 }
 
@@ -702,8 +1105,21 @@ function renderAllMessages() {
     const msg = state.messages[i];
 
     // Assistant message that contains tool_calls: render as tool-use block
-    // and consume the following 'tool' result messages.
+    // and consume the following 'tool' result messages. If the assistant
+    // ALSO produced narrative content alongside the tool call ("Let me look
+    // that up for you…"), render that as its own bubble FIRST — otherwise
+    // it disappears on every re-render even though it was visible during
+    // the original streaming response.
     if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+      const content = typeof msg.content === 'string' ? msg.content.trim() : '';
+      if (content) {
+        const html = renderMarkdown(content);
+        const { el, copyBtn } = createMessageEl('assistant', html, msg.timestamp);
+        el.dataset.msgIndex = String(i);
+        const captured = msg.content;
+        wireCopyButton(copyBtn, () => captured);
+        container.appendChild(el);
+      }
       const toolCalls = msg.tool_calls;
       const toolResults = [];
       i++;
@@ -743,6 +1159,10 @@ let abortController = null;
 
 /** The last messages array sent to /api/chat (client-side, pre-enrichment). */
 let lastSentMessages = null;
+/** Per-segment provenance for the system message of the last build. See buildApiMessages. */
+let lastBuildSegments = null;
+/** The entity-core block that the server actually prepended to the last request's system message. */
+let lastThalamusContext = null;
 
 async function sendMessage(userInput) {
   userInput = userInput.trim();
@@ -775,6 +1195,7 @@ async function sendMessage(userInput) {
   const userTimestamp = now;
   const apiMessages   = buildApiMessages(userInput);
   lastSentMessages    = apiMessages;
+  lastThalamusContext = null; // wait for the live answer to populate this
 
   // Optimistic UI
   appendUserMessage(userInput, userTimestamp);
@@ -782,6 +1203,8 @@ async function sendMessage(userInput) {
   setTyping(true);
   setStatus('busy');
 
+  const sendStart = performance.now();
+  debugRecord('send', `provider=${state.provider} model=${state.model} streaming=${state.streaming} msgs=${apiMessages.length} input=${userInput.length}ch`);
   try {
     if (state.streaming) {
       await doStreamingRequest(apiMessages, userInput, userTimestamp);
@@ -790,11 +1213,15 @@ async function sendMessage(userInput) {
     }
     setStatus('ok');
     state.turnCount = (state.turnCount ?? 0) + 1;
+    debugRecord('recv', `ok in ${Math.round(performance.now() - sendStart)}ms thalamus=${lastThalamusContext ? lastThalamusContext.length + 'ch' : 'none'}`);
   } catch (err) {
     setTyping(false);
     if (err.name !== 'AbortError') {
       appendErrorMessage(err.message || 'Request failed.');
       setStatus('err');
+      debugRecord('recv', `FAILED after ${Math.round(performance.now() - sendStart)}ms: ${err.message}`);
+    } else {
+      debugRecord('recv', `aborted after ${Math.round(performance.now() - sendStart)}ms`);
     }
   } finally {
     setInputLocked(false);
@@ -861,6 +1288,13 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
 
         try {
           const parsed = JSON.parse(raw);
+          // Sidecar envelope from server: the entity-core block thalamus
+          // actually prepended to this request's system message. Arrives
+          // before the upstream stream so the prompt inspector has it.
+          if (parsed._thalamus) {
+            lastThalamusContext = parsed._thalamus.entityContext ?? null;
+            continue;
+          }
           const choice = parsed.choices?.[0];
           const delta  = choice?.delta;
           if (choice?.finish_reason) finishReason = choice.finish_reason;
@@ -970,6 +1404,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
     if (!response.ok || data.error) {
       throw new Error(data.error || `API error ${response.status}`);
     }
+    if (data._thalamus) lastThalamusContext = data._thalamus.entityContext ?? null;
 
     const choice      = data.choices?.[0];
     const message     = choice?.message;
@@ -1030,6 +1465,7 @@ async function regenerateLastResponse() {
   const userTimestamp = origUserTimestamp || new Date().toISOString();
   const apiMessages   = buildApiMessages(lastUserInput);
   lastSentMessages    = apiMessages;
+  lastThalamusContext = null;
   appendUserMessage(lastUserInput, userTimestamp);
   setInputLocked(true);
   setTyping(true);
@@ -1293,11 +1729,15 @@ async function autoEndSession() {
     const sessionMessages = [...state.messages];
     const sessionId       = state.sessionId;
     state.sessionEndedAt  = new Date().toISOString();
+    // Remember when this session ended so {{timeSinceLastSession}} reads
+    // correctly from the new session that's about to start.
+    state.previousSessionEndedAt = state.sessionEndedAt;
     saveSettings();
     await saveToServer();
+    memorizeViaBeacon(sessionMessages, sessionId, { scope: 'session' });
+    state._beaconedSessionId = sessionId;
     startNewSession();
     showSessionEndedNotice();
-    memorizeSessionToTome(sessionMessages, sessionId); // fire-and-forget
   } else {
     startNewSession();
     showSessionEndedNotice();
@@ -1329,201 +1769,233 @@ function showMemorizationNotice(count) {
 }
 
 /**
- * Automatically memorize a finished session into lorebook entries.
- * Fires-and-forgets after session close — never blocks the UI.
- * Calls the configured LLM to split the conversation into distinct topics
- * and creates a lorebook entry for each one.
+ * Enqueue a memorization job on the server. The server-side worker calls the
+ * LLM, finds/creates the "Session Memories" tome, and writes entries — with
+ * retry-on-failure. Survives tab close and server restart.
+ *
+ * scope: 'session' (whole session) or 'topic' (a topic's message range).
+ * Returns the jobId, or null on error / when memorization isn't possible.
  */
-async function memorizeSessionToTome(messages, sessionId) {
-  if (!state.apiKey.trim()) return;
-
-  // Filter to user/assistant only — skip tool-call plumbing and empty turns
-  const readable = messages.filter(m => {
-    if (m.role === 'tool') return false;
-    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return false;
-    return m.content?.trim();
-  });
-  if (readable.length < 4) return;
-
-  const convText = readable
-    .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
-    .join('\n\n');
-
-  const prompt =
-`You are producing Tome entries for a Familiar (AI companion). Each entry is private reference notes that get injected into the Familiar's context when its keywords appear in a future conversation. Identify the distinct situational topics in the conversation below and write one entry per topic, following the craft rules carefully.
-
-Return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
-{
-  "topics": [
-    {
-      "title":    "Short label for the entry comment (max 60 chars)",
-      "content":  "Familiar-perspective bullet guidance — see content rules below",
-      "keywords": ["conversational phrase 1", "conversational phrase 2"],
-      "sticky":   3
-    }
-  ]
-}
-
-Identify 1–8 genuinely distinct topics. Merge closely related material rather than over-splitting. Each entry must be self-contained.
-
-### Content rules (most important)
-Write content as the Familiar's private notes to themselves about this situation. NOT a summary of what happened.
-Structure:
-  1. One short framing line — what is happening and why (gives the Familiar understanding, not just rules).
-  2. 3–5 action bullets — what to do.
-  3. 1–2 prohibition bullets — what NOT to do. Usually the most valuable: name the well-intentioned default response that would make things worse.
-Style:
-  - Second person, addressed to the Familiar. Use {{user}} wherever the user's name belongs.
-  - Practical, grounded, non-clinical. Notes, not a textbook.
-  - Short declarative bullets. The whole entry should be readable in 5–10 seconds.
-  - Do NOT include narrative summaries of "what they said" — distil the situation and the response, not the transcript.
-
-### Keyword rules
-Keywords are TRIGGERS, not labels. They must be phrases the user would literally say when this situation recurs — not the name of the topic.
-  - WRONG: "executive dysfunction", "rejection sensitive dysphoria", "hyperfocus".
-  - RIGHT: "don't know where to start", "did I say something wrong", "been at this for".
-Derive them by imagining what the user would actually type when the situation is happening, then extracting distinctive phrases.
-  - Prefer multi-word phrases over single common words (avoid bare "tired", "can't", "hard").
-  - 3–8 keywords per entry. Each one specific enough not to fire in unrelated conversations.
-  - You may use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has 3+ predictable variants.
-
-### Sticky rules
-Pick an integer sticky value per entry (number of turns the entry stays active after first match):
-  - null = one-shot lore/fact that does not need persistence.
-  - 2    = brief states that typically resolve quickly.
-  - 3    = moderate states needing a few exchanges.
-  - 4–5  = complex/intense states taking multiple turns to navigate.
-  - 8+   = ongoing modes that should persist across the whole session.
-
-Conversation:
-${convText}`;
-
+async function memorizeSessionToTome(messages, sessionId, opts = {}) {
+  if (!state.apiKey.trim()) return null;
+  if (!Array.isArray(messages) || messages.length < 2) return null;
+  const payload = {
+    sessionId,
+    scope:        opts.scope ?? 'session',
+    topicId:      opts.topicId ?? null,
+    topicLabel:   opts.topicLabel ?? null,
+    messageRange: opts.messageRange ?? null,
+    messages,
+    provider:     state.provider,
+    apiKey:       state.apiKey,
+    model:        state.model,
+  };
   try {
-    const resp = await fetch('/api/chat', {
+    const resp = await fetch('/api/memorize', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        provider:    state.provider,
-        apiKey:      state.apiKey,
-        model:       state.model,
-        messages:    [{ role: 'user', content: prompt }],
-        stream:      false,
-        temperature: 0.2,
-        max_tokens:  2000,
-      }),
+      body:    JSON.stringify(payload),
     });
-    if (!resp.ok) return;
-    const data = await resp.json();
-    if (data.error) return;
-
-    const raw       = data.choices?.[0]?.message?.content ?? '';
-    const jsonMatch = raw.match(/\{[\s\S]+\}/);
-    if (!jsonMatch) return;
-    const parsed = JSON.parse(jsonMatch[0]);
-    const topics = parsed.topics;
-    if (!Array.isArray(topics) || !topics.length) return;
-
-    // Get or create the default tome for auto-saved memories
-    let targetTome = null;
-    try { targetTome = await getDefaultTomeForSaving(); } catch { return; }
-    if (!targetTome) return;
-
-    // Fetch the current tome fresh from the server
-    let tomeData = { entries: {} };
-    try {
-      const tRes = await fetch(`/api/tomes/${targetTome.id}`);
-      if (tRes.ok) tomeData = await tRes.json();
-    } catch { /* fall back to empty */ }
-
-    const now = new Date().toISOString();
-    let created = 0;
-    for (const t of topics) {
-      const title   = (t.title   ?? '').trim();
-      const content = (t.content ?? '').trim();
-      if (!title || !content) continue;
-      const stickyN = parseInt(t.sticky, 10);
-      const sticky  = Number.isFinite(stickyN) && stickyN > 0 ? stickyN : null;
-      const uid = generateId();
-      tomeData.entries[uid] = {
-        uid,
-        comment:             title,
-        keys:                Array.isArray(t.keywords) ? t.keywords.map(k => String(k).trim()).filter(Boolean) : [],
-        keysecondary:        [],
-        content,
-        constant:            false,
-        selective:           false,
-        selectiveLogic:      0,
-        enabled:             true,
-        position:            0,
-        depth:               4,
-        role:                0,
-        scanDepth:           null,
-        caseSensitive:       null,
-        matchWholeWords:     null,
-        probability:         100,
-        sticky,
-        cooldown:            null,
-        preventRecursion:    false,
-        delayUntilRecursion: false,
-        excludeRecursion:    false,
-        group:               '',
-        groupWeight:         null,
-        insertion_order:     100,
-        created_at:          now,
-        learnedAt:           now,
-        session_id:          sessionId,
-        message_range:       null,
-      };
-      created++;
+    if (!resp.ok) {
+      console.warn('[memorize] enqueue failed:', resp.status, await resp.text().catch(() => ''));
+      return null;
     }
-    if (!created) return;
+    const { jobId } = await resp.json();
+    return jobId;
+  } catch (err) {
+    console.warn('[memorize] enqueue error:', err);
+    return null;
+  }
+}
 
-    await fetch(`/api/tomes/${targetTome.id}`, {
-      method:  'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ entries: tomeData.entries }),
-    });
+/**
+ * Fire-and-forget enqueue that survives tab close via navigator.sendBeacon.
+ * Used in the `beforeunload` handler — fetch() won't reliably deliver there.
+ */
+function memorizeViaBeacon(messages, sessionId, opts = {}) {
+  if (!state.apiKey.trim()) return false;
+  if (!Array.isArray(messages) || messages.length < 2) return false;
+  const payload = {
+    sessionId,
+    scope:        opts.scope ?? 'session',
+    topicId:      opts.topicId ?? null,
+    topicLabel:   opts.topicLabel ?? null,
+    messageRange: opts.messageRange ?? null,
+    messages,
+    provider:     state.provider,
+    apiKey:       state.apiKey,
+    model:        state.model,
+  };
+  try {
+    const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+    return navigator.sendBeacon('/api/memorize', blob);
+  } catch {
+    return false;
+  }
+}
 
-    // Update cache so the tome entries modal reflects new entries immediately.
-    state.tomeCache[targetTome.id] = tomeData;
-    showMemorizationNotice(created);
-  } catch { /* non-critical — silently swallow any error */ }
+// ── Memorization status polling ──────────────────────────────────
+// The server queue runs asynchronously. Poll for terminal-state jobs so we
+// can toast outcomes (success or failure) and then ACK them so we don't
+// re-toast on the next poll.
+
+let _memStatusTimerId = null;
+
+async function pollMemorizationStatus() {
+  try {
+    const resp = await fetch('/api/memorize');
+    if (!resp.ok) return;
+    const jobs = await resp.json();
+    let tomeChanged = false;
+    for (const j of jobs) {
+      if (j.acknowledged) continue;
+      if (j.status === 'done') {
+        const n = j.result?.entriesCreated ?? 0;
+        if (n > 0) showMemorizationNotice(n);
+        tomeChanged = true;
+      } else if (j.status === 'failed') {
+        showMemorizationFailureNotice(j.lastError ?? 'unknown error');
+      } else {
+        continue;
+      }
+      // Best-effort ack; ignore failure.
+      fetch(`/api/memorize/${j.id}/ack`, { method: 'POST' }).catch(() => {});
+    }
+    if (tomeChanged) {
+      // Refresh the registry so a freshly-created "Session Memories" tome shows up.
+      loadTomesFromServer?.().catch?.(() => {});
+    }
+  } catch { /* polling is best-effort */ }
+}
+
+function startMemorizationStatusPolling() {
+  if (_memStatusTimerId) return;
+  pollMemorizationStatus();
+  _memStatusTimerId = setInterval(pollMemorizationStatus, 30_000);
+  // Also poll when the tab regains focus — likely just-completed jobs.
+  window.addEventListener('focus', pollMemorizationStatus);
+}
+
+function showMemorizationFailureNotice(reason) {
+  const toast = document.createElement('div');
+  toast.className = 'session-toast';
+  toast.textContent = `Memorization failed: ${reason}`;
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('session-toast-show'));
+  setTimeout(() => {
+    toast.classList.remove('session-toast-show');
+    setTimeout(() => toast.remove(), 400);
+  }, 6000);
 }
 
 // ── Prompt inspector modal ───────────────────────────────────
+
+// Human-readable labels for each prompt-segment source. The CSS class
+// `pi-src-<source>` controls the chip + left-rule colour.
+const PI_SOURCE_LABELS = {
+  'thalamus':          'Entity-Core (Thalamus)',
+  'lore-sys-top':      'Lore · system top',
+  'lore-before-char':  'Lore · before character',
+  'lore-after-char':   'Lore · after character',
+  'lore-sys-bottom':   'Lore · system bottom',
+  'lore-at-depth':     'Lore · injected at depth',
+  'system-prompt':     'System prompt',
+  'character-profile': 'Character profile',
+  'user-profile':      'User profile',
+  'post-history':      'Post-history prompt',
+};
+
+function piSegmentEl(source, text) {
+  const seg = document.createElement('div');
+  seg.className = `pi-seg pi-src-${source}`;
+  const chip = document.createElement('span');
+  chip.className = 'pi-chip';
+  chip.textContent = PI_SOURCE_LABELS[source] ?? source;
+  const pre = document.createElement('pre');
+  pre.className = 'pi-pre';
+  pre.textContent = text;
+  seg.appendChild(chip);
+  seg.appendChild(pre);
+  return seg;
+}
+
 function openPromptInspector() {
   const body = $('prompt-inspector-body');
+  body.innerHTML = '';
   if (!lastSentMessages) {
     body.innerHTML = '<p class="logs-empty">Send a message first.</p>';
-  } else {
-    body.innerHTML = '';
-    for (const msg of lastSentMessages) {
-      const div = document.createElement('div');
-      div.className = 'pi-msg';
-      const roleClass = `pi-role-${msg.role ?? 'user'}`;
-      const contentText = typeof msg.content === 'string'
-        ? msg.content
-        : JSON.stringify(msg.content ?? msg.tool_calls ?? '', null, 2);
-      const copyBtn = document.createElement('button');
-      copyBtn.className = 'btn-ghost pi-copy';
-      copyBtn.textContent = 'Copy';
-      wireCopyButton(copyBtn, () => contentText);
-      div.innerHTML = `<span class="pi-role ${roleClass}">${esc(msg.role ?? 'user')}</span>`;
-      const details = document.createElement('details');
-      details.open = msg.role === 'system' || lastSentMessages.length <= 6;
-      const summary = document.createElement('summary');
-      summary.className = 'pi-summary';
-      summary.textContent = contentText.slice(0, 120).replace(/\n/g, ' ');
+    $('prompt-inspector-modal').classList.remove('hidden');
+    return;
+  }
+
+  // Legend strip
+  const legend = document.createElement('div');
+  legend.className = 'pi-legend';
+  for (const src of ['thalamus', 'system-prompt', 'character-profile', 'user-profile',
+                     'lore-sys-top', 'lore-before-char', 'lore-after-char', 'lore-sys-bottom',
+                     'lore-at-depth', 'post-history']) {
+    const chip = document.createElement('span');
+    chip.className = `pi-chip pi-src-${src}`;
+    chip.textContent = PI_SOURCE_LABELS[src];
+    legend.appendChild(chip);
+  }
+  body.appendChild(legend);
+
+  // Note about provenance freshness
+  if (!lastThalamusContext) {
+    const note = document.createElement('p');
+    note.className = 'field-hint';
+    note.textContent = 'No entity-core block in the last response. Thalamus may have returned empty (no enrichment), or the request hadn\'t completed yet — re-open after the next reply lands.';
+    body.appendChild(note);
+  }
+
+  const atDepthSet = new Set((lastBuildSegments?.atDepthInjections ?? []).map(a => a.indexInFinal));
+
+  lastSentMessages.forEach((msg, idx) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'pi-msg';
+    const roleClass = `pi-role-${msg.role ?? 'user'}`;
+    const role = msg.role ?? 'user';
+
+    const header = document.createElement('div');
+    header.className = 'pi-msg-header';
+    header.innerHTML = `<span class="pi-role ${roleClass}">${esc(role)}</span>`;
+    const fullText = typeof msg.content === 'string'
+      ? msg.content
+      : JSON.stringify(msg.content ?? msg.tool_calls ?? '', null, 2);
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'btn-ghost pi-copy';
+    copyBtn.textContent = 'Copy';
+    wireCopyButton(copyBtn, () => fullText);
+    header.appendChild(copyBtn);
+    wrap.appendChild(header);
+
+    // System message: split by source. Includes the entity-core block as its
+    // own first segment when present, then each tracked build segment.
+    if (role === 'system' && idx === 0 && lastBuildSegments?.systemSegments?.length) {
+      if (lastThalamusContext) {
+        wrap.appendChild(piSegmentEl('thalamus', lastThalamusContext));
+      }
+      for (const seg of lastBuildSegments.systemSegments) {
+        wrap.appendChild(piSegmentEl(seg.source, seg.text));
+      }
+    } else if (atDepthSet.has(idx)) {
+      // History splice from an at-depth lore entry.
+      wrap.appendChild(piSegmentEl('lore-at-depth', fullText));
+    } else if (msg === lastSentMessages[lastSentMessages.length - 1]
+               && state.postHistoryPrompt.trim()
+               && fullText.trim() === applyNameVars(state.postHistoryPrompt.trim())) {
+      wrap.appendChild(piSegmentEl('post-history', fullText));
+    } else {
+      // Plain history / user / assistant / tool message — neutral rendering.
       const pre = document.createElement('pre');
       pre.className = 'pi-pre';
-      pre.textContent = contentText;
-      details.appendChild(summary);
-      details.appendChild(pre);
-      div.appendChild(details);
-      div.appendChild(copyBtn);
-      body.appendChild(div);
+      pre.textContent = fullText;
+      wrap.appendChild(pre);
     }
-  }
+    body.appendChild(wrap);
+  });
+
   $('prompt-inspector-modal').classList.remove('hidden');
 }
 
@@ -1596,6 +2068,13 @@ async function refreshLogsList() {
         actions.appendChild(loadBtn);
       }
 
+      const memBtn = document.createElement('button');
+      memBtn.className = 'btn-secondary log-action-btn';
+      memBtn.textContent = 'Memorize';
+      memBtn.title = 'Auto-summarize or manually mark topics for this session';
+      memBtn.addEventListener('click', () => openMemorizeChoice(s));
+      actions.appendChild(memBtn);
+
       const delBtn = document.createElement('button');
       delBtn.className = 'btn-ghost log-action-btn';
       delBtn.textContent = 'Delete';
@@ -1651,6 +2130,10 @@ async function loadSession(sessionId) {
     renderAllMessages();
     updateTopicStrip();
     closeLogsModal();
+
+    // Loading a different session changes which log is "the prior one" —
+    // recompute the cache so {{timeSinceLastSession}} stays correct.
+    refreshPreviousSessionEndedAt().catch(() => {});
   } catch (err) {
     alert(`Failed to load session: ${err.message}`);
   }
@@ -1667,9 +2150,16 @@ function init() {
   if (lastMessage) {
     const idleMs = Date.now() - new Date(lastMessage).getTime();
     if (idleMs >= SESSION_IDLE_MS) {
-      // Session expired while the tab was closed — finalize silently, then reset
+      // Session expired while the tab was closed — finalize silently, then reset.
+      // Capture the just-finalised endedAt for {{timeSinceLastSession}} before
+      // startNewSession() clears sessionEndedAt.
       if (state.messages.length && !state.sessionEndedAt) {
         state.sessionEndedAt = lastMessage; // approximate — last known activity
+      }
+      if (state.sessionEndedAt) {
+        state.previousSessionEndedAt = state.sessionEndedAt;
+      }
+      if (state.messages.length) {
         saveSettings();
         saveToServer(); // fire-and-forget
       }
@@ -1678,6 +2168,12 @@ function init() {
       // Resume the countdown with however much time remains
       _sessionTimeoutId = setTimeout(autoEndSession, SESSION_IDLE_MS - idleMs);
     }
+  }
+
+  // Backfill {{timeSinceLastSession}}'s cache from server logs on cold start,
+  // so the macro works for users whose localStorage doesn't have it yet.
+  if (!state.previousSessionEndedAt) {
+    refreshPreviousSessionEndedAt().catch(() => {});
   }
 
   // Apply saved theme
@@ -1755,10 +2251,14 @@ function init() {
         const sessionMessages = [...state.messages];
         const sessionId       = state.sessionId;
         state.sessionEndedAt  = new Date().toISOString();
+        // Hand the just-ended session's endedAt to {{timeSinceLastSession}}
+        // before startNewSession() resets sessionEndedAt to null.
+        state.previousSessionEndedAt = state.sessionEndedAt;
         saveSettings();
         saveToServer(); // fire-and-forget — stamps the log with endedAt
+        memorizeViaBeacon(sessionMessages, sessionId, { scope: 'session' });
+        state._beaconedSessionId = sessionId;
         startNewSession();
-        memorizeSessionToTome(sessionMessages, sessionId); // fire-and-forget
       } else {
         startNewSession();
       }
@@ -1817,6 +2317,54 @@ function init() {
   });
   $('summary-save-btn').addEventListener('click', savePendingSummary);
 
+  // Diagnostics
+  $('diagnostics-btn').addEventListener('click', openDiagnosticsModal);
+  $('diagnostics-modal-close').addEventListener('click', closeDiagnosticsModal);
+  $('diagnostics-modal').addEventListener('click', e => {
+    if (e.target === $('diagnostics-modal')) closeDiagnosticsModal();
+  });
+  $('diagnostics-copy').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText($('diagnostics-output').textContent);
+      $('diagnostics-copy').textContent = 'Copied ✓';
+      setTimeout(() => { $('diagnostics-copy').textContent = 'Copy'; }, 1500);
+    } catch { alert('Copy failed — select and copy manually.'); }
+  });
+  $('diagnostics-download').addEventListener('click', downloadDiagnosticReport);
+
+  // Knowledge editor (entity-core)
+  $('knowledge-btn').addEventListener('click', openKnowledgeModal);
+  $('knowledge-modal-close').addEventListener('click', closeKnowledgeModal);
+  // Intentionally NO backdrop-click-to-close: it fires mid-pan or while
+  // dragging the resize handle past the modal edge. Only the ✕ closes it.
+  document.querySelectorAll('.ke-tab').forEach(el => {
+    el.addEventListener('click', () => keSwitchTab(el.dataset.tab));
+  });
+  $('ke-mem-refresh').addEventListener('click', keLoadMemories);
+  $('ke-mem-granularity').addEventListener('change', keLoadMemories);
+  $('ke-graph-refresh').addEventListener('click', () => {
+    keGraphClosePopover();
+    if (_keGraphView === 'map') keLoadGraphMap();
+    else keLoadGraphNodes();
+  });
+  $('ke-graph-type').addEventListener('change', () => {
+    keGraphClosePopover();
+    if (_keGraphView === 'map') keLoadGraphMap();
+    else keLoadGraphNodes();
+  });
+  $('ke-graph-view-list').addEventListener('click', () => keSetGraphView('list'));
+  $('ke-graph-view-map').addEventListener('click',  () => keSetGraphView('map'));
+  $('ke-graph-new-node').addEventListener('click',  () => keGraphToggleNewNodeForm());
+  $('ke-nn-cancel').addEventListener('click',       () => keGraphToggleNewNodeForm(false));
+  $('ke-nn-create').addEventListener('click',       keGraphCreateNewNode);
+  $('ke-nn-label').addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { e.preventDefault(); keGraphCreateNewNode(); }
+    if (e.key === 'Escape') keGraphToggleNewNodeForm(false);
+  });
+  $('ke-id-refresh').addEventListener('click', keLoadIdentity);
+  $('ke-snap-create').addEventListener('click', keCreateSnapshot);
+  $('ke-snap-refresh').addEventListener('click', keLoadSnapshots);
+
   // Tomes modal
   $('tomes-btn').addEventListener('click', openTomesModal);
   $('tomes-modal-close').addEventListener('click', closeTomesModal);
@@ -1825,14 +2373,12 @@ function init() {
   });
   $('tome-new-btn').addEventListener('click', openNewTomeModal);
 
-  // Tome entries modal
+  // Tome entries modal — no backdrop-click-to-close; the modal is
+  // resizable and easy to dismiss with the ✕.
   $('tome-entries-modal-close').addEventListener('click', closeTomeEntriesModal);
   $('tome-entries-back-btn').addEventListener('click', () => {
     closeTomeEntriesModal();
     openTomesModal();
-  });
-  $('tome-entries-modal').addEventListener('click', e => {
-    if (e.target === $('tome-entries-modal')) closeTomeEntriesModal();
   });
   $('tome-entries-new-btn').addEventListener('click', () => openLoreEditor(null));
 
@@ -1848,12 +2394,10 @@ function init() {
   });
   $('new-tome-create-btn').addEventListener('click', createNewTome);
 
-  // Lorebook entry editor modal
+  // Lorebook entry editor modal — same rationale as above: resizable,
+  // no backdrop-click-to-close.
   $('lore-editor-close').addEventListener('click', closeLoreEditor);
   $('lore-editor-cancel').addEventListener('click', closeLoreEditor);
-  $('lore-editor-modal').addEventListener('click', e => {
-    if (e.target === $('lore-editor-modal')) closeLoreEditor();
-  });
   $('lore-editor-save').addEventListener('click', saveLoreEditorEntry);
   $('lore-ed-selective').addEventListener('change', () => {
     $('lore-ed-secondary-section').classList.toggle('hidden', !$('lore-ed-selective').checked);
@@ -1874,8 +2418,61 @@ function init() {
     if (e.target === $('retro-end-modal')) closeRetroEndModal();
   });
 
+  // Memorize choice modal (per-session "Memorize" button in the logs modal)
+  $('memorize-choice-close').addEventListener('click', closeMemorizeChoice);
+  $('memorize-choice-modal').addEventListener('click', e => {
+    if (e.target === $('memorize-choice-modal')) closeMemorizeChoice();
+  });
+  $('memorize-choice-auto-btn').addEventListener('click', () => {
+    if (_memorizeChoiceSession) runAutoSummarize(_memorizeChoiceSession);
+  });
+  $('memorize-choice-manual-btn').addEventListener('click', () => {
+    if (_memorizeChoiceSession) openManualMemorize(_memorizeChoiceSession);
+  });
+
+  // Manual memorize modal
+  $('manual-memorize-close').addEventListener('click', closeManualMemorize);
+  $('manual-memorize-modal').addEventListener('click', e => {
+    if (e.target === $('manual-memorize-modal')) closeManualMemorize();
+  });
+
   // ── Load tomes from server ────────────────────────────────────
   loadTomesFromServer();
+
+  // ── Memorization status polling ──────────────────────────────
+  startMemorizationStatusPolling();
+
+  // ── Memorize-now button (in the Chat sidebar section) ────────
+  const memNowBtn = $('memorize-now-btn');
+  if (memNowBtn) {
+    memNowBtn.addEventListener('click', async () => {
+      if (!state.messages.length) {
+        setStatus('Nothing to memorize yet.');
+        return;
+      }
+      if (!state.apiKey.trim()) {
+        setStatus('Set an API key in Settings first.');
+        return;
+      }
+      const jobId = await memorizeSessionToTome([...state.messages], state.sessionId, { scope: 'session' });
+      if (jobId) {
+        setStatus('Memorization queued.');
+      } else {
+        setStatus('Could not queue memorization.');
+      }
+    });
+  }
+
+  // ── beforeunload: catch tab-close mid-session ────────────────
+  // Only enqueue if the current session has messages AND we haven't already
+  // enqueued for this session (avoids duplicate jobs when Clear was just used).
+  window.addEventListener('beforeunload', () => {
+    if (!state.messages.length) return;
+    if (state._beaconedSessionId === state.sessionId) return;
+    if (memorizeViaBeacon([...state.messages], state.sessionId, { scope: 'session' })) {
+      state._beaconedSessionId = state.sessionId;
+    }
+  });
 
   // Restore topic strip
   updateTopicStrip();
@@ -1952,6 +2549,18 @@ function nextTopicColor() {
 let _retroStartIndex = null;
 
 /**
+ * Returns the topic label if the user named it themselves, or null if it's
+ * the auto-generated "Topic N" fallback used when the user dismissed the
+ * name prompt without typing anything.
+ */
+function userNamedTopicLabel(topic) {
+  const label = (topic?.label ?? '').trim();
+  if (!label) return null;
+  if (/^Topic \d+$/.test(label)) return null;
+  return label;
+}
+
+/**
  * Start a new topic, optionally anchored at a past message index.
  * If startIndex is provided it takes precedence over the current tail.
  */
@@ -1996,9 +2605,25 @@ function endTopicAtIndex(topic, endIdx) {
     if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
     rangeMessages.push(m);
   }
-  if (!rangeMessages.length || !state.apiKey.trim()) return;
+
+  // Always open the summary modal so the user sees the topic actually ended.
+  // Auto-generate only when we have something to summarize AND an API key;
+  // otherwise drop into a blank manual form with a hint.
   openSummaryModal(topic);
-  generateTopicSummary(topic, rangeMessages);
+  if (rangeMessages.length && state.apiKey.trim()) {
+    memorizeSessionToTome(rangeMessages, state.sessionId, {
+      scope:        'topic',
+      topicId:      topic.id,
+      topicLabel:   userNamedTopicLabel(topic),
+      messageRange: { start: topic.startIndex, end: topic.endIndex },
+    });
+    generateTopicSummary(topic, rangeMessages);
+  } else {
+    populateSummaryForm({ title: topic.label, content: '', keywords: [], sticky: null });
+    $('summary-content-input').placeholder = !state.apiKey.trim()
+      ? 'Set an API key in Settings to auto-generate, or write the summary manually.'
+      : 'No readable messages in this topic range. Write the summary manually.';
+  }
 }
 
 function endTopic(topicId) {
@@ -2188,6 +2813,365 @@ function closeRetroEndModal() {
   $('retro-end-modal').classList.add('hidden');
 }
 
+// ── Session-memorize: choice modal ───────────────────────────────
+// Per-row "Memorize" button in the logs modal opens this picker, which
+// branches to either the auto-summarize path (enqueue a memorization job
+// and wait for the worker) or the manual-topics path (open a read-only
+// transcript with topic-mark buttons).
+
+let _memorizeChoiceSession = null; // session row {sessionId, startedAt, …}
+
+function openMemorizeChoice(session) {
+  _memorizeChoiceSession = session;
+  const startLabel = session.startedAt
+    ? new Date(session.startedAt).toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : 'session';
+  $('memorize-choice-subtitle').textContent = `Choose how to extract Tome entries from ${startLabel}.`;
+  $('memorize-choice-status').classList.add('hidden');
+  $('memorize-choice-status').textContent = '';
+  $('memorize-choice-auto-btn').disabled   = false;
+  $('memorize-choice-manual-btn').disabled = false;
+  $('memorize-choice-modal').classList.remove('hidden');
+}
+
+function closeMemorizeChoice() {
+  _memorizeChoiceSession = null;
+  $('memorize-choice-modal').classList.add('hidden');
+}
+
+/**
+ * Auto-summarize path: enqueue a memorization job for the chosen session
+ * and poll until the worker reports done/failed. The worker writes to the
+ * Session Memories tome via memorization.js#findOrCreateSessionMemoriesTome.
+ */
+async function runAutoSummarize(session) {
+  if (!state.apiKey.trim()) {
+    setMemorizeChoiceStatus('Set an API key in Settings first.', true);
+    return;
+  }
+  setMemorizeChoiceStatus('Loading session…', false);
+  $('memorize-choice-auto-btn').disabled   = true;
+  $('memorize-choice-manual-btn').disabled = true;
+
+  let messages;
+  try {
+    const res = await fetch(`/api/logs/${session.sessionId}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    messages = Array.isArray(data.messages) ? data.messages : [];
+  } catch (err) {
+    setMemorizeChoiceStatus(`Could not load session: ${err.message}`, true);
+    $('memorize-choice-auto-btn').disabled   = false;
+    $('memorize-choice-manual-btn').disabled = false;
+    return;
+  }
+  if (messages.length < 2) {
+    setMemorizeChoiceStatus('Session is too short to memorize.', true);
+    $('memorize-choice-auto-btn').disabled   = false;
+    $('memorize-choice-manual-btn').disabled = false;
+    return;
+  }
+
+  setMemorizeChoiceStatus('Memorizing… this can take a few seconds.', false);
+
+  let jobId;
+  try {
+    const resp = await fetch('/api/memorize', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        sessionId: session.sessionId,
+        scope:     'session',
+        messages,
+        provider:  state.provider,
+        apiKey:    state.apiKey,
+        model:     state.model,
+      }),
+    });
+    if (!resp.ok) throw new Error(await resp.text().catch(() => `HTTP ${resp.status}`));
+    const data = await resp.json();
+    jobId = data.jobId;
+  } catch (err) {
+    setMemorizeChoiceStatus(`Failed to enqueue: ${err.message}`, true);
+    $('memorize-choice-auto-btn').disabled   = false;
+    $('memorize-choice-manual-btn').disabled = false;
+    return;
+  }
+
+  // Poll this specific job (faster than the 30s background poller) so we can
+  // give immediate, in-context feedback for the click the user just made.
+  const result = await waitForMemorizationJob(jobId, { timeoutMs: 5 * 60 * 1000 });
+  if (result.status === 'done') {
+    const n = result.entriesCreated ?? 0;
+    setMemorizeChoiceStatus(`✓ ${n} Tome entr${n === 1 ? 'y' : 'ies'} saved to Session Memories.`, false);
+    fetch(`/api/memorize/${jobId}/ack`, { method: 'POST' }).catch(() => {});
+    loadTomesFromServer?.().catch?.(() => {});
+    showMemorizationNotice(n);
+    setTimeout(() => { closeMemorizeChoice(); refreshLogsList(); }, 1500);
+  } else if (result.status === 'failed') {
+    setMemorizeChoiceStatus(`Memorization failed: ${result.lastError ?? 'unknown error'}`, true);
+    fetch(`/api/memorize/${jobId}/ack`, { method: 'POST' }).catch(() => {});
+    $('memorize-choice-auto-btn').disabled   = false;
+    $('memorize-choice-manual-btn').disabled = false;
+  } else if (result.status === 'timeout') {
+    setMemorizeChoiceStatus('Still running — the result will toast when it finishes.', false);
+    $('memorize-choice-auto-btn').disabled   = false;
+    $('memorize-choice-manual-btn').disabled = false;
+  } else {
+    setMemorizeChoiceStatus(`Memorization error: ${result.error ?? 'unknown'}`, true);
+    $('memorize-choice-auto-btn').disabled   = false;
+    $('memorize-choice-manual-btn').disabled = false;
+  }
+}
+
+function setMemorizeChoiceStatus(text, isError) {
+  const el = $('memorize-choice-status');
+  el.textContent = text;
+  el.classList.remove('hidden');
+  el.style.color = isError ? 'var(--error-color)' : 'var(--text-dim)';
+}
+
+/** Poll /api/memorize until the named jobId reaches a terminal state. */
+async function waitForMemorizationJob(jobId, { timeoutMs = 5 * 60 * 1000, intervalMs = 2000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const resp = await fetch('/api/memorize');
+      if (resp.ok) {
+        const jobs = await resp.json();
+        const job  = jobs.find(j => j.id === jobId);
+        if (job?.status === 'done') {
+          return { status: 'done', entriesCreated: job.result?.entriesCreated ?? 0 };
+        }
+        if (job?.status === 'failed') {
+          return { status: 'failed', lastError: job.lastError };
+        }
+      }
+    } catch (err) {
+      return { status: 'error', error: err.message };
+    }
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+  return { status: 'timeout' };
+}
+
+// ── Session-memorize: manual topics modal ─────────────────────────
+// Loads a historical session into a dedicated viewer with the same
+// topic-marking workflow as the live chat. Tome entries are saved to
+// the Session Memories tome.
+
+let _manualMemorize = null; // { sessionId, messages: [], topics: [], tomeId }
+
+async function openManualMemorize(session) {
+  closeMemorizeChoice();
+
+  // Reset state and open the modal in a loading state so the user sees movement.
+  _manualMemorize = {
+    sessionId: session.sessionId,
+    startedAt: session.startedAt,
+    messages:  [],
+    topics:    [],
+    tomeId:    null,
+  };
+  $('manual-memorize-title').textContent = 'Memorize Session — Manual Topics';
+  $('manual-memorize-topics-strip').innerHTML = '';
+  $('manual-memorize-messages').innerHTML = '<p class="logs-loading">Loading session…</p>';
+  $('manual-memorize-modal').classList.remove('hidden');
+
+  // Load both the session log and the Session Memories tome id in parallel.
+  let messages;
+  let tomeId;
+  try {
+    const [logRes, tomeRes] = await Promise.all([
+      fetch(`/api/logs/${session.sessionId}`),
+      fetch('/api/tomes/session-memories'),
+    ]);
+    if (!logRes.ok)  throw new Error(`Session log: HTTP ${logRes.status}`);
+    if (!tomeRes.ok) throw new Error(`Session Memories tome: HTTP ${tomeRes.status}`);
+    const logData  = await logRes.json();
+    const tomeData = await tomeRes.json();
+    messages = Array.isArray(logData.messages) ? logData.messages : [];
+    tomeId   = tomeData.id;
+  } catch (err) {
+    $('manual-memorize-messages').innerHTML =
+      `<p class="logs-error">⚠ Failed to load: ${esc(err.message)}</p>`;
+    return;
+  }
+
+  _manualMemorize.messages = messages;
+  _manualMemorize.tomeId   = tomeId;
+  renderManualMemorizeMessages();
+  // Refresh registry so the newly-created Session Memories tome appears in the
+  // tome library on next open (no-op if it already existed).
+  loadTomesFromServer?.().catch?.(() => {});
+}
+
+function closeManualMemorize() {
+  _manualMemorize = null;
+  $('manual-memorize-modal').classList.add('hidden');
+}
+
+function renderManualMemorizeMessages() {
+  const container = $('manual-memorize-messages');
+  container.innerHTML = '';
+  const mm = _manualMemorize;
+  if (!mm) return;
+  if (!mm.messages.length) {
+    container.innerHTML = '<p class="logs-empty">This session has no messages.</p>';
+    return;
+  }
+
+  let rendered = 0;
+  mm.messages.forEach((msg, idx) => {
+    // Skip tool plumbing — same filter as the worker uses.
+    if (msg.role === 'tool') return;
+    if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) return;
+    rendered++;
+
+    const row = document.createElement('div');
+    row.className = `mm-msg mm-msg-${msg.role}`;
+    row.dataset.msgIndex = String(idx);
+
+    const stripe = document.createElement('div');
+    stripe.className = 'mm-msg-stripe';
+    row.appendChild(stripe);
+
+    const header = document.createElement('div');
+    header.className = 'mm-msg-header';
+    const roleSpan = document.createElement('span');
+    roleSpan.textContent = `${msg.role}${msg.timestamp ? ' · ' + formatTimestamp(msg.timestamp) : ''}`;
+    header.appendChild(roleSpan);
+
+    const actions = document.createElement('span');
+    actions.className = 'mm-msg-actions';
+    const startBtn = document.createElement('button');
+    startBtn.className = 'mm-msg-action-btn';
+    startBtn.textContent = '▷ Topic start';
+    startBtn.addEventListener('click', () => manualMemorizeStartTopic(idx));
+    actions.appendChild(startBtn);
+    const endBtn = document.createElement('button');
+    endBtn.className = 'mm-msg-action-btn';
+    endBtn.textContent = '□ Topic end';
+    endBtn.addEventListener('click', () => manualMemorizeEndTopic(idx));
+    actions.appendChild(endBtn);
+    header.appendChild(actions);
+    row.appendChild(header);
+
+    const content = document.createElement('div');
+    content.className = 'mm-msg-content';
+    content.textContent = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content ?? '');
+    row.appendChild(content);
+
+    container.appendChild(row);
+  });
+
+  if (!rendered) {
+    container.innerHTML = '<p class="logs-empty">This session has no user/assistant messages to memorize.</p>';
+    return;
+  }
+
+  refreshManualMemorizeDecorations();
+}
+
+function refreshManualMemorizeDecorations() {
+  const mm = _manualMemorize;
+  if (!mm) return;
+
+  // Topic strip
+  const strip = $('manual-memorize-topics-strip');
+  strip.innerHTML = '';
+  for (const t of mm.topics) {
+    const pill = document.createElement('span');
+    pill.className = 'mm-topic-pill';
+    pill.style.setProperty('--topic-c', t.color);
+    const stateLabel = t.endIndex === null ? 'open' : (t.tomeEntryId ? 'saved' : 'closed');
+    pill.innerHTML =
+      `<span class="mm-topic-pill-dot"></span>` +
+      `<span>${esc(t.label)}</span>` +
+      `<span class="mm-topic-pill-state">${stateLabel}</span>`;
+    strip.appendChild(pill);
+  }
+
+  // Per-message colored bands showing which topics cover them
+  document.querySelectorAll('#manual-memorize-messages .mm-msg').forEach(row => {
+    const idx = parseInt(row.dataset.msgIndex, 10);
+    const stripe = row.querySelector('.mm-msg-stripe');
+    stripe.innerHTML = '';
+    for (const t of mm.topics) {
+      const covers = t.startIndex <= idx && (t.endIndex === null || idx <= t.endIndex);
+      if (!covers) continue;
+      const band = document.createElement('span');
+      band.className = 'mm-msg-stripe-band';
+      band.style.background = t.color;
+      stripe.appendChild(band);
+    }
+  });
+}
+
+function manualMemorizeStartTopic(msgIndex) {
+  const mm = _manualMemorize;
+  if (!mm) return;
+  const label = prompt('Topic label (optional):', `Topic ${mm.topics.length + 1}`);
+  if (label === null) return; // cancelled
+  const used   = new Set(mm.topics.map(t => t.color));
+  const color  = TOPIC_COLORS.find(c => !used.has(c)) ?? TOPIC_COLORS[mm.topics.length % TOPIC_COLORS.length];
+  mm.topics.push({
+    id:          generateId(),
+    label:       label.trim() || `Topic ${mm.topics.length + 1}`,
+    color,
+    startIndex:  msgIndex,
+    endIndex:    null,
+    tomeEntryId: null,
+  });
+  refreshManualMemorizeDecorations();
+}
+
+function manualMemorizeEndTopic(msgIndex) {
+  const mm = _manualMemorize;
+  if (!mm) return;
+  const open = mm.topics.filter(t => t.endIndex === null && t.startIndex <= msgIndex);
+  if (!open.length) {
+    alert('No open topic to end here. Click "Topic start" on an earlier message first.');
+    return;
+  }
+  let topic;
+  if (open.length === 1) {
+    topic = open[0];
+  } else {
+    const choice = prompt(
+      `End which topic?\n${open.map(t => `- ${t.label}`).join('\n')}`,
+      open[0].label,
+    );
+    if (choice === null) return; // cancelled
+    topic = open.find(t => t.label === choice.trim());
+    if (!topic) { alert(`No open topic named "${choice.trim()}".`); return; }
+  }
+
+  // Gather range messages, filtered like the worker does.
+  const rangeMessages = [];
+  for (let i = topic.startIndex; i <= msgIndex; i++) {
+    const m = mm.messages[i];
+    if (!m || m.role === 'tool') continue;
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
+    rangeMessages.push(m);
+  }
+  if (rangeMessages.length < 2) {
+    alert('A topic needs at least two non-tool messages to summarize. Pick a later message to end at.');
+    return; // keep the topic open so the user can try again
+  }
+
+  topic.endIndex = msgIndex;
+  refreshManualMemorizeDecorations();
+
+  openSummaryModal(topic, {
+    sessionId:     mm.sessionId,
+    tomeId:        mm.tomeId,
+    rangeMessages,
+    onSaved:       () => { refreshManualMemorizeDecorations(); },
+  });
+  generateTopicSummary(topic, rangeMessages);
+}
+
 // ── Summary generation ────────────────────────────────────────────
 let _pendingSummaryTopic = null;
 
@@ -2196,27 +3180,32 @@ async function generateTopicSummary(topic, rangeMessages) {
     .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
     .join('\n\n');
 
-  const prompt = `You are writing a Tome entry for a Familiar (AI companion). The entry is private reference notes that get injected into the Familiar's context when its keywords appear in a future conversation. Follow the craft rules below carefully.
+  const userLabel = userNamedTopicLabel(topic);
+  const focusBlock = userLabel
+    ? `\n\n### Focus topic\nThe user named this topic "${userLabel}". Center the entry on that topic. Skip tangential threads in the conversation that don't bear on it.`
+    : '';
+
+  const prompt = `You are writing a Tome entry for a Familiar (AI companion). The entry is the Familiar's own private notes to themselves — first-person reference material that gets injected back into the Familiar's context when its keywords appear in a future conversation. The Familiar is the voice; you are the scribe. Follow the craft rules below carefully.${focusBlock}
 
 Return ONLY valid JSON (no markdown fences, no commentary) with exactly these fields:
 {
   "title":    "Short label for the entry comment (max 60 chars).",
-  "content":  "Familiar-perspective bullet guidance. See rules below.",
+  "content":  "First-person notes from the Familiar to themselves. See rules below.",
   "keywords": ["conversational phrase 1", "conversational phrase 2", ...],
   "sticky":   3
 }
 
 ### Content rules (most important)
-Write content as the Familiar's private notes to themselves about this situation. NOT a summary of what happened.
+Write content as the Familiar's own first-person private notes to themselves about this situation. NOT a summary of what happened.
 Structure:
-  1. One short framing line — what is happening and why (gives the Familiar understanding, not just rules).
-  2. 3–5 action bullets — what to do.
-  3. 1–2 prohibition bullets — what NOT to do. These are usually the most valuable: name the well-intentioned default response that would make things worse.
+  1. One short framing line — what is happening and why (so I understand the situation, not just the rules).
+  2. 3–5 action bullets — what I will do.
+  3. 1–2 prohibition bullets — what I will NOT do. These are usually the most valuable: name the well-intentioned default response that would make things worse.
 Style:
-  - Second person, addressed to the Familiar. Use {{user}} wherever the user's name belongs.
+  - First person, the Familiar speaking as themselves ("I", "my", "me"). Use {{user}} wherever the user's name belongs.
   - Practical, grounded, non-clinical. Notes, not a textbook.
   - Short declarative bullets. The whole entry should be readable in 5–10 seconds.
-  - Do NOT include narrative summaries of "what they said" — distil the situation and the response, not the transcript.
+  - Do NOT include narrative summaries of "what they said" — distil the situation and my response, not the transcript.
 
 ### Keyword rules
 Keywords are TRIGGERS, not labels. They must be phrases the user would literally say when this situation recurs — not the name of the topic.
@@ -2279,12 +3268,19 @@ async function regenerateSummary(topic) {
   $('summary-generating-hint').classList.remove('hidden');
   $('summary-form').classList.add('hidden');
 
-  const rangeMessages = [];
-  for (let i = topic.startIndex; i <= topic.endIndex; i++) {
-    const m = state.messages[i];
-    if (!m || m.role === 'tool') continue;
-    if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
-    rangeMessages.push(m);
+  // Manual-session contexts capture their messages at open time so regen still
+  // works even if the manual viewer has been closed in the meantime.
+  let rangeMessages;
+  if (_pendingSummaryContext?.rangeMessages) {
+    rangeMessages = _pendingSummaryContext.rangeMessages;
+  } else {
+    rangeMessages = [];
+    for (let i = topic.startIndex; i <= topic.endIndex; i++) {
+      const m = state.messages[i];
+      if (!m || m.role === 'tool') continue;
+      if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
+      rangeMessages.push(m);
+    }
   }
   await generateTopicSummary(topic, rangeMessages);
 }
@@ -2304,8 +3300,14 @@ function populateSummaryForm({ title, content, keywords, sticky }) {
 }
 
 // ── Summary modal ─────────────────────────────────────────────────
-function openSummaryModal(topic) {
-  _pendingSummaryTopic = topic;
+// When _pendingSummaryContext is set, savePendingSummary routes the entry
+// to a specific tome and uses the supplied sessionId / onSaved callback
+// instead of the default (live-session) behaviour.
+let _pendingSummaryContext = null; // { sessionId, tomeId, onSaved(uid) } | null
+
+function openSummaryModal(topic, context = null) {
+  _pendingSummaryTopic   = topic;
+  _pendingSummaryContext = context;
   $('summary-modal-title').textContent = `Tome entry: ${topic.label}`;
   $('summary-generating-hint').classList.remove('hidden');
   $('summary-form').classList.add('hidden');
@@ -2316,7 +3318,8 @@ function openSummaryModal(topic) {
 
 function closeSummaryModal() {
   $('summary-modal').classList.add('hidden');
-  _pendingSummaryTopic = null;
+  _pendingSummaryTopic   = null;
+  _pendingSummaryContext = null;
 }
 
 async function savePendingSummary() {
@@ -2336,6 +3339,7 @@ async function savePendingSummary() {
     return;
   }
 
+  const ctx = _pendingSummaryContext;
   const uid = generateId();
   const entry = {
     uid,
@@ -2364,27 +3368,33 @@ async function savePendingSummary() {
     insertion_order:  100,
     created_at:       new Date().toISOString(),
     learnedAt:        new Date().toISOString(),
-    session_id:       state.sessionId,
+    session_id:       ctx?.sessionId ?? state.sessionId,
     message_range:    [topic.startIndex, topic.endIndex],
   };
 
   try {
-    // Get or create the default tome, fetch fresh, merge, save
-    const targetTome = await getDefaultTomeForSaving();
-    if (!targetTome) throw new Error('No tome available for saving.');
-    const tRes = await fetch(`/api/tomes/${targetTome.id}`);
+    // Route to the context-supplied tome (manual session memorization) or
+    // fall back to the first enabled tome (live-session topic save).
+    let targetTomeId = ctx?.tomeId ?? null;
+    if (!targetTomeId) {
+      const targetTome = await getDefaultTomeForSaving();
+      if (!targetTome) throw new Error('No tome available for saving.');
+      targetTomeId = targetTome.id;
+    }
+    const tRes = await fetch(`/api/tomes/${targetTomeId}`);
     if (!tRes.ok) throw new Error(`HTTP ${tRes.status}`);
     const tomeData = await tRes.json();
     tomeData.entries[uid] = entry;
-    await fetch(`/api/tomes/${targetTome.id}`, {
+    await fetch(`/api/tomes/${targetTomeId}`, {
       method:  'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ entries: tomeData.entries }),
     });
-    state.tomeCache[targetTome.id] = tomeData;
-    // Link back to topic
+    state.tomeCache[targetTomeId] = tomeData;
+    // Link back to topic (live session only; manual sessions track topics separately)
     topic.tomeEntryId = uid;
-    saveTopics();
+    if (!ctx) saveTopics();
+    if (ctx?.onSaved) ctx.onSaved(uid);
     closeSummaryModal();
   } catch (err) {
     alert(`Failed to save Tome entry: ${err.message}`);
@@ -2394,6 +3404,9 @@ async function savePendingSummary() {
 // ── Tomes: server sync ───────────────────────────────────────────
 async function loadTomesFromServer() {
   try {
+    // Ensure the Session Memories tome exists before listing, so it always
+    // appears in the library even before its first entry is written.
+    await fetch('/api/tomes/session-memories').catch(() => {});
     const res  = await fetch('/api/tomes');
     if (!res.ok) return;
     const list = await res.json(); // array of { id, name, description, enabled, entryCount }
@@ -2670,7 +3683,7 @@ async function refreshTomesList() {
   await loadTomesFromServer();
   const container = $('tomes-list');
   container.innerHTML = '';
-  const tomes = state.tomeRegistry;
+  const tomes = state.tomeRegistry.filter(t => t && t.id);
   if (!tomes.length) {
     container.innerHTML = '<p class="lorebook-empty">No tomes yet. Click <strong>+ New Tome</strong> to create one.</p>';
     return;
@@ -2760,6 +3773,7 @@ function openTomeEntriesModal(tomeId) {
   const tome = state.tomeRegistry.find(t => t.id === tomeId);
   $('tome-entries-modal-title').textContent = tome?.name ?? 'Tome Entries';
   $('tome-entries-modal').classList.remove('hidden');
+  bindResizableModal('tome-entries-modal-inner', 'pf-tome-entries-modal-size');
   refreshTomeEntriesList();
 }
 
@@ -2862,6 +3876,1371 @@ async function getDefaultTomeForSaving() {
   return state.tomeRegistry.find(t => t.id === id) ?? state.tomeRegistry[0] ?? null;
 }
 
+// ── Diagnostics ─────────────────────────────────────────────────────────
+//
+// On demand, gather a plain-text snapshot the user can paste into a bug
+// report. Combines navigator-derived system info, current Proto-Familiar
+// state, a live /api/health probe (so server-side timeouts / unreachable
+// servers show up immediately), and the recent in-app event log.
+
+async function buildDiagnosticReport() {
+  const nav  = navigator;
+  const scr  = screen;
+  const now  = new Date();
+  const lines = [];
+  const add = (k, v) => lines.push(`${k.padEnd(22)} ${v}`);
+  const section = title => { lines.push('', `── ${title} ${'─'.repeat(Math.max(0, 56 - title.length))}`); };
+
+  lines.push(`Proto-Familiar diagnostic report`);
+  lines.push(`generated: ${now.toISOString()} (${now.toString()})`);
+
+  section('System');
+  add('userAgent',           nav.userAgent ?? '?');
+  add('platform',            nav.platform ?? nav.userAgentData?.platform ?? '?');
+  add('language',            nav.language ?? '?');
+  add('hardwareConcurrency', nav.hardwareConcurrency ?? '?');
+  add('deviceMemory (GB)',   nav.deviceMemory ?? '?');
+  add('connection',          nav.connection ? `${nav.connection.effectiveType ?? '?'} ${nav.connection.downlink ?? '?'}Mb/s${nav.connection.rtt ? ` ${nav.connection.rtt}ms` : ''}` : '?');
+  add('online',              String(nav.onLine));
+  add('screen',              scr ? `${scr.width}×${scr.height} @ ${window.devicePixelRatio ?? 1}x dpr` : '?');
+  add('viewport',            `${window.innerWidth}×${window.innerHeight}`);
+  add('colorScheme',         (typeof window.matchMedia === 'function')
+                               ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+                               : '?');
+  try { add('timezone',      Intl.DateTimeFormat().resolvedOptions().timeZone ?? '?'); }
+  catch { add('timezone',    '?'); }
+
+  section('Proto-Familiar');
+  add('url',                 location.href);
+  add('provider',            state.provider ?? '?');
+  add('model',               state.model ?? '?');
+  add('apiKey set',          state.apiKey && state.apiKey.trim() ? 'yes' : 'no');
+  add('streaming',           String(state.streaming));
+  add('toolsEnabled',        String(state.toolsEnabled));
+  add('temperature',         String(state.temperature ?? '?'));
+  add('max_tokens',          String(state.maxTokens ?? '?'));
+  add('sessionId',           state.sessionId ?? '(none)');
+  add('sessionStartedAt',    state.sessionStartedAt ?? '(none)');
+  add('messages',            String(state.messages?.length ?? 0));
+  add('topics',              String(state.topics?.length ?? 0));
+  add('tomeRegistry',        String(state.tomeRegistry?.length ?? 0));
+  add('customTools',         state.customTools ? `${state.customTools.length} chars` : '(empty)');
+  add('lastThalamusContext', lastThalamusContext ? `${lastThalamusContext.length} chars` : '(none — no enriched response captured yet)');
+
+  // localStorage estimate (rough — only our own keys)
+  let lsBytes = 0;
+  try {
+    for (const k of Object.keys(localStorage)) lsBytes += (k.length + (localStorage.getItem(k)?.length ?? 0));
+  } catch { /* not available */ }
+  add('localStorage (bytes)', String(lsBytes));
+
+  section('Server probe (/api/health)');
+  const probeStart = performance.now();
+  try {
+    const r = await fetch('/api/health', { cache: 'no-store' });
+    const ms = Math.round(performance.now() - probeStart);
+    add('status', `${r.status} ${r.statusText}`);
+    add('roundTrip',  `${ms} ms`);
+  } catch (err) {
+    add('status', `FAILED: ${err.message}`);
+  }
+
+  section('Last sent prompt summary');
+  if (!lastSentMessages) {
+    lines.push('  (none — no message sent yet this session)');
+  } else {
+    add('messages',  String(lastSentMessages.length));
+    add('roles',     lastSentMessages.map(m => m.role).join(','));
+    add('system seg sources', (lastBuildSegments?.systemSegments ?? []).map(s => s.source).join(',') || '(none)');
+    add('at-depth lore splices', String((lastBuildSegments?.atDepthInjections ?? []).length));
+    add('thalamus injection', lastThalamusContext ? `${lastThalamusContext.length} chars` : 'none');
+  }
+
+  section(`Recent events (${debugLog.length} / cap ${DEBUG_LOG_CAP})`);
+  if (!debugLog.length) {
+    lines.push('  (no events captured yet)');
+  } else {
+    for (const e of debugLog.slice(-100)) {
+      lines.push(`  ${e.ts}  ${e.type.padEnd(20)} ${e.detail}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+async function openDiagnosticsModal() {
+  $('diagnostics-output').textContent = 'Gathering…';
+  $('diagnostics-modal').classList.remove('hidden');
+  try {
+    const text = await buildDiagnosticReport();
+    $('diagnostics-output').textContent = text;
+  } catch (err) {
+    $('diagnostics-output').textContent = `Failed to build report: ${err.message}`;
+  }
+}
+function closeDiagnosticsModal() { $('diagnostics-modal').classList.add('hidden'); }
+
+function downloadDiagnosticReport() {
+  const text = $('diagnostics-output').textContent;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `proto-familiar-diagnostics-${stamp}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ── Knowledge editor (entity-core: memories, identity, graph, snapshots) ─
+//
+// Layered UI: tabs across the top, two-pane list+detail per tab. All ops
+// hit /api/entity/* endpoints; destructive ones auto-snapshot server-side
+// so the Snapshots tab is the always-on undo.
+
+const KE_TABS = ['memories', 'graph', 'identity', 'snapshots'];
+
+function openKnowledgeModal() {
+  $('knowledge-modal').classList.remove('hidden');
+  bindResizableModal('knowledge-modal-inner', 'pf-knowledge-modal-size');
+  keGraphClosePopover();
+  keSwitchTab('memories');
+}
+function closeKnowledgeModal() {
+  $('knowledge-modal').classList.add('hidden');
+  keGraphClosePopover();
+}
+
+// Restore a persisted size for a `.modal-resizable` element and persist
+// future resizes. Idempotent — repeat calls re-apply the saved size but
+// only install one ResizeObserver per element.
+const _resizableBound = new WeakSet();
+function bindResizableModal(elId, storageKey) {
+  const el = $(elId);
+  if (!el) return;
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (raw) {
+      const { w, h } = JSON.parse(raw);
+      if (typeof w === 'number' && w > 0) el.style.width  = `${w}px`;
+      if (typeof h === 'number' && h > 0) el.style.height = `${h}px`;
+    }
+  } catch {/* ignore */}
+  if (_resizableBound.has(el) || typeof ResizeObserver === 'undefined') return;
+  _resizableBound.add(el);
+  let saveT = 0;
+  const ro = new ResizeObserver(entries => {
+    clearTimeout(saveT);
+    saveT = setTimeout(() => {
+      const r = entries[0]?.contentRect;
+      if (!r) return;
+      try { localStorage.setItem(storageKey, JSON.stringify({ w: Math.round(r.width), h: Math.round(r.height) })); }
+      catch {/* ignore */}
+    }, 250);
+  });
+  ro.observe(el);
+}
+
+function keSwitchTab(tab) {
+  for (const t of KE_TABS) {
+    $(`ke-pane-${t}`)?.classList.toggle('ke-pane-active', t === tab);
+  }
+  document.querySelectorAll('.ke-tab').forEach(el => {
+    el.classList.toggle('ke-tab-active', el.dataset.tab === tab);
+  });
+  if (tab === 'memories')   keLoadMemories();
+  if (tab === 'graph') {
+    if (_keGraphView === 'map') { keSetGraphView('map'); }
+    else                        { keSetGraphView('list'); keLoadGraphNodes(); }
+  }
+  if (tab === 'identity')   keLoadIdentity();
+  if (tab === 'snapshots')  keLoadSnapshots();
+}
+
+function keSetDetail(paneId, html) { $(paneId).innerHTML = html; }
+
+function keError(err, fallback) {
+  const m = (err && err.message) ? err.message : (typeof err === 'string' ? err : fallback);
+  return `<p class="logs-error">⚠ ${esc(String(m))}</p>`;
+}
+
+// Pull the server's real `{ error }` message out of a non-OK response.
+// Falls back to HTTP status. Surfaces 'entity-core not connected'
+// instead of the opaque 'HTTP 502' the user used to see.
+async function keReadServerError(res) {
+  try {
+    const j = await res.json();
+    if (j?.error) return String(j.error);
+  } catch {/* not JSON */}
+  return `HTTP ${res.status}`;
+}
+
+// ── Memories tab ────────────────────────────────────────────────────────
+async function keLoadMemories() {
+  const list = $('ke-mem-list');
+  list.innerHTML = '<p class="logs-loading">Loading…</p>';
+  const granularity = $('ke-mem-granularity').value || undefined;
+  try {
+    const res = await fetch('/api/entity/memories' + (granularity ? `?granularity=${encodeURIComponent(granularity)}` : ''));
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const data = await res.json();
+    const memories = data.memories ?? [];
+    if (!memories.length) { list.innerHTML = '<p class="logs-empty">No memories found.</p>'; return; }
+    list.innerHTML = '';
+    for (const m of memories) {
+      const row = document.createElement('div');
+      row.className = 'ke-row';
+      row.innerHTML = `
+        <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date)}</div>
+        <div class="ke-row-sub">${esc((m.preview ?? '').slice(0, 140))}</div>`;
+      row.addEventListener('click', () => keOpenMemory(m.granularity, m.date));
+      list.appendChild(row);
+    }
+  } catch (err) { list.innerHTML = keError(err, 'Failed to load memories.'); }
+}
+
+async function keOpenMemory(granularity, date) {
+  keSetDetail('ke-mem-detail', '<p class="logs-loading">Loading…</p>');
+  try {
+    const res = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`);
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const data = await res.json();
+    const content = data.memory?.content ?? data.content ?? '';
+    const det = $('ke-mem-detail');
+    det.innerHTML = `
+      <div class="ke-detail-header">
+        <h3>${esc(granularity)} · ${esc(date)}</h3>
+      </div>
+      <textarea id="ke-mem-content" rows="14" class="ke-textarea">${esc(content)}</textarea>
+      <div class="ke-actions">
+        <button id="ke-mem-save"    class="btn-send">Save (overwrite)</button>
+        <button id="ke-mem-super"   class="btn-secondary">Supersede with today's date</button>
+        <button id="ke-mem-delete"  class="btn-ghost ke-danger">Delete</button>
+      </div>
+      <p class="field-hint">Editing rewrites the entry in place; an auto-snapshot is taken first. "Supersede" writes a NEW dated entry that contradicts this one — recency-decay then demotes the stale entry while preserving history.</p>`;
+    $('ke-mem-save').addEventListener('click', async () => {
+      const body = $('ke-mem-content').value;
+      const r = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: body, editedBy: 'user-edit' }),
+      });
+      if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
+      keLoadMemories();
+      keOpenMemory(granularity, date);
+    });
+    $('ke-mem-super').addEventListener('click', async () => {
+      const body = $('ke-mem-content').value;
+      if (!body.trim()) { alert('Write the corrected memory content first.'); return; }
+      const r = await fetch('/api/entity/memories/supersede', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: body, granularity, supersedes: { granularity, date } }),
+      });
+      if (!r.ok) { alert(`Supersede failed: ${(await r.json()).error ?? r.status}`); return; }
+      const j = await r.json();
+      alert(`Wrote new ${granularity}/${j.date}.`);
+      keLoadMemories();
+    });
+    $('ke-mem-delete').addEventListener('click', async () => {
+      if (!confirm(`Delete memory ${granularity}/${date}? An auto-snapshot is taken first; you can restore via the Snapshots tab.`)) return;
+      const r = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`, { method: 'DELETE' });
+      if (!r.ok) { alert(`Delete failed: ${(await r.json()).error ?? r.status}`); return; }
+      keSetDetail('ke-mem-detail', '<p class="logs-empty">Deleted.</p>');
+      keLoadMemories();
+    });
+  } catch (err) { keSetDetail('ke-mem-detail', keError(err, 'Failed to load memory.')); }
+}
+
+// ── Graph tab ───────────────────────────────────────────────────────────
+async function keLoadGraphNodes() {
+  const list = $('ke-graph-list');
+  list.innerHTML = '<p class="logs-loading">Loading…</p>';
+  const type = $('ke-graph-type').value.trim() || undefined;
+  try {
+    const res = await fetch('/api/entity/graph/nodes' + (type ? `?type=${encodeURIComponent(type)}` : ''));
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const data  = await res.json();
+    const nodes = data.nodes ?? data.results ?? [];
+    if (!nodes.length) { list.innerHTML = '<p class="logs-empty">No graph nodes found.</p>'; return; }
+    keUpdateNodeTypes(nodes);
+    list.innerHTML = '';
+    for (const n of nodes) {
+      const row = document.createElement('div');
+      row.className = 'ke-row';
+      row.innerHTML = `
+        <div class="ke-row-title">${esc(n.label ?? n.id)}</div>
+        <div class="ke-row-sub">${esc(n.type ?? '')}${n.description ? ' · ' + esc(n.description.slice(0, 100)) : ''}</div>`;
+      row.addEventListener('click', () => keOpenGraphNode(n.id));
+      list.appendChild(row);
+    }
+  } catch (err) { list.innerHTML = keError(err, 'Failed to load graph nodes.'); }
+}
+
+async function keOpenGraphNode(id) {
+  keSetDetail('ke-graph-detail', '<p class="logs-loading">Loading…</p>');
+  try {
+    const res = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(id)}/subgraph?depth=1`);
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const sg   = await res.json();
+    const self = (sg.nodes ?? []).find(n => n.id === id) ?? { id };
+    keUpdateNodeTypes([self, ...(sg.nodes ?? [])]);
+    keUpdateEdgeTypes(sg.edges ?? []);
+    const det  = $('ke-graph-detail');
+    const edgesHtml = (sg.edges ?? []).map(e => keGraphEdgeRowHTML(id, e, sg)).join('');
+    det.innerHTML = `
+      <div class="ke-detail-header"><h3>${esc(self.label ?? id)}</h3></div>
+      <div class="field"><label>Label</label><input id="ke-graph-label" type="text" value="${esc(self.label ?? '')}"></div>
+      <div class="field"><label>Type</label><input id="ke-graph-nodetype" type="text" value="${esc(self.type ?? '')}" list="ke-node-types-dl"></div>
+      <div class="field"><label>Description</label><textarea id="ke-graph-desc" rows="4" class="ke-textarea">${esc(self.description ?? '')}</textarea></div>
+      <div class="ke-actions">
+        <button id="ke-graph-save" class="btn-send">Save</button>
+        <button id="ke-graph-delete" class="btn-ghost ke-danger">Delete node</button>
+      </div>
+      <h4 class="ke-subhead">Edges (${(sg.edges ?? []).length})</h4>
+      <div class="ke-edges" id="ke-graph-edges">${edgesHtml || '<p class="logs-empty">No edges.</p>'}</div>
+      ${keGraphAddEdgeFormHTML()}`;
+    $('ke-graph-save').addEventListener('click', async () => {
+      const body = {
+        label:       $('ke-graph-label').value,
+        type:        $('ke-graph-nodetype').value,
+        description: $('ke-graph-desc').value,
+      };
+      const r = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(id)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
+      keLoadGraphNodes();
+      keOpenGraphNode(id);
+    });
+    $('ke-graph-delete').addEventListener('click', async () => {
+      if (!confirm('Delete this node and ALL its edges? An auto-snapshot is taken first.')) return;
+      const r = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (!r.ok) { alert(`Delete failed: ${(await r.json()).error ?? r.status}`); return; }
+      keSetDetail('ke-graph-detail', '<p class="logs-empty">Deleted.</p>');
+      keLoadGraphNodes();
+    });
+    keGraphAttachEdgesUI(det, id, sg, () => keOpenGraphNode(id));
+  } catch (err) { keSetDetail('ke-graph-detail', keError(err, 'Failed to load node.')); }
+}
+
+// ── Graph map view ──────────────────────────────────────────────────────
+//
+// Renders the full knowledge graph as dots (nodes) and quadratic curves
+// (edges) on a canvas. Node hue encodes type via a deterministic
+// per-graph palette (sorted types → palette[i*stride % 24]); edge hue
+// encodes relationship type, with saturation / lightness / alpha
+// scaled to the edge's weight in [0, 1] so strong relationships read
+// vivid and weak ones fade. Wheel zooms, drag pans, hover surfaces a
+// tooltip (hit-tested against the actual Bézier curve), and clicking a
+// dot opens the draggable popover editor.
+
+let _keGraphView = 'list';
+const _keGraph = {
+  nodes:    [],
+  edges:    [],
+  nodeById: new Map(),
+  // viewport transform: world = (screen - tx) / zoom
+  zoom:     1,
+  tx:       0,
+  ty:       0,
+  hover:    null,   // { kind: 'node'|'edge', ref }
+  drag:     null,
+  raf:      0,
+  inited:   false,
+};
+
+const KE_GRAPH_NODE_R   = 6;
+const KE_GRAPH_LABEL_ZOOM = 1.4;
+
+function keSetGraphView(view) {
+  const changed = (view !== _keGraphView);
+  _keGraphView = view;
+  $('ke-graph-view-list').classList.toggle('ke-view-active', view === 'list');
+  $('ke-graph-view-map').classList.toggle('ke-view-active',  view === 'map');
+  $('ke-graph-view-list').setAttribute('aria-selected', view === 'list' ? 'true' : 'false');
+  $('ke-graph-view-map').setAttribute('aria-selected',  view === 'map'  ? 'true' : 'false');
+  $('ke-graph-split').classList.toggle('hidden', view !== 'list');
+  $('ke-graph-map').classList.toggle('hidden',   view !== 'map');
+  // Popover is anchored to a specific (possibly stale) node, so leaving
+  // the map view, or refreshing it, should dismiss it.
+  if (changed) keGraphClosePopover();
+  if (view === 'map') {
+    keInitGraphMapOnce();
+    keLoadGraphMap();
+  }
+}
+
+function keInitGraphMapOnce() {
+  if (_keGraph.inited) return;
+  _keGraph.inited = true;
+  const canvas = $('ke-graph-canvas');
+
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const rect  = canvas.getBoundingClientRect();
+    const mx    = e.clientX - rect.left;
+    const my    = e.clientY - rect.top;
+    const wx    = (mx - _keGraph.tx) / _keGraph.zoom;
+    const wy    = (my - _keGraph.ty) / _keGraph.zoom;
+    const scale = Math.exp(-e.deltaY * 0.0015);
+    _keGraph.zoom = Math.max(0.2, Math.min(8, _keGraph.zoom * scale));
+    _keGraph.tx = mx - wx * _keGraph.zoom;
+    _keGraph.ty = my - wy * _keGraph.zoom;
+    keGraphRequestDraw();
+  }, { passive: false });
+
+  canvas.addEventListener('mousedown', e => {
+    _keGraph.drag = { x: e.clientX, y: e.clientY, tx: _keGraph.tx, ty: _keGraph.ty, moved: false };
+  });
+  window.addEventListener('mousemove', e => {
+    if (_keGraph.drag) {
+      const dx = e.clientX - _keGraph.drag.x;
+      const dy = e.clientY - _keGraph.drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) _keGraph.drag.moved = true;
+      _keGraph.tx = _keGraph.drag.tx + dx;
+      _keGraph.ty = _keGraph.drag.ty + dy;
+      keGraphRequestDraw();
+      return;
+    }
+    if (_keGraphView !== 'map') return;
+    if ($('knowledge-modal').classList.contains('hidden')) return;
+    if ($('ke-graph-map').classList.contains('hidden'))   return;
+    keGraphUpdateHover(e);
+  });
+  window.addEventListener('mouseup', e => {
+    if (!_keGraph.drag) return;
+    const moved = _keGraph.drag.moved;
+    _keGraph.drag = null;
+    if (!moved) keGraphHandleClick(e);
+  });
+
+  canvas.addEventListener('mouseleave', () => {
+    _keGraph.hover = null;
+    $('ke-graph-tooltip').classList.add('hidden');
+    keGraphRequestDraw();
+  });
+
+  window.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !$('ke-graph-popover').classList.contains('hidden')) {
+      keGraphClosePopover();
+    }
+  });
+
+  // Keep the canvas sized to its container.
+  const ro = new ResizeObserver(() => {
+    keGraphResize();
+    keGraphRequestDraw();
+  });
+  ro.observe(canvas.parentElement);
+}
+
+function keGraphResize() {
+  const canvas = $('ke-graph-canvas');
+  const dpr    = window.devicePixelRatio || 1;
+  const rect   = canvas.getBoundingClientRect();
+  canvas.width  = Math.max(1, Math.floor(rect.width  * dpr));
+  canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+}
+
+// Generation counter — guards against a slow earlier load resolving
+// after a faster later one and clobbering the visible map.
+let _keGraphLoadGen = 0;
+async function keLoadGraphMap() {
+  const gen    = ++_keGraphLoadGen;
+  const status = $('ke-graph-map-status');
+  status.textContent = 'Loading…';
+  status.classList.remove('hidden');
+  const type = $('ke-graph-type').value.trim();
+  const url  = '/api/entity/graph/full' + (type ? `?type=${encodeURIComponent(type)}` : '');
+  try {
+    const res = await fetch(url);
+    if (gen !== _keGraphLoadGen) return;
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const data  = await res.json();
+    if (gen !== _keGraphLoadGen) return;
+    // Preserve existing positions for nodes that survived a reload —
+    // avoids reshuffling the whole map when the user adds an edge.
+    const prevById = _keGraph.nodeById;
+    const nodes = (data.nodes ?? []).map(n => {
+      const prev = prevById?.get(n.id);
+      return prev ? { ...n, x: prev.x, y: prev.y } : { ...n };
+    });
+    const edges = (data.edges ?? []).slice();
+    if (!nodes.length) {
+      _keGraph.nodes = [];
+      _keGraph.edges = [];
+      _keGraph.nodeById = new Map();
+      status.textContent = 'No graph nodes yet.';
+      keGraphRequestDraw();
+      return;
+    }
+    keUpdateNodeTypes(nodes);
+    keUpdateEdgeTypes(edges);
+    const isFreshLayout = nodes.every(n => n.x === undefined);
+    _keGraph.nodes = nodes;
+    _keGraph.edges = edges;
+    _keGraph.nodeById = new Map(nodes.map(n => [n.id, n]));
+    keGraphResize();
+    const rect = $('ke-graph-canvas').getBoundingClientRect();
+    keGraphLayout(rect.width || 600, rect.height || 400, { fresh: isFreshLayout });
+    if (isFreshLayout) keGraphFit();
+    keGraphBuildLegend();
+    status.classList.add('hidden');
+    keGraphRequestDraw();
+  } catch (err) {
+    status.textContent = 'Failed to load graph: ' + (err.message || err);
+  }
+}
+
+// ── Layout (Fruchterman-Reingold) ───────────────────────────────────────
+//
+// `fresh` runs the full simulation; on incremental loads we only place
+// nodes that don't have positions yet (near the centroid of their
+// neighbors, falling back to the canvas centre) and skip iterations,
+// so existing nodes stay put.
+function keGraphLayout(width, height, { fresh = true } = {}) {
+  const nodes = _keGraph.nodes;
+  const edges = _keGraph.edges;
+  if (!nodes.length) return;
+  if (!fresh) {
+    for (const n of nodes) {
+      if (n.x !== undefined && n.y !== undefined) continue;
+      // Try to place near the centroid of already-placed neighbors so
+      // the new dot lands in a sensible neighborhood.
+      let sx = 0, sy = 0, c = 0;
+      for (const e of edges) {
+        const other = e.fromId === n.id ? _keGraph.nodeById.get(e.toId)
+                    : e.toId   === n.id ? _keGraph.nodeById.get(e.fromId) : null;
+        if (other && other.x !== undefined) { sx += other.x; sy += other.y; c++; }
+      }
+      if (c > 0) {
+        n.x = sx / c + (Math.random() - 0.5) * 40;
+        n.y = sy / c + (Math.random() - 0.5) * 40;
+      } else {
+        n.x = width  / 2 + (Math.random() - 0.5) * width  * 0.3;
+        n.y = height / 2 + (Math.random() - 0.5) * height * 0.3;
+      }
+    }
+    return;
+  }
+  const area = width * height;
+  const k    = Math.sqrt(area / nodes.length) * 0.75;
+  for (const n of nodes) {
+    n.x = width  / 2 + (Math.random() - 0.5) * width  * 0.6;
+    n.y = height / 2 + (Math.random() - 0.5) * height * 0.6;
+  }
+  const iterations = nodes.length <= 60 ? 300 : nodes.length <= 200 ? 220 : 140;
+  let t = Math.min(width, height) / 8;
+  const cool = t / iterations;
+  for (let iter = 0; iter < iterations; iter++) {
+    for (const n of nodes) { n.dx = 0; n.dy = 0; }
+    for (let i = 0; i < nodes.length; i++) {
+      const a = nodes[i];
+      for (let j = i + 1; j < nodes.length; j++) {
+        const b = nodes[j];
+        let dx = a.x - b.x, dy = a.y - b.y;
+        let d2 = dx * dx + dy * dy;
+        if (d2 < 0.01) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = dx*dx + dy*dy + 0.01; }
+        const d = Math.sqrt(d2);
+        const f = (k * k) / d;
+        const fx = (dx / d) * f, fy = (dy / d) * f;
+        a.dx += fx; a.dy += fy;
+        b.dx -= fx; b.dy -= fy;
+      }
+    }
+    for (const e of edges) {
+      const a = _keGraph.nodeById.get(e.fromId);
+      const b = _keGraph.nodeById.get(e.toId);
+      if (!a || !b) continue;
+      const dx = a.x - b.x, dy = a.y - b.y;
+      const d  = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      const f  = (d * d) / k;
+      const fx = (dx / d) * f, fy = (dy / d) * f;
+      a.dx -= fx; a.dy -= fy;
+      b.dx += fx; b.dy += fy;
+    }
+    for (const n of nodes) {
+      const dlen = Math.sqrt(n.dx * n.dx + n.dy * n.dy) || 0.01;
+      n.x += (n.dx / dlen) * Math.min(dlen, t);
+      n.y += (n.dy / dlen) * Math.min(dlen, t);
+      n.x += (width  / 2 - n.x) * 0.01;
+      n.y += (height / 2 - n.y) * 0.01;
+    }
+    t = Math.max(0.5, t - cool);
+  }
+}
+
+function keGraphFit() {
+  const canvas = $('ke-graph-canvas');
+  const rect   = canvas.getBoundingClientRect();
+  if (!_keGraph.nodes.length || !rect.width) return;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const n of _keGraph.nodes) {
+    if (n.x < minX) minX = n.x;
+    if (n.y < minY) minY = n.y;
+    if (n.x > maxX) maxX = n.x;
+    if (n.y > maxY) maxY = n.y;
+  }
+  const pad = 40;
+  const w   = (maxX - minX) || 1;
+  const h   = (maxY - minY) || 1;
+  const zoom = Math.min((rect.width - pad * 2) / w, (rect.height - pad * 2) / h, 2);
+  _keGraph.zoom = Math.max(0.3, zoom);
+  _keGraph.tx = rect.width  / 2 - ((minX + maxX) / 2) * _keGraph.zoom;
+  _keGraph.ty = rect.height / 2 - ((minY + maxY) / 2) * _keGraph.zoom;
+}
+
+// ── Color encoding ──────────────────────────────────────────────────────
+//
+// Per-graph deterministic assignment beats hashing for a small categorical
+// space: hashes happily put 10 of 16 common types into the magenta band.
+// Instead, sort the live type names and walk a 24-step hue palette in
+// alphabetical order. Edge types start half a palette later, so a node
+// and an edge with the same sort index can't pick the same hue.
+
+const KE_GRAPH_PALETTE = [
+    0,  15,  30,  45,  60,  75,  90, 105,
+  120, 135, 150, 165, 180, 195, 210, 225,
+  240, 255, 270, 285, 300, 315, 330, 345,
+];
+const _keGraphColors = { node: new Map(), edge: new Map() };
+
+function keGraphAssignColors() {
+  const nodeTypes = Array.from(new Set(_keGraph.nodes.map(n => n.type || 'untyped'))).sort();
+  const edgeTypes = Array.from(new Set(_keGraph.edges.map(e => e.type || e.customType || 'related'))).sort();
+  _keGraphColors.node.clear();
+  _keGraphColors.edge.clear();
+  const N      = KE_GRAPH_PALETTE.length;
+  // Stride coprime to N spreads adjacent indices around the wheel:
+  // index 0,1,2,3,… → palette[0,7,14,21,…] = red, green, blue, purple, …
+  // rather than the eye-killing 0,15,30,45 gradient.
+  const stride = 7;
+  const off    = Math.floor(N / 2);
+  nodeTypes.forEach((t, i) => _keGraphColors.node.set(t, KE_GRAPH_PALETTE[(i * stride) % N]));
+  edgeTypes.forEach((t, i) => _keGraphColors.edge.set(t, KE_GRAPH_PALETTE[((i * stride) + off) % N]));
+}
+
+function keGraphNodeHue(n) {
+  return _keGraphColors.node.get(n.type || 'untyped') ?? 0;
+}
+function keGraphEdgeHue(e) {
+  return _keGraphColors.edge.get(e.type || e.customType || 'related') ?? 0;
+}
+function keGraphNodeColor(n) {
+  return `hsl(${keGraphNodeHue(n)}, 65%, 60%)`;
+}
+function keGraphEdgeColor(e) {
+  const hue   = keGraphEdgeHue(e);
+  const w     = Math.max(0, Math.min(1, typeof e.weight === 'number' ? e.weight : 0.5));
+  const sat   = Math.round(20 + 70 * w);
+  const lt    = Math.round(32 + 30 * w);
+  const alpha = (0.35 + 0.55 * w).toFixed(2);
+  return `hsla(${hue}, ${sat}%, ${lt}%, ${alpha})`;
+}
+
+function keGraphBuildLegend() {
+  keGraphAssignColors();
+  const legend = $('ke-graph-legend');
+  const rows   = [];
+  const nodeTypes = Array.from(_keGraphColors.node.keys()).sort();
+  const edgeTypes = Array.from(_keGraphColors.edge.keys()).sort();
+  if (nodeTypes.length) {
+    rows.push('<div class="ke-graph-legend-section">Nodes</div>');
+    for (const t of nodeTypes) {
+      const hue = _keGraphColors.node.get(t);
+      rows.push(`<div class="ke-graph-legend-row"><span class="ke-graph-legend-swatch" style="background:hsl(${hue},65%,60%)"></span>${esc(t)}</div>`);
+    }
+  }
+  if (edgeTypes.length) {
+    rows.push('<div class="ke-graph-legend-section">Edges</div>');
+    for (const t of edgeTypes) {
+      const hue = _keGraphColors.edge.get(t);
+      rows.push(`<div class="ke-graph-legend-row"><span class="ke-graph-legend-swatch" style="background:hsl(${hue},75%,55%)"></span>${esc(t)}</div>`);
+    }
+  }
+  legend.innerHTML = rows.join('');
+  legend.classList.toggle('hidden', !rows.length);
+}
+
+// ── Rendering ───────────────────────────────────────────────────────────
+function keGraphRequestDraw() {
+  if (_keGraph.raf) return;
+  _keGraph.raf = requestAnimationFrame(() => {
+    _keGraph.raf = 0;
+    keGraphDraw();
+  });
+}
+
+function keGraphDraw() {
+  const canvas = $('ke-graph-canvas');
+  const ctx    = canvas.getContext('2d');
+  const dpr    = window.devicePixelRatio || 1;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.translate(_keGraph.tx, _keGraph.ty);
+  ctx.scale(_keGraph.zoom, _keGraph.zoom);
+
+  // Edges
+  for (const e of _keGraph.edges) {
+    const a = _keGraph.nodeById.get(e.fromId);
+    const b = _keGraph.nodeById.get(e.toId);
+    if (!a || !b) continue;
+    const isHover = _keGraph.hover && _keGraph.hover.kind === 'edge' && _keGraph.hover.ref === e;
+    ctx.strokeStyle = isHover ? '#ffffff' : keGraphEdgeColor(e);
+    const w = Math.max(0, Math.min(1, typeof e.weight === 'number' ? e.weight : 0.5));
+    ctx.lineWidth   = (0.7 + w * 1.6) / _keGraph.zoom;
+    const dx  = b.x - a.x, dy = b.y - a.y;
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+    const mx  = (a.x + b.x) / 2;
+    const my  = (a.y + b.y) / 2;
+    const cpx = mx + (-dy / len) * len * 0.12;
+    const cpy = my + ( dx / len) * len * 0.12;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.quadraticCurveTo(cpx, cpy, b.x, b.y);
+    ctx.stroke();
+  }
+
+  // Nodes
+  const r = KE_GRAPH_NODE_R / _keGraph.zoom;
+  for (const n of _keGraph.nodes) {
+    const isHover = _keGraph.hover && _keGraph.hover.kind === 'node' && _keGraph.hover.ref === n;
+    ctx.fillStyle   = keGraphNodeColor(n);
+    ctx.strokeStyle = isHover ? '#ffffff' : 'rgba(0,0,0,0.45)';
+    ctx.lineWidth   = (isHover ? 2 : 1) / _keGraph.zoom;
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // Labels — always for hovered node, and for everything when zoomed in.
+  const showAll = _keGraph.zoom >= KE_GRAPH_LABEL_ZOOM;
+  ctx.font         = `${12 / _keGraph.zoom}px sans-serif`;
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle    = '#cdd6f4';
+  ctx.strokeStyle  = 'rgba(0,0,0,0.7)';
+  ctx.lineWidth    = 3 / _keGraph.zoom;
+  for (const n of _keGraph.nodes) {
+    const isHover = _keGraph.hover && _keGraph.hover.kind === 'node' && _keGraph.hover.ref === n;
+    if (!showAll && !isHover) continue;
+    const label = String(n.label ?? n.id);
+    const x = n.x + r + 4 / _keGraph.zoom;
+    ctx.strokeText(label, x, n.y);
+    ctx.fillText(label,   x, n.y);
+  }
+}
+
+// ── Hit testing & interaction ───────────────────────────────────────────
+function keGraphClientToWorld(clientX, clientY) {
+  const rect = $('ke-graph-canvas').getBoundingClientRect();
+  const sx = clientX - rect.left;
+  const sy = clientY - rect.top;
+  return { x: (sx - _keGraph.tx) / _keGraph.zoom, y: (sy - _keGraph.ty) / _keGraph.zoom, sx, sy };
+}
+
+function keGraphHitNode(wx, wy) {
+  const r = KE_GRAPH_NODE_R / _keGraph.zoom;
+  const tol = Math.max(r, 8 / _keGraph.zoom);
+  let best = null, bestD = tol * tol;
+  for (const n of _keGraph.nodes) {
+    const dx = n.x - wx, dy = n.y - wy;
+    const d2 = dx * dx + dy * dy;
+    if (d2 <= bestD) { bestD = d2; best = n; }
+  }
+  return best;
+}
+
+function keGraphHitEdge(wx, wy) {
+  const tol = 6 / _keGraph.zoom;
+  const tol2 = tol * tol;
+  let best = null, bestD = tol2;
+  for (const e of _keGraph.edges) {
+    const a = _keGraph.nodeById.get(e.fromId);
+    const b = _keGraph.nodeById.get(e.toId);
+    if (!a || !b) continue;
+    // Same quadratic the renderer draws: midpoint pushed perpendicular
+    // by 12% of the chord length. Flatten into segments and take the
+    // minimum point-to-segment distance — the chord approximation we
+    // used before missed by up to ~12% of the edge length at the apex.
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const L  = Math.sqrt(dx * dx + dy * dy);
+    if (L < 1) continue;
+    const cpx = (a.x + b.x) / 2 + (-dy / L) * L * 0.12;
+    const cpy = (a.y + b.y) / 2 + ( dx / L) * L * 0.12;
+    // Cheap reject: if even the chord midpoint is far enough that the
+    // whole curve's bounding box can't reach the cursor, skip.
+    const minX = Math.min(a.x, b.x, cpx) - tol;
+    const maxX = Math.max(a.x, b.x, cpx) + tol;
+    const minY = Math.min(a.y, b.y, cpy) - tol;
+    const maxY = Math.max(a.y, b.y, cpy) + tol;
+    if (wx < minX || wx > maxX || wy < minY || wy > maxY) continue;
+    const d2 = keGraphDistSqToQuadratic(wx, wy, a.x, a.y, cpx, cpy, b.x, b.y);
+    if (d2 <= bestD) { bestD = d2; best = e; }
+  }
+  return best;
+}
+
+// Squared distance from (px,py) to a quadratic Bézier defined by
+// (x0,y0)-(cpx,cpy)-(x1,y1), via polyline flattening. 16 segments is
+// plenty: at the renderer's 12% bow the chord error of an N-segment
+// approximation is well under one pixel at any reasonable zoom.
+function keGraphDistSqToQuadratic(px, py, x0, y0, cpx, cpy, x1, y1) {
+  const SEG = 16;
+  let prevX = x0, prevY = y0;
+  let best  = Infinity;
+  for (let i = 1; i <= SEG; i++) {
+    const t   = i / SEG;
+    const omt = 1 - t;
+    const x   = omt * omt * x0 + 2 * omt * t * cpx + t * t * x1;
+    const y   = omt * omt * y0 + 2 * omt * t * cpy + t * t * y1;
+    const dx  = x - prevX, dy = y - prevY;
+    const L2  = dx * dx + dy * dy;
+    if (L2 > 0.0001) {
+      let tt = ((px - prevX) * dx + (py - prevY) * dy) / L2;
+      if (tt < 0) tt = 0; else if (tt > 1) tt = 1;
+      const ix = prevX + tt * dx, iy = prevY + tt * dy;
+      const ex = px - ix,         ey = py - iy;
+      const d2 = ex * ex + ey * ey;
+      if (d2 < best) best = d2;
+    }
+    prevX = x; prevY = y;
+  }
+  return best;
+}
+
+function keGraphUpdateHover(e) {
+  const { x, y, sx, sy } = keGraphClientToWorld(e.clientX, e.clientY);
+  const node = keGraphHitNode(x, y);
+  let hover  = node ? { kind: 'node', ref: node } : null;
+  if (!hover) {
+    const edge = keGraphHitEdge(x, y);
+    if (edge) hover = { kind: 'edge', ref: edge };
+  }
+  const changed = (hover?.ref !== _keGraph.hover?.ref);
+  _keGraph.hover = hover;
+  const tip = $('ke-graph-tooltip');
+  // Suppress the tooltip while the editor popover is open — they'd
+  // stack and the popover content is more authoritative.
+  const popoverOpen = !$('ke-graph-popover').classList.contains('hidden');
+  if (!hover || popoverOpen) {
+    tip.classList.add('hidden');
+    if (changed) keGraphRequestDraw();
+    return;
+  }
+  if (hover.kind === 'node') {
+    const n = hover.ref;
+    tip.innerHTML = `<div class="ke-graph-tooltip-title">${esc(n.label ?? n.id)}</div>
+      <div class="ke-graph-tooltip-sub">${esc(n.type ?? 'untyped')}</div>
+      ${n.description ? `<div>${esc(String(n.description).slice(0, 160))}</div>` : ''}`;
+  } else {
+    const ed = hover.ref;
+    const a  = _keGraph.nodeById.get(ed.fromId);
+    const b  = _keGraph.nodeById.get(ed.toId);
+    const w  = typeof ed.weight === 'number' ? ed.weight.toFixed(2) : '—';
+    tip.innerHTML = `<div class="ke-graph-tooltip-title">${esc(ed.type ?? ed.customType ?? 'related')}</div>
+      <div class="ke-graph-tooltip-sub">${esc(a?.label ?? ed.fromId)} → ${esc(b?.label ?? ed.toId)}</div>
+      <div class="ke-graph-tooltip-sub">weight: ${esc(w)}</div>`;
+  }
+  tip.style.left = `${sx + 12}px`;
+  tip.style.top  = `${sy + 12}px`;
+  tip.classList.remove('hidden');
+  if (changed) keGraphRequestDraw();
+}
+
+function keGraphHandleClick(e) {
+  const { x, y } = keGraphClientToWorld(e.clientX, e.clientY);
+  const node = keGraphHitNode(x, y);
+  if (!node) { keGraphClosePopover(); return; }
+  keGraphOpenPopover(node, e.clientX, e.clientY);
+}
+
+// ── Type & label autocomplete (shared by list & map editors) ──────────
+//
+// Every place we receive node/edge data we feed unique values into a few
+// global indices and re-render hidden <datalist>s that all the editor
+// inputs reference. Datalists are suggestions, not constraints — the
+// user can still introduce new types/labels freely.
+const _keNodeTypes = new Set();
+const _keEdgeTypes = new Set();
+// label (lowercased) → array of node ids that carry it; arrays so we
+// can detect ambiguity at resolve-time.
+const _keNodeIdsByLabel = new Map();
+// id → label for rendering edge rows after fetch.
+const _keNodeLabelById  = new Map();
+
+function keUpdateNodeTypes(nodes) {
+  if (!Array.isArray(nodes)) return;
+  let typesChanged = false, labelsChanged = false;
+  for (const n of nodes) {
+    const t = (n?.type || '').trim();
+    if (t && !_keNodeTypes.has(t)) { _keNodeTypes.add(t); typesChanged = true; }
+    const l = (n?.label || '').trim();
+    if (l && n?.id) {
+      _keNodeLabelById.set(n.id, l);
+      const key = l.toLowerCase();
+      const ids = _keNodeIdsByLabel.get(key);
+      if (!ids) { _keNodeIdsByLabel.set(key, [n.id]); labelsChanged = true; }
+      else if (!ids.includes(n.id)) { ids.push(n.id); labelsChanged = true; }
+    }
+  }
+  if (typesChanged)  keRefreshDatalist('ke-node-types-dl',  Array.from(_keNodeTypes));
+  if (labelsChanged) keRefreshDatalist('ke-node-labels-dl', Array.from(new Set(_keNodeLabelById.values())));
+}
+
+function keUpdateEdgeTypes(edges) {
+  if (!Array.isArray(edges)) return;
+  let changed = false;
+  for (const e of edges) {
+    const t = (e?.type || e?.customType || '').trim();
+    if (t && !_keEdgeTypes.has(t)) { _keEdgeTypes.add(t); changed = true; }
+  }
+  if (changed) keRefreshDatalist('ke-edge-types-dl', Array.from(_keEdgeTypes));
+}
+
+function keRefreshDatalist(id, values) {
+  let dl = document.getElementById(id);
+  if (!dl) {
+    dl = document.createElement('datalist');
+    dl.id = id;
+    document.body.appendChild(dl);
+  }
+  dl.innerHTML = values.slice().sort().map(v => `<option value="${esc(v)}">`).join('');
+}
+
+// Resolve a typed-in label to a node id. Returns { id, ambiguous, missing }.
+function keResolveNodeLabel(label) {
+  const l = (label || '').trim();
+  if (!l) return { missing: true };
+  const ids = _keNodeIdsByLabel.get(l.toLowerCase());
+  if (!ids || !ids.length) return { missing: true };
+  if (ids.length > 1)      return { id: ids[0], ambiguous: true };
+  return { id: ids[0] };
+}
+
+// ── Edge UI (shared by list editor & map popover) ──────────────────────
+function keGraphEdgeRowHTML(ownerId, e, sg) {
+  const otherId    = e.fromId === ownerId ? e.toId : e.fromId;
+  const otherLabel = (sg.nodes ?? []).find(n => n.id === otherId)?.label ?? otherId;
+  const dir        = e.fromId === ownerId ? '→' : '←';
+  const t          = e.type ?? e.customType ?? 'related';
+  const w          = typeof e.weight === 'number' ? e.weight.toFixed(2) : '0.50';
+  return `<div class="ke-edge-row" data-edge-id="${esc(e.id)}">
+    <span class="ke-edge-text">${dir} ${esc(t)} <span class="ke-edge-weight-display">[${esc(w)}]</span> ${dir} <strong>${esc(otherLabel)}</strong></span>
+    <button class="btn-ghost ke-edge-edit-btn"            type="button" title="Edit">✎</button>
+    <button class="btn-ghost ke-danger ke-edge-del-btn"   type="button" title="Delete">✕</button>
+  </div>`;
+}
+
+function keGraphAddEdgeFormHTML() {
+  return `<details class="ke-add-edge">
+    <summary>+ Add edge from this node</summary>
+    <div class="ke-add-edge-form">
+      <input class="ke-ae-target" type="text" placeholder="Target node label" list="ke-node-labels-dl" autocomplete="off">
+      <input class="ke-ae-type"   type="text" placeholder="Relationship type" list="ke-edge-types-dl"  autocomplete="off">
+      <label>Weight
+        <input class="ke-ae-weight" type="range" min="0" max="1" step="0.05" value="0.5">
+        <span class="ke-edge-weight-display ke-ae-w-disp">0.50</span>
+      </label>
+      <div class="ke-actions">
+        <button class="btn-send ke-ae-create" type="button">Add edge</button>
+      </div>
+    </div>
+  </details>`;
+}
+
+// Wire up the edge add/edit/delete affordances rendered by the two
+// helpers above. `onChange` is called after any successful mutation so
+// the caller can re-fetch and re-render.
+function keGraphAttachEdgesUI(container, ownerId, sg, onChange) {
+  const ae = container.querySelector('.ke-add-edge');
+  if (ae) {
+    const wInput = ae.querySelector('.ke-ae-weight');
+    const wDisp  = ae.querySelector('.ke-ae-w-disp');
+    wInput?.addEventListener('input', () => { wDisp.textContent = (+wInput.value).toFixed(2); });
+    ae.querySelector('.ke-ae-create')?.addEventListener('click', async () => {
+      const targetLabel = ae.querySelector('.ke-ae-target').value;
+      const type        = ae.querySelector('.ke-ae-type').value.trim();
+      const weight      = parseFloat(ae.querySelector('.ke-ae-weight').value);
+      const resolved    = keResolveNodeLabel(targetLabel);
+      if (resolved.missing)      { alert('No node with that label is loaded. Try refreshing.'); return; }
+      if (resolved.id === ownerId) { alert('Pick a different target — self-edges aren\'t allowed.'); return; }
+      if (resolved.ambiguous && !confirm('Multiple nodes share that label. Use the first match?')) return;
+      if (!type) { alert('Relationship type is required.'); return; }
+      const r = await fetch('/api/entity/graph/edges', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fromId: ownerId, toId: resolved.id, type, weight }),
+      });
+      if (!r.ok) { alert(`Add failed: ${(await r.json()).error ?? r.status}`); return; }
+      onChange();
+    });
+  }
+  container.querySelectorAll('.ke-edge-del-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const row = btn.closest('.ke-edge-row');
+      const eid = row?.dataset.edgeId;
+      if (!eid) return;
+      if (!confirm('Delete this edge? Auto-snapshot first.')) return;
+      const r = await fetch(`/api/entity/graph/edges/${encodeURIComponent(eid)}`, { method: 'DELETE' });
+      if (!r.ok) { alert(`Delete failed: ${(await r.json()).error ?? r.status}`); return; }
+      onChange();
+    });
+  });
+  container.querySelectorAll('.ke-edge-edit-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const row  = btn.closest('.ke-edge-row');
+      const eid  = row?.dataset.edgeId;
+      const edge = (sg.edges ?? []).find(e => e.id === eid);
+      if (!row || !edge) return;
+      const cur = {
+        type:   edge.type ?? edge.customType ?? 'related',
+        weight: typeof edge.weight === 'number' ? edge.weight : 0.5,
+      };
+      const ed = document.createElement('div');
+      ed.className = 'ke-edge-edit';
+      ed.dataset.edgeId = eid;
+      ed.innerHTML = `
+        <input class="ke-ee-type" type="text" value="${esc(cur.type)}" list="ke-edge-types-dl" autocomplete="off">
+        <label>Weight
+          <input class="ke-ee-weight" type="range" min="0" max="1" step="0.05" value="${cur.weight}">
+          <span class="ke-edge-weight-display ke-ee-w-disp">${cur.weight.toFixed(2)}</span>
+        </label>
+        <div class="ke-actions">
+          <button class="btn-send  ke-ee-save"   type="button">Save</button>
+          <button class="btn-ghost ke-ee-cancel" type="button">Cancel</button>
+        </div>`;
+      row.replaceWith(ed);
+      const wIn = ed.querySelector('.ke-ee-weight');
+      const wDi = ed.querySelector('.ke-ee-w-disp');
+      wIn.addEventListener('input', () => { wDi.textContent = (+wIn.value).toFixed(2); });
+      ed.querySelector('.ke-ee-cancel').addEventListener('click', () => onChange());
+      ed.querySelector('.ke-ee-save').addEventListener('click', async () => {
+        const body = {
+          type:   ed.querySelector('.ke-ee-type').value.trim(),
+          weight: parseFloat(wIn.value),
+        };
+        if (!body.type) { alert('Type is required.'); return; }
+        const r = await fetch(`/api/entity/graph/edges/${encodeURIComponent(eid)}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        });
+        if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
+        onChange();
+      });
+    });
+  });
+}
+
+// ── New-node form (toolbar) ─────────────────────────────────────────────
+function keGraphToggleNewNodeForm(show) {
+  const f = $('ke-new-node-form');
+  if (!f) return;
+  const willShow = show ?? f.classList.contains('hidden');
+  f.classList.toggle('hidden', !willShow);
+  if (willShow) {
+    $('ke-nn-label').value = '';
+    $('ke-nn-type').value  = '';
+    $('ke-nn-desc').value  = '';
+    $('ke-nn-label').focus();
+  }
+}
+
+async function keGraphCreateNewNode() {
+  const label       = $('ke-nn-label').value.trim();
+  const type        = $('ke-nn-type').value.trim();
+  const description = $('ke-nn-desc').value.trim();
+  if (!label) { alert('Label is required.'); $('ke-nn-label').focus(); return; }
+  const body = { label };
+  if (type)        body.type        = type;
+  if (description) body.description = description;
+  const r = await fetch('/api/entity/graph/nodes', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  if (!r.ok) { alert(`Create failed: ${(await r.json()).error ?? r.status}`); return; }
+  const created = await r.json().catch(() => ({}));
+  const newId   = created?.node?.id ?? created?.id;
+  keGraphToggleNewNodeForm(false);
+  if (_keGraphView === 'map') {
+    await keLoadGraphMap();
+    if (newId) {
+      const node = _keGraph.nodeById.get(newId);
+      if (node) {
+        const canvas = $('ke-graph-canvas');
+        const r = canvas.getBoundingClientRect();
+        // Open popover anchored to the new node's screen position.
+        const sx = r.left + node.x * _keGraph.zoom + _keGraph.tx;
+        const sy = r.top  + node.y * _keGraph.zoom + _keGraph.ty;
+        keGraphOpenPopover(node, sx, sy);
+      }
+    }
+  } else {
+    await keLoadGraphNodes();
+    if (newId) keOpenGraphNode(newId);
+  }
+}
+
+// ── Inline editor popover ───────────────────────────────────────────────
+let _kePopoverNodeId = null;
+let _kePopoverDragged = false;
+
+function keGraphClosePopover() {
+  const pop = $('ke-graph-popover');
+  if (pop) pop.classList.add('hidden');
+  _kePopoverNodeId  = null;
+  _kePopoverDragged = false;
+}
+
+// Drag the popover by its header so the user can move it out from
+// behind itself when it covers something they want to click.
+function keGraphInitPopoverDrag(pop) {
+  const head = pop.querySelector('.ke-graph-popover-head');
+  if (!head) return;
+  head.addEventListener('mousedown', e => {
+    // Don't start a drag from the ✕ button.
+    if (e.target.closest('.ke-graph-popover-close')) return;
+    e.preventDefault();
+    const map  = $('ke-graph-map').getBoundingClientRect();
+    const popR = pop.getBoundingClientRect();
+    const offX = e.clientX - popR.left;
+    const offY = e.clientY - popR.top;
+    head.style.cursor = 'grabbing';
+    const onMove = ev => {
+      const mr = $('ke-graph-map').getBoundingClientRect();
+      let x = ev.clientX - mr.left - offX;
+      let y = ev.clientY - mr.top  - offY;
+      x = Math.max(6, Math.min(x, mr.width  - pop.offsetWidth  - 6));
+      y = Math.max(6, Math.min(y, mr.height - pop.offsetHeight - 6));
+      pop.style.left = `${x}px`;
+      pop.style.top  = `${y}px`;
+      _kePopoverDragged = true;
+    };
+    const onUp = () => {
+      head.style.cursor = '';
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  });
+}
+
+function keGraphPositionPopover(pop, clientX, clientY) {
+  const map = $('ke-graph-map');
+  const r   = map.getBoundingClientRect();
+  pop.style.left = `${(clientX - r.left) + 14}px`;
+  pop.style.top  = `${(clientY - r.top)  + 14}px`;
+  // Clamp on next frame once the popover has been laid out.
+  requestAnimationFrame(() => {
+    const pr = pop.getBoundingClientRect();
+    let nx = pr.left - r.left, ny = pr.top - r.top;
+    if (pr.right  > r.right  - 6) nx = r.width  - pr.width  - 10;
+    if (pr.bottom > r.bottom - 6) ny = r.height - pr.height - 10;
+    pop.style.left = `${Math.max(6, nx)}px`;
+    pop.style.top  = `${Math.max(6, ny)}px`;
+  });
+}
+
+async function keGraphOpenPopover(node, clientX, clientY) {
+  const pop = $('ke-graph-popover');
+  // Reset the dragged flag when opening on a different node — but
+  // preserve the user's manual position when re-rendering the same one
+  // (e.g. after Save reloads the popover).
+  const sameNode = (_kePopoverNodeId === node.id);
+  if (!sameNode) _kePopoverDragged = false;
+  _kePopoverNodeId = node.id;
+  pop.innerHTML = '<p class="logs-loading">Loading…</p>';
+  pop.classList.remove('hidden');
+  if (!_kePopoverDragged) keGraphPositionPopover(pop, clientX, clientY);
+  try {
+    const res = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(node.id)}/subgraph?depth=1`);
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const sg   = await res.json();
+    const self = (sg.nodes ?? []).find(n => n.id === node.id) ?? node;
+    const edgesHtml = (sg.edges ?? []).map(e => keGraphEdgeRowHTML(node.id, e, sg)).join('');
+    pop.innerHTML = `
+      <div class="ke-graph-popover-head">
+        <h3>${esc(self.label ?? node.id)}</h3>
+        <button class="ke-graph-popover-close" type="button" aria-label="Close" id="ke-pop-close">✕</button>
+      </div>
+      <div class="field"><label>Label</label><input id="ke-pop-label" type="text" value="${esc(self.label ?? '')}"></div>
+      <div class="field"><label>Type</label><input  id="ke-pop-type"  type="text" value="${esc(self.type  ?? '')}" list="ke-node-types-dl"></div>
+      <div class="field"><label>Description</label><textarea id="ke-pop-desc" rows="3">${esc(self.description ?? '')}</textarea></div>
+      <div class="ke-actions">
+        <button id="ke-pop-save"   class="btn-send"  type="button">Save</button>
+        <button id="ke-pop-delete" class="btn-ghost ke-danger" type="button">Delete node</button>
+      </div>
+      <h4 class="ke-subhead">Edges (${(sg.edges ?? []).length})</h4>
+      <div class="ke-edges">${edgesHtml || '<p class="logs-empty">No edges.</p>'}</div>
+      ${keGraphAddEdgeFormHTML()}`;
+
+    keUpdateNodeTypes([self, ...(sg.nodes ?? [])]);
+    keUpdateEdgeTypes(sg.edges ?? []);
+    keGraphInitPopoverDrag(pop);
+
+    pop.querySelector('#ke-pop-close').addEventListener('click', keGraphClosePopover);
+
+    pop.querySelector('#ke-pop-save').addEventListener('click', async () => {
+      const body = {
+        label:       $('ke-pop-label').value,
+        type:        $('ke-pop-type').value,
+        description: $('ke-pop-desc').value,
+      };
+      const r = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(node.id)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
+      Object.assign(node, body);
+      keGraphBuildLegend();
+      keGraphRequestDraw();
+      keGraphOpenPopover(node, clientX, clientY);
+    });
+
+    pop.querySelector('#ke-pop-delete').addEventListener('click', async () => {
+      if (!confirm('Delete this node and ALL its edges? An auto-snapshot is taken first.')) return;
+      const r = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(node.id)}`, { method: 'DELETE' });
+      if (!r.ok) { alert(`Delete failed: ${(await r.json()).error ?? r.status}`); return; }
+      _keGraph.nodes = _keGraph.nodes.filter(n => n.id !== node.id);
+      _keGraph.edges = _keGraph.edges.filter(e => e.fromId !== node.id && e.toId !== node.id);
+      _keGraph.nodeById.delete(node.id);
+      _keGraph.hover = null;
+      keGraphClosePopover();
+      keGraphBuildLegend();
+      keGraphRequestDraw();
+    });
+
+    // Add / edit / delete edges share the same handler; on success we
+    // both update the in-memory map (so the canvas redraws right) and
+    // re-open the popover so its edge list refreshes.
+    keGraphAttachEdgesUI(pop, node.id, sg, async () => {
+      // Re-fetch the full graph so newly-added or removed edges show up
+      // on the canvas. Old positions are preserved for nodes that still
+      // exist, so the layout doesn't snap.
+      const startId = node.id;
+      await keLoadGraphMap();
+      // The await can take a while on a big graph; if the user clicked
+      // a different node in the meantime, don't yank their popover back.
+      if (_kePopoverNodeId !== startId) return;
+      const refreshed = _keGraph.nodeById.get(startId);
+      keGraphOpenPopover(refreshed ?? node, clientX, clientY);
+    });
+  } catch (err) {
+    pop.innerHTML = `<p class="logs-error">⚠ ${esc(err.message || String(err))}</p>
+      <div class="ke-actions"><button class="btn-ghost" type="button" id="ke-pop-close">Close</button></div>`;
+    pop.querySelector('#ke-pop-close').addEventListener('click', keGraphClosePopover);
+  }
+}
+
+// ── Identity tab ────────────────────────────────────────────────────────
+async function keLoadIdentity() {
+  const list = $('ke-id-list');
+  list.innerHTML = '<p class="logs-loading">Loading…</p>';
+  try {
+    const res = await fetch('/api/entity/identity');
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const data = await res.json();
+    list.innerHTML = '';
+    let any = false;
+    for (const category of ['self', 'user', 'relationship', 'custom']) {
+      const files = data[category] ?? [];
+      if (!files.length) continue;
+      const header = document.createElement('div');
+      header.className = 'ke-row-header';
+      header.textContent = category;
+      list.appendChild(header);
+      for (const f of files) {
+        any = true;
+        const row = document.createElement('div');
+        row.className = 'ke-row';
+        row.innerHTML = `
+          <div class="ke-row-title">${esc(f.filename)}</div>
+          <div class="ke-row-sub">${esc((f.content ?? '').slice(0, 100).replace(/\n/g, ' '))}</div>`;
+        row.addEventListener('click', () => keOpenIdentity(category, f));
+        list.appendChild(row);
+      }
+    }
+    if (!any) list.innerHTML = '<p class="logs-empty">No identity files yet.</p>';
+  } catch (err) { list.innerHTML = keError(err, 'Failed to load identity.'); }
+}
+
+function keOpenIdentity(category, file) {
+  // Parse markdown sections (## heading lines)
+  const text = file.content ?? '';
+  const lines = text.split('\n');
+  const sections = [];
+  let current = { heading: '(top)', body: [] };
+  for (const line of lines) {
+    const m = line.match(/^#{1,6}\s+(.+?)\s*$/);
+    if (m) { sections.push(current); current = { heading: m[1].trim(), body: [] }; }
+    else current.body.push(line);
+  }
+  sections.push(current);
+  const det = $('ke-id-detail');
+  const sectionsHtml = sections.map((s, i) => `
+    <div class="ke-section">
+      <div class="ke-section-head">${esc(s.heading)}</div>
+      <textarea class="ke-textarea ke-id-section" rows="6" data-section="${esc(s.heading)}">${esc(s.body.join('\n').trim())}</textarea>
+      <div class="ke-actions">
+        <button class="btn-send ke-id-save" data-section="${esc(s.heading)}" ${s.heading === '(top)' ? 'disabled title="Top-of-file content has no heading to target — edit the file manually for now."' : ''}>Save section</button>
+      </div>
+    </div>`).join('');
+  det.innerHTML = `
+    <div class="ke-detail-header"><h3>${esc(category)} / ${esc(file.filename)}</h3></div>
+    <p class="field-hint">Each section here corresponds to a markdown heading in the file. Saving a section rewrites just that heading's body via identity_rewrite_section; an auto-snapshot is taken first.</p>
+    ${sectionsHtml}`;
+  det.querySelectorAll('.ke-id-save').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const sec = btn.dataset.section;
+      const ta  = det.querySelector(`textarea.ke-id-section[data-section="${sec.replace(/"/g, '\\"')}"]`);
+      const r = await fetch(
+        `/api/entity/identity/${encodeURIComponent(category)}/${encodeURIComponent(file.filename)}/sections/${encodeURIComponent(sec)}`,
+        { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: ta.value }) },
+      );
+      if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
+      keLoadIdentity();
+    });
+  });
+}
+
+// ── Snapshots tab ───────────────────────────────────────────────────────
+async function keLoadSnapshots() {
+  const list = $('ke-snap-list');
+  list.innerHTML = '<p class="logs-loading">Loading…</p>';
+  try {
+    const res  = await fetch('/api/entity/snapshots');
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const data = await res.json();
+    const snaps = data.snapshots ?? data ?? [];
+    if (!snaps.length) { list.innerHTML = '<p class="logs-empty">No snapshots yet.</p>'; return; }
+    list.innerHTML = '';
+    for (const s of snaps) {
+      const row = document.createElement('div');
+      row.className = 'ke-row';
+      row.innerHTML = `
+        <div class="ke-row-title">${esc(s.id ?? s.snapshotId ?? 'snapshot')}</div>
+        <div class="ke-row-sub">${esc(s.createdAt ?? s.date ?? '')}</div>
+        <div class="ke-actions">
+          <button class="btn-secondary ke-snap-restore" data-id="${esc(s.id ?? s.snapshotId)}">Restore</button>
+        </div>`;
+      list.appendChild(row);
+    }
+    list.querySelectorAll('.ke-snap-restore').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Restore this snapshot? This will overwrite the CURRENT memory / identity / graph state with the snapshot contents.')) return;
+        const r = await fetch(`/api/entity/snapshots/${encodeURIComponent(btn.dataset.id)}/restore`, { method: 'POST' });
+        if (!r.ok) { alert(`Restore failed: ${(await r.json()).error ?? r.status}`); return; }
+        alert('Snapshot restored.');
+      });
+    });
+  } catch (err) { list.innerHTML = keError(err, 'Failed to load snapshots.'); }
+}
+
+async function keCreateSnapshot() {
+  const r = await fetch('/api/entity/snapshots', { method: 'POST' });
+  if (!r.ok) { alert(`Snapshot failed: ${(await r.json()).error ?? r.status}`); return; }
+  keLoadSnapshots();
+}
+
 // ── Tome entry editor ─────────────────────────────────────────────
 
 function openLoreEditor(uid) {
@@ -2933,6 +5312,7 @@ function openLoreEditor(uid) {
   }
 
   $('lore-editor-modal').classList.remove('hidden');
+  bindResizableModal('lore-editor-modal-inner', 'pf-lore-editor-modal-size');
 }
 
 function closeLoreEditor() {
@@ -2945,7 +5325,9 @@ async function saveLoreEditorEntry() {
   if (!content) { alert('Content is required.'); return; }
 
   const uid      = _loreEditUid || generateId();
-  const existing = _loreEditUid ? (state.lorebook.entries[uid] ?? {}) : {};
+  const existing = _loreEditUid
+    ? (state.tomeCache[_currentTomeId]?.entries?.[uid] ?? {})
+    : {};
 
   const keysRaw    = $('lore-ed-keys').value;
   const keys       = keysRaw.split(',').map(k => k.trim()).filter(Boolean);

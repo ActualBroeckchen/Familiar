@@ -22,7 +22,9 @@ Click the **▷ Topic start** button on any past message to begin a topic from t
 
 ## Ending a Topic
 
-Hover over any message and click the **□ Topic end** button. If more than one open topic includes that message, a picker appears so you can choose which topic to close.
+Hover over any message and click the **□ Topic end** button. If more than one open topic includes that message, a picker appears so you can choose which topic to close. You can also click the active topic pill above the input bar to end the topic at the latest message.
+
+The summary review dialog always opens on topic end, so you have a chance to write or edit the entry even when auto-generation isn't possible. With no API key set, or when the range contains no readable messages, the dialog drops straight into a blank manual form with a hint explaining why.
 
 ---
 
@@ -31,8 +33,10 @@ Hover over any message and click the **□ Topic end** button. If more than one 
 When a topic ends, an LLM call is made to produce a tome entry for the messages within that topic's bounds. The prompt is shaped by [`docs/tome-writing-guide.md`](tome-writing-guide.md), so the model is asked for:
 
 - **Conversational trigger keywords** — phrases the user would actually say when the situation recurs, not topic labels.
-- **Familiar-perspective bullet content** — a short framing line followed by action and prohibition bullets, written in second person and using the `{{user}}` macro.
+- **Familiar-perspective bullet content** — the Familiar's own first-person notes-to-self: a short framing line followed by action and prohibition bullets ("what I will do" / "what I will NOT do"), using the `{{user}}` macro for the user's name.
 - **A sticky value** suggestion sized to how long the situation typically persists.
+
+If the topic was named by the user (anything other than the default `Topic N` label), the label is forwarded to the summarizer as a "focus topic" so the generated entry centers on that subject and skips tangential threads within the range. Auto-named topics fall back to the unscoped prompt, letting the model split the range into whatever distinct entries it identifies.
 
 A review dialog opens with:
 

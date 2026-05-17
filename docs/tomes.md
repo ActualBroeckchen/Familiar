@@ -4,6 +4,10 @@ Tomes are persistent knowledge bases that automatically inject context into ever
 
 Tomes are stored as individual JSON files inside the `tomes/` directory (auto-created, git-ignored). Each Tome is a standalone file — `tomes/<uuid>.json` — and can be independently enabled or disabled. Manage them via **☰ → Tomes → Manage Tomes** in the sidebar.
 
+### The `Session Memories` system tome
+
+One Tome is special: **Session Memories**. It is identified by name, auto-created on first session memorization (whether triggered by the worker, the **Memorize now** button, or the per-row **Memorize** button in the Logs modal), always present in the tome library, and the default save target for every session memorization — automatic or manual. Find-or-create is shared between `memorization.js` and the `GET /api/tomes/session-memories` endpoint via a process-wide mutex so concurrent callers can't produce duplicates. Entries written to it are normal lorebook entries and can be edited, disabled, renamed, or deleted like any other.
+
 ---
 
 ## Multiple Tomes
@@ -150,7 +154,11 @@ Set **Probability (0–100)** to randomly skip an entry even when its keywords m
 
 ## Tome File Format
 
-Each Tome is stored as a JSON file at `tomes/<id>.json`:
+Each Tome is stored as a JSON file at `tomes/<id>.json`. The memorization
+worker also keeps its job queue in this directory at
+`tomes/.memorization-queue.json`; this and any other dotfile inside
+`tomes/` is skipped by both `/api/tomes` and `findTomeFile`, so it
+never appears in the Tome Manager.
 
 ```json
 {

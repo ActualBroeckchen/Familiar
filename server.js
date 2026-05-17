@@ -9,7 +9,25 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
-import { enrich, createMemory, appendIdentity, updateIdentitySection } from './thalamus.js';
+import {
+  enrich, createMemory, appendIdentity, updateIdentitySection,
+  // Reads for the Knowledge editor UI
+  listMemories, readMemory, getIdentityAll, listGraphNodes, searchGraphNodes, getGraphSubgraph, getFullGraph,
+  listSnapshots,
+  // Writes (each auto-snapshots before the destructive op)
+  updateMemory, deleteMemory, rewriteIdentitySection,
+  updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
+  createGraphNode, createGraphEdge,
+  createSnapshot, restoreSnapshot,
+} from './thalamus.js';
+import {
+  enqueueMemorization,
+  listJobs as listMemorizationJobs,
+  acknowledgeJob as acknowledgeMemorizationJob,
+  cancelJob as cancelMemorizationJob,
+  startMemorizationWorker,
+  findOrCreateSessionMemoriesTome,
+} from './memorization.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -17,8 +35,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOGS_DIR = path.join(__dirname, 'logs');
 mkdirSync(LOGS_DIR, { recursive: true });
 
-// Only allow UUID-shaped session IDs to prevent path traversal
-function isValidSessionId(id) {
+// Only allow UUID-shaped IDs to prevent path traversal and bound input size.
+// Used for session IDs, tome IDs, entry UIDs, and memorization job IDs — all
+// of which are generated via crypto.randomUUID() and share the same shape.
+function isValidUUID(id) {
   return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id);
 }
 
@@ -118,6 +138,17 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     const text = await upstream.text();
     res.status(upstream.status);
     res.setHeader('Content-Type', 'application/json');
+    // Attach the actual entity-core block that thalamus injected, so the
+    // client's prompt inspector can show what was sent verbatim (without
+    // re-running enrich() and risking drift). On parse failure or upstream
+    // error, fall through to a raw passthrough.
+    if (entityContext && upstream.ok) {
+      try {
+        const parsed = JSON.parse(text);
+        parsed._thalamus = { entityContext };
+        return res.send(JSON.stringify(parsed));
+      } catch { /* upstream returned non-JSON — pass through unchanged */ }
+    }
     return res.send(text);
   }
 
@@ -132,6 +163,15 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('X-Accel-Buffering', 'no'); // Disable nginx buffering if behind a proxy
+
+  // Emit the thalamus envelope as the first SSE data event, BEFORE the
+  // upstream stream, so the client has it by the time the prompt inspector
+  // could be opened. Uses the same `data: ` line format as the upstream
+  // SSE stream; the client routes on the presence of `_thalamus` instead
+  // of `choices`.
+  if (entityContext) {
+    res.write(`data: ${JSON.stringify({ _thalamus: { entityContext } })}\n\n`);
+  }
 
   const reader = upstream.body.getReader();
   try {
@@ -188,7 +228,7 @@ app.post('/api/debug-prompt', async (req, res) => {
 // POST /api/log — create or overwrite a session log file
 app.post('/api/log', async (req, res) => {
   const { sessionId, startedAt, endedAt, provider, model, messages } = req.body;
-  if (!isValidSessionId(sessionId))
+  if (!isValidUUID(sessionId))
     return res.status(400).json({ error: 'Invalid session ID.' });
   if (!Array.isArray(messages))
     return res.status(400).json({ error: 'messages must be an array.' });
@@ -230,7 +270,7 @@ app.get('/api/logs', async (_req, res) => {
 // GET /api/logs/:id — retrieve a full session log
 app.get('/api/logs/:id', async (req, res) => {
   const { id } = req.params;
-  if (!isValidSessionId(id))
+  if (!isValidUUID(id))
     return res.status(400).json({ error: 'Invalid session ID.' });
   try {
     const raw = await fsp.readFile(path.join(LOGS_DIR, `${id}.json`), 'utf8');
@@ -244,7 +284,7 @@ app.get('/api/logs/:id', async (req, res) => {
 // DELETE /api/logs/:id — remove a session log
 app.delete('/api/logs/:id', async (req, res) => {
   const { id } = req.params;
-  if (!isValidSessionId(id))
+  if (!isValidUUID(id))
     return res.status(400).json({ error: 'Invalid session ID.' });
   try {
     await fsp.unlink(path.join(LOGS_DIR, `${id}.json`));
@@ -261,12 +301,11 @@ app.get('/api/health', (_req, res) => res.json({ ok: true }));
 const TOMES_DIR = path.join(__dirname, 'tomes');
 mkdirSync(TOMES_DIR, { recursive: true });
 
-function isValidTomeId(id) {
-  return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id);
-}
 
-function isValidEntryUid(uid) {
-  return typeof uid === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uid);
+// True for filenames that look like a tome file (i.e. not the memorization
+// queue dotfile or any other hidden bookkeeping file we drop in TOMES_DIR).
+function isTomeFile(f) {
+  return f.endsWith('.json') && !f.startsWith('.');
 }
 
 // Returns the absolute path for a tome file, falling back to a directory scan
@@ -279,7 +318,7 @@ async function findTomeFile(id) {
   } catch { /* not found by UUID filename — scan */ }
   const files = await fsp.readdir(TOMES_DIR);
   for (const f of files) {
-    if (!f.endsWith('.json')) continue;
+    if (!isTomeFile(f)) continue;
     try {
       const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
       const data = JSON.parse(raw);
@@ -310,10 +349,11 @@ app.get('/api/tomes', async (_req, res) => {
     const files = await fsp.readdir(TOMES_DIR);
     const tomes = [];
     for (const f of files) {
-      if (!f.endsWith('.json')) continue;
+      if (!isTomeFile(f)) continue;
       try {
         const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
         const { id, name, description, enabled, entries } = JSON.parse(raw);
+        if (!id) continue; // not a tome (no id) — skip rather than poison the registry
         tomes.push({ id, name, description, enabled, entryCount: Object.keys(entries ?? {}).length });
       } catch { /* skip corrupt */ }
     }
@@ -339,10 +379,31 @@ app.post('/api/tomes', async (req, res) => {
   }
 });
 
+// GET /api/tomes/session-memories — find or create the special Session
+// Memories tome (the system tome that receives all session memorization
+// output, auto-summarized or manually marked). Always present: created on
+// first lookup. Shares find-or-create logic with the memorization worker
+// via memorization.js so concurrent calls can't produce duplicates.
+// Must be registered BEFORE GET /api/tomes/:id so it isn't shadowed.
+app.get('/api/tomes/session-memories', async (_req, res) => {
+  try {
+    const { tome } = await findOrCreateSessionMemoriesTome();
+    res.json({
+      id:          tome.id,
+      name:        tome.name,
+      description: tome.description ?? '',
+      enabled:     tome.enabled !== false,
+      entryCount:  Object.keys(tome.entries ?? {}).length,
+    });
+  } catch {
+    res.status(500).json({ error: 'Failed to find or create Session Memories tome.' });
+  }
+});
+
 // GET /api/tomes/:id — get a full tome with entries
 app.get('/api/tomes/:id', async (req, res) => {
   const { id } = req.params;
-  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
+  if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
   const tome = await readTome(id);
   if (!tome) return res.status(404).json({ error: 'Tome not found.' });
   res.json(tome);
@@ -351,7 +412,7 @@ app.get('/api/tomes/:id', async (req, res) => {
 // PUT /api/tomes/:id — save full tome (entries + optional metadata)
 app.put('/api/tomes/:id', async (req, res) => {
   const { id } = req.params;
-  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
+  if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
   const { name, description, enabled, entries } = req.body;
   if (!entries || typeof entries !== 'object' || Array.isArray(entries))
     return res.status(400).json({ error: 'entries object required.' });
@@ -359,7 +420,7 @@ app.put('/api/tomes/:id', async (req, res) => {
   if (!existing) return res.status(404).json({ error: 'Tome not found.' });
   const safe = {};
   for (const [uid, entry] of Object.entries(entries)) {
-    if (!isValidEntryUid(uid)) continue;
+    if (!isValidUUID(uid)) continue;
     safe[uid] = entry;
   }
   const updated = {
@@ -380,7 +441,7 @@ app.put('/api/tomes/:id', async (req, res) => {
 // PATCH /api/tomes/:id — update metadata only (name, description, enabled)
 app.patch('/api/tomes/:id', async (req, res) => {
   const { id } = req.params;
-  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
+  if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
   const tome = await readTome(id);
   if (!tome) return res.status(404).json({ error: 'Tome not found.' });
   if (req.body.name !== undefined) tome.name = String(req.body.name).trim() || tome.name;
@@ -397,7 +458,7 @@ app.patch('/api/tomes/:id', async (req, res) => {
 // DELETE /api/tomes/:id — delete a tome
 app.delete('/api/tomes/:id', async (req, res) => {
   const { id } = req.params;
-  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
+  if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
   try {
     await fsp.unlink(path.join(TOMES_DIR, `${id}.json`));
     res.json({ ok: true });
@@ -409,8 +470,8 @@ app.delete('/api/tomes/:id', async (req, res) => {
 // DELETE /api/tomes/:id/entries/:uid — remove a single entry
 app.delete('/api/tomes/:id/entries/:uid', async (req, res) => {
   const { id, uid } = req.params;
-  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
-  if (!isValidEntryUid(uid)) return res.status(400).json({ error: 'Invalid entry UID.' });
+  if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
+  if (!isValidUUID(uid)) return res.status(400).json({ error: 'Invalid entry UID.' });
   const tome = await readTome(id);
   if (!tome) return res.status(404).json({ error: 'Tome not found.' });
   if (!tome.entries?.[uid]) return res.status(404).json({ error: 'Entry not found.' });
@@ -501,6 +562,60 @@ app.post('/api/tomes/default/entries', async (req, res) => {
   }
 });
 
+// ── Memorization queue endpoints ────────────────────────────────
+
+// POST /api/memorize — enqueue a memorization job.
+// Accepts JSON body OR sendBeacon's text/plain JSON for beforeunload.
+app.post('/api/memorize', express.text({ type: ['text/plain', 'application/json'], limit: '4mb' }), async (req, res) => {
+  // express.json() above this route already consumed application/json bodies
+  // into req.body. For sendBeacon (text/plain), parse it here.
+  let body = req.body;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch { return res.status(400).json({ error: 'Invalid JSON.' }); }
+  }
+  if (!body || typeof body !== 'object') {
+    return res.status(400).json({ error: 'Request body required.' });
+  }
+  const { sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model } = body;
+  if (!isValidUUID(sessionId))
+    return res.status(400).json({ error: 'Invalid session ID.' });
+  try {
+    const { jobId, deduped } = await enqueueMemorization({
+      sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model,
+    });
+    res.status(202).json({ jobId, deduped });
+  } catch (err) {
+    res.status(400).json({ error: err.message ?? 'Failed to enqueue memorization.' });
+  }
+});
+
+// GET /api/memorize — list all jobs (sanitized, no apiKey or messages)
+app.get('/api/memorize', async (_req, res) => {
+  try {
+    res.json(await listMemorizationJobs());
+  } catch {
+    res.json([]);
+  }
+});
+
+// POST /api/memorize/:id/ack — mark a terminal job as seen by the UI
+app.post('/api/memorize/:id/ack', async (req, res) => {
+  const { id } = req.params;
+  if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid job ID.' });
+  const ok = await acknowledgeMemorizationJob(id);
+  if (!ok) return res.status(404).json({ error: 'Job not found or not terminal.' });
+  res.json({ ok: true });
+});
+
+// DELETE /api/memorize/:id — cancel a pending job
+app.delete('/api/memorize/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid job ID.' });
+  const ok = await cancelMemorizationJob(id);
+  if (!ok) return res.status(409).json({ error: 'Job not found or already running.' });
+  res.json({ ok: true });
+});
+
 // ── Entity-core write endpoints ─────────────────────────────────
 
 const VALID_MEMORY_GRANULARITIES = new Set(['daily', 'weekly', 'monthly', 'yearly', 'significant']);
@@ -547,7 +662,218 @@ app.post('/api/entity/identity', async (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Entity-core editing endpoints (Knowledge editor UI + LLM write tools) ──
+//
+// All destructive ops auto-snapshot on the thalamus side via snapshot_create
+// before calling the entity-core tool, so the Snapshots tab in the UI lets
+// the user roll back if something goes sideways.
+
+const VALID_MEMORY_DATE_RE = /^\d{4}(-W\d{2}|(-\d{2})?(-\d{2})?)$/;
+const VALID_GRAPH_ID_RE    = /^[\w-]{1,128}$/;
+const VALID_SECTION_RE     = /^[\w\s\-()&'?!,.:/]{1,200}$/; // markdown headings — permissive but bounded
+const VALID_SNAPSHOT_ID_RE = /^[\w.\-:]{1,200}$/;
+
+function badRequest(res, message) { return res.status(400).json({ error: message }); }
+function gatewayDown(res, err)    { return res.status(502).json({ error: err ?? 'entity-core unavailable' }); }
+
+// ── Memory ────────────────────────────────────────────────────────────────
+app.get('/api/entity/memories', async (req, res) => {
+  const { granularity, limit } = req.query;
+  if (granularity && !VALID_MEMORY_GRANULARITIES.has(granularity))
+    return badRequest(res, `granularity must be one of: ${[...VALID_MEMORY_GRANULARITIES].join(', ')}.`);
+  const n = limit !== undefined ? Math.max(1, Math.min(100, parseInt(limit, 10) || 50)) : 50;
+  try { res.json(await listMemories({ granularity, limit: n })); }
+  catch (err) { gatewayDown(res, err.message); }
+});
+
+app.get('/api/entity/memories/:granularity/:date', async (req, res) => {
+  const { granularity, date } = req.params;
+  if (!VALID_MEMORY_GRANULARITIES.has(granularity)) return badRequest(res, 'invalid granularity');
+  if (!VALID_MEMORY_DATE_RE.test(date))             return badRequest(res, 'invalid date format');
+  try { res.json(await readMemory({ granularity, date })); }
+  catch (err) { gatewayDown(res, err.message); }
+});
+
+app.put('/api/entity/memories/:granularity/:date', async (req, res) => {
+  const { granularity, date } = req.params;
+  const { content, editedBy } = req.body;
+  if (!VALID_MEMORY_GRANULARITIES.has(granularity)) return badRequest(res, 'invalid granularity');
+  if (!VALID_MEMORY_DATE_RE.test(date))             return badRequest(res, 'invalid date format');
+  if (typeof content !== 'string' || !content.trim()) return badRequest(res, 'content required');
+  if (content.length > 16384)                       return badRequest(res, 'content exceeds 16 KB limit');
+  const result = await updateMemory({ granularity, date, content: content.trim(), editedBy });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
+});
+
+app.delete('/api/entity/memories/:granularity/:date', async (req, res) => {
+  const { granularity, date } = req.params;
+  if (!VALID_MEMORY_GRANULARITIES.has(granularity)) return badRequest(res, 'invalid granularity');
+  if (!VALID_MEMORY_DATE_RE.test(date))             return badRequest(res, 'invalid date format');
+  const result = await deleteMemory({ granularity, date, instanceId: req.query.instanceId, slug: req.query.slug });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
+});
+
+// "Supersede" — write a new memory contradicting an old one. Doesn't delete
+// the original; the recency-decay scoring will demote it naturally over
+// time while preserving the audit trail.
+app.post('/api/entity/memories/supersede', async (req, res) => {
+  const { content, granularity = 'daily', supersedes } = req.body;
+  if (typeof content !== 'string' || !content.trim()) return badRequest(res, 'content required');
+  if (!VALID_MEMORY_GRANULARITIES.has(granularity))   return badRequest(res, 'invalid granularity');
+  const today = new Date().toISOString().slice(0, 10);
+  const body  = supersedes
+    ? `[supersedes ${supersedes.granularity ?? 'memory'}/${supersedes.date ?? '?'}]\n${content.trim()}`
+    : content.trim();
+  const result = await createMemory({ content: body, granularity, date: today });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json({ ok: true, date: today });
+});
+
+// ── Identity ──────────────────────────────────────────────────────────────
+app.get('/api/entity/identity', async (_req, res) => {
+  try { res.json(await getIdentityAll()); }
+  catch (err) { gatewayDown(res, err.message); }
+});
+
+app.put('/api/entity/identity/:category/:filename/sections/:section', async (req, res) => {
+  const { category, filename, section } = req.params;
+  const { content } = req.body;
+  if (!VALID_IDENTITY_CATEGORIES.has(category)) return badRequest(res, 'invalid category');
+  if (!VALID_FILENAME_RE.test(filename))        return badRequest(res, 'invalid filename');
+  if (!VALID_SECTION_RE.test(section))          return badRequest(res, 'invalid section heading');
+  if (typeof content !== 'string')              return badRequest(res, 'content required');
+  if (content.length > 16384)                   return badRequest(res, 'content exceeds 16 KB limit');
+  const result = await rewriteIdentitySection({ category, filename, section, content });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
+});
+
+// ── Graph ─────────────────────────────────────────────────────────────────
+app.get('/api/entity/graph/nodes', async (req, res) => {
+  const { type, limit, offset } = req.query;
+  const n = limit  !== undefined ? Math.max(1, Math.min(500, parseInt(limit, 10)  || 200)) : 200;
+  const o = offset !== undefined ? Math.max(0, parseInt(offset, 10) || 0) : 0;
+  try { res.json(await listGraphNodes({ type, limit: n, offset: o })); }
+  catch (err) { gatewayDown(res, err.message); }
+});
+
+// Text search across graph nodes — backs the find_graph_node LLM tool so
+// the Familiar can resolve a name ("Eury", "Chen") to a graph id without
+// loading the full node list.
+app.get('/api/entity/graph/search', async (req, res) => {
+  const { q, type, limit } = req.query;
+  if (!q || typeof q !== 'string' || !q.trim()) return badRequest(res, 'q (query) is required');
+  const n = limit !== undefined ? Math.max(1, Math.min(100, parseInt(limit, 10) || 10)) : 10;
+  try { res.json(await searchGraphNodes({ query: q.trim(), type, limit: n })); }
+  catch (err) { gatewayDown(res, err.message); }
+});
+
+// Full-graph dump for the Map view: every node + every deduplicated edge.
+// O(N) subgraph calls under the hood; capped via the limit param.
+app.get('/api/entity/graph/full', async (req, res) => {
+  const { type, limit } = req.query;
+  const n = limit !== undefined ? Math.max(1, Math.min(500, parseInt(limit, 10) || 500)) : 500;
+  try { res.json(await getFullGraph({ type, limit: n })); }
+  catch (err) { gatewayDown(res, err.message); }
+});
+
+app.get('/api/entity/graph/nodes/:id/subgraph', async (req, res) => {
+  const { id } = req.params;
+  if (!VALID_GRAPH_ID_RE.test(id)) return badRequest(res, 'invalid id');
+  const depth = Math.max(1, Math.min(3, parseInt(req.query.depth, 10) || 1));
+  try { res.json(await getGraphSubgraph({ nodeId: id, depth })); }
+  catch (err) { gatewayDown(res, err.message); }
+});
+
+app.post('/api/entity/graph/nodes', async (req, res) => {
+  const { label, type, description } = req.body ?? {};
+  if (label       !== undefined && typeof label       !== 'string') return badRequest(res, 'label must be string');
+  if (type        !== undefined && typeof type        !== 'string') return badRequest(res, 'type must be string');
+  if (description !== undefined && typeof description !== 'string') return badRequest(res, 'description must be string');
+  if (!label && !type && !description) return badRequest(res, 'at least one of label / type / description is required');
+  const result = await createGraphNode({ label, type, description });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
+});
+
+app.post('/api/entity/graph/edges', async (req, res) => {
+  const { fromId, toId, type, weight } = req.body ?? {};
+  if (!fromId || !VALID_GRAPH_ID_RE.test(fromId)) return badRequest(res, 'valid fromId is required');
+  if (!toId   || !VALID_GRAPH_ID_RE.test(toId))   return badRequest(res, 'valid toId is required');
+  if (fromId === toId) return badRequest(res, 'fromId and toId must differ');
+  if (type !== undefined && typeof type !== 'string') return badRequest(res, 'type must be string');
+  if (weight !== undefined && (typeof weight !== 'number' || weight < 0 || weight > 1))
+    return badRequest(res, 'weight must be a number in [0, 1]');
+  const result = await createGraphEdge({ fromId, toId, type, weight });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
+});
+
+app.patch('/api/entity/graph/nodes/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!VALID_GRAPH_ID_RE.test(id)) return badRequest(res, 'invalid id');
+  const { label, description, type } = req.body;
+  if (label !== undefined && typeof label !== 'string')             return badRequest(res, 'label must be string');
+  if (description !== undefined && typeof description !== 'string') return badRequest(res, 'description must be string');
+  if (type !== undefined && typeof type !== 'string')               return badRequest(res, 'type must be string');
+  const result = await updateGraphNode({ id, label, description, type });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
+});
+
+app.delete('/api/entity/graph/nodes/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!VALID_GRAPH_ID_RE.test(id)) return badRequest(res, 'invalid id');
+  const permanent = req.query.permanent === '1' || req.query.permanent === 'true';
+  const result = await deleteGraphNode({ id, permanent });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
+});
+
+app.patch('/api/entity/graph/edges/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!VALID_GRAPH_ID_RE.test(id)) return badRequest(res, 'invalid id');
+  const { type, weight } = req.body;
+  if (type !== undefined && typeof type !== 'string') return badRequest(res, 'type must be string');
+  if (weight !== undefined && (typeof weight !== 'number' || weight < 0 || weight > 1))
+    return badRequest(res, 'weight must be a number in [0, 1]');
+  const result = await updateGraphEdge({ id, type, weight });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
+});
+
+app.delete('/api/entity/graph/edges/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!VALID_GRAPH_ID_RE.test(id)) return badRequest(res, 'invalid id');
+  const result = await deleteGraphEdge({ id });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
+});
+
+// ── Snapshots ─────────────────────────────────────────────────────────────
+app.get('/api/entity/snapshots', async (_req, res) => {
+  try { res.json(await listSnapshots()); }
+  catch (err) { gatewayDown(res, err.message); }
+});
+
+app.post('/api/entity/snapshots', async (_req, res) => {
+  const result = await createSnapshot();
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
+});
+
+app.post('/api/entity/snapshots/:id/restore', async (req, res) => {
+  const { id } = req.params;
+  if (!VALID_SNAPSHOT_ID_RE.test(id)) return badRequest(res, 'invalid snapshot id');
+  const result = await restoreSnapshot({ snapshotId: id });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`\nProto-Familiar running at http://localhost:${PORT}\n`);
+  startMemorizationWorker();
 });

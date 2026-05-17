@@ -1,10 +1,24 @@
 # Getting Started
 
+## One double-click
+
+| OS | Entry point | What happens |
+|---|---|---|
+| **Windows** | Double-click `Proto-Familiar.vbs` | First run: auto-installs Node/Deno/Git via winget, runs `npm install`, clones entity-core, creates Desktop + Start Menu shortcuts. Every run: tray icon appears, browser opens. Right-click the tray icon → **Quit** to stop. |
+| **macOS** | Double-click `Proto-Familiar.command` | First run installs, then opens browser. Ctrl-C in the Terminal window stops everything. |
+| **Linux** | Run `./install.sh` once, then launch **Proto-Familiar** from your app menu | The installer registers a `.desktop` entry under `~/.local/share/applications/`. Stop with `./stop.sh`. |
+
+Open `http://localhost:3000` in your browser (this happens automatically on launch).
+
 ## Requirements
 
 - Node.js 18+
+- Deno 2+ (optional, only for entity-core)
+- Git (optional, only for the entity-core clone step)
 
-## Install and run
+On Windows the installer pulls all three via `winget --scope user`. On macOS/Linux install them yourself if they're missing — the installer will warn.
+
+## Manual install
 
 ```bash
 npm install
@@ -16,8 +30,6 @@ For auto-reload during development:
 ```bash
 npm run dev
 ```
-
-Open: `http://localhost:3000`
 
 To use a different port:
 
@@ -41,3 +53,8 @@ PORT=8080 npm start
 
 - Settings and chat history are persisted in browser `localStorage`.
 - Session logs are persisted as JSON files under `logs/` on the local server.
+- The launcher writes `.proto-familiar.pid` and `.proto-familiar.log` at the project root (both git-ignored).
+
+## Full instructions
+
+See [docs/getting-started.md](../docs/getting-started.md) for the full guide, including the tray-icon controls, env vars, providers, entity-core setup, and troubleshooting.

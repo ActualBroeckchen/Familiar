@@ -42,17 +42,21 @@ Proxies a chat completion request to the selected LLM provider. Supports both st
 
 **Streaming response (`stream: true`):**
 
-Returns `Content-Type: text/event-stream`. Events follow the OpenAI SSE format:
+Returns `Content-Type: text/event-stream`. The first `data:` line is a `_thalamus` envelope carrying the entity-core block this request was actually enriched with (omitted entirely when `enrich()` returned empty); the remaining events follow the OpenAI SSE format:
 
 ```
+data: {"_thalamus":{"entityContext":"<my_identity>\n…\n</my_identity>\n\n<memories>\n…"}}
+
 data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}
 
 data: [DONE]
 ```
 
+Clients should route on the presence of `_thalamus` and skip the normal `choices` parsing for that line.
+
 **Non-streaming response (`stream: false`):**
 
-Returns the provider's JSON response verbatim with the provider's original HTTP status code.
+Returns the provider's JSON response with the provider's original HTTP status code. On a successful response the server parses the JSON and attaches a top-level `_thalamus: { entityContext }` field carrying the actual injected block (omitted when `enrich()` returned empty or the upstream body wasn't JSON).
 
 **Error responses:**
 
@@ -65,7 +69,7 @@ Returns the provider's JSON response verbatim with the provider's original HTTP 
 
 ### `POST /api/debug-prompt`
 
-Returns the full enriched message array that would be sent to the LLM for a given conversation payload — including the entity-core context block — **without** making any upstream API call. Used by the prompt inspector UI.
+Returns the full enriched message array that would be sent to the LLM for a given conversation payload — including the entity-core context block — **without** making any upstream API call. Available for offline previewing. The live prompt inspector no longer uses this endpoint; it reads the `_thalamus` envelope that `POST /api/chat` attaches to every response, so it reflects the actual injection rather than a re-derived preview.
 
 **Request body:**
 
@@ -168,7 +172,10 @@ Tomes are stored as individual JSON files in the `tomes/` directory. Each Tome i
 
 ### `GET /api/tomes`
 
-Returns a metadata list of all Tomes (no entry bodies).
+Returns a metadata list of all Tomes (no entry bodies). Files inside
+`tomes/` whose name starts with `.` (e.g. `.memorization-queue.json`,
+which the memorization worker uses for its persistent job queue) are
+skipped, as are files that parse but lack an `id` field.
 
 **Response:**
 
@@ -210,6 +217,34 @@ Creates a new Tome.
 |---|---|
 | `400` | `name` is missing or blank |
 | `500` | File system write failure |
+
+---
+
+### `GET /api/tomes/session-memories`
+
+Returns metadata for the special **Session Memories** tome, creating it if it doesn't exist yet. This is the system tome that receives all session memorization output — both the worker-driven Auto-summarize path and the user-driven Manual topics path. Always present, always at the same logical name; the underlying file id remains stable across calls.
+
+The find-or-create routine is shared with the memorization worker (`memorization.js#findOrCreateSessionMemoriesTome`) via a process-wide mutex, so concurrent callers (e.g. the worker processing a queued job and the client opening the manual viewer) can't produce duplicate tomes.
+
+**Response:**
+
+```json
+{
+  "id":          "550e8400-e29b-41d4-a716-446655440000",
+  "name":        "Session Memories",
+  "description": "Auto-generated entries from past conversations. Created on first session memorization.",
+  "enabled":     true,
+  "entryCount":  12
+}
+```
+
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| `500` | File system read/write failure during find-or-create |
+
+> Registered before `GET /api/tomes/:id` so the literal segment isn't shadowed by the UUID-validated route.
 
 ---
 
@@ -338,6 +373,112 @@ Adds a single entry to the first enabled Tome (or creates a "General" Tome if no
 
 ---
 
+## Session memorization
+
+The memorization queue is implemented in `memorization.js` and runs as an in-process worker on the server. Jobs persist to `tomes/.memorization-queue.json` so they survive tab close, idle rollover, and server restart. See [`sessions.md`](sessions.md#session-memorization) for the lifecycle and triggers.
+
+### `POST /api/memorize`
+
+Enqueue a memorization job. Accepts both `application/json` and `text/plain` JSON (the latter is what `navigator.sendBeacon` uses from the browser's `beforeunload` handler).
+
+**Request body:**
+
+```json
+{
+  "sessionId":    "550e8400-e29b-41d4-a716-446655440000",
+  "scope":        "session | topic",
+  "topicId":      "<topic id, when scope = topic>",
+  "topicLabel":   "<user-supplied topic label, when scope = topic>",
+  "messageRange": { "start": 0, "end": 42 },
+  "messages":     [ /* role + content turns */ ],
+  "provider":     "nanogpt",
+  "apiKey":       "sk-...",
+  "model":        "gpt-4o-mini"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `sessionId` | string (UUID) | Yes | Session the memorization belongs to |
+| `scope` | string | Yes | `"session"` for full-session memorization, `"topic"` for a topic-bounded range |
+| `topicId` | string | When `scope = topic` | Identifier of the topic being memorized |
+| `topicLabel` | string | Optional | When the user named the topic themselves, the worker injects a "focus topic" block into the summarizer prompt so the generated entry centers on that topic. Omit (or pass `null`) for auto-named topics (`"Topic 1"`, etc.) — the client suppresses the field for those automatically. |
+| `messageRange` | object | When `scope = topic` | `{ start, end }` indices into the supplied `messages` array |
+| `messages` | array | Yes | Conversation turns to summarise (user/assistant only — tool plumbing is filtered server-side) |
+| `provider` / `apiKey` / `model` | string | Yes | Provider credentials the worker uses for the LLM call |
+
+**Response (`202 Accepted`):**
+
+```json
+{ "jobId": "550e8400-e29b-41d4-a716-446655440000", "deduped": false }
+```
+
+`deduped` is `true` when an active job with the same `sessionId + scope + topicId + messageRange` already exists, in which case `jobId` is the existing job's id.
+
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| `400` | Invalid session ID, malformed body, or fewer than 2 readable messages |
+
+---
+
+### `GET /api/memorize`
+
+List every job in the queue. API keys and message bodies are stripped from the response.
+
+**Response:**
+
+```json
+[
+  {
+    "id":            "<job uuid>",
+    "sessionId":     "<session uuid>",
+    "scope":         "session",
+    "topicId":       null,
+    "status":        "pending | processing | done | failed",
+    "attempts":      0,
+    "createdAt":     "<ISO>",
+    "nextAttemptAt": "<ISO>",
+    "result":        { "entryCount": 3 },
+    "error":         null,
+    "acknowledged":  false
+  }
+]
+```
+
+---
+
+### `POST /api/memorize/:id/ack`
+
+Mark a terminal (`done` or `failed`) job as seen by the UI. Acknowledged jobs are pruned 24 hours later.
+
+**Response:** `{ "ok": true }`
+
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| `400` | `id` is not a UUID |
+| `404` | Job not found or not in a terminal state |
+
+---
+
+### `DELETE /api/memorize/:id`
+
+Cancel a pending job. Jobs already in `processing` cannot be cancelled.
+
+**Response:** `{ "ok": true }`
+
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| `400` | `id` is not a UUID |
+| `409` | Job not found or already running |
+
+---
+
 ## Entity-core
 
 These endpoints write through to the entity-core MCP subprocess via `thalamus.js`. They are exposed for the built-in `save_memory` and `update_identity` tools and degrade gracefully (`502`) when entity-core is unavailable.
@@ -405,6 +546,54 @@ Appends to or updates a section of an identity file.
 |---|---|
 | `400` | Invalid category, filename, missing content, or missing heading when `mode = update_section` |
 | `502` | entity-core unavailable |
+
+---
+
+### Knowledge editor endpoints
+
+The endpoints below back the **Knowledge editor** modal in the sidebar and the LLM-callable editing tools (`update_memory`, `delete_memory`, `rewrite_identity_section`, `update_graph_node`, `delete_graph_node`, `update_graph_edge`, `delete_graph_edge`). Every destructive op (`PUT`, `PATCH`, `DELETE`) auto-snapshots entity-core before the underlying MCP call, so a mistake is always recoverable via the snapshots endpoints. All return `502` when entity-core is unavailable; reads return entity-core's JSON verbatim.
+
+#### Memory
+
+| Method & path | Purpose | Body / query |
+|---|---|---|
+| `GET /api/entity/memories` | List memories. Query: `granularity` (optional, one of the five tiers), `limit` (1–100, default 50) | — |
+| `GET /api/entity/memories/:granularity/:date` | Read one memory | — |
+| `PUT /api/entity/memories/:granularity/:date` | Overwrite the memory's content (auto-snapshots) | `{ "content": "…", "editedBy": "user-edit" }` (≤ 16 KB) |
+| `DELETE /api/entity/memories/:granularity/:date` | Delete the memory (auto-snapshots). Query: `instanceId`, `slug` (optional) | — |
+| `POST /api/entity/memories/supersede` | Write a new dated memory contradicting an old one, prefixed with `[supersedes <granularity>/<date>]`. Preserves history; recency-decay demotes the stale entry | `{ "content": "…", "granularity": "daily", "supersedes": { "granularity": "daily", "date": "2026-05-15" } }` |
+
+#### Identity
+
+| Method & path | Purpose | Body |
+|---|---|---|
+| `GET /api/entity/identity` | All identity files grouped by category | — |
+| `PUT /api/entity/identity/:category/:filename/sections/:section` | Rewrite the body of one markdown section (auto-snapshots) | `{ "content": "…" }` (≤ 16 KB) |
+
+#### Graph
+
+| Method & path | Purpose | Body / query |
+|---|---|---|
+| `GET /api/entity/graph/nodes` | List graph nodes. Query: `type` (optional), `limit` (1–500, default 200), `offset` | — |
+| `GET /api/entity/graph/search` | Text search across graph nodes (backs the `find_graph_node` LLM tool). Query: `q` (required), `type` (optional), `limit` (1–100, default 10) | — |
+| `GET /api/entity/graph/nodes/:id/subgraph` | Node + 1-hop neighbours and edges (backs the `find_graph_edges` LLM tool). Query: `depth` (1–3, default 1) | — |
+| `GET /api/entity/graph/full` | All nodes + all deduplicated edges in one payload (backs the Knowledge editor's Map view). Walks each node's 1-hop subgraph under a 16-worker concurrency cap and drops edges whose endpoints fall outside the (possibly type-filtered) visible set so the rendered legend matches what's drawn. Query: `type` (optional), `limit` (1–500, default 500) | — |
+| `POST /api/entity/graph/nodes` | Create a new node via `graph_node_create`. At least one of `label` / `type` / `description` is required | `{ "label"?: "…", "type"?: "…", "description"?: "…" }` |
+| `PATCH /api/entity/graph/nodes/:id` | Update label / type / description (auto-snapshots) | `{ "label"?: "…", "type"?: "…", "description"?: "…" }` |
+| `DELETE /api/entity/graph/nodes/:id` | Delete the node and its edges (auto-snapshots). Query: `permanent=1` for hard delete | — |
+| `POST /api/entity/graph/edges` | Create a new edge via `graph_edge_create`. `fromId` and `toId` are required and must differ; `weight` is clamped to `[0, 1]` | `{ "fromId": "…", "toId": "…", "type"?: "…", "weight"?: 0.5 }` |
+| `PATCH /api/entity/graph/edges/:id` | Update edge type or weight (auto-snapshots) | `{ "type"?: "…", "weight"?: 0.85 }` |
+| `DELETE /api/entity/graph/edges/:id` | Delete one relationship; both endpoint nodes remain (auto-snapshots) | — |
+
+Creates do not auto-snapshot — they are additive and reversible via the matching `DELETE`.
+
+#### Snapshots
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/entity/snapshots` | List available snapshots |
+| `POST /api/entity/snapshots` | Create a snapshot now (user-triggered; in addition to the auto-snapshots before destructive ops) |
+| `POST /api/entity/snapshots/:id/restore` | Restore one snapshot — overwrites current memory / identity / graph with its contents |
 
 ---
 

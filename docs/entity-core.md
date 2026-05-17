@@ -2,7 +2,7 @@
 
 ## What Is Entity-Core?
 
-[entity-core-alpha](https://github.com/zarilewis/entity-core-alpha) is a Deno-based MCP (Model Context Protocol) server that manages persistent identity files, RAG memories, and a knowledge graph for a named AI entity. Proto-Familiar connects to it through `thalamus.js` to ground every LLM request in stable, long-term context that survives session boundaries.
+[entity-core-alpha](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) is a Deno-based MCP (Model Context Protocol) server that manages persistent identity files, RAG memories, and a knowledge graph for a named AI entity. Proto-Familiar connects to it through `thalamus.js` to ground every LLM request in stable, long-term context that survives session boundaries.
 
 This integration is **optional** — the app runs fully without it. When entity-core is unavailable, `thalamus.js` logs the error and returns an empty string, and every chat request proceeds without enrichment.
 
@@ -106,27 +106,50 @@ Files sorted alphabetically.
 
 ---
 
-## Prompt Inspector
+## Editing the knowledge
 
-To see exactly what was sent to the LLM on any given message — including the full entity-core block, all lorebook injections, and the conversation history — click the **🔍 magnifying glass** button in the top bar after sending a message.
+The Familiar surfaces the editing side of entity-core through two paths:
 
-The inspector calls `POST /api/debug-prompt` with the current message array and displays each message in a colour-coded, collapsible panel with per-message Copy buttons. No API call is made to the upstream LLM.
+- **Knowledge editor** in the sidebar (button **🧠 Open Knowledge editor** under the Knowledge section). Four tabs — Memories, Graph, Identity, Snapshots — that let the user browse, edit, delete, and supersede entries directly. The Graph tab carries full CRUD across two view modes (a classic list/detail browser and a colored dot-and-curve **Map view** with an in-canvas popover editor and `GET /api/entity/graph/full` aggregation behind it). Every destructive op auto-snapshots first; the Snapshots tab is the always-on undo. See [Features → Knowledge editor](features.md#knowledge-editor-entity-core) for the full UI walkthrough.
+
+- **LLM tool calls.** Beyond `save_memory` and `update_identity` (both append-only), the Familiar can call `update_memory`, `delete_memory`, `rewrite_identity_section`, `update_graph_node`, `delete_graph_node`, `update_graph_edge`, and `delete_graph_edge`. Each tool's description teaches the model when to append vs. rewrite vs. delete, and recommends superseding (writing a new contradicting memory) over deleting when the change has historical value. Every destructive tool auto-snapshots before the underlying MCP call, so even a bad model decision is recoverable from the Knowledge editor's Snapshots tab. See [Tool Calling](tool-calling.md#built-in-tools) for the full parameter reference.
+
+The auto-snapshots are pruned by entity-core's own retention policy (`ENTITY_CORE_SNAPSHOT_RETENTION_DAYS`, default 30 days) so this doesn't grow without bound.
+
+---
+
+## Prompt inspector
+
+To see exactly what was sent to the LLM on the previous turn — including the full entity-core block, all lorebook injections, and the conversation history — click the **🔍 magnifying glass** button in the top bar after sending a message. The entity-core block is captured from a `_thalamus` envelope the server attaches to every `/api/chat` response (both streaming and non-streaming), so the inspector shows the actual injected text rather than a re-derived preview that could drift if intervening memory or identity writes have changed what `enrich()` would now return. See [Prompt Inspector](features.md#prompt-inspector) for the full source palette.
 
 ---
 
 ## Setup
 
+The one-click installers handle the clone for you (`Proto-Familiar.vbs` on Windows, `Proto-Familiar.command` on macOS, `./install.sh` on Linux). They also pre-cache the Deno module graph so the first server start doesn't stall on downloads. If you'd rather do it by hand:
+
 1. Clone entity-core-alpha as a sibling directory next to Proto-Familiar:
    ```bash
-   git clone https://github.com/zarilewis/entity-core-alpha ../entity-core-alpha
+   git clone --depth 1 --branch entity-core-v0.2.2 https://github.com/PsycherosAI/Psycheros.git ../entity-core-alpha
    ```
-2. Populate its `data/` directory with identity files following the entity-core README.
-3. Start Proto-Familiar normally. `thalamus.js` spawns entity-core automatically on startup.
+   Psycheros is a Deno workspace at this tag, so entity-core itself lives at `../entity-core-alpha/packages/entity-core/`. Older releases kept it at the repo root (`../entity-core-alpha/src/mod.ts`); `thalamus.js` probes both layouts and prefers the workspace path.
+
+2. Populate the package's `data/` directory — `entity-core-alpha/packages/entity-core/data/` for the workspace layout, or `entity-core-alpha/data/` for the legacy layout — with identity files following the entity-core README.
+
+3. (Optional but recommended) Pre-cache Deno dependencies so the first launch is instant:
+   ```bash
+   cd ../entity-core-alpha/packages/entity-core   # or just ../entity-core-alpha on the legacy layout
+   deno cache src/mod.ts
+   ```
+
+4. Start Proto-Familiar normally. `thalamus.js` spawns entity-core automatically on startup. Make sure `deno` is on `PATH` for the process that runs `node server.js`; `start.sh` adds `~/.deno/bin` to `PATH` automatically when the official installer was used and the user's shell config hasn't been reloaded.
+
+If entity-core is missing or fails to start, `thalamus.js` logs the error and `enrich()` returns an empty string — Proto-Familiar runs normally without enrichment.
 
 To use a custom install path, set `ENTITY_CORE_PATH` to the absolute path of entity-core's `src/mod.ts` before starting the server:
 
 ```bash
-ENTITY_CORE_PATH=/home/user/my-entity-core/src/mod.ts npm start
+ENTITY_CORE_PATH=/home/user/my-entity-core/packages/entity-core/src/mod.ts npm start
 ```
 
 ---
@@ -148,7 +171,7 @@ npm run import-entity -- --from /path/to/entity-core --yes
 
 The script:
 - Auto-detects whether `--from` is an entity-core root or a bare data directory.
-- Resolves the destination using the same logic as `thalamus.js` (`$ENTITY_CORE_PATH` → `../entity-core-alpha`).
+- Resolves the destination using the same logic as `thalamus.js`: `$ENTITY_CORE_PATH` if set, otherwise probes `../entity-core-alpha/packages/entity-core` (Deno-workspace layout) and falls back to `../entity-core-alpha` (legacy top-level layout).
 - Reads both installs' `.env` files for `ENTITY_CORE_DATA_DIR` overrides.
 - Preserves file timestamps so memory recency ranking stays accurate.
 - Refuses to proceed if source and destination resolve to the same path.

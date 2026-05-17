@@ -112,13 +112,13 @@ Use for background context that applies to *almost every interaction* — not si
 
 ## 3. Wording the Entry Content
 
-### Write as the character's private notes to themselves
+### Write as the Familiar's private notes to themselves
 
-Content is injected into the Familiar's context as their own knowledge. Write it in first or second person from the Familiar's perspective, using `{{user}}` where the user's name belongs.
+Content is injected into the Familiar's context as their own knowledge. Write it in **first person** from the Familiar's perspective — "I", "my", "me" — using `{{user}}` where the user's name belongs. The Familiar reads the entry as their own internal monologue, not as instructions handed to them.
 
 The Familiar is reading this mid-conversation. The tone should be:
-- **Practical**: what to do, what not to do
-- **Grounded**: brief explanation of why, so the Familiar understands rather than just follows rules
+- **Practical**: what I will do, what I will not do
+- **Grounded**: brief explanation of why, so I understand rather than just follow rules
 - **Non-clinical**: notes, not a textbook
 
 ### Bullet format is most effective
@@ -136,9 +136,9 @@ LLMs parse short declarative bullets better than prose for injected reference ma
 
 ### The structure that works
 
-1. **One-sentence framing line** — what is happening and why (gives the Familiar understanding, not just rules)
-2. **3–5 action bullets** — what to do
-3. **1–2 prohibition bullets** — what not to do (these are often the most important)
+1. **One-sentence framing line** — what is happening and why (so I understand the situation, not just the rules)
+2. **3–5 action bullets** — what I will do
+3. **1–2 prohibition bullets** — what I will not do (these are often the most important)
 
 Prohibition bullets are disproportionately valuable. The Familiar may default to well-intentioned but harmful responses (offering solutions during emotional flooding, challenging RSD narrative, adding pressure during executive dysfunction). Name the trap explicitly.
 
