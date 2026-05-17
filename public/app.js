@@ -2335,9 +2335,8 @@ function init() {
   // Knowledge editor (entity-core)
   $('knowledge-btn').addEventListener('click', openKnowledgeModal);
   $('knowledge-modal-close').addEventListener('click', closeKnowledgeModal);
-  $('knowledge-modal').addEventListener('click', e => {
-    if (e.target === $('knowledge-modal')) closeKnowledgeModal();
-  });
+  // Intentionally NO backdrop-click-to-close: it fires mid-pan or while
+  // dragging the resize handle past the modal edge. Only the ✕ closes it.
   document.querySelectorAll('.ke-tab').forEach(el => {
     el.addEventListener('click', () => keSwitchTab(el.dataset.tab));
   });
