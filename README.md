@@ -5,6 +5,8 @@ I've decided to make this public while I work on it so others can access the res
 
 ## Proto-Familiar — Chat Frontend
 
+**Current version: `0.1.1-alpha`** (single source of truth: `package.json`; the server reads it at boot and exposes it via `/api/version`, `/api/health`, the startup banner, and the sidebar footer badge).
+
 A lightweight, self-hosted chat UI for [z.ai](https://api.z.ai) and [NanoGPT](https://nano-gpt.com). Runs entirely on your machine — your API key never leaves `localhost`.
 
 ### Requirements

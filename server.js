@@ -35,6 +35,15 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// Single source of truth for the version string. Read package.json once
+// at startup; everything else (startup banner, /api/health, /api/version,
+// the UI badge) reads from this.
+const PKG_VERSION = (() => {
+  try {
+    return JSON.parse(readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version || 'unknown';
+  } catch { return 'unknown'; }
+})();
+
 // Ensure the logs directory exists next to server.js
 const LOGS_DIR = path.join(__dirname, 'logs');
 mkdirSync(LOGS_DIR, { recursive: true });
@@ -342,7 +351,8 @@ app.delete('/api/logs/:id', async (req, res) => {
 });
 
 // Health check
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
+app.get('/api/health',  (_req, res) => res.json({ ok: true, version: PKG_VERSION }));
+app.get('/api/version', (_req, res) => res.json({ version: PKG_VERSION }));
 
 // ── Tome endpoints ──────────────────────────────────────────────
 const TOMES_DIR = path.join(__dirname, 'tomes');
@@ -1015,7 +1025,7 @@ app.post('/api/tailscale', async (req, res) => {
 });
 
 app.listen(PORT, HOST, async () => {
-  const lines = ['', 'Proto-Familiar running at:'];
+  const lines = ['', `Proto-Familiar ${PKG_VERSION} running at:`];
   lines.push(`  http://localhost:${PORT}`);
   if (tailscaleState.enabled) {
     const ts = await detectTailscale();

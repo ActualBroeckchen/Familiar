@@ -663,8 +663,12 @@ Creates do not auto-snapshot — they are additive and reversible via the matchi
 
 ---
 
-## Health
+## Health & version
 
 ### `GET /api/health`
 
-Returns `{ "ok": true }`. Useful for uptime checks or confirming the server is running.
+Returns `{ "ok": true, "version": "<package.json version>" }`. Useful for uptime checks or confirming the server is running.
+
+### `GET /api/version`
+
+Returns `{ "version": "<package.json version>" }`. Read once at startup from `package.json`. The UI uses this to populate the sidebar footer badge.

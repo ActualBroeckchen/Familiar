@@ -217,6 +217,28 @@ In short: entity-core lives at `../entity-core/packages/entity-core` (Deno-works
 
 ---
 
+## Versioning
+
+Proto-Familiar's version lives in `package.json` (`version` field) and is the **single source of truth**. The server reads it at boot and exposes it via:
+
+- `/api/version` → `{ "version": "<v>" }`
+- `/api/health`  → `{ "ok": true, "version": "<v>" }`
+- The startup banner: `Proto-Familiar <v> running at:`
+- The sidebar footer badge in the UI.
+
+Current release: `0.1.1-alpha`. Pre-release while the schema and storage layout are still in flux.
+
+Bump policy (followed by AI agents working in this repo via [`CLAUDE.md`](../CLAUDE.md)):
+
+| Change                                                              | Bump        |
+|---------------------------------------------------------------------|-------------|
+| Bug fix, copy edit, dependency pin, doc tweak                       | patch       |
+| New user-visible feature, behavioral change, UX rework, new endpoint | minor       |
+| Breaking API/storage change, removed feature, format migration      | major       |
+| Graduate from pre-release                                           | drop suffix |
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |

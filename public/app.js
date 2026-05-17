@@ -3169,6 +3169,15 @@ function init() {
     if (window.innerWidth < 768) closeSidebarOnMobile();
   });
 
+  // ── Version badge ────────────────────────────────────────────
+  fetch('/api/version')
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      const badge = $('version-badge');
+      if (badge && data?.version) badge.textContent = `Proto-Familiar v${data.version}`;
+    })
+    .catch(() => {});
+
   // ── Mobile viewport / keyboard handling ──────────────────────
   initMobileViewport();
 
