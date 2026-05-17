@@ -5,8 +5,12 @@
 set -e
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-PORT="${PORT:-3000}"
+PORT="${PORT:-8742}"
 URL="http://localhost:$PORT"
+# TAILSCALE=1 seeds the in-UI "Access from other devices" toggle to ON when
+# .proto-familiar-config.json doesn't exist yet. Once you've used the in-UI
+# toggle, that file is the source of truth and this env var is ignored.
+TAILSCALE="${TAILSCALE:-0}"
 PID_FILE="$SCRIPT_DIR/.proto-familiar.pid"
 LOG_FILE="$SCRIPT_DIR/.proto-familiar.log"
 
@@ -21,16 +25,37 @@ if ! command -v deno >/dev/null 2>&1 && [ -x "$HOME/.deno/bin/deno" ]; then
 fi
 
 # Already running?
-if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-  say "Proto-Familiar already running (PID $(cat "$PID_FILE"))."
+EXISTING_PID=""
+if [ -f "$PID_FILE" ]; then EXISTING_PID="$(cat "$PID_FILE")"; fi
+PID_ALIVE=0
+if [ -n "$EXISTING_PID" ] && kill -0 "$EXISTING_PID" 2>/dev/null; then PID_ALIVE=1; fi
+
+PORT_LISTENING=0
+if (echo >"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then PORT_LISTENING=1; fi
+
+if [ "$PID_ALIVE" = "1" ] && [ "$PORT_LISTENING" = "1" ]; then
+  say "Proto-Familiar already running (PID $EXISTING_PID) on port $PORT."
   say "Opening $URL ..."
 else
+  if [ "$PID_ALIVE" = "1" ]; then
+    # Tracked PID is alive but not serving the configured port — e.g. left
+    # over from a different PORT value or an older build. Recycle it so the
+    # new config actually takes effect.
+    say "Found stale Proto-Familiar process (PID $EXISTING_PID) not on port $PORT — restarting."
+    kill "$EXISTING_PID" 2>/dev/null || true
+    for _ in $(seq 1 20); do
+      kill -0 "$EXISTING_PID" 2>/dev/null || break
+      sleep 0.25
+    done
+    kill -9 "$EXISTING_PID" 2>/dev/null || true
+    rm -f "$PID_FILE"
+  fi
   if [ ! -d "$SCRIPT_DIR/node_modules" ]; then
     say "Dependencies missing. Running installer first..."
     bash "$SCRIPT_DIR/install.sh"
   fi
   say "Starting Proto-Familiar on $URL (logs: $LOG_FILE) ..."
-  ( cd "$SCRIPT_DIR" && PORT="$PORT" nohup node server.js >"$LOG_FILE" 2>&1 & echo $! >"$PID_FILE" )
+  ( cd "$SCRIPT_DIR" && PORT="$PORT" TAILSCALE="$TAILSCALE" nohup node server.js >"$LOG_FILE" 2>&1 & echo $! >"$PID_FILE" )
 
   # Wait up to ~15s for the port to come up
   for i in $(seq 1 30); do

@@ -9,7 +9,7 @@ Proto-Familiar ships with a one-click installer and launcher for each platform. 
 1. Clone or download the repo.
 2. Double-click **`Proto-Familiar.vbs`**.
 3. On first run a console window opens and auto-installs Node 18+, Deno, and Git via `winget install --scope user` (no admin prompt). It then runs `npm install`, clones [entity-core-alpha](https://github.com/PsycherosAI/Psycheros) into the sibling directory, and creates Desktop + Start Menu shortcuts named **Proto-Familiar**.
-4. After install, a tray icon appears (bottom-right, you may need to click the `^` to reveal hidden icons) and your browser opens at `http://localhost:3000`.
+4. After install, a tray icon appears (bottom-right, you may need to click the `^` to reveal hidden icons) and your browser opens at `http://localhost:8742`.
 
 **Tray icon controls:**
 
@@ -31,7 +31,7 @@ The tray app is single-instance — double-clicking the shortcut a second time j
 1. Clone or download the repo.
 2. Double-click **`Proto-Familiar.command`** in Finder.
 3. On first run it runs `./install.sh`, which checks Node 18+ and Deno, runs `npm install`, and clones entity-core-alpha. On subsequent runs it skips straight to launching.
-4. A Terminal window opens showing server logs; your browser opens automatically at `http://localhost:3000`.
+4. A Terminal window opens showing server logs; your browser opens automatically at `http://localhost:8742`.
 
 **To shut down**, press **Ctrl-C** in the Terminal window, then close it (Cmd-W). Because `node` runs in the foreground, Ctrl-C cleanly stops both Proto-Familiar and its entity-core child.
 
@@ -69,7 +69,7 @@ npm start          # production
 npm run dev        # auto-restarts on file changes
 ```
 
-Open `http://localhost:3000`.
+Open `http://localhost:8742`.
 
 The repo also ships three plain shell scripts you can call directly:
 
@@ -138,11 +138,53 @@ PORT=8080 npm start
 
 On Windows, set the env var in the current shell before double-clicking `Proto-Familiar.vbs`, or `setx PORT 8080` and start a new session.
 
+## Access from other devices (Tailscale / LAN)
+
+By default Proto-Familiar is reachable only from the machine it's running on. To use the UI from your phone, tablet, or another laptop:
+
+1. Open Proto-Familiar in your browser (on the machine running the server).
+2. Click the globe icon in the top bar — it sits next to the prompt-inspector magnifier.
+3. Flip the **Access from other devices** switch in the popover.
+
+The popover lists the URLs you can open on any device that can reach this machine. If the `tailscale` CLI is installed and you're logged in, you'll see entries like:
+
+```
+Tailscale:      http://my-laptop.tail1234.ts.net:8742
+Tailscale IPv4: http://100.x.y.z:8742
+```
+
+Open one of those on any device signed into the same Tailnet — Tailscale handles auth and encryption.
+
+The toggle persists in `.proto-familiar-config.json` (git-ignored) and survives restarts. To preset it on startup, set `TAILSCALE=1` in the environment before launching — that seeds the initial state when the config file doesn't exist yet.
+
+### How it works
+
+Proto-Familiar always binds to `0.0.0.0`, but until the toggle is on a middleware rejects every non-loopback request with a 403. The effective behaviour with the toggle off matches the historical `localhost`-only bind — nothing on the network can actually talk to the server.
+
+### Security caveats
+
+- **Plain LAN (no Tailscale):** anything that can route to the port can use your API key, read entity-core context, and write to the knowledge editor. Don't enable on coffee-shop wifi.
+- **Tailscale:** other devices on your tailnet can use the proxy. If you share your tailnet with others, set up Tailscale ACLs accordingly.
+- The `/api/debug-prompt` endpoint and the entity-core knowledge editor REST API are unauthenticated. They were designed for loopback. When the toggle is on, anyone on your network gets them too.
+- The toggle endpoint itself (`POST /api/tailscale`) is also unauthenticated; once the toggle is on, any device that can reach the server can toggle it back off (a self-locking misfeature) or back on. Keep it loopback-only unless you trust your network.
+
+### Tailscale Serve / Funnel (alternative)
+
+If you'd rather not flip the toggle at all, leave it off and front the loopback server with Tailscale Serve instead:
+
+```bash
+tailscale serve --bg --https=443 http://127.0.0.1:8742
+```
+
+That exposes the loopback server over HTTPS to your tailnet without changing Proto-Familiar's gate. See [Tailscale Serve docs](https://tailscale.com/kb/1242/tailscale-serve).
+
 ## Environment variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `PORT` | `3000` | HTTP port the server listens on |
+| `PORT` | `8742` | HTTP port the server listens on |
+| `HOST` | `0.0.0.0` | Bind address. The runtime gate keeps non-loopback requests out until you flip the in-UI toggle — override only if you need to force a different bind. |
+| `TAILSCALE` | `0` | Seeds the persisted toggle state on first launch (when `.proto-familiar-config.json` doesn't exist yet). After that, the in-UI toggle is the source of truth. |
 | `ENTITY_CORE_PATH` | auto: probes `../entity-core-alpha/packages/entity-core/src/mod.ts` then `../entity-core-alpha/src/mod.ts` | Absolute path to entity-core's `src/mod.ts`. Override if your entity-core install is not in the sibling directory or to force a specific layout. |
 
 ---

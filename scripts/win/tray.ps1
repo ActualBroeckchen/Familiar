@@ -20,8 +20,9 @@ if (-not $mutex.WaitOne(0, $false)) {
 
 # --- Paths and state ---
 $script:projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$script:port        = if ($env:PORT) { $env:PORT } else { "3000" }
+$script:port        = if ($env:PORT) { $env:PORT } else { "8742" }
 $script:url         = "http://localhost:$($script:port)"
+$script:tailscale   = if ($env:TAILSCALE) { $env:TAILSCALE } else { "0" }
 $script:pidFile     = Join-Path $script:projectRoot ".proto-familiar.pid"
 $script:logFile     = Join-Path $script:projectRoot ".proto-familiar.log"
 $script:logErrFile  = "$($script:logFile).err"
@@ -83,6 +84,16 @@ function Test-Port {
 
 function Start-Server {
     if (Test-Port) { Set-Status "running"; return }
+    # PID file points at a live process, but the configured port isn't
+    # responding — almost certainly a stale instance from a previous PORT
+    # value or older build. Recycle it so the new config takes effect.
+    if (Test-Path $script:pidFile) {
+        $stalePid = Get-Content $script:pidFile -ErrorAction SilentlyContinue
+        if ($stalePid -and (Get-Process -Id $stalePid -ErrorAction SilentlyContinue)) {
+            try { Stop-Process -Id $stalePid -Force -ErrorAction SilentlyContinue } catch {}
+        }
+        Remove-Item $script:pidFile -ErrorAction SilentlyContinue
+    }
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
         [System.Windows.Forms.MessageBox]::Show(
             "Node.js is not on PATH. Run the installer (double-click Proto-Familiar.vbs while node_modules is missing, or run scripts\win\install.ps1).",
@@ -91,6 +102,7 @@ function Start-Server {
     }
     Set-Status "starting"
     $env:PORT = $script:port
+    $env:TAILSCALE = $script:tailscale
     try {
         $script:serverProc = Start-Process -FilePath "node" `
             -ArgumentList "server.js" `

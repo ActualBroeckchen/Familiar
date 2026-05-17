@@ -8,7 +8,7 @@
 | **macOS** | Double-click `Proto-Familiar.command` | First run installs, then opens browser. Ctrl-C in the Terminal window stops everything. |
 | **Linux** | Run `./install.sh` once, then launch **Proto-Familiar** from your app menu | The installer registers a `.desktop` entry under `~/.local/share/applications/`. Stop with `./stop.sh`. |
 
-Open `http://localhost:3000` in your browser (this happens automatically on launch).
+Open `http://localhost:8742` in your browser (this happens automatically on launch).
 
 ## Requirements
 
@@ -36,6 +36,8 @@ To use a different port:
 ```bash
 PORT=8080 npm start
 ```
+
+To access the UI from your phone or another device, click the globe icon in the top bar (next to the prompt-inspector magnifier) and flip the **Access from other devices** switch. The popover lists the URLs to open on your tailnet. See [docs/getting-started.md → Access from other devices](../docs/getting-started.md#access-from-other-devices-tailscale--lan) for security caveats.
 
 ## First chat checklist
 

@@ -20,7 +20,9 @@ A lightweight, self-hosted chat UI for [z.ai](https://api.z.ai) and [NanoGPT](ht
 | **macOS** | Double-click `Proto-Familiar.command` in Finder. First run installs dependencies; subsequent runs just start it. | Double-click `Proto-Familiar.command`. Browser opens automatically. | Press **Ctrl-C** in the Terminal window, then close the window. |
 | **Linux** | Run `./install.sh` once. It installs Node deps, clones entity-core, and registers a **Proto-Familiar** entry in your application menu. | Search **Proto-Familiar** in your app launcher, or `./start.sh`. | `./stop.sh` |
 
-Everything runs locally at **http://localhost:3000** — your API key never leaves your machine. Set `PORT=8080` (env var, or `PORT=8080 ./start.sh`) to change the port.
+Everything runs locally at **http://localhost:8742** — your API key never leaves your machine. Set `PORT=8080` (env var, or `PORT=8080 ./start.sh`) to change the port.
+
+**Access from other devices (Tailscale / LAN):** click the globe icon in the top bar (next to the prompt-inspector magnifier) to toggle external access on. While on, the UI is reachable at the displayed Tailscale hostname / IPv4 (auto-detected from the `tailscale` CLI if installed) from any device on your tailnet. While off (the default), non-loopback requests get a 403 — same effective posture as the historical localhost-only bind. The setting persists in `.proto-familiar-config.json`. Tailscale provides the auth and encryption — on a plain LAN with no Tailscale, anyone on the network can hit the proxy and use your API key, so only flip it on when you actually need cross-device access on a trusted network. See [docs/getting-started.md#access-from-other-devices-tailscale--lan](docs/getting-started.md#access-from-other-devices-tailscale--lan).
 
 **Updating an existing install:** re-run the same installer. It detects `node_modules/` and switches to update mode. Before any git op runs, `tomes/`, `logs/`, and entity-core's `data/` directory are copied to `.pf-backups/<timestamp>/` as a safety net. Then `git pull --ff-only` on Proto-Familiar (refuses non-FF merges; your work tree stays put on conflict), `git fetch && checkout <pinned tag>` on entity-core (whose `data/` is gitignored, never touched), idempotent `npm install` + `deno cache`. Node/Deno/Git are reinstalled if missing in either mode; only shortcut creation is skipped on update. See [docs/getting-started.md#updating-an-existing-install](docs/getting-started.md#updating-an-existing-install) for the protection table.
 
@@ -35,7 +37,7 @@ npm start          # production
 npm run dev        # auto-restarts on file changes
 ```
 
-Open **http://localhost:3000** in your browser.
+Open **http://localhost:8742** in your browser.
 
 Open the Settings panel (☰), choose your provider, paste your API key, pick a model, and start chatting.
 
@@ -303,7 +305,7 @@ Open **☰ View entries** in the sidebar Lorebook section. Use **+ New** to crea
 
 ### Server API Reference
 
-The Express server runs on `localhost:3000` and exposes the following endpoints.
+The Express server runs on `localhost:8742` (or whatever you set `PORT` to) and exposes the following endpoints.
 
 #### `POST /api/chat`
 Proxies a chat request to the chosen provider.
