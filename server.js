@@ -12,7 +12,7 @@ import { randomUUID } from 'crypto';
 import {
   enrich, createMemory, appendIdentity, updateIdentitySection,
   // Reads for the Knowledge editor UI
-  listMemories, readMemory, getIdentityAll, listGraphNodes, searchGraphNodes, getGraphSubgraph,
+  listMemories, readMemory, getIdentityAll, listGraphNodes, searchGraphNodes, getGraphSubgraph, getFullGraph,
   listSnapshots,
   // Writes (each auto-snapshots before the destructive op)
   updateMemory, deleteMemory, rewriteIdentitySection,
@@ -766,6 +766,15 @@ app.get('/api/entity/graph/search', async (req, res) => {
   if (!q || typeof q !== 'string' || !q.trim()) return badRequest(res, 'q (query) is required');
   const n = limit !== undefined ? Math.max(1, Math.min(100, parseInt(limit, 10) || 10)) : 10;
   try { res.json(await searchGraphNodes({ query: q.trim(), type, limit: n })); }
+  catch (err) { gatewayDown(res, err.message); }
+});
+
+// Full-graph dump for the Map view: every node + every deduplicated edge.
+// O(N) subgraph calls under the hood; capped via the limit param.
+app.get('/api/entity/graph/full', async (req, res) => {
+  const { type, limit } = req.query;
+  const n = limit !== undefined ? Math.max(1, Math.min(500, parseInt(limit, 10) || 500)) : 500;
+  try { res.json(await getFullGraph({ type, limit: n })); }
   catch (err) { gatewayDown(res, err.message); }
 });
 

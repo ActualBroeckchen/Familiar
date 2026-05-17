@@ -438,6 +438,25 @@ export async function getGraphSubgraph({ nodeId, depth = 1 }) {
   return callTool('graph_subgraph', { nodeId, depth });
 }
 
+// Aggregate every node and every edge into one payload for the Map view.
+// entity-core has no "list all edges" tool, so we walk each node's 1-hop
+// subgraph in parallel and deduplicate edges by id.
+export async function getFullGraph({ type, limit = 500 } = {}) {
+  const nodeResp = await listGraphNodes({ type, limit });
+  const nodes    = nodeResp.nodes ?? nodeResp.results ?? [];
+  const edgeMap  = new Map();
+  const subgraphs = await Promise.all(
+    nodes.map(n => getGraphSubgraph({ nodeId: n.id, depth: 1 }).catch(() => null)),
+  );
+  for (const sg of subgraphs) {
+    if (!sg) continue;
+    for (const e of sg.edges ?? []) {
+      if (e && e.id && !edgeMap.has(e.id)) edgeMap.set(e.id, e);
+    }
+  }
+  return { nodes, edges: Array.from(edgeMap.values()) };
+}
+
 export async function listSnapshots() {
   return callTool('snapshot_list', {});
 }

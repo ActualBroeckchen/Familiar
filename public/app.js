@@ -2343,8 +2343,16 @@ function init() {
   });
   $('ke-mem-refresh').addEventListener('click', keLoadMemories);
   $('ke-mem-granularity').addEventListener('change', keLoadMemories);
-  $('ke-graph-refresh').addEventListener('click', keLoadGraphNodes);
-  $('ke-graph-type').addEventListener('change', keLoadGraphNodes);
+  $('ke-graph-refresh').addEventListener('click', () => {
+    if (_keGraphView === 'map') keLoadGraphMap();
+    else keLoadGraphNodes();
+  });
+  $('ke-graph-type').addEventListener('change', () => {
+    if (_keGraphView === 'map') keLoadGraphMap();
+    else keLoadGraphNodes();
+  });
+  $('ke-graph-view-list').addEventListener('click', () => keSetGraphView('list'));
+  $('ke-graph-view-map').addEventListener('click',  () => keSetGraphView('map'));
   $('ke-id-refresh').addEventListener('click', keLoadIdentity);
   $('ke-snap-create').addEventListener('click', keCreateSnapshot);
   $('ke-snap-refresh').addEventListener('click', keLoadSnapshots);
@@ -4003,7 +4011,10 @@ function keSwitchTab(tab) {
     el.classList.toggle('ke-tab-active', el.dataset.tab === tab);
   });
   if (tab === 'memories')   keLoadMemories();
-  if (tab === 'graph')      keLoadGraphNodes();
+  if (tab === 'graph') {
+    if (_keGraphView === 'map') { keSetGraphView('map'); }
+    else                        { keSetGraphView('list'); keLoadGraphNodes(); }
+  }
   if (tab === 'identity')   keLoadIdentity();
   if (tab === 'snapshots')  keLoadSnapshots();
 }
@@ -4172,6 +4183,518 @@ async function keOpenGraphNode(id) {
       });
     });
   } catch (err) { keSetDetail('ke-graph-detail', keError(err, 'Failed to load node.')); }
+}
+
+// ── Graph map view ──────────────────────────────────────────────────────
+//
+// Renders the full knowledge graph as dots (nodes) and quadratic curves
+// (edges) on a canvas. Color encodes type (hashed → hue); edge saturation
+// and lightness encode weight (entity-core edges carry a weight in [0,1]).
+// Wheel zooms, drag pans, hover shows labels, zoom-in reveals labels for
+// every dot, and clicking a node opens the existing list-view editor.
+
+let _keGraphView = 'list';
+const _keGraph = {
+  nodes:    [],
+  edges:    [],
+  nodeById: new Map(),
+  // viewport transform: world = (screen - tx) / zoom
+  zoom:     1,
+  tx:       0,
+  ty:       0,
+  hover:    null,   // { kind: 'node'|'edge', ref }
+  drag:     null,
+  raf:      0,
+  inited:   false,
+};
+
+const KE_GRAPH_NODE_R   = 6;
+const KE_GRAPH_LABEL_ZOOM = 1.4;
+
+function keSetGraphView(view) {
+  _keGraphView = view;
+  $('ke-graph-view-list').classList.toggle('ke-view-active', view === 'list');
+  $('ke-graph-view-map').classList.toggle('ke-view-active',  view === 'map');
+  $('ke-graph-view-list').setAttribute('aria-selected', view === 'list' ? 'true' : 'false');
+  $('ke-graph-view-map').setAttribute('aria-selected',  view === 'map'  ? 'true' : 'false');
+  $('ke-graph-split').classList.toggle('hidden', view !== 'list');
+  $('ke-graph-map').classList.toggle('hidden',   view !== 'map');
+  if (view === 'map') {
+    keInitGraphMapOnce();
+    keLoadGraphMap();
+  }
+}
+
+function keInitGraphMapOnce() {
+  if (_keGraph.inited) return;
+  _keGraph.inited = true;
+  const canvas = $('ke-graph-canvas');
+
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const rect  = canvas.getBoundingClientRect();
+    const mx    = e.clientX - rect.left;
+    const my    = e.clientY - rect.top;
+    const wx    = (mx - _keGraph.tx) / _keGraph.zoom;
+    const wy    = (my - _keGraph.ty) / _keGraph.zoom;
+    const scale = Math.exp(-e.deltaY * 0.0015);
+    _keGraph.zoom = Math.max(0.2, Math.min(8, _keGraph.zoom * scale));
+    _keGraph.tx = mx - wx * _keGraph.zoom;
+    _keGraph.ty = my - wy * _keGraph.zoom;
+    keGraphRequestDraw();
+  }, { passive: false });
+
+  canvas.addEventListener('mousedown', e => {
+    _keGraph.drag = { x: e.clientX, y: e.clientY, tx: _keGraph.tx, ty: _keGraph.ty, moved: false };
+  });
+  window.addEventListener('mousemove', e => {
+    if (_keGraph.drag) {
+      const dx = e.clientX - _keGraph.drag.x;
+      const dy = e.clientY - _keGraph.drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) _keGraph.drag.moved = true;
+      _keGraph.tx = _keGraph.drag.tx + dx;
+      _keGraph.ty = _keGraph.drag.ty + dy;
+      keGraphRequestDraw();
+    } else if (_keGraphView === 'map' && !$('ke-graph-map').classList.contains('hidden')) {
+      keGraphUpdateHover(e);
+    }
+  });
+  window.addEventListener('mouseup', e => {
+    if (!_keGraph.drag) return;
+    const moved = _keGraph.drag.moved;
+    _keGraph.drag = null;
+    if (!moved) keGraphHandleClick(e);
+  });
+
+  canvas.addEventListener('mouseleave', () => {
+    _keGraph.hover = null;
+    $('ke-graph-tooltip').classList.add('hidden');
+    keGraphRequestDraw();
+  });
+
+  window.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !$('ke-graph-popover').classList.contains('hidden')) {
+      keGraphClosePopover();
+    }
+  });
+
+  // Keep the canvas sized to its container.
+  const ro = new ResizeObserver(() => {
+    keGraphResize();
+    keGraphRequestDraw();
+  });
+  ro.observe(canvas.parentElement);
+}
+
+function keGraphResize() {
+  const canvas = $('ke-graph-canvas');
+  const dpr    = window.devicePixelRatio || 1;
+  const rect   = canvas.getBoundingClientRect();
+  canvas.width  = Math.max(1, Math.floor(rect.width  * dpr));
+  canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+}
+
+async function keLoadGraphMap() {
+  const status = $('ke-graph-map-status');
+  status.textContent = 'Loading…';
+  status.classList.remove('hidden');
+  const type = $('ke-graph-type').value.trim();
+  const url  = '/api/entity/graph/full' + (type ? `?type=${encodeURIComponent(type)}` : '');
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data  = await res.json();
+    const nodes = (data.nodes ?? []).map(n => ({ ...n }));
+    const edges = (data.edges ?? []).slice();
+    if (!nodes.length) { status.textContent = 'No graph nodes yet.'; return; }
+    _keGraph.nodes = nodes;
+    _keGraph.edges = edges;
+    _keGraph.nodeById = new Map(nodes.map(n => [n.id, n]));
+    keGraphResize();
+    const rect = $('ke-graph-canvas').getBoundingClientRect();
+    keGraphLayout(rect.width || 600, rect.height || 400);
+    keGraphFit();
+    keGraphBuildLegend();
+    status.classList.add('hidden');
+    keGraphRequestDraw();
+  } catch (err) {
+    status.textContent = 'Failed to load graph: ' + (err.message || err);
+  }
+}
+
+// ── Layout (Fruchterman-Reingold) ───────────────────────────────────────
+function keGraphLayout(width, height) {
+  const nodes = _keGraph.nodes;
+  const edges = _keGraph.edges;
+  if (!nodes.length) return;
+  const area = width * height;
+  const k    = Math.sqrt(area / nodes.length) * 0.75;
+  for (const n of nodes) {
+    n.x = width  / 2 + (Math.random() - 0.5) * width  * 0.6;
+    n.y = height / 2 + (Math.random() - 0.5) * height * 0.6;
+  }
+  const iterations = nodes.length <= 60 ? 300 : nodes.length <= 200 ? 220 : 140;
+  let t = Math.min(width, height) / 8;
+  const cool = t / iterations;
+  for (let iter = 0; iter < iterations; iter++) {
+    for (const n of nodes) { n.dx = 0; n.dy = 0; }
+    for (let i = 0; i < nodes.length; i++) {
+      const a = nodes[i];
+      for (let j = i + 1; j < nodes.length; j++) {
+        const b = nodes[j];
+        let dx = a.x - b.x, dy = a.y - b.y;
+        let d2 = dx * dx + dy * dy;
+        if (d2 < 0.01) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = dx*dx + dy*dy + 0.01; }
+        const d = Math.sqrt(d2);
+        const f = (k * k) / d;
+        const fx = (dx / d) * f, fy = (dy / d) * f;
+        a.dx += fx; a.dy += fy;
+        b.dx -= fx; b.dy -= fy;
+      }
+    }
+    for (const e of edges) {
+      const a = _keGraph.nodeById.get(e.fromId);
+      const b = _keGraph.nodeById.get(e.toId);
+      if (!a || !b) continue;
+      const dx = a.x - b.x, dy = a.y - b.y;
+      const d  = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      const f  = (d * d) / k;
+      const fx = (dx / d) * f, fy = (dy / d) * f;
+      a.dx -= fx; a.dy -= fy;
+      b.dx += fx; b.dy += fy;
+    }
+    for (const n of nodes) {
+      const dlen = Math.sqrt(n.dx * n.dx + n.dy * n.dy) || 0.01;
+      n.x += (n.dx / dlen) * Math.min(dlen, t);
+      n.y += (n.dy / dlen) * Math.min(dlen, t);
+      n.x += (width  / 2 - n.x) * 0.01;
+      n.y += (height / 2 - n.y) * 0.01;
+    }
+    t = Math.max(0.5, t - cool);
+  }
+}
+
+function keGraphFit() {
+  const canvas = $('ke-graph-canvas');
+  const rect   = canvas.getBoundingClientRect();
+  if (!_keGraph.nodes.length || !rect.width) return;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const n of _keGraph.nodes) {
+    if (n.x < minX) minX = n.x;
+    if (n.y < minY) minY = n.y;
+    if (n.x > maxX) maxX = n.x;
+    if (n.y > maxY) maxY = n.y;
+  }
+  const pad = 40;
+  const w   = (maxX - minX) || 1;
+  const h   = (maxY - minY) || 1;
+  const zoom = Math.min((rect.width - pad * 2) / w, (rect.height - pad * 2) / h, 2);
+  _keGraph.zoom = Math.max(0.3, zoom);
+  _keGraph.tx = rect.width  / 2 - ((minX + maxX) / 2) * _keGraph.zoom;
+  _keGraph.ty = rect.height / 2 - ((minY + maxY) / 2) * _keGraph.zoom;
+}
+
+// ── Color encoding ──────────────────────────────────────────────────────
+function keGraphHashHue(s) {
+  const str = String(s ?? '');
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0;
+  // Golden-ratio multiplier spreads hashed buckets across the wheel.
+  return Math.abs(Math.round(h * 137.508)) % 360;
+}
+function keGraphNodeColor(n) {
+  const hue = keGraphHashHue(n.type || 'untyped');
+  return `hsl(${hue}, 65%, 60%)`;
+}
+function keGraphEdgeColor(e) {
+  const hue = keGraphHashHue(e.type || e.customType || 'related');
+  const w   = Math.max(0, Math.min(1, typeof e.weight === 'number' ? e.weight : 0.5));
+  const sat  = Math.round(20 + 70 * w);
+  const lt   = Math.round(32 + 30 * w);
+  const alpha = (0.35 + 0.55 * w).toFixed(2);
+  return `hsla(${hue}, ${sat}%, ${lt}%, ${alpha})`;
+}
+
+function keGraphBuildLegend() {
+  const legend = $('ke-graph-legend');
+  const nodeTypes = new Set();
+  const edgeTypes = new Set();
+  for (const n of _keGraph.nodes) nodeTypes.add(n.type || 'untyped');
+  for (const e of _keGraph.edges) edgeTypes.add(e.type || e.customType || 'related');
+  const rows = [];
+  if (nodeTypes.size) {
+    rows.push('<div class="ke-graph-legend-section">Nodes</div>');
+    for (const t of Array.from(nodeTypes).sort()) {
+      rows.push(`<div class="ke-graph-legend-row"><span class="ke-graph-legend-swatch" style="background:hsl(${keGraphHashHue(t)},65%,60%)"></span>${esc(t)}</div>`);
+    }
+  }
+  if (edgeTypes.size) {
+    rows.push('<div class="ke-graph-legend-section">Edges</div>');
+    for (const t of Array.from(edgeTypes).sort()) {
+      rows.push(`<div class="ke-graph-legend-row"><span class="ke-graph-legend-swatch" style="background:hsl(${keGraphHashHue(t)},75%,55%)"></span>${esc(t)}</div>`);
+    }
+  }
+  legend.innerHTML = rows.join('');
+  legend.classList.toggle('hidden', !rows.length);
+}
+
+// ── Rendering ───────────────────────────────────────────────────────────
+function keGraphRequestDraw() {
+  if (_keGraph.raf) return;
+  _keGraph.raf = requestAnimationFrame(() => {
+    _keGraph.raf = 0;
+    keGraphDraw();
+  });
+}
+
+function keGraphDraw() {
+  const canvas = $('ke-graph-canvas');
+  const ctx    = canvas.getContext('2d');
+  const dpr    = window.devicePixelRatio || 1;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.translate(_keGraph.tx, _keGraph.ty);
+  ctx.scale(_keGraph.zoom, _keGraph.zoom);
+
+  // Edges
+  for (const e of _keGraph.edges) {
+    const a = _keGraph.nodeById.get(e.fromId);
+    const b = _keGraph.nodeById.get(e.toId);
+    if (!a || !b) continue;
+    const isHover = _keGraph.hover && _keGraph.hover.kind === 'edge' && _keGraph.hover.ref === e;
+    ctx.strokeStyle = isHover ? '#ffffff' : keGraphEdgeColor(e);
+    const w = Math.max(0, Math.min(1, typeof e.weight === 'number' ? e.weight : 0.5));
+    ctx.lineWidth   = (0.7 + w * 1.6) / _keGraph.zoom;
+    const dx  = b.x - a.x, dy = b.y - a.y;
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+    const mx  = (a.x + b.x) / 2;
+    const my  = (a.y + b.y) / 2;
+    const cpx = mx + (-dy / len) * len * 0.12;
+    const cpy = my + ( dx / len) * len * 0.12;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.quadraticCurveTo(cpx, cpy, b.x, b.y);
+    ctx.stroke();
+  }
+
+  // Nodes
+  const r = KE_GRAPH_NODE_R / _keGraph.zoom;
+  for (const n of _keGraph.nodes) {
+    const isHover = _keGraph.hover && _keGraph.hover.kind === 'node' && _keGraph.hover.ref === n;
+    ctx.fillStyle   = keGraphNodeColor(n);
+    ctx.strokeStyle = isHover ? '#ffffff' : 'rgba(0,0,0,0.45)';
+    ctx.lineWidth   = (isHover ? 2 : 1) / _keGraph.zoom;
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // Labels — always for hovered node, and for everything when zoomed in.
+  const showAll = _keGraph.zoom >= KE_GRAPH_LABEL_ZOOM;
+  ctx.font         = `${12 / _keGraph.zoom}px sans-serif`;
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle    = '#cdd6f4';
+  ctx.strokeStyle  = 'rgba(0,0,0,0.7)';
+  ctx.lineWidth    = 3 / _keGraph.zoom;
+  for (const n of _keGraph.nodes) {
+    const isHover = _keGraph.hover && _keGraph.hover.kind === 'node' && _keGraph.hover.ref === n;
+    if (!showAll && !isHover) continue;
+    const label = String(n.label ?? n.id);
+    const x = n.x + r + 4 / _keGraph.zoom;
+    ctx.strokeText(label, x, n.y);
+    ctx.fillText(label,   x, n.y);
+  }
+}
+
+// ── Hit testing & interaction ───────────────────────────────────────────
+function keGraphClientToWorld(clientX, clientY) {
+  const rect = $('ke-graph-canvas').getBoundingClientRect();
+  const sx = clientX - rect.left;
+  const sy = clientY - rect.top;
+  return { x: (sx - _keGraph.tx) / _keGraph.zoom, y: (sy - _keGraph.ty) / _keGraph.zoom, sx, sy };
+}
+
+function keGraphHitNode(wx, wy) {
+  const r = KE_GRAPH_NODE_R / _keGraph.zoom;
+  const tol = Math.max(r, 8 / _keGraph.zoom);
+  let best = null, bestD = tol * tol;
+  for (const n of _keGraph.nodes) {
+    const dx = n.x - wx, dy = n.y - wy;
+    const d2 = dx * dx + dy * dy;
+    if (d2 <= bestD) { bestD = d2; best = n; }
+  }
+  return best;
+}
+
+function keGraphHitEdge(wx, wy) {
+  const tol = 6 / _keGraph.zoom;
+  let best = null, bestD = tol * tol;
+  for (const e of _keGraph.edges) {
+    const a = _keGraph.nodeById.get(e.fromId);
+    const b = _keGraph.nodeById.get(e.toId);
+    if (!a || !b) continue;
+    // Approximate the quadratic curve with its straight midpoint segment.
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const L2 = dx * dx + dy * dy;
+    if (L2 < 1) continue;
+    let t = ((wx - a.x) * dx + (wy - a.y) * dy) / L2;
+    t = Math.max(0, Math.min(1, t));
+    const px = a.x + t * dx, py = a.y + t * dy;
+    const ddx = wx - px, ddy = wy - py;
+    const d2 = ddx * ddx + ddy * ddy;
+    if (d2 <= bestD) { bestD = d2; best = e; }
+  }
+  return best;
+}
+
+function keGraphUpdateHover(e) {
+  const { x, y, sx, sy } = keGraphClientToWorld(e.clientX, e.clientY);
+  const node = keGraphHitNode(x, y);
+  let hover  = node ? { kind: 'node', ref: node } : null;
+  if (!hover) {
+    const edge = keGraphHitEdge(x, y);
+    if (edge) hover = { kind: 'edge', ref: edge };
+  }
+  const changed = (hover?.ref !== _keGraph.hover?.ref);
+  _keGraph.hover = hover;
+  const tip = $('ke-graph-tooltip');
+  if (!hover) {
+    tip.classList.add('hidden');
+  } else {
+    if (hover.kind === 'node') {
+      const n = hover.ref;
+      tip.innerHTML = `<div class="ke-graph-tooltip-title">${esc(n.label ?? n.id)}</div>
+        <div class="ke-graph-tooltip-sub">${esc(n.type ?? 'untyped')}</div>
+        ${n.description ? `<div>${esc(String(n.description).slice(0, 160))}</div>` : ''}`;
+    } else {
+      const ed = hover.ref;
+      const a  = _keGraph.nodeById.get(ed.fromId);
+      const b  = _keGraph.nodeById.get(ed.toId);
+      const w  = typeof ed.weight === 'number' ? ed.weight.toFixed(2) : '—';
+      tip.innerHTML = `<div class="ke-graph-tooltip-title">${esc(ed.type ?? ed.customType ?? 'related')}</div>
+        <div class="ke-graph-tooltip-sub">${esc(a?.label ?? ed.fromId)} → ${esc(b?.label ?? ed.toId)}</div>
+        <div class="ke-graph-tooltip-sub">weight: ${esc(w)}</div>`;
+    }
+    tip.style.left = `${sx + 12}px`;
+    tip.style.top  = `${sy + 12}px`;
+    tip.classList.remove('hidden');
+  }
+  if (changed) keGraphRequestDraw();
+}
+
+function keGraphHandleClick(e) {
+  const { x, y } = keGraphClientToWorld(e.clientX, e.clientY);
+  const node = keGraphHitNode(x, y);
+  if (!node) { keGraphClosePopover(); return; }
+  keGraphOpenPopover(node, e.clientX, e.clientY);
+}
+
+// ── Inline editor popover ───────────────────────────────────────────────
+function keGraphClosePopover() {
+  const pop = $('ke-graph-popover');
+  if (pop) pop.classList.add('hidden');
+}
+
+function keGraphPositionPopover(pop, clientX, clientY) {
+  const map = $('ke-graph-map');
+  const r   = map.getBoundingClientRect();
+  pop.style.left = `${(clientX - r.left) + 14}px`;
+  pop.style.top  = `${(clientY - r.top)  + 14}px`;
+  // Clamp on next frame once the popover has been laid out.
+  requestAnimationFrame(() => {
+    const pr = pop.getBoundingClientRect();
+    let nx = pr.left - r.left, ny = pr.top - r.top;
+    if (pr.right  > r.right  - 6) nx = r.width  - pr.width  - 10;
+    if (pr.bottom > r.bottom - 6) ny = r.height - pr.height - 10;
+    pop.style.left = `${Math.max(6, nx)}px`;
+    pop.style.top  = `${Math.max(6, ny)}px`;
+  });
+}
+
+async function keGraphOpenPopover(node, clientX, clientY) {
+  const pop = $('ke-graph-popover');
+  pop.innerHTML = '<p class="logs-loading">Loading…</p>';
+  pop.classList.remove('hidden');
+  keGraphPositionPopover(pop, clientX, clientY);
+  try {
+    const res = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(node.id)}/subgraph?depth=1`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const sg   = await res.json();
+    const self = (sg.nodes ?? []).find(n => n.id === node.id) ?? node;
+    const edgesHtml = (sg.edges ?? []).map(e => {
+      const otherId = e.fromId === node.id ? e.toId : e.fromId;
+      const otherLabel = (sg.nodes ?? []).find(n => n.id === otherId)?.label ?? otherId;
+      const dir = e.fromId === node.id ? '→' : '←';
+      return `<div class="ke-edge-row">
+        <span class="ke-edge-text">${dir} ${esc(e.type ?? e.customType ?? 'related')} ${dir} <strong>${esc(otherLabel)}</strong></span>
+        <button class="btn-ghost ke-danger" data-edge-id="${esc(e.id)}" type="button">✕</button>
+      </div>`;
+    }).join('');
+    pop.innerHTML = `
+      <div class="ke-graph-popover-head">
+        <h3>${esc(self.label ?? node.id)}</h3>
+        <button class="ke-graph-popover-close" type="button" aria-label="Close" id="ke-pop-close">✕</button>
+      </div>
+      <div class="field"><label>Label</label><input id="ke-pop-label" type="text" value="${esc(self.label ?? '')}"></div>
+      <div class="field"><label>Type</label><input  id="ke-pop-type"  type="text" value="${esc(self.type  ?? '')}"></div>
+      <div class="field"><label>Description</label><textarea id="ke-pop-desc" rows="3">${esc(self.description ?? '')}</textarea></div>
+      <div class="ke-actions">
+        <button id="ke-pop-save"   class="btn-send"  type="button">Save</button>
+        <button id="ke-pop-delete" class="btn-ghost ke-danger" type="button">Delete node</button>
+      </div>
+      <h4 class="ke-subhead">Edges (${(sg.edges ?? []).length})</h4>
+      <div class="ke-edges">${edgesHtml || '<p class="logs-empty">No edges.</p>'}</div>`;
+
+    pop.querySelector('#ke-pop-close').addEventListener('click', keGraphClosePopover);
+
+    pop.querySelector('#ke-pop-save').addEventListener('click', async () => {
+      const body = {
+        label:       $('ke-pop-label').value,
+        type:        $('ke-pop-type').value,
+        description: $('ke-pop-desc').value,
+      };
+      const r = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(node.id)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
+      Object.assign(node, body);
+      keGraphBuildLegend();
+      keGraphRequestDraw();
+      keGraphOpenPopover(node, clientX, clientY);
+    });
+
+    pop.querySelector('#ke-pop-delete').addEventListener('click', async () => {
+      if (!confirm('Delete this node and ALL its edges? An auto-snapshot is taken first.')) return;
+      const r = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(node.id)}`, { method: 'DELETE' });
+      if (!r.ok) { alert(`Delete failed: ${(await r.json()).error ?? r.status}`); return; }
+      _keGraph.nodes = _keGraph.nodes.filter(n => n.id !== node.id);
+      _keGraph.edges = _keGraph.edges.filter(e => e.fromId !== node.id && e.toId !== node.id);
+      _keGraph.nodeById.delete(node.id);
+      _keGraph.hover = null;
+      keGraphClosePopover();
+      keGraphBuildLegend();
+      keGraphRequestDraw();
+    });
+
+    pop.querySelectorAll('button[data-edge-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const eid = btn.dataset.edgeId;
+        if (!confirm('Delete this edge? Auto-snapshot first.')) return;
+        const r = await fetch(`/api/entity/graph/edges/${encodeURIComponent(eid)}`, { method: 'DELETE' });
+        if (!r.ok) { alert(`Delete failed: ${(await r.json()).error ?? r.status}`); return; }
+        _keGraph.edges = _keGraph.edges.filter(e => e.id !== eid);
+        keGraphBuildLegend();
+        keGraphRequestDraw();
+        keGraphOpenPopover(node, clientX, clientY);
+      });
+    });
+  } catch (err) {
+    pop.innerHTML = `<p class="logs-error">⚠ ${esc(err.message || String(err))}</p>
+      <div class="ke-actions"><button class="btn-ghost" type="button" id="ke-pop-close">Close</button></div>`;
+    pop.querySelector('#ke-pop-close').addEventListener('click', keGraphClosePopover);
+  }
 }
 
 // ── Identity tab ────────────────────────────────────────────────────────

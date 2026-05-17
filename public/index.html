@@ -453,12 +453,24 @@
               <input id="ke-graph-type" type="text" placeholder="(any)" />
             </label>
             <button id="ke-graph-refresh" class="btn-ghost">Refresh</button>
+            <div class="ke-view-toggle" role="tablist" aria-label="Graph view mode">
+              <button id="ke-graph-view-list" class="ke-view-btn ke-view-active" data-graph-view="list" role="tab" aria-selected="true">List</button>
+              <button id="ke-graph-view-map"  class="ke-view-btn"                 data-graph-view="map"  role="tab" aria-selected="false">Map</button>
+            </div>
           </div>
-          <div class="ke-split">
+          <div class="ke-split" id="ke-graph-split">
             <div class="ke-list" id="ke-graph-list"></div>
             <div class="ke-detail" id="ke-graph-detail">
               <p class="logs-empty">Pick a node on the left to view its edges and details.</p>
             </div>
+          </div>
+          <div class="ke-graph-map hidden" id="ke-graph-map">
+            <canvas id="ke-graph-canvas"></canvas>
+            <div class="ke-graph-status" id="ke-graph-map-status">Loading…</div>
+            <div class="ke-graph-legend" id="ke-graph-legend"></div>
+            <div class="ke-graph-tooltip hidden" id="ke-graph-tooltip"></div>
+            <div class="ke-graph-popover hidden" id="ke-graph-popover" role="dialog" aria-label="Edit graph node"></div>
+            <div class="ke-graph-hint">drag to pan · wheel to zoom · hover for label · click a node to edit</div>
           </div>
         </div>
 
