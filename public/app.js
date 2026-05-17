@@ -4635,21 +4635,58 @@ function keGraphHitNode(wx, wy) {
 
 function keGraphHitEdge(wx, wy) {
   const tol = 6 / _keGraph.zoom;
-  let best = null, bestD = tol * tol;
+  const tol2 = tol * tol;
+  let best = null, bestD = tol2;
   for (const e of _keGraph.edges) {
     const a = _keGraph.nodeById.get(e.fromId);
     const b = _keGraph.nodeById.get(e.toId);
     if (!a || !b) continue;
-    // Approximate the quadratic curve with its straight midpoint segment.
+    // Same quadratic the renderer draws: midpoint pushed perpendicular
+    // by 12% of the chord length. Flatten into segments and take the
+    // minimum point-to-segment distance — the chord approximation we
+    // used before missed by up to ~12% of the edge length at the apex.
     const dx = b.x - a.x, dy = b.y - a.y;
-    const L2 = dx * dx + dy * dy;
-    if (L2 < 1) continue;
-    let t = ((wx - a.x) * dx + (wy - a.y) * dy) / L2;
-    t = Math.max(0, Math.min(1, t));
-    const px = a.x + t * dx, py = a.y + t * dy;
-    const ddx = wx - px, ddy = wy - py;
-    const d2 = ddx * ddx + ddy * ddy;
+    const L  = Math.sqrt(dx * dx + dy * dy);
+    if (L < 1) continue;
+    const cpx = (a.x + b.x) / 2 + (-dy / L) * L * 0.12;
+    const cpy = (a.y + b.y) / 2 + ( dx / L) * L * 0.12;
+    // Cheap reject: if even the chord midpoint is far enough that the
+    // whole curve's bounding box can't reach the cursor, skip.
+    const minX = Math.min(a.x, b.x, cpx) - tol;
+    const maxX = Math.max(a.x, b.x, cpx) + tol;
+    const minY = Math.min(a.y, b.y, cpy) - tol;
+    const maxY = Math.max(a.y, b.y, cpy) + tol;
+    if (wx < minX || wx > maxX || wy < minY || wy > maxY) continue;
+    const d2 = keGraphDistSqToQuadratic(wx, wy, a.x, a.y, cpx, cpy, b.x, b.y);
     if (d2 <= bestD) { bestD = d2; best = e; }
+  }
+  return best;
+}
+
+// Squared distance from (px,py) to a quadratic Bézier defined by
+// (x0,y0)-(cpx,cpy)-(x1,y1), via polyline flattening. 16 segments is
+// plenty: at the renderer's 12% bow the chord error of an N-segment
+// approximation is well under one pixel at any reasonable zoom.
+function keGraphDistSqToQuadratic(px, py, x0, y0, cpx, cpy, x1, y1) {
+  const SEG = 16;
+  let prevX = x0, prevY = y0;
+  let best  = Infinity;
+  for (let i = 1; i <= SEG; i++) {
+    const t   = i / SEG;
+    const omt = 1 - t;
+    const x   = omt * omt * x0 + 2 * omt * t * cpx + t * t * x1;
+    const y   = omt * omt * y0 + 2 * omt * t * cpy + t * t * y1;
+    const dx  = x - prevX, dy = y - prevY;
+    const L2  = dx * dx + dy * dy;
+    if (L2 > 0.0001) {
+      let tt = ((px - prevX) * dx + (py - prevY) * dy) / L2;
+      if (tt < 0) tt = 0; else if (tt > 1) tt = 1;
+      const ix = prevX + tt * dx, iy = prevY + tt * dy;
+      const ex = px - ix,         ey = py - iy;
+      const d2 = ex * ex + ey * ey;
+      if (d2 < best) best = d2;
+    }
+    prevX = x; prevY = y;
   }
   return best;
 }
