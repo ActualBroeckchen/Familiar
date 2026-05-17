@@ -34,6 +34,7 @@ cat <<EOF
 
   URL:    $URL
   Stop:   press Ctrl-C, then close this window (Cmd-W)
+  Help:   docs/troubleshooting.md
 
   Logs print below. Closing this window
   will shut down Proto-Familiar and entity-core.

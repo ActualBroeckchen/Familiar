@@ -231,4 +231,6 @@ Write-Host "  - Desktop shortcut: Proto-Familiar"
 Write-Host "  - Start Menu:       Proto-Familiar"
 Write-Host "  - Or double-click:  Proto-Familiar.vbs"
 Write-Host ""
+Write-Host "Trouble? See docs\troubleshooting.md"
+Write-Host ""
 Start-Sleep -Seconds 2

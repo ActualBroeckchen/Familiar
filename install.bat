@@ -155,8 +155,9 @@ if "!MODE!"=="update" (
 ) else (
   echo === Install complete ===
 )
-echo   Start: start.bat   ^(double-click^)
-echo   Stop:  stop.bat    ^(double-click^)
+echo   Start:     start.bat   ^(double-click^)
+echo   Stop:      stop.bat    ^(double-click^)
+echo   Trouble?   see docs\troubleshooting.md
 echo.
 pause
 endlocal

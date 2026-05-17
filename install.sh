@@ -215,7 +215,8 @@ case "$UNAME" in
   Linux)  echo "    - Search 'Proto-Familiar' in your app launcher, or run ./start.sh";;
   *)      echo "    - ./start.sh";;
 esac
-echo "  Stop:   ./stop.sh  (or close the launcher window on macOS)"
+echo "  Stop:          ./stop.sh  (or close the launcher window on macOS)"
+echo "  Trouble?       see docs/troubleshooting.md"
 echo
 if [ "$HAVE_DENO" = "0" ]; then
   warn "Reminder: install Deno before first start if you want entity-core enrichment."

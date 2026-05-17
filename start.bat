@@ -44,5 +44,6 @@ echo Opening %URL% ...
 start "" "%URL%"
 echo.
 echo Done. Double-click stop.bat to shut down.
+echo Trouble? See docs\troubleshooting.md
 timeout /t 3 >nul
 endlocal

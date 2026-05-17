@@ -51,3 +51,4 @@ else
 fi
 
 say "Done. Use ./stop.sh to shut down."
+say "Trouble? See docs/troubleshooting.md"
