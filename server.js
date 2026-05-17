@@ -17,6 +17,7 @@ import {
   // Writes (each auto-snapshots before the destructive op)
   updateMemory, deleteMemory, rewriteIdentitySection,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
+  createGraphNode, createGraphEdge,
   createSnapshot, restoreSnapshot,
 } from './thalamus.js';
 import {
@@ -784,6 +785,30 @@ app.get('/api/entity/graph/nodes/:id/subgraph', async (req, res) => {
   const depth = Math.max(1, Math.min(3, parseInt(req.query.depth, 10) || 1));
   try { res.json(await getGraphSubgraph({ nodeId: id, depth })); }
   catch (err) { gatewayDown(res, err.message); }
+});
+
+app.post('/api/entity/graph/nodes', async (req, res) => {
+  const { label, type, description } = req.body ?? {};
+  if (label       !== undefined && typeof label       !== 'string') return badRequest(res, 'label must be string');
+  if (type        !== undefined && typeof type        !== 'string') return badRequest(res, 'type must be string');
+  if (description !== undefined && typeof description !== 'string') return badRequest(res, 'description must be string');
+  if (!label && !type && !description) return badRequest(res, 'at least one of label / type / description is required');
+  const result = await createGraphNode({ label, type, description });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
+});
+
+app.post('/api/entity/graph/edges', async (req, res) => {
+  const { fromId, toId, type, weight } = req.body ?? {};
+  if (!fromId || !VALID_GRAPH_ID_RE.test(fromId)) return badRequest(res, 'valid fromId is required');
+  if (!toId   || !VALID_GRAPH_ID_RE.test(toId))   return badRequest(res, 'valid toId is required');
+  if (fromId === toId) return badRequest(res, 'fromId and toId must differ');
+  if (type !== undefined && typeof type !== 'string') return badRequest(res, 'type must be string');
+  if (weight !== undefined && (typeof weight !== 'number' || weight < 0 || weight > 1))
+    return badRequest(res, 'weight must be a number in [0, 1]');
+  const result = await createGraphEdge({ fromId, toId, type, weight });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
 });
 
 app.patch('/api/entity/graph/nodes/:id', async (req, res) => {

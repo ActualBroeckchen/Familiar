@@ -452,10 +452,22 @@
             <label>Type
               <input id="ke-graph-type" type="text" placeholder="(any)" list="ke-node-types-dl" />
             </label>
-            <button id="ke-graph-refresh" class="btn-ghost">Refresh</button>
+            <button id="ke-graph-refresh"  class="btn-ghost">Refresh</button>
+            <button id="ke-graph-new-node" class="btn-secondary">+ Node</button>
             <div class="ke-view-toggle" role="tablist" aria-label="Graph view mode">
               <button id="ke-graph-view-list" class="ke-view-btn ke-view-active" data-graph-view="list" role="tab" aria-selected="true">List</button>
               <button id="ke-graph-view-map"  class="ke-view-btn"                 data-graph-view="map"  role="tab" aria-selected="false">Map</button>
+            </div>
+          </div>
+          <div class="ke-inline-form hidden" id="ke-new-node-form">
+            <div class="ke-inline-form-row">
+              <input id="ke-nn-label" type="text" placeholder="Label">
+              <input id="ke-nn-type"  type="text" placeholder="Type"  list="ke-node-types-dl">
+            </div>
+            <textarea id="ke-nn-desc" rows="2" placeholder="Description (optional)"></textarea>
+            <div class="ke-actions">
+              <button id="ke-nn-create" class="btn-send">Create node</button>
+              <button id="ke-nn-cancel" class="btn-ghost">Cancel</button>
             </div>
           </div>
           <div class="ke-split" id="ke-graph-split">

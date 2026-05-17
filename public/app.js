@@ -2354,6 +2354,13 @@ function init() {
   });
   $('ke-graph-view-list').addEventListener('click', () => keSetGraphView('list'));
   $('ke-graph-view-map').addEventListener('click',  () => keSetGraphView('map'));
+  $('ke-graph-new-node').addEventListener('click',  () => keGraphToggleNewNodeForm());
+  $('ke-nn-cancel').addEventListener('click',       () => keGraphToggleNewNodeForm(false));
+  $('ke-nn-create').addEventListener('click',       keGraphCreateNewNode);
+  $('ke-nn-label').addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { e.preventDefault(); keGraphCreateNewNode(); }
+    if (e.key === 'Escape') keGraphToggleNewNodeForm(false);
+  });
   $('ke-id-refresh').addEventListener('click', keLoadIdentity);
   $('ke-snap-create').addEventListener('click', keCreateSnapshot);
   $('ke-snap-refresh').addEventListener('click', keLoadSnapshots);
@@ -4167,16 +4174,9 @@ async function keOpenGraphNode(id) {
     const sg   = await res.json();
     const self = (sg.nodes ?? []).find(n => n.id === id) ?? { id };
     keUpdateNodeTypes([self, ...(sg.nodes ?? [])]);
+    keUpdateEdgeTypes(sg.edges ?? []);
     const det  = $('ke-graph-detail');
-    const edgesHtml = (sg.edges ?? []).map(e => {
-      const other = e.fromId === id ? e.toId : e.fromId;
-      const otherLabel = (sg.nodes ?? []).find(n => n.id === other)?.label ?? other;
-      const dir = e.fromId === id ? '→' : '←';
-      return `<div class="ke-edge-row">
-        <span class="ke-edge-text"><strong>${esc(self.label ?? id)}</strong> ${dir} ${esc(e.type)} ${dir} <strong>${esc(otherLabel)}</strong></span>
-        <button class="btn-ghost ke-danger" data-edge-id="${esc(e.id)}">Delete edge</button>
-      </div>`;
-    }).join('');
+    const edgesHtml = (sg.edges ?? []).map(e => keGraphEdgeRowHTML(id, e, sg)).join('');
     det.innerHTML = `
       <div class="ke-detail-header"><h3>${esc(self.label ?? id)}</h3></div>
       <div class="field"><label>Label</label><input id="ke-graph-label" type="text" value="${esc(self.label ?? '')}"></div>
@@ -4187,7 +4187,8 @@ async function keOpenGraphNode(id) {
         <button id="ke-graph-delete" class="btn-ghost ke-danger">Delete node</button>
       </div>
       <h4 class="ke-subhead">Edges (${(sg.edges ?? []).length})</h4>
-      <div class="ke-edges">${edgesHtml || '<p class="logs-empty">No edges.</p>'}</div>`;
+      <div class="ke-edges" id="ke-graph-edges">${edgesHtml || '<p class="logs-empty">No edges.</p>'}</div>
+      ${keGraphAddEdgeFormHTML()}`;
     $('ke-graph-save').addEventListener('click', async () => {
       const body = {
         label:       $('ke-graph-label').value,
@@ -4208,15 +4209,7 @@ async function keOpenGraphNode(id) {
       keSetDetail('ke-graph-detail', '<p class="logs-empty">Deleted.</p>');
       keLoadGraphNodes();
     });
-    det.querySelectorAll('button[data-edge-id]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const eid = btn.dataset.edgeId;
-        if (!confirm(`Delete edge ${eid}? Auto-snapshot first.`)) return;
-        const r = await fetch(`/api/entity/graph/edges/${encodeURIComponent(eid)}`, { method: 'DELETE' });
-        if (!r.ok) { alert(`Delete failed: ${(await r.json()).error ?? r.status}`); return; }
-        keOpenGraphNode(id);
-      });
-    });
+    keGraphAttachEdgesUI(det, id, sg, () => keOpenGraphNode(id));
   } catch (err) { keSetDetail('ke-graph-detail', keError(err, 'Failed to load node.')); }
 }
 
@@ -4346,17 +4339,32 @@ async function keLoadGraphMap() {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data  = await res.json();
-    const nodes = (data.nodes ?? []).map(n => ({ ...n }));
+    // Preserve existing positions for nodes that survived a reload —
+    // avoids reshuffling the whole map when the user adds an edge.
+    const prevById = _keGraph.nodeById;
+    const nodes = (data.nodes ?? []).map(n => {
+      const prev = prevById?.get(n.id);
+      return prev ? { ...n, x: prev.x, y: prev.y } : { ...n };
+    });
     const edges = (data.edges ?? []).slice();
-    if (!nodes.length) { status.textContent = 'No graph nodes yet.'; return; }
+    if (!nodes.length) {
+      _keGraph.nodes = [];
+      _keGraph.edges = [];
+      _keGraph.nodeById = new Map();
+      status.textContent = 'No graph nodes yet.';
+      keGraphRequestDraw();
+      return;
+    }
     keUpdateNodeTypes(nodes);
+    keUpdateEdgeTypes(edges);
+    const isFreshLayout = nodes.every(n => n.x === undefined);
     _keGraph.nodes = nodes;
     _keGraph.edges = edges;
     _keGraph.nodeById = new Map(nodes.map(n => [n.id, n]));
     keGraphResize();
     const rect = $('ke-graph-canvas').getBoundingClientRect();
-    keGraphLayout(rect.width || 600, rect.height || 400);
-    keGraphFit();
+    keGraphLayout(rect.width || 600, rect.height || 400, { fresh: isFreshLayout });
+    if (isFreshLayout) keGraphFit();
     keGraphBuildLegend();
     status.classList.add('hidden');
     keGraphRequestDraw();
@@ -4366,10 +4374,36 @@ async function keLoadGraphMap() {
 }
 
 // ── Layout (Fruchterman-Reingold) ───────────────────────────────────────
-function keGraphLayout(width, height) {
+//
+// `fresh` runs the full simulation; on incremental loads we only place
+// nodes that don't have positions yet (near the centroid of their
+// neighbors, falling back to the canvas centre) and skip iterations,
+// so existing nodes stay put.
+function keGraphLayout(width, height, { fresh = true } = {}) {
   const nodes = _keGraph.nodes;
   const edges = _keGraph.edges;
   if (!nodes.length) return;
+  if (!fresh) {
+    for (const n of nodes) {
+      if (n.x !== undefined && n.y !== undefined) continue;
+      // Try to place near the centroid of already-placed neighbors so
+      // the new dot lands in a sensible neighborhood.
+      let sx = 0, sy = 0, c = 0;
+      for (const e of edges) {
+        const other = e.fromId === n.id ? _keGraph.nodeById.get(e.toId)
+                    : e.toId   === n.id ? _keGraph.nodeById.get(e.fromId) : null;
+        if (other && other.x !== undefined) { sx += other.x; sy += other.y; c++; }
+      }
+      if (c > 0) {
+        n.x = sx / c + (Math.random() - 0.5) * 40;
+        n.y = sy / c + (Math.random() - 0.5) * 40;
+      } else {
+        n.x = width  / 2 + (Math.random() - 0.5) * width  * 0.3;
+        n.y = height / 2 + (Math.random() - 0.5) * height * 0.3;
+      }
+    }
+    return;
+  }
   const area = width * height;
   const k    = Math.sqrt(area / nodes.length) * 0.75;
   for (const n of nodes) {
@@ -4666,33 +4700,227 @@ function keGraphHandleClick(e) {
   keGraphOpenPopover(node, e.clientX, e.clientY);
 }
 
-// ── Type autocomplete (shared by list & map editors) ───────────────────
+// ── Type & label autocomplete (shared by list & map editors) ──────────
 //
-// Every place we receive node data we feed unique non-empty types into a
-// global set and re-render a single hidden <datalist> that all the Type
-// inputs reference via `list="ke-node-types-dl"`. New types the user
-// invents are still allowed — datalist is a suggestion, not a constraint.
+// Every place we receive node/edge data we feed unique values into a few
+// global indices and re-render hidden <datalist>s that all the editor
+// inputs reference. Datalists are suggestions, not constraints — the
+// user can still introduce new types/labels freely.
 const _keNodeTypes = new Set();
+const _keEdgeTypes = new Set();
+// label (lowercased) → array of node ids that carry it; arrays so we
+// can detect ambiguity at resolve-time.
+const _keNodeIdsByLabel = new Map();
+// id → label for rendering edge rows after fetch.
+const _keNodeLabelById  = new Map();
 
 function keUpdateNodeTypes(nodes) {
   if (!Array.isArray(nodes)) return;
-  let changed = false;
+  let typesChanged = false, labelsChanged = false;
   for (const n of nodes) {
     const t = (n?.type || '').trim();
-    if (t && !_keNodeTypes.has(t)) { _keNodeTypes.add(t); changed = true; }
+    if (t && !_keNodeTypes.has(t)) { _keNodeTypes.add(t); typesChanged = true; }
+    const l = (n?.label || '').trim();
+    if (l && n?.id) {
+      _keNodeLabelById.set(n.id, l);
+      const key = l.toLowerCase();
+      const ids = _keNodeIdsByLabel.get(key);
+      if (!ids) { _keNodeIdsByLabel.set(key, [n.id]); labelsChanged = true; }
+      else if (!ids.includes(n.id)) { ids.push(n.id); labelsChanged = true; }
+    }
   }
-  if (changed) keRefreshTypesDatalist();
+  if (typesChanged)  keRefreshDatalist('ke-node-types-dl',  Array.from(_keNodeTypes));
+  if (labelsChanged) keRefreshDatalist('ke-node-labels-dl', Array.from(new Set(_keNodeLabelById.values())));
 }
 
-function keRefreshTypesDatalist() {
-  let dl = document.getElementById('ke-node-types-dl');
+function keUpdateEdgeTypes(edges) {
+  if (!Array.isArray(edges)) return;
+  let changed = false;
+  for (const e of edges) {
+    const t = (e?.type || e?.customType || '').trim();
+    if (t && !_keEdgeTypes.has(t)) { _keEdgeTypes.add(t); changed = true; }
+  }
+  if (changed) keRefreshDatalist('ke-edge-types-dl', Array.from(_keEdgeTypes));
+}
+
+function keRefreshDatalist(id, values) {
+  let dl = document.getElementById(id);
   if (!dl) {
     dl = document.createElement('datalist');
-    dl.id = 'ke-node-types-dl';
+    dl.id = id;
     document.body.appendChild(dl);
   }
-  dl.innerHTML = Array.from(_keNodeTypes).sort()
-    .map(t => `<option value="${esc(t)}">`).join('');
+  dl.innerHTML = values.slice().sort().map(v => `<option value="${esc(v)}">`).join('');
+}
+
+// Resolve a typed-in label to a node id. Returns { id, ambiguous, missing }.
+function keResolveNodeLabel(label) {
+  const l = (label || '').trim();
+  if (!l) return { missing: true };
+  const ids = _keNodeIdsByLabel.get(l.toLowerCase());
+  if (!ids || !ids.length) return { missing: true };
+  if (ids.length > 1)      return { id: ids[0], ambiguous: true };
+  return { id: ids[0] };
+}
+
+// ── Edge UI (shared by list editor & map popover) ──────────────────────
+function keGraphEdgeRowHTML(ownerId, e, sg) {
+  const otherId    = e.fromId === ownerId ? e.toId : e.fromId;
+  const otherLabel = (sg.nodes ?? []).find(n => n.id === otherId)?.label ?? otherId;
+  const dir        = e.fromId === ownerId ? '→' : '←';
+  const t          = e.type ?? e.customType ?? 'related';
+  const w          = typeof e.weight === 'number' ? e.weight.toFixed(2) : '0.50';
+  return `<div class="ke-edge-row" data-edge-id="${esc(e.id)}">
+    <span class="ke-edge-text">${dir} ${esc(t)} <span class="ke-edge-weight-display">[${esc(w)}]</span> ${dir} <strong>${esc(otherLabel)}</strong></span>
+    <button class="btn-ghost ke-edge-edit-btn"            type="button" title="Edit">✎</button>
+    <button class="btn-ghost ke-danger ke-edge-del-btn"   type="button" title="Delete">✕</button>
+  </div>`;
+}
+
+function keGraphAddEdgeFormHTML() {
+  return `<details class="ke-add-edge">
+    <summary>+ Add edge from this node</summary>
+    <div class="ke-add-edge-form">
+      <input class="ke-ae-target" type="text" placeholder="Target node label" list="ke-node-labels-dl" autocomplete="off">
+      <input class="ke-ae-type"   type="text" placeholder="Relationship type" list="ke-edge-types-dl"  autocomplete="off">
+      <label>Weight
+        <input class="ke-ae-weight" type="range" min="0" max="1" step="0.05" value="0.5">
+        <span class="ke-edge-weight-display ke-ae-w-disp">0.50</span>
+      </label>
+      <div class="ke-actions">
+        <button class="btn-send ke-ae-create" type="button">Add edge</button>
+      </div>
+    </div>
+  </details>`;
+}
+
+// Wire up the edge add/edit/delete affordances rendered by the two
+// helpers above. `onChange` is called after any successful mutation so
+// the caller can re-fetch and re-render.
+function keGraphAttachEdgesUI(container, ownerId, sg, onChange) {
+  const ae = container.querySelector('.ke-add-edge');
+  if (ae) {
+    const wInput = ae.querySelector('.ke-ae-weight');
+    const wDisp  = ae.querySelector('.ke-ae-w-disp');
+    wInput?.addEventListener('input', () => { wDisp.textContent = (+wInput.value).toFixed(2); });
+    ae.querySelector('.ke-ae-create')?.addEventListener('click', async () => {
+      const targetLabel = ae.querySelector('.ke-ae-target').value;
+      const type        = ae.querySelector('.ke-ae-type').value.trim();
+      const weight      = parseFloat(ae.querySelector('.ke-ae-weight').value);
+      const resolved    = keResolveNodeLabel(targetLabel);
+      if (resolved.missing)      { alert('No node with that label is loaded. Try refreshing.'); return; }
+      if (resolved.id === ownerId) { alert('Pick a different target — self-edges aren\'t allowed.'); return; }
+      if (resolved.ambiguous && !confirm('Multiple nodes share that label. Use the first match?')) return;
+      if (!type) { alert('Relationship type is required.'); return; }
+      const r = await fetch('/api/entity/graph/edges', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fromId: ownerId, toId: resolved.id, type, weight }),
+      });
+      if (!r.ok) { alert(`Add failed: ${(await r.json()).error ?? r.status}`); return; }
+      onChange();
+    });
+  }
+  container.querySelectorAll('.ke-edge-del-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const row = btn.closest('.ke-edge-row');
+      const eid = row?.dataset.edgeId;
+      if (!eid) return;
+      if (!confirm('Delete this edge? Auto-snapshot first.')) return;
+      const r = await fetch(`/api/entity/graph/edges/${encodeURIComponent(eid)}`, { method: 'DELETE' });
+      if (!r.ok) { alert(`Delete failed: ${(await r.json()).error ?? r.status}`); return; }
+      onChange();
+    });
+  });
+  container.querySelectorAll('.ke-edge-edit-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const row  = btn.closest('.ke-edge-row');
+      const eid  = row?.dataset.edgeId;
+      const edge = (sg.edges ?? []).find(e => e.id === eid);
+      if (!row || !edge) return;
+      const cur = {
+        type:   edge.type ?? edge.customType ?? 'related',
+        weight: typeof edge.weight === 'number' ? edge.weight : 0.5,
+      };
+      const ed = document.createElement('div');
+      ed.className = 'ke-edge-edit';
+      ed.dataset.edgeId = eid;
+      ed.innerHTML = `
+        <input class="ke-ee-type" type="text" value="${esc(cur.type)}" list="ke-edge-types-dl" autocomplete="off">
+        <label>Weight
+          <input class="ke-ee-weight" type="range" min="0" max="1" step="0.05" value="${cur.weight}">
+          <span class="ke-edge-weight-display ke-ee-w-disp">${cur.weight.toFixed(2)}</span>
+        </label>
+        <div class="ke-actions">
+          <button class="btn-send  ke-ee-save"   type="button">Save</button>
+          <button class="btn-ghost ke-ee-cancel" type="button">Cancel</button>
+        </div>`;
+      row.replaceWith(ed);
+      const wIn = ed.querySelector('.ke-ee-weight');
+      const wDi = ed.querySelector('.ke-ee-w-disp');
+      wIn.addEventListener('input', () => { wDi.textContent = (+wIn.value).toFixed(2); });
+      ed.querySelector('.ke-ee-cancel').addEventListener('click', () => onChange());
+      ed.querySelector('.ke-ee-save').addEventListener('click', async () => {
+        const body = {
+          type:   ed.querySelector('.ke-ee-type').value.trim(),
+          weight: parseFloat(wIn.value),
+        };
+        if (!body.type) { alert('Type is required.'); return; }
+        const r = await fetch(`/api/entity/graph/edges/${encodeURIComponent(eid)}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        });
+        if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
+        onChange();
+      });
+    });
+  });
+}
+
+// ── New-node form (toolbar) ─────────────────────────────────────────────
+function keGraphToggleNewNodeForm(show) {
+  const f = $('ke-new-node-form');
+  if (!f) return;
+  const willShow = show ?? f.classList.contains('hidden');
+  f.classList.toggle('hidden', !willShow);
+  if (willShow) {
+    $('ke-nn-label').value = '';
+    $('ke-nn-type').value  = '';
+    $('ke-nn-desc').value  = '';
+    $('ke-nn-label').focus();
+  }
+}
+
+async function keGraphCreateNewNode() {
+  const label       = $('ke-nn-label').value.trim();
+  const type        = $('ke-nn-type').value.trim();
+  const description = $('ke-nn-desc').value.trim();
+  if (!label) { alert('Label is required.'); $('ke-nn-label').focus(); return; }
+  const body = { label };
+  if (type)        body.type        = type;
+  if (description) body.description = description;
+  const r = await fetch('/api/entity/graph/nodes', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  if (!r.ok) { alert(`Create failed: ${(await r.json()).error ?? r.status}`); return; }
+  const created = await r.json().catch(() => ({}));
+  const newId   = created?.node?.id ?? created?.id;
+  keGraphToggleNewNodeForm(false);
+  if (_keGraphView === 'map') {
+    await keLoadGraphMap();
+    if (newId) {
+      const node = _keGraph.nodeById.get(newId);
+      if (node) {
+        const canvas = $('ke-graph-canvas');
+        const r = canvas.getBoundingClientRect();
+        // Open popover anchored to the new node's screen position.
+        const sx = r.left + node.x * _keGraph.zoom + _keGraph.tx;
+        const sy = r.top  + node.y * _keGraph.zoom + _keGraph.ty;
+        keGraphOpenPopover(node, sx, sy);
+      }
+    }
+  } else {
+    await keLoadGraphNodes();
+    if (newId) keOpenGraphNode(newId);
+  }
 }
 
 // ── Inline editor popover ───────────────────────────────────────────────
@@ -4772,15 +5000,7 @@ async function keGraphOpenPopover(node, clientX, clientY) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const sg   = await res.json();
     const self = (sg.nodes ?? []).find(n => n.id === node.id) ?? node;
-    const edgesHtml = (sg.edges ?? []).map(e => {
-      const otherId = e.fromId === node.id ? e.toId : e.fromId;
-      const otherLabel = (sg.nodes ?? []).find(n => n.id === otherId)?.label ?? otherId;
-      const dir = e.fromId === node.id ? '→' : '←';
-      return `<div class="ke-edge-row">
-        <span class="ke-edge-text">${dir} ${esc(e.type ?? e.customType ?? 'related')} ${dir} <strong>${esc(otherLabel)}</strong></span>
-        <button class="btn-ghost ke-danger" data-edge-id="${esc(e.id)}" type="button">✕</button>
-      </div>`;
-    }).join('');
+    const edgesHtml = (sg.edges ?? []).map(e => keGraphEdgeRowHTML(node.id, e, sg)).join('');
     pop.innerHTML = `
       <div class="ke-graph-popover-head">
         <h3>${esc(self.label ?? node.id)}</h3>
@@ -4794,9 +5014,11 @@ async function keGraphOpenPopover(node, clientX, clientY) {
         <button id="ke-pop-delete" class="btn-ghost ke-danger" type="button">Delete node</button>
       </div>
       <h4 class="ke-subhead">Edges (${(sg.edges ?? []).length})</h4>
-      <div class="ke-edges">${edgesHtml || '<p class="logs-empty">No edges.</p>'}</div>`;
+      <div class="ke-edges">${edgesHtml || '<p class="logs-empty">No edges.</p>'}</div>
+      ${keGraphAddEdgeFormHTML()}`;
 
     keUpdateNodeTypes([self, ...(sg.nodes ?? [])]);
+    keUpdateEdgeTypes(sg.edges ?? []);
     keGraphInitPopoverDrag(pop);
 
     pop.querySelector('#ke-pop-close').addEventListener('click', keGraphClosePopover);
@@ -4830,17 +5052,16 @@ async function keGraphOpenPopover(node, clientX, clientY) {
       keGraphRequestDraw();
     });
 
-    pop.querySelectorAll('button[data-edge-id]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const eid = btn.dataset.edgeId;
-        if (!confirm('Delete this edge? Auto-snapshot first.')) return;
-        const r = await fetch(`/api/entity/graph/edges/${encodeURIComponent(eid)}`, { method: 'DELETE' });
-        if (!r.ok) { alert(`Delete failed: ${(await r.json()).error ?? r.status}`); return; }
-        _keGraph.edges = _keGraph.edges.filter(e => e.id !== eid);
-        keGraphBuildLegend();
-        keGraphRequestDraw();
-        keGraphOpenPopover(node, clientX, clientY);
-      });
+    // Add / edit / delete edges share the same handler; on success we
+    // both update the in-memory map (so the canvas redraws right) and
+    // re-open the popover so its edge list refreshes.
+    keGraphAttachEdgesUI(pop, node.id, sg, async () => {
+      // Re-fetch the full graph so newly-added or removed edges show up
+      // on the canvas. Old positions are preserved for nodes that still
+      // exist, so the layout doesn't snap.
+      await keLoadGraphMap();
+      const refreshed = _keGraph.nodeById.get(node.id);
+      keGraphOpenPopover(refreshed ?? node, clientX, clientY);
     });
   } catch (err) {
     pop.innerHTML = `<p class="logs-error">⚠ ${esc(err.message || String(err))}</p>

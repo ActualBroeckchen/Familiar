@@ -34,13 +34,6 @@ restore from the Snapshots tab.
 
 Open follow-ups for this area, if/when they earn their slot:
 
-- **Graph node and edge CREATION from the UI.** The current panel can
-  rename / re-describe / delete nodes and delete edges, but adding a
-  new node or wiring a new edge still requires either an LLM tool call
-  or hand-editing the SQLite store. Add "+ Node" and "+ Edge" buttons
-  on the Graph tab; both are one-shot forms backed by `graph_node_create`
-  and `graph_edge_create` (already exposed by entity-core).
-
 - **Memory diff view on supersede.** When the user clicks "Supersede
   with today's date" in the Memories tab, show the old vs. new content
   side by side before committing — easier to confirm the contradiction

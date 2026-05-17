@@ -1547,6 +1547,90 @@ button { cursor: pointer; font-family: var(--font); }
 }
 .ke-graph-legend-section:first-child { margin-top: 0; }
 
+.ke-inline-form {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border-light);
+}
+.ke-inline-form.hidden { display: none; }
+.ke-inline-form-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.ke-inline-form-row > input { flex: 1 1 140px; }
+.ke-inline-form input[type="text"],
+.ke-inline-form input[type="number"],
+.ke-inline-form textarea {
+  font-size: 0.85rem;
+  padding: 5px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: inherit;
+}
+.ke-inline-form textarea { resize: vertical; min-height: 40px; }
+
+.ke-add-edge {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-light);
+}
+.ke-add-edge > summary {
+  cursor: pointer;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  list-style: none;
+  user-select: none;
+  padding: 2px 0;
+}
+.ke-add-edge > summary::-webkit-details-marker { display: none; }
+.ke-add-edge > summary:hover { color: var(--text); }
+.ke-add-edge[open] > summary { color: var(--text); margin-bottom: 6px; }
+.ke-add-edge-form {
+  display: flex; flex-direction: column; gap: 5px;
+  padding: 6px 0;
+}
+.ke-add-edge-form input[type="text"],
+.ke-add-edge-form input[type="number"] {
+  font-size: 0.8rem;
+  padding: 4px 7px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  width: 100%;
+}
+.ke-add-edge-form label {
+  font-size: 0.72rem; color: var(--text-dim);
+  display: flex; align-items: center; gap: 6px;
+}
+.ke-add-edge-form input[type="range"] { flex: 1; }
+.ke-edge-weight-display {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  min-width: 32px;
+  text-align: right;
+}
+
+.ke-edge-row { gap: 6px; }
+.ke-edge-row .btn-ghost { padding: 2px 6px; font-size: 0.78rem; }
+.ke-edge-edit {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 6px 8px;
+  background: var(--surface-raise);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+}
+.ke-edge-edit input[type="text"] {
+  font-size: 0.78rem;
+  padding: 3px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+
 .ke-edges { display: flex; flex-direction: column; gap: 4px; }
 .ke-edge-row {
   display: flex; align-items: center; gap: 10px;

@@ -517,6 +517,37 @@ export async function rewriteIdentitySection({ category, filename, section, cont
   }
 }
 
+export async function createGraphNode({ label, type, description, instanceId = PROTO_INSTANCE_ID }) {
+  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  try {
+    const args = { instanceId };
+    if (label       !== undefined) args.label       = label;
+    if (description !== undefined) args.description = description;
+    if (type        !== undefined) args.type        = type;
+    const result = await callTool('graph_node_create', args);
+    console.log(`[thalamus] createGraphNode (${label ?? '?'})`);
+    return { ok: true, result };
+  } catch (err) {
+    console.error('[thalamus] createGraphNode failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function createGraphEdge({ fromId, toId, type, weight, instanceId = PROTO_INSTANCE_ID }) {
+  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  try {
+    const args = { fromId, toId, instanceId };
+    if (type   !== undefined) args.type   = type;
+    if (weight !== undefined) args.weight = weight;
+    const result = await callTool('graph_edge_create', args);
+    console.log(`[thalamus] createGraphEdge ${fromId} -${type ?? '?'}-> ${toId}`);
+    return { ok: true, result };
+  } catch (err) {
+    console.error('[thalamus] createGraphEdge failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
 export async function updateGraphNode({ id, label, description, type, instanceId = PROTO_INSTANCE_ID }) {
   if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
   await autoSnapshot(`graph_node_update ${id}`);
