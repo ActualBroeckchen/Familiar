@@ -1336,6 +1336,7 @@ button { cursor: pointer; font-family: var(--font); }
   flex: 1;
   min-height: 0;
 }
+.ke-split.hidden { display: none; }
 .ke-list {
   overflow-y: auto;
   border-right: 1px solid var(--border);
