@@ -42,5 +42,4 @@ All prompt fields support file import from `.txt`, `.md`, or `.json`.
 ## Export and chat controls
 
 - Export chat as Markdown (`.md`) from the sidebar.
-- Regenerate the last assistant reply.
 - Clear history starts a fresh session while preserving existing log files.

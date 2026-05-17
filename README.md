@@ -87,7 +87,6 @@ Project wiki pages are available in [`/wiki`](wiki/):
 | **Session memorization** | Sessions are queued for memorization on idle timeout, manual clear, tab close, topic end, or via the **Memorize now** button; a server-side worker calls the LLM, extracts 1–8 distinct topics, and saves each as an entry in the dedicated **Session Memories** Tome. Jobs survive tab close and server restart, with exponential backoff retry on failure |
 | **Per-session Memorize** | Each row in the Logs modal has a **Memorize** button that opens a chooser: **Auto-summarize** runs the worker over that session and shows the entry count inline, while **Manual topics** opens the session read-only so you can mark topic ranges by hand and review each entry before saving |
 | **Export** | Download conversation as a Markdown `.md` file (tool-call turns are omitted) |
-| **Regenerate** | Re-run the last AI response with the same user message |
 | **Themes** | Dark / light toggle |
 | **Responsive layout** | Full sidebar on desktop · Full-screen slide-in panel on mobile |
 | **File import** | Load any prompt field from a plain-text, Markdown, or JSON file |

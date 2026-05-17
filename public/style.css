@@ -102,16 +102,29 @@ body {
 }
 
 /* ── Top bar ─────────────────────────────────────────────────── */
+/* Pinned to the top of the visible viewport so the menu / inspector /
+   tailscale / theme buttons stay reachable even when the mobile URL bar
+   is showing and the layout viewport gets shorter than 100vh. A spacer
+   div with the same height holds the layout open below. */
 .topbar {
-  height: var(--topbar-h);
-  flex-shrink: 0;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: calc(var(--topbar-h) + env(safe-area-inset-top));
+  padding-top: env(safe-area-inset-top);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 14px;
+  padding-left: 14px;
+  padding-right: 14px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  z-index: 20;
+  z-index: 40;
+}
+.topbar-spacer {
+  flex-shrink: 0;
+  height: calc(var(--topbar-h) + env(safe-area-inset-top));
 }
 
 .topbar-left,
@@ -923,21 +936,26 @@ button { cursor: pointer; font-family: var(--font); }
 .input-bar {
   flex-shrink: 0;
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 10px 16px;
-  padding-bottom: max(10px, env(safe-area-inset-bottom));
+  flex-direction: column;
   background: var(--surface);
   border-top: 1px solid var(--border);
+  /* `--kb-inset` is set by initMobileViewport() (iOS Safari fallback). On
+     platforms where the layout viewport already resizes for the keyboard
+     (Android Chrome via `interactive-widget=resizes-content`) the inset
+     stays at 0 and we just use the safe-area bottom. */
+  padding-bottom: max(var(--kb-inset, 0px), env(safe-area-inset-bottom));
 }
 
-.input-wrapper {
-  flex: 1;
+.input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 14px;
 }
 
 #user-input {
-  display: block;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   background: var(--surface-raise);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -947,7 +965,9 @@ button { cursor: pointer; font-family: var(--font); }
   font-family: var(--font);
   line-height: var(--line-height);
   resize: none;
-  max-height: 160px;
+  /* Desktop cap; mobile gets a softer 40dvh cap further down. autoResize()
+     enforces both dynamically as the user types. */
+  max-height: 220px;
   overflow-y: auto;
   transition: border-color 0.15s;
 }
@@ -961,19 +981,16 @@ button { cursor: pointer; font-family: var(--font); }
   color: var(--text-muted);
 }
 
-.input-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  flex-shrink: 0;
-}
-
 .btn-send {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: var(--accent);
   color: #fff;
   border: none;
   border-radius: var(--radius-md);
-  padding: 10px 18px;
+  padding: 10px 16px;
   font-size: 0.9rem;
   font-weight: 600;
   transition: background 0.15s, opacity 0.15s;
@@ -981,10 +998,7 @@ button { cursor: pointer; font-family: var(--font); }
 
 .btn-send:hover  { background: var(--accent-hover); }
 .btn-send:disabled { opacity: 0.45; cursor: not-allowed; }
-
-.regen-btn {
-  align-self: center;
-}
+.btn-send svg { display: none; }
 
 /* ── Scrollbar ───────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -1011,7 +1025,7 @@ button { cursor: pointer; font-family: var(--font); }
 @media (max-width: 767px) {
   .sidebar {
     position: fixed;
-    top: var(--topbar-h);
+    top: calc(var(--topbar-h) + env(safe-area-inset-top));
     left: 0;
     bottom: 0;
     width: min(var(--sidebar-w), 100vw);
@@ -1037,8 +1051,31 @@ button { cursor: pointer; font-family: var(--font); }
     max-width: 86%;
   }
 
+  /* Icon-only send on narrow screens — saves horizontal room for the
+     textarea while keeping the affordance clear. */
   .btn-send {
-    padding: 10px 14px;
+    padding: 10px 12px;
+  }
+  .btn-send-label { display: none; }
+  .btn-send svg   { display: inline-block; }
+
+  /* Cap the auto-growing textarea so the conversation above always has
+     room to scroll. autoResize() also enforces this dynamically. */
+  #user-input {
+    max-height: 40dvh;
+  }
+}
+
+/* Suppress iOS Safari's auto-zoom on input focus — anything under 16px
+   triggers it. Coarse pointer = touch. */
+@media (pointer: coarse) {
+  #user-input,
+  input[type="text"],
+  input[type="number"],
+  input[type="password"],
+  textarea,
+  select {
+    font-size: 16px;
   }
 
   #messages {
@@ -1408,35 +1445,21 @@ button { cursor: pointer; font-family: var(--font); }
 }
 
 /* ── Topic strip (above input) ───────────────────────────────── */
-.input-bar {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0;
-  padding: 0;
-  padding-bottom: max(0px, env(safe-area-inset-bottom));
-}
-
 .topic-strip {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 7px 14px 0;
+  padding: 5px 14px 0;
   min-height: 0;
   overflow: hidden;
 }
 
-.topic-strip:empty,
-.topic-strip:has(button:only-child) {
-  /* keeps a small footprint when only the "+ Topic" button is present */
-}
-
-.input-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 10px 14px;
-  padding-bottom: max(10px, env(safe-area-inset-bottom));
+/* When only the "+ Topic" button is showing, hide its label on mobile
+   so the row collapses to a single chip and stops eating chat height. */
+@media (max-width: 767px) {
+  .topic-strip:has(button:only-child) .btn-new-topic-label { display: none; }
+  .topic-strip:has(button:only-child) .btn-new-topic       { padding: 2px 6px; }
 }
 
 /* ── New-topic button ────────────────────────────────────────── */

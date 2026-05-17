@@ -1382,14 +1382,8 @@ function renderAllMessages() {
     container.appendChild(el);
     i++;
   }
-  updateRegenBtn();
   refreshTopicGutter();
   scrollToBottom();
-}
-
-function updateRegenBtn() {
-  const last = state.messages[state.messages.length - 1];
-  $('regen-btn').disabled = !last || last.role !== 'assistant';
 }
 
 // ── API communication ────────────────────────────────────────────
@@ -1669,7 +1663,6 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
       saveHistory();
       refreshTopicGutter();
       wireCopyButton(shell.copyBtn, () => content);
-      updateRegenBtn();
       clearRetryStatus();
       return;
     }
@@ -1818,7 +1811,6 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
       saveHistory();
       refreshTopicGutter();
       wireCopyButton(copyBtn, () => content);
-      updateRegenBtn();
       clearRetryStatus();
       return;
     }
@@ -1828,55 +1820,25 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
   throw lastError || new Error('Request failed and no fallback connections succeeded.');
 }
 
-// ── Regenerate ───────────────────────────────────────────────────
-async function regenerateLastResponse() {
-  if (state.messages.length < 2) return;
-
-  // Pop last assistant + user turn, preserve the original user timestamp
-  state.messages.pop();
-  const { content: lastUserInput, timestamp: origUserTimestamp } = state.messages.pop();
-  saveHistory();
-  renderAllMessages();
-
-  const userTimestamp = origUserTimestamp || new Date().toISOString();
-  const apiMessages   = buildApiMessages(lastUserInput);
-  lastSentMessages    = apiMessages;
-  lastThalamusContext = null;
-  appendUserMessage(lastUserInput, userTimestamp);
-  setInputLocked(true);
-  setTyping(true);
-  setStatus('busy');
-
-  try {
-    if (state.streaming) {
-      await doStreamingRequest(apiMessages, lastUserInput, userTimestamp);
-    } else {
-      await doNonStreamingRequest(apiMessages, lastUserInput, userTimestamp);
-    }
-    setStatus('ok');
-  } catch (err) {
-    setTyping(false);
-    if (err.name !== 'AbortError') {
-      appendErrorMessage(err.message || 'Regeneration failed.');
-      setStatus('err');
-    }
-  } finally {
-    setInputLocked(false);
-    $('user-input').focus();
-  }
-}
-
 // ── Input lock ───────────────────────────────────────────────────
 function setInputLocked(locked) {
   $('send-btn').disabled   = locked;
-  $('regen-btn').disabled  = locked;
   $('user-input').disabled = locked;
 }
 
 // ── Auto-resize textarea ─────────────────────────────────────────
+// Cap the textarea height so the conversation above always stays
+// scrollable, even while the user is typing a long message. On mobile
+// we want a softer cap (40% of viewport) so the composer can't take
+// over the screen; on desktop a hard pixel cap is fine.
+function autoResizeCapPx() {
+  const isMobile = window.matchMedia('(max-width: 767px)').matches;
+  const vh = window.visualViewport?.height ?? window.innerHeight;
+  return isMobile ? Math.round(vh * 0.4) : 220;
+}
 function autoResize(el) {
   el.style.height = 'auto';
-  el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+  el.style.height = Math.min(el.scrollHeight, autoResizeCapPx()) + 'px';
 }
 
 // ── File import ──────────────────────────────────────────────────
@@ -2100,7 +2062,6 @@ function startNewSession() {
   saveSettings();
   try { localStorage.setItem('pf_history', JSON.stringify([])); } catch { /* ignore */ }
   $('messages').innerHTML = '';
-  updateRegenBtn();
   updateTopicStrip();
   refreshTopicGutter();
 }
@@ -2768,9 +2729,6 @@ function init() {
     autoResize(this);
   });
 
-  // ── Regenerate ───────────────────────────────────────────────
-  $('regen-btn').addEventListener('click', regenerateLastResponse);
-
   // ── Clear history ────────────────────────────────────────────
   $('clear-chat-btn').addEventListener('click', () => {
     if (!state.messages.length || confirm('Clear all chat history? The current session log will be kept.')) {
@@ -3046,8 +3004,58 @@ function init() {
     if (window.innerWidth < 768) closeSidebarOnMobile();
   });
 
+  // ── Mobile viewport / keyboard handling ──────────────────────
+  initMobileViewport();
+
   // ── Focus input ──────────────────────────────────────────────
   $('user-input').focus();
+}
+
+// ── Mobile viewport: keyboard inset + scroll preservation ──────
+// On Android Chrome the `interactive-widget=resizes-content` meta
+// already shrinks the layout viewport when the IME opens, so the
+// composer sits above the keyboard for free. iOS Safari ignores
+// that hint, so we fall back to the visualViewport API and expose
+// the offset as `--kb-inset` for the input bar to consume.
+//
+// Separately, when the textarea auto-grows we want the conversation
+// to stay anchored — if the user is already at the bottom, follow
+// it; otherwise hold position by subtracting the delta.
+function initMobileViewport() {
+  const root = document.documentElement;
+
+  if (window.visualViewport) {
+    const vv = window.visualViewport;
+    const updateInset = () => {
+      const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      root.style.setProperty('--kb-inset', `${inset}px`);
+    };
+    vv.addEventListener('resize', updateInset);
+    vv.addEventListener('scroll', updateInset);
+    updateInset();
+  } else {
+    root.style.setProperty('--kb-inset', '0px');
+  }
+
+  // Keep the conversation anchored as the composer grows / shrinks.
+  const scroller = $('messages-scroller');
+  const input    = $('user-input');
+  if (scroller && input && 'ResizeObserver' in window) {
+    let lastH = input.getBoundingClientRect().height;
+    const ro = new ResizeObserver(() => {
+      const h = input.getBoundingClientRect().height;
+      const delta = h - lastH;
+      if (delta === 0) return;
+      const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32;
+      if (nearBottom) {
+        scroller.scrollTop = scroller.scrollHeight;
+      } else {
+        scroller.scrollTop -= delta;
+      }
+      lastH = h;
+    });
+    ro.observe(input);
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);

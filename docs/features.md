@@ -12,9 +12,6 @@ Type in the input bar and press **Enter** (or **Send**). Hold **Shift+Enter** fo
 ### Streaming
 Server-sent event (SSE) streaming is enabled by default. Toggle it off in **Settings → Streaming** to receive the full response at once instead.
 
-### Regenerate
-Re-run the last AI response with the same user message using the **↺ Regenerate** button that appears on the last assistant message.
-
 ### Export
 Download the current conversation as a Markdown `.md` file via **☰ → Export**. Tool-call turns are omitted from the export.
 
