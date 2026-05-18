@@ -215,12 +215,24 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
 
 
 def main() -> None:
-    """Run the server on stdio. Blocks until the parent closes stdin."""
+    """Run the server on stdio. Blocks until the parent closes stdin
+    or the user (or the launcher) sends Ctrl-C.
+
+    KeyboardInterrupt + BrokenPipeError are normal shutdown paths:
+    Thalamus going away closes our stdin pipe, and the Windows
+    console-group Ctrl-C cascades through every child. Either path
+    used to dump anyio's internal CancelledError trace as a wall of
+    red — visually alarming for what's actually a clean exit. We
+    swallow both here and exit 0 instead.
+    """
     # Touch the DB once at boot so migrations apply before the first
     # tool call — the cost is one open+close (~ms) and it surfaces any
     # schema problem in the startup logs instead of mid-request.
     get_conn().close()
-    mcp.run(transport="stdio")
+    try:
+        mcp.run(transport="stdio")
+    except (KeyboardInterrupt, BrokenPipeError):
+        pass
 
 
 if __name__ == "__main__":

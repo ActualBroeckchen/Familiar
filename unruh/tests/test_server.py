@@ -60,18 +60,10 @@ class TestTemporalContext:
         assert "open_threads" in handoff
         assert isinstance(handoff["open_threads"], list)
 
-    def test_empty_payload_is_actually_empty(self):
-        """Milestone 1-2 guarantee: temporal_context returns no real
-        content yet. The downstream contract is that all lists are
-        empty and intent/phase are None — so Thalamus omits the
-        section instead of printing a hollow header."""
-        result = temporal_context()
-        assert result["schedule"]["window"] == []
-        assert result["schedule"]["phase"] is None
-        assert result["interests"]["standing"] == []
-        assert result["interests"]["live"] == []
-        assert result["handoff"]["intent"] is None
-        assert result["handoff"]["open_threads"] == []
+    # The M1-era "all-empty contract" was true only until M3 wired
+    # schedule reads from the DB; the empty-DB case now lives in
+    # test_temporal_context.py::test_empty_schedule_returns_empty_window
+    # which uses an isolated tmp DB instead of hitting the real one.
 
     def test_now_argument_is_echoed(self):
         result = temporal_context(now="2026-01-15T10:00:00Z")
