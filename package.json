@@ -1,6 +1,6 @@
 {
   "name": "proto-familiar",
-  "version": "1.0.0",
+  "version": "0.1.2-alpha",
   "description": "Lightweight LLM frontend for z.ai and NanoGPT",
   "type": "module",
   "main": "server.js",

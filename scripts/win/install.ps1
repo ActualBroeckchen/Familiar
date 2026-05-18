@@ -69,12 +69,18 @@ $backupDir = $null
 if ($updateMode) {
     $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
     $backupDir = Join-Path $backupRoot $stamp
+    # Probe BOTH the new entity-core dir and the pre-rename legacy
+    # entity-core-alpha so leftover data from before the rename still
+    # gets backed up.
     $sources = @(
         @{ Path = (Join-Path $projectRoot "tomes"); Rel = "tomes"; IsFile = $false },
         @{ Path = (Join-Path $projectRoot "logs");  Rel = "logs";  IsFile = $false },
-        @{ Path = (Join-Path $entityCoreDir "packages\entity-core\data"); Rel = "$entityCoreDirRel\packages\entity-core\data"; IsFile = $false },
-        @{ Path = (Join-Path $entityCoreDir "data"); Rel = "$entityCoreDirRel\data"; IsFile = $false },
-        @{ Path = (Join-Path $projectRoot ".proto-familiar-config.json"); Rel = ".proto-familiar-config.json"; IsFile = $true }
+        @{ Path = (Join-Path $entityCoreDirNew    "packages\entity-core\data"); Rel = "entity-core\packages\entity-core\data";       IsFile = $false },
+        @{ Path = (Join-Path $entityCoreDirNew    "data");                       Rel = "entity-core\data";                            IsFile = $false },
+        @{ Path = (Join-Path $entityCoreDirLegacy "packages\entity-core\data"); Rel = "entity-core-alpha\packages\entity-core\data"; IsFile = $false },
+        @{ Path = (Join-Path $entityCoreDirLegacy "data");                       Rel = "entity-core-alpha\data";                      IsFile = $false },
+        @{ Path = (Join-Path $projectRoot ".proto-familiar-config.json"); Rel = ".proto-familiar-config.json"; IsFile = $true },
+        @{ Path = (Join-Path $projectRoot "settings.json");                Rel = "settings.json";                IsFile = $true }
     )
     foreach ($s in $sources) {
         if (-not (Test-Path $s.Path)) { continue }
@@ -86,7 +92,7 @@ if ($updateMode) {
     }
     if ($anythingBackedUp) {
         Ok "User data backed up to $backupDir\"
-        Ok "  (tomes\, logs\, entity-core data\, .proto-familiar-config.json — restore by copying back if needed)"
+        Ok "  (tomes\, logs\, entity-core data\, .proto-familiar-config.json, settings.json — restore by copying back if needed)"
     }
 }
 

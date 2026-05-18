@@ -105,7 +105,7 @@ Re-run the same installer you used for the first install:
 
 The installer detects the existing install via the `node_modules/` directory and switches to **update mode**. The flow:
 
-1. **Defensive backup** — `tomes/`, `logs/`, entity-core's `data/` directory (if non-empty), and `.proto-familiar-config.json` (Tailscale toggle state) are copied to `.pf-backups/<UTC-timestamp>/` inside the project root *before* any git operation runs. Safety net even though the git ops below are designed not to touch user data.
+1. **Defensive backup** — `tomes/`, `logs/`, entity-core's `data/` directory (if non-empty), `.proto-familiar-config.json` (Tailscale toggle state), and `settings.json` (central user settings) are copied to `.pf-backups/<UTC-timestamp>/` inside the project root *before* any git operation runs. Safety net even though the git ops below are designed not to touch user data.
 2. **`git pull --ff-only`** on the Proto-Familiar repo. Skipped if the directory isn't a git checkout. The `--ff-only` flag means git refuses any non-fast-forward merge — if you're on a non-default branch, have local commits, or have uncommitted changes that would conflict, the pull aborts with a warning and the work tree is left exactly as you had it.
 3. **Node / Deno / Git checks**, with auto-install of anything missing (same as fresh install — your environment catches up if a new release added a requirement).
 4. **`npm install`** to pick up any new Node deps.
@@ -123,6 +123,7 @@ Update mode skips only the shortcut / desktop-entry creation, since those are al
 | Session logs | `logs/` | Gitignored. Also copied into `.pf-backups/` |
 | entity-core identity files, memory markdown, SQLite store | `entity-core/packages/entity-core/data/` (or the legacy `entity-core-alpha/…` if you installed before the rename) | Gitignored at both workspace and package roots; never touched by `git checkout <tag>`. Also copied into `.pf-backups/` |
 | Tailscale toggle state | `.proto-familiar-config.json` | Gitignored. Also copied into `.pf-backups/` |
+| Central user settings (prompts, names, saved connections incl. API keys, tomes settings) | `settings.json` | Gitignored. Also copied into `.pf-backups/` |
 
 If you ever need to roll back, the contents of `.pf-backups/<timestamp>/` mirror the project tree — copy any subtree back over the live one. Old backups can be removed by hand; nothing prunes them automatically.
 
@@ -213,6 +214,28 @@ All three providers use the OpenAI-compatible `chat/completions` format. The ser
 The one-click installer clones entity-core automatically and pre-caches its Deno dependencies so the first server start is instant. If you want to do it manually (or import an existing data directory), see [Entity-Core](entity-core.md).
 
 In short: entity-core lives at `../entity-core/packages/entity-core` (Deno-workspace layout) relative to Proto-Familiar, and `thalamus.js` spawns it on startup. Older sibling-directory layouts are still detected as fallbacks — the legacy top-level `../entity-core/src/mod.ts` path, and the pre-rename `../entity-core-alpha/…` checkout. If entity-core is missing or fails, enrichment is skipped and Proto-Familiar runs normally.
+
+---
+
+## Versioning
+
+Proto-Familiar's version lives in `package.json` (`version` field) and is the **single source of truth**. The server reads it at boot and exposes it via:
+
+- `/api/version` → `{ "version": "<v>" }`
+- `/api/health`  → `{ "ok": true, "version": "<v>" }`
+- The startup banner: `Proto-Familiar <v> running at:`
+- The sidebar footer badge in the UI.
+
+Current release: `0.1.2-alpha`. Pre-release while the schema and storage layout are still in flux.
+
+Bump policy (followed by AI agents working in this repo via [`CLAUDE.md`](../CLAUDE.md)):
+
+| Change                                                              | Bump        |
+|---------------------------------------------------------------------|-------------|
+| Bug fix, copy edit, dependency pin, doc tweak                       | patch       |
+| New user-visible feature, behavioral change, UX rework, new endpoint | minor       |
+| Breaking API/storage change, removed feature, format migration      | major       |
+| Graduate from pre-release                                           | drop suffix |
 
 ---
 

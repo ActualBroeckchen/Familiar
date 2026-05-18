@@ -35,6 +35,15 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// Single source of truth for the version string. Read package.json once
+// at startup; everything else (startup banner, /api/health, /api/version,
+// the UI badge) reads from this.
+const PKG_VERSION = (() => {
+  try {
+    return JSON.parse(readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version || 'unknown';
+  } catch { return 'unknown'; }
+})();
+
 // Ensure the logs directory exists next to server.js
 const LOGS_DIR = path.join(__dirname, 'logs');
 mkdirSync(LOGS_DIR, { recursive: true });
@@ -48,13 +57,16 @@ function isValidUUID(id) {
 
 const app = express();
 app.set('trust proxy', 'loopback');
-app.use(express.json({ limit: '4mb' }));
 
 // ── Runtime Tailscale / external-access gate ─────────────────────
 // Server binds to 0.0.0.0 by default so the in-UI toggle can flip
 // external access at runtime without a restart. Until the toggle is
 // on, this middleware drops anything that isn't a loopback request,
 // so the default posture matches the historical localhost-only bind.
+//
+// Registered BEFORE express.json so a non-loopback request never gets
+// its body buffered (would otherwise eat memory on a 4 MB upload before
+// we even decide it's unauthorised).
 const TAILSCALE_CONFIG_FILE = path.join(__dirname, '.proto-familiar-config.json');
 
 function loadTailscaleConfig() {
@@ -62,16 +74,18 @@ function loadTailscaleConfig() {
     const raw = readFileSync(TAILSCALE_CONFIG_FILE, 'utf8');
     const obj = JSON.parse(raw);
     return { enabled: !!obj.tailscaleEnabled };
-  } catch {
+  } catch (err) {
+    if (err.code && err.code !== 'ENOENT') {
+      console.warn(`[tailscale] failed to read ${TAILSCALE_CONFIG_FILE}: ${err.message} — falling back to TAILSCALE env`);
+    }
     return { enabled: /^(1|true|yes)$/i.test(process.env.TAILSCALE || '') };
   }
 }
 async function saveTailscaleConfig(cfg) {
-  await fsp.writeFile(
-    TAILSCALE_CONFIG_FILE,
-    JSON.stringify({ tailscaleEnabled: !!cfg.enabled }, null, 2),
-    'utf8'
-  );
+  // Atomic tmp + rename so concurrent toggles can't leave a half-written file.
+  const tmp = TAILSCALE_CONFIG_FILE + '.tmp';
+  await fsp.writeFile(tmp, JSON.stringify({ tailscaleEnabled: !!cfg.enabled }, null, 2), 'utf8');
+  await fsp.rename(tmp, TAILSCALE_CONFIG_FILE);
 }
 const tailscaleState = { enabled: loadTailscaleConfig().enabled };
 
@@ -91,6 +105,7 @@ app.use((req, res, next) => {
     .send('Proto-Familiar is configured for localhost only. Enable the Tailscale toggle in the top bar to allow access from other devices.');
 });
 
+app.use(express.json({ limit: '4mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Provider base URLs — all use OpenAI-compatible chat completions format
@@ -342,7 +357,8 @@ app.delete('/api/logs/:id', async (req, res) => {
 });
 
 // Health check
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
+app.get('/api/health',  (_req, res) => res.json({ ok: true, version: PKG_VERSION }));
+app.get('/api/version', (_req, res) => res.json({ version: PKG_VERSION }));
 
 // ── Tome endpoints ──────────────────────────────────────────────
 const TOMES_DIR = path.join(__dirname, 'tomes');
@@ -947,6 +963,46 @@ async function detectTailscale() {
   }
 }
 
+// ── Centralised settings ─────────────────────────────────────────
+// User preferences (prompts, names, saved connections with API keys,
+// tomes settings, …) are stored on the server so opening Proto-Familiar
+// on a second device doesn't reset everything. The frontend treats this
+// as the source of truth on load and pushes updates back here on every
+// change. localStorage on each client stays as a fast offline cache.
+const SETTINGS_FILE = path.join(__dirname, 'settings.json');
+const SETTINGS_MAX_BYTES = 2 * 1024 * 1024;  // 2 MB hard cap — way more than realistic
+
+app.get('/api/settings', async (_req, res) => {
+  try {
+    const raw = await fsp.readFile(SETTINGS_FILE, 'utf8');
+    return res.json({ settings: JSON.parse(raw) });
+  } catch (err) {
+    if (err.code === 'ENOENT') return res.json({ settings: null });
+    return res.status(500).json({ error: `failed to read settings: ${err.message}` });
+  }
+});
+
+app.put('/api/settings', async (req, res) => {
+  const { settings } = req.body ?? {};
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+    return badRequest(res, 'settings (object) is required');
+  }
+  let serialised;
+  try { serialised = JSON.stringify(settings, null, 2); }
+  catch (err) { return badRequest(res, `settings not serialisable: ${err.message}`); }
+  if (serialised.length > SETTINGS_MAX_BYTES) {
+    return badRequest(res, `settings exceed ${SETTINGS_MAX_BYTES}-byte limit`);
+  }
+  try {
+    const tmp = SETTINGS_FILE + '.tmp';
+    await fsp.writeFile(tmp, serialised, 'utf8');
+    await fsp.rename(tmp, SETTINGS_FILE);
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: `failed to write settings: ${err.message}` });
+  }
+});
+
 app.get('/api/tailscale', async (_req, res) => {
   const ts = await detectTailscale();
   res.json({
@@ -975,7 +1031,7 @@ app.post('/api/tailscale', async (req, res) => {
 });
 
 app.listen(PORT, HOST, async () => {
-  const lines = ['', 'Proto-Familiar running at:'];
+  const lines = ['', `Proto-Familiar ${PKG_VERSION} running at:`];
   lines.push(`  http://localhost:${PORT}`);
   if (tailscaleState.enabled) {
     const ts = await detectTailscale();

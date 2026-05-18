@@ -5,6 +5,8 @@ I've decided to make this public while I work on it so others can access the res
 
 ## Proto-Familiar — Chat Frontend
 
+**Current version: `0.1.2-alpha`** (single source of truth: `package.json`; the server reads it at boot and exposes it via `/api/version`, `/api/health`, the startup banner, and the sidebar footer badge).
+
 A lightweight, self-hosted chat UI for [z.ai](https://api.z.ai) and [NanoGPT](https://nano-gpt.com). Runs entirely on your machine — your API key never leaves `localhost`.
 
 ### Requirements
@@ -24,7 +26,9 @@ Everything runs locally at **http://localhost:8742** — your API key never leav
 
 **Access from other devices (Tailscale / LAN):** click the globe icon in the top bar (next to the prompt-inspector magnifier) to toggle external access on. While on, the UI is reachable at the displayed Tailscale hostname / IPv4 (auto-detected from the `tailscale` CLI if installed) from any device on your tailnet. While off (the default), non-loopback requests get a 403 — same effective posture as the historical localhost-only bind. The setting persists in `.proto-familiar-config.json`. Tailscale provides the auth and encryption — on a plain LAN with no Tailscale, anyone on the network can hit the proxy and use your API key, so only flip it on when you actually need cross-device access on a trusted network. See [docs/getting-started.md#access-from-other-devices-tailscale--lan](docs/getting-started.md#access-from-other-devices-tailscale--lan).
 
-**Updating an existing install:** re-run the same installer. It detects `node_modules/` and switches to update mode. Before any git op runs, `tomes/`, `logs/`, entity-core's `data/` directory, and `.proto-familiar-config.json` (Tailscale toggle state) are copied to `.pf-backups/<timestamp>/` as a safety net. Then `git pull --ff-only` on Proto-Familiar (refuses non-FF merges; your work tree stays put on conflict), `git fetch && checkout <pinned tag>` on entity-core (whose `data/` is gitignored, never touched), idempotent `npm install` + `deno cache`. Node/Deno/Git are reinstalled if missing in either mode; only shortcut creation is skipped on update. See [docs/getting-started.md#updating-an-existing-install](docs/getting-started.md#updating-an-existing-install) for the protection table.
+**Central settings:** prompts, names, model picks, and saved connections (including API keys) live in `settings.json` on the machine running the server, not in each browser. Opening Proto-Familiar on a second device pulls the same configuration from the server, so you don't have to re-enter anything. Edits sync back on every change; the browser's `localStorage` is just a fast offline cache.
+
+**Updating an existing install:** re-run the same installer. It detects `node_modules/` and switches to update mode. Before any git op runs, `tomes/`, `logs/`, entity-core's `data/` directory, `.proto-familiar-config.json` (Tailscale toggle state), and `settings.json` (central user settings) are copied to `.pf-backups/<timestamp>/` as a safety net. Then `git pull --ff-only` on Proto-Familiar (refuses non-FF merges; your work tree stays put on conflict), `git fetch && checkout <pinned tag>` on entity-core (whose `data/` is gitignored, never touched), idempotent `npm install` + `deno cache`. Node/Deno/Git are reinstalled if missing in either mode; only shortcut creation is skipped on update. See [docs/getting-started.md#updating-an-existing-install](docs/getting-started.md#updating-an-existing-install) for the protection table.
 
 **Manual / advanced:**
 

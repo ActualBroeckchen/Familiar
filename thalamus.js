@@ -17,10 +17,17 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import path from 'path';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Match server.js: read the version from package.json so the MCP
+// client handshake identifies which Proto-Familiar version connected.
+const PKG_VERSION = (() => {
+  try { return JSON.parse(readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version || 'unknown'; }
+  catch { return 'unknown'; }
+})();
 
 // Resolve the entity-core entry point.
 //
@@ -83,7 +90,7 @@ async function connect() {
   });
 
   const client = new Client(
-    { name: 'proto-familiar', version: '1.0.0' },
+    { name: 'proto-familiar', version: PKG_VERSION },
     { capabilities: {} },
   );
 

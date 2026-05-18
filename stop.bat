@@ -1,28 +1,24 @@
 @echo off
 REM Proto-Familiar shutdown (Windows) - double-click to run.
+REM Stops every node.exe whose CommandLine references server.js and is
+REM rooted at this project dir — covers the launcher-tracked PID plus
+REM any stray instances (manual `npm start`, leftovers from before a
+REM port migration still listening on the old port, etc).
 
 setlocal EnableDelayedExpansion
 set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 set "PID_FILE=%SCRIPT_DIR%\.proto-familiar.pid"
 
-if not exist "%PID_FILE%" (
-  echo No PID file found - Proto-Familiar does not appear to be running.
-  timeout /t 3 >nul
-  exit /b 0
+set "KILLED_ANY=0"
+for /f %%P in ('powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'server\.js' -and $_.CommandLine -match [regex]::Escape('%SCRIPT_DIR%') } | ForEach-Object { $_.ProcessId }" 2^>nul') do (
+  echo Stopping Proto-Familiar PID %%P ...
+  taskkill /PID %%P /T /F >nul 2>nul
+  set "KILLED_ANY=1"
 )
 
-set /p PID=<"%PID_FILE%"
-tasklist /FI "PID eq !PID!" 2>nul | find "!PID!" >nul
-if errorlevel 1 (
-  echo Process !PID! is not running.
-) else (
-  echo Stopping Proto-Familiar ^(PID !PID!^) and any child processes...
-  REM /T kills the process tree so entity-core child is also stopped.
-  taskkill /PID !PID! /T /F >nul 2>nul
-  echo Stopped.
-)
+if "!KILLED_ANY!"=="0" echo No Proto-Familiar process found in %SCRIPT_DIR%.
+if exist "%PID_FILE%" del /q "%PID_FILE%" >nul 2>nul
 
-del /q "%PID_FILE%" >nul 2>nul
 timeout /t 2 >nul
 endlocal

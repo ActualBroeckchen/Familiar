@@ -82,18 +82,25 @@ function Test-Port {
     try { $c = New-Object Net.Sockets.TcpClient('127.0.0.1', [int]$script:port); $c.Close(); return $true } catch { return $false }
 }
 
+function Stop-StrayServerProcesses {
+    # Kill every node.exe whose CommandLine references server.js and is
+    # rooted at this project dir. Catches the launcher-tracked PID, plus
+    # any instance started outside the tray (manual `npm start`, leftover
+    # from before a port migration still listening on the old port, ...).
+    $rootPattern = [regex]::Escape($script:projectRoot)
+    try {
+        $stray = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+                 Where-Object { $_.CommandLine -match 'server\.js' -and $_.CommandLine -match $rootPattern }
+        foreach ($p in $stray) {
+            try { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+        }
+    } catch {}
+    if (Test-Path $script:pidFile) { Remove-Item $script:pidFile -ErrorAction SilentlyContinue }
+}
+
 function Start-Server {
     if (Test-Port) { Set-Status "running"; return }
-    # PID file points at a live process, but the configured port isn't
-    # responding — almost certainly a stale instance from a previous PORT
-    # value or older build. Recycle it so the new config takes effect.
-    if (Test-Path $script:pidFile) {
-        $stalePid = Get-Content $script:pidFile -ErrorAction SilentlyContinue
-        if ($stalePid -and (Get-Process -Id $stalePid -ErrorAction SilentlyContinue)) {
-            try { Stop-Process -Id $stalePid -Force -ErrorAction SilentlyContinue } catch {}
-        }
-        Remove-Item $script:pidFile -ErrorAction SilentlyContinue
-    }
+    Stop-StrayServerProcesses
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
         [System.Windows.Forms.MessageBox]::Show(
             "Node.js is not on PATH. Run the installer (double-click Proto-Familiar.vbs while node_modules is missing, or run scripts\win\install.ps1).",
@@ -135,16 +142,7 @@ function Start-Server {
 function Stop-Server {
     Set-Status "starting"  # transient
     $tray.Text = "Proto-Familiar - stopping..."
-    $targetPid = $null
-    if ($script:serverProc -and -not $script:serverProc.HasExited) {
-        $targetPid = $script:serverProc.Id
-    } elseif (Test-Path $script:pidFile) {
-        $targetPid = (Get-Content $script:pidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
-    }
-    if ($targetPid) {
-        Start-Process -FilePath "taskkill.exe" -ArgumentList "/PID $targetPid /T /F" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
-    }
-    Remove-Item $script:pidFile -ErrorAction SilentlyContinue
+    Stop-StrayServerProcesses
     $script:serverProc = $null
     Set-Status "stopped"
 }

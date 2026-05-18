@@ -58,12 +58,18 @@ if "!MODE!"=="update" (
   set "BACKUP_DIR=%BACKUP_ROOT%\!STAMP!"
   call :backupIfExists      "%SCRIPT_DIR%\tomes" "tomes"
   call :backupIfExists      "%SCRIPT_DIR%\logs"  "logs"
-  call :backupIfExists      "%ENTITY_CORE_DIR%\packages\entity-core\data" "!ENTITY_CORE_DIR_REL!\packages\entity-core\data"
-  call :backupIfExists      "%ENTITY_CORE_DIR%\data"                       "!ENTITY_CORE_DIR_REL!\data"
+  REM Probe BOTH the new entity-core dir and the pre-rename legacy
+  REM entity-core-alpha so leftover data from before the rename still
+  REM gets backed up.
+  call :backupIfExists      "%ENTITY_CORE_DIR_NEW%\packages\entity-core\data"    "entity-core\packages\entity-core\data"
+  call :backupIfExists      "%ENTITY_CORE_DIR_NEW%\data"                          "entity-core\data"
+  call :backupIfExists      "%ENTITY_CORE_DIR_LEGACY%\packages\entity-core\data" "entity-core-alpha\packages\entity-core\data"
+  call :backupIfExists      "%ENTITY_CORE_DIR_LEGACY%\data"                       "entity-core-alpha\data"
   call :backupFileIfExists  "%SCRIPT_DIR%\.proto-familiar-config.json"     ".proto-familiar-config.json"
+  call :backupFileIfExists  "%SCRIPT_DIR%\settings.json"                   "settings.json"
   if "!ANYTHING_BACKED_UP!"=="1" (
     echo User data backed up to !BACKUP_DIR!\
-    echo   ^(tomes\, logs\, entity-core data\, .proto-familiar-config.json — restore by copying back if needed^)
+    echo   ^(tomes\, logs\, entity-core data\, .proto-familiar-config.json, settings.json — restore by copying back if needed^)
   )
 )
 
