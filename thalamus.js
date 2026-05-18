@@ -101,8 +101,56 @@ function resolveUvBinary() {
   return isWin ? 'uv.exe' : 'uv'; // last-resort PATH lookup
 }
 
+// Path to the central settings file. server.js owns the read/write
+// surface (PUT /api/settings) but we read it here at spawn time to pick
+// up the API-key designation for entity-core. Read is sync and small.
+const SETTINGS_FILE = path.join(__dirname, 'settings.json');
+
+/**
+ * Build the env block passed to the entity-core child process based on
+ * the saved-connection the user designated as the entity-core source
+ * (`entityCoreConnectionId` in settings.json).
+ *
+ * Returns {} when no designation exists, the pointed-at connection is
+ * missing, or its API key is empty. Entity-core then runs without an
+ * API key — same as before this wiring existed — so the change is
+ * additive and safe.
+ *
+ * Env mapping:
+ *   ENTITY_CORE_LLM_API_KEY    — set whenever a designation resolves
+ *   ENTITY_CORE_LLM_PROVIDER   — provider tag from the connection
+ *   ENTITY_CORE_LLM_MODEL      — model id from the connection
+ *   ZAI_API_KEY                — *only* when the designated connection
+ *                                is a z.ai provider (entity-core's z.ai
+ *                                backend reads this env name directly)
+ */
+export function loadEntityCoreEnv() {
+  let settings;
+  try {
+    settings = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
+  } catch {
+    return {}; // no settings.json yet (fresh install) or unreadable
+  }
+  const id = settings.entityCoreConnectionId;
+  if (!id) return {};
+  const conn = (settings.connections ?? []).find(c => c?.id === id);
+  if (!conn) return {};
+  const apiKey = (conn.apiKey ?? '').trim();
+  if (!apiKey) return {};
+  const env = {
+    ENTITY_CORE_LLM_API_KEY:  apiKey,
+    ENTITY_CORE_LLM_PROVIDER: conn.provider ?? '',
+    ENTITY_CORE_LLM_MODEL:    conn.model ?? '',
+  };
+  if (conn.provider === 'zai' || conn.provider === 'zai-coding') {
+    env.ZAI_API_KEY = apiKey;
+  }
+  return env;
+}
+
 /** @type {import('@modelcontextprotocol/sdk/client/index.js').Client | null} */
 let mcpClient = null;
+let entityCoreShuttingDown = false;
 /** @type {import('@modelcontextprotocol/sdk/client/index.js').Client | null} */
 let unruhClient = null;
 let unruhShuttingDown = false;
@@ -127,10 +175,18 @@ const RELATIONSHIP_ORDER = [
 // ── Connection ────────────────────────────────────────────────────────────────
 
 async function connect() {
+  // Resolve the per-connection env block fresh on every connect so a
+  // reconnect after a settings change picks up the new key without a
+  // server restart. StdioClientTransport merges this with PATH/HOME/etc
+  // (DEFAULT_INHERITED_ENV_VARS), so we don't clobber the shell env.
+  const ecEnv = loadEntityCoreEnv();
+  const haveKey = Object.prototype.hasOwnProperty.call(ecEnv, 'ENTITY_CORE_LLM_API_KEY');
+
   const transport = new StdioClientTransport({
     command: 'deno',
     args: ['run', '-A', '--unstable-cron', ENTITY_CORE_ENTRY],
     cwd: ENTITY_CORE_ROOT,
+    env: ecEnv,
   });
 
   const client = new Client(
@@ -145,7 +201,39 @@ async function connect() {
 
   await client.connect(transport);
   mcpClient = client;
-  console.log('[thalamus] Connected to entity-core at', ENTITY_CORE_ENTRY);
+  console.log(
+    '[thalamus] Connected to entity-core at', ENTITY_CORE_ENTRY,
+    haveKey ? `(API key from connection "${ecEnv.ENTITY_CORE_LLM_PROVIDER}")` : '(no API key — designate one in the Connections sidebar)',
+  );
+}
+
+/**
+ * Tear down the current entity-core child and re-spawn it with a fresh
+ * env (so a settings change to `entityCoreConnectionId` or the pointed-
+ * at connection's apiKey takes effect immediately). Safe to call when
+ * no client is currently connected — behaves as a plain connect().
+ *
+ * Caller is server.js, after a successful PUT /api/settings that
+ * changed the entity-core API-key designation. A chat request in
+ * flight at reconnect time may lose its enrichment for that one
+ * message; enrich() already degrades gracefully on entity-core
+ * failures so this is acceptable.
+ */
+export async function reconnectEntityCore() {
+  entityCoreShuttingDown = true;
+  try {
+    if (mcpClient) {
+      try { await mcpClient.close?.(); } catch { /* best-effort */ }
+      mcpClient = null;
+    }
+  } finally {
+    entityCoreShuttingDown = false;
+  }
+  try {
+    await connect();
+  } catch (err) {
+    console.error('[thalamus] entity-core reconnect failed:', err.message);
+  }
 }
 
 // Unruh runs as an independent stdio child. Its failures must not affect

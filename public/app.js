@@ -577,10 +577,11 @@ const state = {
   tomeRegistry:      [],         // array of { id, name, enabled, entryCount } — not persisted
   topics:            [],         // session-level; stored under pf_topics_{sessionId}
   // ── Saved connections (primary + fallbacks) ─────────────
-  connections:           [],     // [{ id, name, provider, apiKey, model }]
-  primaryConnectionId:   null,   // id of the active/primary connection
-  fallbackConnectionIds: [],     // ordered ids tried when primary fails/returns empty
-  maxEmptyRetries:       2,      // retries per connection when response is empty
+  connections:             [],   // [{ id, name, provider, apiKey, model }]
+  primaryConnectionId:     null, // id of the active/primary connection
+  fallbackConnectionIds:   [],   // ordered ids tried when primary fails/returns empty
+  maxEmptyRetries:         2,    // retries per connection when response is empty
+  entityCoreConnectionId:  null, // id of the connection whose API key entity-core uses
 };
 
 // ── Persistence ──────────────────────────────────────────────────
@@ -602,6 +603,7 @@ const SERVER_SYNCED_KEYS = [
   'tomeScanDepth', 'tomeRecursive', 'tomeMaxRecursionSteps',
   'tomeCaseSensitive', 'tomeMatchWholeWords',
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
+  'entityCoreConnectionId',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -822,6 +824,10 @@ function migrateLegacyConnection() {
   state.fallbackConnectionIds = (state.fallbackConnectionIds || [])
     .filter(id => state.connections.find(c => c.id === id))
     .filter(id => id !== state.primaryConnectionId);
+  // Clear the entity-core designation if it points at a missing connection.
+  if (state.entityCoreConnectionId && !state.connections.find(c => c.id === state.entityCoreConnectionId)) {
+    state.entityCoreConnectionId = null;
+  }
 }
 
 function getPrimaryConnection() {
@@ -893,6 +899,7 @@ function saveNewConnection(name) {
 function deleteConnection(id) {
   state.connections = state.connections.filter(c => c.id !== id);
   state.fallbackConnectionIds = state.fallbackConnectionIds.filter(x => x !== id);
+  if (state.entityCoreConnectionId === id) state.entityCoreConnectionId = null;
   if (state.primaryConnectionId === id) {
     state.primaryConnectionId = state.connections[0]?.id ?? null;
     const newPrimary = getPrimaryConnection();
@@ -928,6 +935,26 @@ function toggleFallback(id, enabled) {
   renderConnectionsList();
 }
 
+/**
+ * Designate (or clear) the connection whose API key entity-core uses.
+ * Single-select: setting this on one connection clears it from any
+ * other. Setting it to the currently-designated id clears the
+ * designation entirely (so the same toggle button works for both
+ * directions). server.js compares old vs new on PUT /api/settings and
+ * respawns entity-core when this (or the pointed-at connection's key)
+ * changes — so the user sees the new key take effect on the next
+ * chat message, no restart required.
+ */
+function setEntityCoreConnection(id) {
+  if (state.entityCoreConnectionId === id) {
+    state.entityCoreConnectionId = null;
+  } else {
+    state.entityCoreConnectionId = id;
+  }
+  saveSettings();
+  renderConnectionsList();
+}
+
 function moveFallback(id, delta) {
   const arr = [...state.fallbackConnectionIds];
   const idx = arr.indexOf(id);
@@ -946,9 +973,10 @@ function renderConnectionsList() {
   if (!ul) return;
   ul.innerHTML = '';
   for (const conn of state.connections) {
-    const isPrimary = conn.id === state.primaryConnectionId;
-    const fbIdx     = state.fallbackConnectionIds.indexOf(conn.id);
+    const isPrimary  = conn.id === state.primaryConnectionId;
+    const fbIdx      = state.fallbackConnectionIds.indexOf(conn.id);
     const isFallback = fbIdx >= 0 && !isPrimary;
+    const isEntityCore = conn.id === state.entityCoreConnectionId;
 
     const li = document.createElement('li');
     li.className = 'connection-item' + (isPrimary ? ' is-primary' : '');
@@ -965,11 +993,11 @@ function renderConnectionsList() {
     // Info column
     const info = document.createElement('div');
     info.className = 'conn-info';
-    const badgeHtml = isPrimary
-      ? '<span class="conn-badge">primary</span>'
-      : (isFallback ? `<span class="conn-badge fb">fallback #${fbIdx + 1}</span>` : '');
+    const primaryBadge   = isPrimary    ? '<span class="conn-badge">primary</span>' : '';
+    const fallbackBadge  = (!isPrimary && isFallback) ? `<span class="conn-badge fb">fallback #${fbIdx + 1}</span>` : '';
+    const entityBadge    = isEntityCore ? '<span class="conn-badge ec">entity-core</span>' : '';
     info.innerHTML =
-      `<div class="conn-name">${esc(conn.name)}${badgeHtml}</div>` +
+      `<div class="conn-name">${esc(conn.name)}${primaryBadge}${fallbackBadge}${entityBadge}</div>` +
       `<div class="conn-meta">${esc(conn.provider)} / ${esc(conn.model || '—')}</div>`;
 
     // Actions column
@@ -983,6 +1011,20 @@ function renderConnectionsList() {
     fbBtn.disabled = isPrimary;
     fbBtn.addEventListener('click', () => toggleFallback(conn.id, !isFallback));
     actions.appendChild(fbBtn);
+
+    // Entity-core designation: single-select across all connections. Tells
+    // the server which API key to pass to the entity-core child process
+    // via ENTITY_CORE_LLM_API_KEY (and ZAI_API_KEY for z.ai providers).
+    // Independent of primary/fallback — you can point entity-core at any
+    // connection regardless of how the chat path uses it.
+    const ecBtn = document.createElement('button');
+    ecBtn.type = 'button';
+    ecBtn.textContent = isEntityCore ? '✓ entity-core' : '+ entity-core';
+    ecBtn.title = isEntityCore
+      ? 'Currently the API key source for entity-core (click to clear)'
+      : 'Use this connection’s API key for entity-core';
+    ecBtn.addEventListener('click', () => setEntityCoreConnection(conn.id));
+    actions.appendChild(ecBtn);
 
     if (isFallback) {
       const upBtn = document.createElement('button');

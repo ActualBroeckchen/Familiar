@@ -23,6 +23,7 @@ import {
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   createGraphNode, createGraphEdge,
   createSnapshot, restoreSnapshot,
+  reconnectEntityCore,
 } from './thalamus.js';
 import {
   enqueueMemorization,
@@ -982,6 +983,26 @@ app.get('/api/settings', async (_req, res) => {
   }
 });
 
+// Resolve the fields entity-core actually cares about from a settings
+// snapshot, so we can tell whether a settings PUT changed any of them.
+// Anything else (UI prefs, system prompts, etc.) doesn't require an
+// entity-core respawn and shouldn't trigger one.
+function entityCoreCredsSnapshot(settings) {
+  const id = settings?.entityCoreConnectionId ?? null;
+  if (!id) return { id: null, apiKey: '', provider: '', model: '' };
+  const conn = (settings.connections ?? []).find(c => c?.id === id);
+  if (!conn) return { id, apiKey: '', provider: '', model: '' };
+  return {
+    id,
+    apiKey:   conn.apiKey   ?? '',
+    provider: conn.provider ?? '',
+    model:    conn.model    ?? '',
+  };
+}
+function entityCoreCredsEqual(a, b) {
+  return a.id === b.id && a.apiKey === b.apiKey && a.provider === b.provider && a.model === b.model;
+}
+
 app.put('/api/settings', async (req, res) => {
   const { settings } = req.body ?? {};
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
@@ -993,14 +1014,35 @@ app.put('/api/settings', async (req, res) => {
   if (serialised.length > SETTINGS_MAX_BYTES) {
     return badRequest(res, `settings exceed ${SETTINGS_MAX_BYTES}-byte limit`);
   }
+
+  // Snapshot the prior entity-core creds so we can detect a real change
+  // after the write. Missing file => empty snapshot (counts as "no creds
+  // before"); any failure here is non-fatal — we just won't re-spawn.
+  let priorCreds = { id: null, apiKey: '', provider: '', model: '' };
+  try {
+    const raw = await fsp.readFile(SETTINGS_FILE, 'utf8');
+    priorCreds = entityCoreCredsSnapshot(JSON.parse(raw));
+  } catch { /* no prior settings — first write */ }
+
   try {
     const tmp = SETTINGS_FILE + '.tmp';
     await fsp.writeFile(tmp, serialised, 'utf8');
     await fsp.rename(tmp, SETTINGS_FILE);
-    return res.json({ ok: true });
   } catch (err) {
     return res.status(500).json({ error: `failed to write settings: ${err.message}` });
   }
+
+  // If the entity-core API-key designation changed (different connection
+  // picked, or the same connection's key/provider/model edited), respawn
+  // the child so it picks up the new env. Fire-and-forget so the PUT
+  // returns quickly; reconnect logs itself.
+  const nextCreds = entityCoreCredsSnapshot(settings);
+  if (!entityCoreCredsEqual(priorCreds, nextCreds)) {
+    console.log('[server] entity-core API-key designation changed — respawning');
+    reconnectEntityCore().catch(err => console.error('[server] reconnectEntityCore failed:', err.message));
+  }
+
+  return res.json({ ok: true });
 });
 
 app.get('/api/tailscale', async (_req, res) => {
