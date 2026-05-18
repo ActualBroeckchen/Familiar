@@ -109,13 +109,10 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '4mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Provider base URLs — all use OpenAI-compatible chat completions format
-// zai-coding uses the Coding Plan endpoint (separate quota from the standard API)
-const PROVIDER_URLS = {
-  nanogpt:     'https://nano-gpt.com/api/v1/chat/completions',
-  zai:         'https://api.z.ai/api/paas/v4/chat/completions',
-  'zai-coding': 'https://api.z.ai/api/coding/paas/v4/chat/completions',
-};
+// Provider chat-completions URLs live in providers.js so thalamus.js can
+// share them when it builds the env block for entity-core. See that file
+// for the rationale and how to add a new provider.
+import { PROVIDER_URLS } from './providers.js';
 
 // Simple in-memory rate limiter for /api/chat: max 20 requests per minute per IP.
 // Protects against accidental public exposure and runaway tool-call loops.

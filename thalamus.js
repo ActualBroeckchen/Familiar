@@ -106,16 +106,12 @@ function resolveUvBinary() {
 // up the API-key designation for entity-core. Read is sync and small.
 const SETTINGS_FILE = path.join(__dirname, 'settings.json');
 
-// OpenAI-compatible base URLs per provider (without /chat/completions —
-// entity-core's LLM client appends the path itself, as do most
-// OpenAI-compatible SDKs). KEEP IN SYNC with PROVIDER_URLS in server.js
-// — server.js stores the *full* chat-completions URL because that's
-// what its fetch proxy hits directly; entity-core needs the base.
-const PROVIDER_BASE_URLS = {
-  nanogpt:     'https://nano-gpt.com/api/v1',
-  zai:         'https://api.z.ai/api/paas/v4',
-  'zai-coding':'https://api.z.ai/api/coding/paas/v4',
-};
+// Despite the name, entity-core's ENTITY_CORE_LLM_BASE_URL env var is
+// actually the FULL endpoint including /chat/completions — its
+// createLLMClient does `fetch(baseUrl, { method: 'POST' })` with no
+// path appending. So we pass the same chat-completions URLs server.js
+// uses for its proxy. Shared via ./providers.js to keep one source.
+import { PROVIDER_URLS } from './providers.js';
 
 /**
  * Build the env block passed to the entity-core child process based on
@@ -136,7 +132,7 @@ const PROVIDER_BASE_URLS = {
  *
  * Env mapping:
  *   ENTITY_CORE_LLM_API_KEY    — always set when designation resolves
- *   ENTITY_CORE_LLM_BASE_URL   — derived from provider via PROVIDER_BASE_URLS
+ *   ENTITY_CORE_LLM_BASE_URL   — full chat-completions URL from PROVIDER_URLS
  *   ENTITY_CORE_LLM_MODEL      — model id from the connection
  *   ENTITY_CORE_LLM_PROVIDER   — provider tag (informational)
  *   ZAI_API_KEY / ZAI_BASE_URL / ZAI_MODEL  — only when the designated
@@ -159,7 +155,7 @@ export function loadEntityCoreEnv() {
   if (!apiKey) return {};
   const provider = conn.provider ?? '';
   const model    = conn.model ?? '';
-  const baseUrl  = PROVIDER_BASE_URLS[provider] ?? '';
+  const baseUrl  = PROVIDER_URLS[provider] ?? '';
 
   const env = {
     ENTITY_CORE_LLM_API_KEY:  apiKey,
@@ -211,9 +207,9 @@ async function connect() {
   // Surface partial-config gotchas explicitly: entity-core's createLLMClient
   // returns null (→ "No LLM API key configured" error from the consolidator)
   // when any of api_key / base_url / model is missing. A blank base_url
-  // typically means the connection's provider isn't in PROVIDER_BASE_URLS.
+  // typically means the connection's provider tag isn't in PROVIDER_URLS.
   if (haveKey && !ecEnv.ENTITY_CORE_LLM_BASE_URL) {
-    console.warn(`[thalamus] entity-core: provider "${ecEnv.ENTITY_CORE_LLM_PROVIDER}" has no known base URL — add it to PROVIDER_BASE_URLS in thalamus.js`);
+    console.warn(`[thalamus] entity-core: provider "${ecEnv.ENTITY_CORE_LLM_PROVIDER}" has no known URL — add it to PROVIDER_URLS in providers.js`);
   }
   if (haveKey && !ecEnv.ENTITY_CORE_LLM_MODEL) {
     console.warn('[thalamus] entity-core: designated connection has no model set — consolidation will fail');
