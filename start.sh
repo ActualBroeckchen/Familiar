@@ -33,10 +33,40 @@ if [ -n "$EXISTING_PID" ] && kill -0 "$EXISTING_PID" 2>/dev/null; then PID_ALIVE
 PORT_LISTENING=0
 if (echo >"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then PORT_LISTENING=1; fi
 
-if [ "$PID_ALIVE" = "1" ] && [ "$PORT_LISTENING" = "1" ]; then
+# Find every `node server.js` process whose cwd is THIS project root —
+# catches instances launched outside the PID-file flow (e.g. a stray
+# `npm start` from an editor terminal, or a leftover from before the
+# port migration that's still listening on 3000). Skip the tracked-and-
+# healthy PID; everything else gets recycled.
+find_stray_pf_pids() {
+  command -v pgrep >/dev/null 2>&1 || return 0
+  for pid in $(pgrep -f "node .*server\.js" 2>/dev/null); do
+    [ "$pid" = "$$" ] && continue
+    cwd=""
+    if [ -r "/proc/$pid/cwd" ]; then
+      cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null)"
+    elif command -v lsof >/dev/null 2>&1; then
+      cwd="$(lsof -a -d cwd -p "$pid" -Fn 2>/dev/null | awk '/^n/{print substr($0,2); exit}')"
+    fi
+    [ "$cwd" = "$SCRIPT_DIR" ] || continue
+    if [ "$pid" = "$EXISTING_PID" ] && [ "$PORT_LISTENING" = "1" ]; then continue; fi
+    echo "$pid"
+  done
+}
+STRAY_PIDS="$(find_stray_pf_pids | tr '\n' ' ')"
+
+if [ "$PID_ALIVE" = "1" ] && [ "$PORT_LISTENING" = "1" ] && [ -z "${STRAY_PIDS// /}" ]; then
   say "Proto-Familiar already running (PID $EXISTING_PID) on port $PORT."
   say "Opening $URL ..."
 else
+  if [ -n "${STRAY_PIDS// /}" ]; then
+    say "Killing stray Proto-Familiar processes:${STRAY_PIDS}(leftovers / other ports)"
+    # shellcheck disable=SC2086
+    kill $STRAY_PIDS 2>/dev/null || true
+    sleep 1
+    # shellcheck disable=SC2086
+    kill -9 $STRAY_PIDS 2>/dev/null || true
+  fi
   if [ "$PID_ALIVE" = "1" ]; then
     # Tracked PID is alive but not serving the configured port — e.g. left
     # over from a different PORT value or an older build. Recycle it so the

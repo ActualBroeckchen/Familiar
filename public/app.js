@@ -584,11 +584,48 @@ const state = {
 };
 
 // ── Persistence ──────────────────────────────────────────────────
+//
+// Settings live centrally on the server (so opening Proto-Familiar on a
+// second device doesn't reset prompts, names, and saved connections).
+// localStorage is a fast offline cache that gets refreshed from the
+// server on every page load.
+//
+// SERVER_SYNCED_KEYS is the subset of `state` that's user preference
+// rather than per-device session state. Session timing (sessionId,
+// sessionStartedAt, …) stays local — syncing it across devices would
+// be weird (e.g. device A's idle timer applying to device B).
+const SERVER_SYNCED_KEYS = [
+  'provider', 'apiKey', 'model', 'streaming', 'temperature', 'maxTokens',
+  'userName', 'charName',
+  'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt',
+  'toolsEnabled', 'customTools',
+  'tomeScanDepth', 'tomeRecursive', 'tomeMaxRecursionSteps',
+  'tomeCaseSensitive', 'tomeMatchWholeWords',
+  'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
+];
+function extractServerSettings(s) {
+  const out = {};
+  for (const k of SERVER_SYNCED_KEYS) if (k in s) out[k] = s[k];
+  return out;
+}
+let _settingsPutTimer = null;
+function pushSettingsToServer() {
+  clearTimeout(_settingsPutTimer);
+  _settingsPutTimer = setTimeout(() => {
+    fetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: extractServerSettings(state) }),
+    }).catch(err => console.warn('settings sync to server failed', err));
+  }, 500);
+}
+
 function saveSettings() {
   try {
     const { messages: _ignored, tomeCache: _tc, tomeRegistry: _tr, topics: _t, ...settings } = state;
     localStorage.setItem('pf_settings', JSON.stringify(settings));
   } catch { /* quota exceeded — silently skip */ }
+  pushSettingsToServer();
 }
 
 function saveTopics() {
@@ -630,6 +667,133 @@ function loadPersisted() {
   if (!Array.isArray(state.fallbackConnectionIds)) state.fallbackConnectionIds = [];
   if (typeof state.maxEmptyRetries !== 'number')   state.maxEmptyRetries = 2;
   migrateLegacyConnection();
+}
+
+// True for non-empty strings / non-empty arrays / any non-null number /
+// any non-null object. Used by the merge logic to decide whether a field
+// is "carrying real user data" versus just a default/empty placeholder.
+function isMeaningfulSetting(v) {
+  if (v === null || v === undefined) return false;
+  if (typeof v === 'string') return v.trim() !== '';
+  if (Array.isArray(v))      return v.length > 0;
+  return true;
+}
+
+// Union two connection arrays by id, with a soft-duplicate guard:
+// if two connections from different devices have different ids but
+// identical (provider, model, apiKey), treat them as the same entry
+// and keep the existing one. Otherwise both survive.
+function unionConnections(remote = [], local = []) {
+  const byId = new Map();
+  for (const c of remote) if (c && c.id) byId.set(c.id, c);
+  for (const c of local) {
+    if (!c || !c.id) continue;
+    if (byId.has(c.id)) continue;
+    let isDupe = false;
+    for (const existing of byId.values()) {
+      if (existing.provider === c.provider
+          && existing.model    === c.model
+          && existing.apiKey   === c.apiKey) { isDupe = true; break; }
+    }
+    if (!isDupe) byId.set(c.id, c);
+  }
+  return [...byId.values()];
+}
+
+// One-time absorption: when this device first contacts a server that
+// already has data, fold the device's local values into the server
+// payload before treating server as source of truth. Scalars from the
+// server win when both sides are meaningful (server is presumed most
+// recent across the tailnet); the local value is kept only when the
+// server has nothing. Connections / fallbacks are unioned so different
+// devices' saved presets all survive.
+function absorbLocalIntoRemote(remote, local) {
+  const merged = { ...remote };
+  for (const k of SERVER_SYNCED_KEYS) {
+    if (k === 'connections' || k === 'fallbackConnectionIds' || k === 'primaryConnectionId') continue;
+    if (isMeaningfulSetting(local[k]) && !isMeaningfulSetting(remote[k])) {
+      merged[k] = local[k];
+    }
+  }
+  merged.connections = unionConnections(remote.connections, local.connections);
+  merged.primaryConnectionId = remote.primaryConnectionId
+    || local.primaryConnectionId
+    || (merged.connections[0]?.id ?? null);
+  const fallbackUnion = [
+    ...(Array.isArray(remote.fallbackConnectionIds) ? remote.fallbackConnectionIds : []),
+    ...(Array.isArray(local.fallbackConnectionIds)  ? local.fallbackConnectionIds  : []),
+  ];
+  merged.fallbackConnectionIds = [...new Set(fallbackUnion)]
+    .filter(id => id !== merged.primaryConnectionId)
+    .filter(id => merged.connections.find(c => c.id === id));
+  return merged;
+}
+
+// Pull the canonical settings from the server and overlay them onto the
+// in-memory state. Called once at startup, after the synchronous
+// localStorage load has already painted the UI from the offline cache.
+//
+// First-run absorption: each device flips `pf_settings_absorbed` in its
+// own localStorage the first time this sync completes. Until that flag
+// is set, anything the user had locally that the server doesn't yet
+// know about is folded in (scalars keep server values when both are set,
+// connections are unioned). After that, the server is the source of
+// truth and a plain overlay runs.
+const ABSORBED_FLAG_KEY = 'pf_settings_absorbed';
+
+async function syncSettingsFromServer() {
+  let remote;
+  try {
+    const r = await fetch('/api/settings');
+    if (!r.ok) return;
+    const data = await r.json();
+    remote = data.settings ?? null;
+  } catch (err) {
+    console.warn('initial settings fetch failed', err);
+    return;
+  }
+  const alreadyAbsorbed = (() => {
+    try { return localStorage.getItem(ABSORBED_FLAG_KEY) === '1'; }
+    catch { return false; }
+  })();
+
+  if (!remote || typeof remote !== 'object') {
+    // Server is empty — seed it from whatever we just loaded out of
+    // localStorage so the user doesn't lose anything on the next load.
+    pushSettingsToServer();
+    try { localStorage.setItem(ABSORBED_FLAG_KEY, '1'); } catch {}
+    return;
+  }
+
+  // Re-snapshot AT MERGE TIME (not at function entry) so that any
+  // keystrokes the user landed during the in-flight fetch are folded in
+  // rather than discarded. Field listeners write straight into `state`
+  // via readSettingsFromUI, so this always reflects the freshest values.
+  const freshSnapshot = extractServerSettings(state);
+  const effective = alreadyAbsorbed
+    ? remote
+    : absorbLocalIntoRemote(remote, freshSnapshot);
+
+  for (const k of SERVER_SYNCED_KEYS) {
+    if (k in effective) state[k] = effective[k];
+  }
+  if (!Array.isArray(state.connections))           state.connections = [];
+  if (!Array.isArray(state.fallbackConnectionIds)) state.fallbackConnectionIds = [];
+  migrateLegacyConnection();
+  writeSettingsToUI();
+  renderConnectionsList();
+  refreshModelSuggestions(state.provider);
+
+  // Mirror the resolved state back to localStorage, and push the
+  // (possibly absorbed) result up so the server keeps the new entries.
+  try {
+    const { messages: _i, tomeCache: _tc, tomeRegistry: _tr, topics: _t, ...settings } = state;
+    localStorage.setItem('pf_settings', JSON.stringify(settings));
+  } catch { /* quota */ }
+  if (!alreadyAbsorbed) {
+    pushSettingsToServer();
+    try { localStorage.setItem(ABSORBED_FLAG_KEY, '1'); } catch {}
+  }
 }
 
 // ── Saved connections ──────────────────────────────────────────
@@ -1951,34 +2115,35 @@ function readSettingsFromUI() {
   renderConnectionsList();
 }
 
+// Don't clobber the input the user is actively typing in — the async
+// server sync would otherwise stomp on a half-typed API key or prompt.
+function setIfNotFocused(el, prop, value) {
+  if (!el) return;
+  if (document.activeElement === el) return;
+  el[prop] = value;
+}
 function writeSettingsToUI() {
-  $('provider-select').value    = state.provider;
-  $('api-key').value            = state.apiKey;
-  $('model-input').value        = state.model;
-  $('streaming-toggle').checked = state.streaming;
-  $('temperature').value        = state.temperature;
+  setIfNotFocused($('provider-select'), 'value',   state.provider);
+  setIfNotFocused($('api-key'),         'value',   state.apiKey);
+  setIfNotFocused($('model-input'),     'value',   state.model);
+  setIfNotFocused($('streaming-toggle'),'checked', state.streaming);
+  setIfNotFocused($('temperature'),     'value',   state.temperature);
   $('temp-display').textContent = state.temperature;
-  $('max-tokens').value         = state.maxTokens;
-  $('user-name').value          = state.userName ?? 'User';
-  $('char-name').value          = state.charName ?? 'Assistant';
-  $('system-prompt').value      = state.systemPrompt;
-  $('char-profile').value       = state.characterProfile;
-  $('user-profile').value       = state.userProfile;
-  $('post-history-prompt').value = state.postHistoryPrompt;
-  $('tools-enabled').checked    = state.toolsEnabled ?? true;
-  $('custom-tools').value       = state.customTools ?? '';
-  const scanEl = $('tome-scan-depth');
-  if (scanEl) scanEl.value = state.tomeScanDepth ?? 4;
-  const recursiveEl = $('tome-recursive');
-  if (recursiveEl) recursiveEl.checked = state.tomeRecursive ?? false;
-  const maxRecEl = $('tome-max-recursion');
-  if (maxRecEl) maxRecEl.value = state.tomeMaxRecursionSteps ?? 3;
-  const csEl = $('tome-case-sensitive');
-  if (csEl) csEl.checked = state.tomeCaseSensitive ?? false;
-  const wwEl = $('tome-match-whole-words');
-  if (wwEl) wwEl.checked = state.tomeMatchWholeWords ?? false;
-  const retriesEl = $('max-empty-retries');
-  if (retriesEl) retriesEl.value = state.maxEmptyRetries ?? 2;
+  setIfNotFocused($('max-tokens'),         'value',   state.maxTokens);
+  setIfNotFocused($('user-name'),          'value',   state.userName ?? 'User');
+  setIfNotFocused($('char-name'),          'value',   state.charName ?? 'Assistant');
+  setIfNotFocused($('system-prompt'),      'value',   state.systemPrompt);
+  setIfNotFocused($('char-profile'),       'value',   state.characterProfile);
+  setIfNotFocused($('user-profile'),       'value',   state.userProfile);
+  setIfNotFocused($('post-history-prompt'),'value',   state.postHistoryPrompt);
+  setIfNotFocused($('tools-enabled'),      'checked', state.toolsEnabled ?? true);
+  setIfNotFocused($('custom-tools'),       'value',   state.customTools ?? '');
+  setIfNotFocused($('tome-scan-depth'),       'value',   state.tomeScanDepth ?? 4);
+  setIfNotFocused($('tome-recursive'),        'checked', state.tomeRecursive ?? false);
+  setIfNotFocused($('tome-max-recursion'),    'value',   state.tomeMaxRecursionSteps ?? 3);
+  setIfNotFocused($('tome-case-sensitive'),   'checked', state.tomeCaseSensitive ?? false);
+  setIfNotFocused($('tome-match-whole-words'),'checked', state.tomeMatchWholeWords ?? false);
+  setIfNotFocused($('max-empty-retries'),     'value',   state.maxEmptyRetries ?? 2);
   refreshModelSuggestions(state.provider);
 }
 
@@ -2615,10 +2780,15 @@ function init() {
   const savedTheme = localStorage.getItem('pf_theme') || 'dark';
   applyTheme(savedTheme);
 
-  // Populate UI from state
+  // Populate UI from state (fast path — uses the localStorage cache).
   writeSettingsToUI();
   renderAllMessages();
   initCollapsibles();
+
+  // Pull the canonical settings from the server in the background. If the
+  // server has data, it overlays + repaints; if it's empty, our local
+  // settings get pushed up so the next device sees them.
+  syncSettingsFromServer().catch(err => console.warn('syncSettingsFromServer', err));
 
   // ── Settings field listeners ─────────────────────────────────
   const settingsIds = [
@@ -3004,6 +3174,15 @@ function init() {
     if (window.innerWidth < 768) closeSidebarOnMobile();
   });
 
+  // ── Version badge ────────────────────────────────────────────
+  fetch('/api/version')
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      const badge = $('version-badge');
+      if (badge && data?.version) badge.textContent = `Proto-Familiar v${data.version}`;
+    })
+    .catch(() => {});
+
   // ── Mobile viewport / keyboard handling ──────────────────────
   initMobileViewport();
 
@@ -3015,8 +3194,11 @@ function init() {
 // On Android Chrome the `interactive-widget=resizes-content` meta
 // already shrinks the layout viewport when the IME opens, so the
 // composer sits above the keyboard for free. iOS Safari ignores
-// that hint, so we fall back to the visualViewport API and expose
-// the offset as `--kb-inset` for the input bar to consume.
+// that hint, so we fall back to the visualViewport API and write the
+// visible viewport height onto `--app-h`. The CSS uses that to
+// shrink the whole app shell, which pulls the .input-bar (last flex
+// child) up above the keyboard. `--kb-inset` is also exposed for any
+// other element that wants to compensate.
 //
 // Separately, when the textarea auto-grows we want the conversation
 // to stay anchored — if the user is already at the bottom, follow
@@ -3029,6 +3211,7 @@ function initMobileViewport() {
     const updateInset = () => {
       const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
       root.style.setProperty('--kb-inset', `${inset}px`);
+      root.style.setProperty('--app-h', `${vv.height}px`);
     };
     vv.addEventListener('resize', updateInset);
     vv.addEventListener('scroll', updateInset);

@@ -93,6 +93,35 @@ The same messages array with entity-core enrichment prepended to the system mess
 
 ---
 
+## Central settings
+
+User preferences (prompts, names, saved connections including API keys, tomes settings) are stored centrally on the server so opening Proto-Familiar on a second device pulls the same configuration. The browser's `localStorage` is used as a fast offline cache; the server is the source of truth.
+
+### `GET /api/settings`
+
+Returns the persisted settings JSON.
+
+**Response:** `{ "settings": <object> }` — or `{ "settings": null }` if nothing has been saved yet.
+
+### `PUT /api/settings`
+
+Replaces the persisted settings JSON with the supplied object (atomic write via tmp + rename).
+
+**Request body:** `{ "settings": { ... } }` — must be a non-array object.
+
+**Response:** `{ "ok": true }`
+
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| `400` | `settings` is missing, not an object, or serialised payload exceeds 2 MB |
+| `500` | Failed to write the file |
+
+Stored at `./settings.json` in the project root (git-ignored). The frontend POSTs an updated copy on every preference change, debounced by ~500ms.
+
+---
+
 ## Tailscale toggle
 
 ### `GET /api/tailscale`
@@ -634,8 +663,12 @@ Creates do not auto-snapshot — they are additive and reversible via the matchi
 
 ---
 
-## Health
+## Health & version
 
 ### `GET /api/health`
 
-Returns `{ "ok": true }`. Useful for uptime checks or confirming the server is running.
+Returns `{ "ok": true, "version": "<package.json version>" }`. Useful for uptime checks or confirming the server is running.
+
+### `GET /api/version`
+
+Returns `{ "version": "<package.json version>" }`. Read once at startup from `package.json`. The UI uses this to populate the sidebar footer badge.
