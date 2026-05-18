@@ -25,9 +25,27 @@ set "PORT_LISTENING=0"
 powershell -NoProfile -Command "try { $c = New-Object Net.Sockets.TcpClient('127.0.0.1', %PORT%); $c.Close(); exit 0 } catch { exit 1 }" >nul 2>nul
 if not errorlevel 1 set "PORT_LISTENING=1"
 
-if "!PID_ALIVE!"=="1" if "!PORT_LISTENING!"=="1" (
+REM Find every node.exe process whose CommandLine references server.js
+REM and whose ExecutablePath / CommandLine is rooted at this project dir.
+REM Catches instances launched outside this script (manual `npm start`,
+REM leftovers from before a port migration that may still be listening
+REM on the old port, etc).
+for /f %%P in ('powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'server\.js' -and $_.CommandLine -match [regex]::Escape('%SCRIPT_DIR%') } | ForEach-Object { $_.ProcessId }" 2^>nul') do (
+  if not "%%P"=="!EXISTING_PID!" (
+    set "STRAY_PIDS=!STRAY_PIDS! %%P"
+  ) else (
+    if not "!PORT_LISTENING!"=="1" set "STRAY_PIDS=!STRAY_PIDS! %%P"
+  )
+)
+
+if "!PID_ALIVE!"=="1" if "!PORT_LISTENING!"=="1" if not defined STRAY_PIDS (
   echo Proto-Familiar already running ^(PID !EXISTING_PID!^) on port %PORT%.
   goto :open_browser
+)
+if defined STRAY_PIDS (
+  echo Killing stray Proto-Familiar processes:!STRAY_PIDS! ^(leftovers / other ports^)
+  for %%P in (!STRAY_PIDS!) do taskkill /PID %%P /T /F >nul 2>nul
+  set "STRAY_PIDS="
 )
 if "!PID_ALIVE!"=="1" (
   echo Found stale Proto-Familiar process ^(PID !EXISTING_PID!^) not on port %PORT% — restarting.

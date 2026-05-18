@@ -8,4 +8,6 @@ tomes/.memorization-queue.json
 tomes/.memorization-queue.json.tmp
 .proto-familiar.pid
 .proto-familiar-config.json
+settings.json
+settings.json.tmp
 .pf-backups/

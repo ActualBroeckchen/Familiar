@@ -94,11 +94,16 @@ body {
 }
 
 /* ── App shell ───────────────────────────────────────────────── */
+/* `--app-h` is set by initMobileViewport() (visualViewport.height) on
+   iOS Safari so the shell shrinks when the IME opens, lifting the
+   .input-bar (last flex child) above the keyboard. On platforms where
+   that variable is never set, the dvh / vh fallback is used. */
 .app {
   display: flex;
   flex-direction: column;
+  height: 100vh; /* fallback for browsers without dvh */
   height: 100dvh;
-  height: 100vh; /* fallback */
+  height: var(--app-h, 100dvh);
 }
 
 /* ── Top bar ─────────────────────────────────────────────────── */
@@ -180,6 +185,23 @@ body {
   width: 0;
   border-right-width: 0;
   overflow: hidden;
+}
+
+/* Sidebar footer (version badge etc.) — pushed to the bottom of the
+   sidebar column so it sits below the last section but still scrolls
+   into view if the sidebar content is shorter than the viewport. */
+.sidebar-footer {
+  margin-top: auto;
+  padding: 12px 16px 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: center;
+}
+.version-badge {
+  font-size: 0.72rem;
+  color: var(--text-muted, #777);
+  letter-spacing: 0.02em;
+  user-select: text;
 }
 
 /* Sidebar sections */
@@ -933,17 +955,16 @@ button { cursor: pointer; font-family: var(--font); }
 .connection-save-row button { flex-shrink: 0; }
 
 /* ── Input bar ───────────────────────────────────────────────── */
+/* Sits as the last flex child of .chat-pane; the keyboard lift is
+   handled by shrinking the app shell via `--app-h` (see .app rule),
+   not by padding here. We just preserve the home-indicator safe area. */
 .input-bar {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   background: var(--surface);
   border-top: 1px solid var(--border);
-  /* `--kb-inset` is set by initMobileViewport() (iOS Safari fallback). On
-     platforms where the layout viewport already resizes for the keyboard
-     (Android Chrome via `interactive-widget=resizes-content`) the inset
-     stays at 0 and we just use the safe-area bottom. */
-  padding-bottom: max(var(--kb-inset, 0px), env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 .input-row {
@@ -1010,12 +1031,15 @@ button { cursor: pointer; font-family: var(--font); }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
 
 /* ── Mobile overlay ──────────────────────────────────────────── */
+/* Sits ABOVE the topbar (z 40) so the dim layer covers the whole
+   viewport and topbar buttons aren't accidentally tappable through it
+   while the sidebar is open. Tap the overlay to dismiss. */
 .sidebar-overlay {
   display: none;
   position: fixed;
   inset: 0;
   background: rgba(0,0,0,0.55);
-  z-index: 29;
+  z-index: 50;
   backdrop-filter: blur(1px);
 }
 
@@ -1029,7 +1053,9 @@ button { cursor: pointer; font-family: var(--font); }
     left: 0;
     bottom: 0;
     width: min(var(--sidebar-w), 100vw);
-    z-index: 30;
+    /* Above the overlay (50) so its contents stay interactive while
+       the dim layer covers everything else. */
+    z-index: 51;
     transform: translateX(-100%);
     /* Override desktop collapsed state */
     overflow-y: auto;
@@ -1111,12 +1137,14 @@ button { cursor: pointer; font-family: var(--font); }
 }
 
 /* ── Logs modal ──────────────────────────────────────────────── */
+/* Above the sidebar (51) so modals opened from sidebar buttons
+   stack on top of the slide-in panel rather than behind it. */
 .modal-backdrop {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.6);
   backdrop-filter: blur(2px);
-  z-index: 50;
+  z-index: 60;
   display: flex;
   align-items: center;
   justify-content: center;
