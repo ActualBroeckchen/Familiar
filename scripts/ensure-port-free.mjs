@@ -89,38 +89,63 @@ function findPortOwnerPid(port) {
   return Number.isFinite(pid) && pid > 0 ? pid : null;
 }
 
-/** Verify that `pid` is a `node server.js`-shaped process rooted at
- *  this repo. Used to make "yes this is one of ours" cross-platform
- *  without trusting the PID file alone. We never kill a PID that
- *  fails this check. */
-function isOurServerProcess(pid) {
+/** Describe a process by what's actually inspectable on each platform.
+ *  We need enough signal to decide "is this one of ours" AND enough
+ *  text to show the user when we refuse to kill — so they can see
+ *  what they're dealing with without launching Task Manager. */
+function describeProcess(pid) {
   if (process.platform === 'win32') {
+    // Name + CommandLine, joined with a sentinel so paths can contain |.
+    // We deliberately don't try to read cwd: Win32_Process doesn't
+    // expose it, and pulling it via PEB inspection requires native
+    // code. The Name + CommandLine combination is enough to identify
+    // a `node server.js` process unambiguously in practice (see
+    // isOurServerProcess for the rationale on dropping the cwd check).
     const r = spawnSync('powershell', [
       '-NoProfile', '-Command',
-      `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" -ErrorAction SilentlyContinue; if ($p) { $p.CommandLine }`,
+      `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" -ErrorAction SilentlyContinue;` +
+      `if ($p) { "$($p.Name)|||$($p.CommandLine)" }`,
     ], { encoding: 'utf8' });
-    const cmdline = (r.stdout ?? '').trim();
-    return /node(\.exe)?\b/i.test(cmdline)
-        && /server\.js/i.test(cmdline)
-        // Win32 CommandLine may use either slash direction; normalise.
-        && cmdline.replace(/\\/g, '/').includes(REPO_ROOT.replace(/\\/g, '/'));
+    const out = (r.stdout ?? '').trim();
+    if (!out) return { name: null, cmdline: null };
+    const sep = out.indexOf('|||');
+    if (sep < 0) return { name: out, cmdline: null };
+    return { name: out.slice(0, sep), cmdline: out.slice(sep + 3) };
   }
-  // Linux: /proc/$pid/cwd is a symlink to the working directory.
+  // Linux: cwd via /proc, cmdline via /proc.
   if (existsSync(`/proc/${pid}/cwd`)) {
+    let cwd = null, cmd = null;
     try {
-      const cwd = spawnSync('readlink', [`/proc/${pid}/cwd`], { encoding: 'utf8' }).stdout?.trim();
-      if (cwd && path.resolve(cwd) === path.resolve(REPO_ROOT)) {
-        const cmd = readFileSync(`/proc/${pid}/cmdline`, 'utf8');
-        return cmd.includes('node') && cmd.includes('server.js');
-      }
+      cwd = spawnSync('readlink', [`/proc/${pid}/cwd`], { encoding: 'utf8' }).stdout?.trim() || null;
     } catch { /* fall through */ }
+    try {
+      cmd = readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ').trim();
+    } catch { /* fall through */ }
+    return { name: cmd?.split(/\s+/)[0]?.split('/').pop() ?? null, cmdline: cmd, cwd };
   }
-  // macOS: lsof tells us the cwd; cleaner than parsing ps output.
-  const r = spawnSync('lsof', ['-a', '-d', 'cwd', '-p', String(pid), '-Fn'], { encoding: 'utf8' });
-  const cwd = (r.stdout ?? '').split('\n').find(l => l.startsWith('n'))?.slice(1);
-  if (!cwd || path.resolve(cwd) !== path.resolve(REPO_ROOT)) return false;
-  const ps = spawnSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' });
-  return /node\b/.test(ps.stdout ?? '') && /server\.js/.test(ps.stdout ?? '');
+  // macOS: lsof for cwd, ps for command.
+  const lsofR = spawnSync('lsof', ['-a', '-d', 'cwd', '-p', String(pid), '-Fn'], { encoding: 'utf8' });
+  const cwd = (lsofR.stdout ?? '').split('\n').find(l => l.startsWith('n'))?.slice(1) ?? null;
+  const psR = spawnSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' });
+  const cmdline = (psR.stdout ?? '').trim() || null;
+  return { name: cmdline?.split(/\s+/)[0]?.split('/').pop() ?? null, cmdline, cwd };
+}
+
+/** Decide whether `pid` looks like a Proto-Familiar `node server.js`
+ *  we should feel safe killing. On Unix we verify cwd against the
+ *  repo root — strict and trustworthy. On Windows we can't get cwd
+ *  reliably, so we accept "Name=node.exe + CommandLine contains
+ *  server.js" — the chance of an unrelated node process called
+ *  server.js happening to hold our exact port is vanishingly small,
+ *  and the alternative (refuse to kill, force the user to chase the
+ *  PID manually) is worse UX than the false-positive risk. */
+function isOurServerProcess(pid, info) {
+  if (process.platform === 'win32') {
+    return /^node(\.exe)?$/i.test(info.name ?? '')
+        && /server\.js/i.test(info.cmdline ?? '');
+  }
+  if (!info.cwd || path.resolve(info.cwd) !== path.resolve(REPO_ROOT)) return false;
+  return /node\b/.test(info.cmdline ?? '') && /server\.js/.test(info.cmdline ?? '');
 }
 
 async function waitForRelease(port, timeoutMs) {
@@ -136,34 +161,48 @@ async function waitForRelease(port, timeoutMs) {
 
 if (!(await isPortInUse(PORT))) process.exit(0);
 
-// Port is busy. First try the PID file (the launchers' own record),
-// then ask the OS who owns the port. Either way, we only kill if we
-// can confirm it's our own server process.
-let candidate = readPidFile();
-if (!candidate) candidate = findPortOwnerPid(PORT);
-
-if (!candidate) {
-  warn(`Port ${PORT} is in use but the owner couldn't be identified.`);
-  warn(`  Run stop.bat (Windows) or ./stop.sh (Unix), or set PORT=<other>.`);
+// Port is busy. The port owner is the canonical kill target — killing
+// any other PID (e.g. a stale .proto-familiar.pid pointing at a since-
+// recycled process) wouldn't free this port. The PID file matters
+// only as a corroborating "yes this came from our launcher" signal.
+const portOwner = findPortOwnerPid(PORT);
+if (!portOwner) {
+  warn(`Port ${PORT} is in use but the owning PID couldn't be identified.`);
+  warn(`  Try stop.bat (Windows) or ./stop.sh (Unix), or set PORT=<other>.`);
   process.exit(1);
 }
 
-if (!isOurServerProcess(candidate)) {
-  warn(`Port ${PORT} is held by PID ${candidate}, which isn't a Proto-Familiar instance.`);
+const info = describeProcess(portOwner);
+const pidFilePid = readPidFile();
+const inPidFile  = pidFilePid === portOwner;
+
+if (!inPidFile && !isOurServerProcess(portOwner, info)) {
+  warn(`Port ${PORT} is held by PID ${portOwner}, which doesn't look like a Proto-Familiar instance.`);
+  if (info.name)    warn(`  Process name: ${info.name}`);
+  if (info.cmdline) warn(`  CommandLine:  ${info.cmdline}`);
   warn(`  Stop that process or set PORT=<other> and try again.`);
+  if (process.platform === 'win32') {
+    warn(`  To force-kill manually: taskkill /PID ${portOwner} /F`);
+  } else {
+    warn(`  To force-kill manually: kill -9 ${portOwner}`);
+  }
   process.exit(1);
 }
 
-say(`Recycling stale Proto-Familiar (PID ${candidate}) holding port ${PORT}…`);
-try { process.kill(candidate, 'SIGTERM'); } catch { /* already dying */ }
+// Print what we're about to kill so the user can intervene if the
+// match was a false positive (Ctrl-C the npm start, then investigate).
+const source = inPidFile ? 'from PID file' : 'identified by process inspection';
+say(`Recycling stale Proto-Familiar (PID ${portOwner}, ${source}) holding port ${PORT}…`);
+if (info.cmdline) say(`  CommandLine: ${info.cmdline}`);
+try { process.kill(portOwner, 'SIGTERM'); } catch { /* already dying */ }
 
 if (await waitForRelease(PORT, 5_000)) {
   process.exit(0);
 }
 
 // Stubborn — escalate.
-warn(`PID ${candidate} didn't release port ${PORT} after 5s — sending SIGKILL.`);
-try { process.kill(candidate, 'SIGKILL'); } catch { /* already gone */ }
+warn(`PID ${portOwner} didn't release port ${PORT} after 5s — sending SIGKILL.`);
+try { process.kill(portOwner, 'SIGKILL'); } catch { /* already gone */ }
 if (await waitForRelease(PORT, 2_000)) process.exit(0);
 
 warn(`Port ${PORT} is still busy after SIGKILL. Investigate manually.`);
