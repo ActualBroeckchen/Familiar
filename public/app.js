@@ -1707,6 +1707,9 @@ async function sendMessage(userInput) {
     setStatus('ok');
     state.turnCount = (state.turnCount ?? 0) + 1;
     debugRecord('recv', `ok in ${Math.round(performance.now() - sendStart)}ms thalamus=${lastThalamus ? `static=${(lastThalamus.static ?? '').length}ch dynamic=${(lastThalamus.dynamic ?? '').length}ch@d${lastThalamus.depth}` : 'none'}`);
+    // M5: feed this turn's engagement into Unruh's interest layer.
+    // Fire-and-forget — never blocks the UI or surfaces errors.
+    recordTopicEngagement();
   } catch (err) {
     setTyping(false);
     if (err.name !== 'AbortError') {
@@ -1728,6 +1731,55 @@ async function sendMessage(userInput) {
     $('user-input').focus();
     abortController = null;
   }
+}
+
+/**
+ * M5 weight instrumentation. After a turn completes, attribute the
+ * engagement to whatever topics are currently open (state.topics with
+ * endIndex === null) and post it to the server, which translates the
+ * signals into an interest-weight delta and bumps Unruh.
+ *
+ * Topic attribution uses the user's manual topic markers — approach
+ * (a) from the plan. No topic markers open → nothing to attribute, so
+ * we no-op (weights only accrue for marked topics until the LLM-based
+ * detector of approach (b) lands).
+ *
+ * Signals sent per topic:
+ *   - responseChars: length of this turn's assistant reply (token-
+ *     volume proxy; shared across all open topics for the turn).
+ *   - spanMessages: how many messages the topic has been open for
+ *     (persistence proxy).
+ *
+ * Fully fire-and-forget: any failure is swallowed so interest
+ * bookkeeping can never disrupt the conversation.
+ */
+function recordTopicEngagement() {
+  try {
+    const openTopics = state.topics.filter(t => t.endIndex === null);
+    if (openTopics.length === 0) return;
+
+    // Length of the final assistant message this turn — the last
+    // assistant-role message with string content in the history.
+    let responseChars = 0;
+    for (let i = state.messages.length - 1; i >= 0; i--) {
+      const m = state.messages[i];
+      if (m.role === 'assistant' && typeof m.content === 'string' && m.content) {
+        responseChars = m.content.length;
+        break;
+      }
+    }
+
+    const topics = openTopics.map(t => ({
+      label:        t.label,
+      spanMessages: Math.max(1, state.messages.length - t.startIndex),
+    }));
+
+    fetch('/api/interest/engage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topics, responseChars }),
+    }).catch(() => { /* best-effort — interest accrual is non-critical */ });
+  } catch { /* never let bookkeeping break the turn */ }
 }
 
 /**

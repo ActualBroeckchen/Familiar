@@ -394,6 +394,36 @@ export function shutdownEntityCore() {
   try { mcpClient?.close?.(); } catch { /* best-effort */ }
 }
 
+/**
+ * Record a moment of engagement with a topic into Unruh's interest
+ * layer (M5). Fire-and-forget from the chat path: the caller computes
+ * the weight delta from chat signals (response length, topic
+ * persistence) and we just forward it to the `interest_record` tool.
+ *
+ * Best-effort like everything Unruh-facing — if Unruh is down or the
+ * call fails, we log and move on. Interest accrual missing for one
+ * message is invisible to the user; it just means that turn didn't
+ * count toward the topic's weight.
+ *
+ * @param {{ topic: string, delta: number, source?: string }} args
+ * @returns {Promise<boolean>} true if the bump landed
+ */
+export async function recordInterest({ topic, delta, source = 'chat' }) {
+  if (!unruhClient) return false;
+  if (!topic || typeof topic !== 'string' || !topic.trim()) return false;
+  if (typeof delta !== 'number' || !Number.isFinite(delta) || delta <= 0) return false;
+  try {
+    await unruhClient.callTool({
+      name: 'interest_record',
+      arguments: { topic: topic.trim(), delta, source },
+    });
+    return true;
+  } catch (err) {
+    console.error('[thalamus] interest_record failed:', err?.message ?? err);
+    return false;
+  }
+}
+
 connect().catch(err => {
   console.error('[thalamus] Failed to start entity-core:', err.message);
 });

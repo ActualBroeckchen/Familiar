@@ -24,6 +24,7 @@ import {
   createGraphNode, createGraphEdge,
   createSnapshot, restoreSnapshot,
   reconnectEntityCore,
+  recordInterest,
   shutdownUnruh, shutdownEntityCore,
 } from './thalamus.js';
 import {
@@ -312,6 +313,68 @@ app.post('/api/debug-prompt', async (req, res) => {
   enrichedMessages = injection.messages;
 
   res.json({ messages: enrichedMessages, depth, injectedAt: injection.injectedAt });
+});
+
+// ── Interest engagement (M5) ─────────────────────────────────────
+
+// Translate per-turn chat signals into an interest-weight delta.
+// Pure function so the weight semantics live in one testable place.
+//
+// Two signals (the third, session-boundary survival, lands with the
+// M6 handoff):
+//
+//   token volume — a long, expansive answer signals the topic pulled
+//     real engagement. Measured in response characters (chars/4 ≈
+//     tokens; we don't run a tokenizer). Scaled so a ~1500-char
+//     response contributes ~0.1 (matching the manual record default),
+//     capped so a single huge dump can't dominate.
+//
+//   persistence — a topic that's stayed open across several messages
+//     is one the conversation keeps returning to. `spanMessages` is
+//     how many messages the topic has been open for; each turn of
+//     persistence adds a little, capped.
+//
+// Both components are additive. A deep, sustained topic (long answers
+// across many turns) accrues fastest; a one-off short mention gets a
+// small bump that decay erases within a couple of weeks.
+const ENGAGE_TOKEN_SCALE_CHARS = 1500; // chars that map to one TOKEN_UNIT
+const ENGAGE_TOKEN_UNIT        = 0.1;
+const ENGAGE_TOKEN_CAP         = 0.5;
+const ENGAGE_PERSIST_PER_TURN  = 0.05;
+const ENGAGE_PERSIST_CAP       = 0.3;
+
+function interestEngagementDelta({ responseChars = 0, spanMessages = 0 } = {}) {
+  const rc = Number.isFinite(responseChars) && responseChars > 0 ? responseChars : 0;
+  const sm = Number.isFinite(spanMessages) && spanMessages > 0 ? spanMessages : 0;
+  const tokenComponent = Math.min((rc / ENGAGE_TOKEN_SCALE_CHARS) * ENGAGE_TOKEN_UNIT, ENGAGE_TOKEN_CAP);
+  const persistComponent = Math.min(sm * ENGAGE_PERSIST_PER_TURN, ENGAGE_PERSIST_CAP);
+  return tokenComponent + persistComponent;
+}
+
+// POST /api/interest/engage
+// Body: { topics: [{ label, spanMessages }], responseChars }
+// Records an engagement bump for each active topic from the turn that
+// just completed. Fire-and-forget from the client's perspective —
+// returns the computed deltas for debugging but never blocks or fails
+// the conversation. Degrades silently when Unruh is down.
+app.post('/api/interest/engage', async (req, res) => {
+  const { topics, responseChars } = req.body ?? {};
+  if (!Array.isArray(topics) || topics.length === 0) {
+    return res.json({ ok: true, recorded: [] });
+  }
+  const recorded = [];
+  for (const t of topics) {
+    const label = typeof t?.label === 'string' ? t.label.trim() : '';
+    if (!label) continue;
+    const delta = interestEngagementDelta({
+      responseChars,
+      spanMessages: t?.spanMessages,
+    });
+    if (delta <= 0) continue;
+    const ok = await recordInterest({ topic: label, delta, source: 'chat' });
+    recorded.push({ topic: label, delta, ok });
+  }
+  res.json({ ok: true, recorded });
 });
 
 // ── Log endpoints ───────────────────────────────────────────────

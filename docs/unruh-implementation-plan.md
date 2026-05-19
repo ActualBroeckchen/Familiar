@@ -395,40 +395,45 @@ persistence across consecutive messages, session-boundary survival.
 Bookmarks remain a supplementary explicit signal.
 
 **Tasks**
-- [ ] **Topic attribution.** This is the load-bearing prerequisite.
-      Today the only topic source is the user's manual `state.topics`
-      markers. Options:
-      - (a) Reuse `state.topics`: when frontend sends a message,
-        include the active topic id/label in the `/api/chat` request
-        and pass it through to a new `interest_record_message` MCP
-        tool.
-      - (b) Add an LLM-based topic detector that runs out-of-band
-        (cheap model, async, writes to Unruh after the fact). This
-        violates Decision 7 only if we count Unruh-internal LLM
-        calls; the design doc explicitly says Unruh shouldn't do
-        inference itself, so this must live in the chat path and
-        push results into Unruh.
-      - **Recommendation:** start with (a) so we ship without a new
-        model dependency, mark (b) as a follow-on once we have a
-        baseline.
-- [ ] **Token volume.** Server measures response length per message
-      and posts `{ topic, response_tokens }` to Unruh. Long expansive
-      responses bump weight more.
-- [ ] **Topic persistence.** Thalamus tracks "previous message's
-      topic"; when current matches, post a persistence bump.
-- [ ] **Session-boundary survival.** Unruh stores the last-active
-      topics from the previous session (written at session end —
-      depends on Milestone 6). When a topic re-emerges, bump.
-- [ ] **Bookmarks.** Already an explicit tool from Milestone 4.
+- [x] **Topic attribution.** Took approach (a): the frontend's
+      `recordTopicEngagement()` collects the currently-open topics
+      (state.topics with endIndex === null) when a turn completes and
+      POSTs them to `/api/interest/engage`. No new model dependency.
+      Approach (b) — an LLM-based topic detector for unmarked
+      conversation — remains the documented follow-on; until it
+      lands, weights only accrue for topics the user has marked.
+- [x] **Token volume.** The engage payload carries `responseChars`
+      (the final assistant reply's length — chars/4 ≈ tokens, no
+      tokenizer). `interestEngagementDelta()` in server.js maps it
+      to a weight component: ~1500 chars → 0.1, capped at 0.5 so a
+      single huge dump can't dominate.
+- [x] **Topic persistence.** The engage payload carries
+      `spanMessages` per topic (how many messages it's been open
+      for). The delta formula adds 0.05/message, capped at 0.3 — a
+      topic the conversation keeps returning to accrues steadily.
+- [ ] **Session-boundary survival.** Deferred to Milestone 6 as the
+      plan anticipated — it depends on the session-end handoff
+      writing last-active topics, which M6 introduces. The `source`
+      field on `interest_record` is already plumbed so M6 can post
+      `source='session_boundary'` bumps without further wiring.
+- [x] **Bookmarks.** Explicit tool from Milestone 4 (`interest_bookmark`).
 
-**Acceptance:** A conversation that returns to the same topic across
-several sessions shows that topic accruing weight; a one-off mention
-fades within days.
+**Acceptance:** Verified end-to-end via smoke. Recording engagement
+for "owl flight mechanics" across turns accrues weight (0.3 + 0.4 →
+0.70, rendered in the [Temporal Context] live-interests list sorted
+by weight); a single small bump (0.05) lands low and decays away.
+The full path is frontend `recordTopicEngagement` → POST
+`/api/interest/engage` → `interestEngagementDelta` → thalamus
+`recordInterest` → Unruh `interest_record` (decay-then-add) →
+`temporal_context` surfacing.
 
-**Open question — weight curve shape.** Pick `tau` (decay half-life)
-deliberately. Design doc says "a real interest survives a few days of
-inattention". Start with `tau = 5 days`; expose as a config so it can
-be tuned without code changes.
+**Open question — weight curve shape: resolved.** tau = 5 days (set
+in M4's interest.py, `DEFAULT_TAU_DAYS`). Accrual constants live in
+server.js (`ENGAGE_*`). Both are code constants for now; the M5
+plan's "expose as config" is folded into the same settings-sync work
+M4 deferred — a single "interest tuning" settings group (tau, accrual
+scales, min surfaced weight) is cheaper to ship once than piecemeal.
+Tracked as a near-term follow-on, not a blocker.
 
 ---
 
