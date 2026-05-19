@@ -154,7 +154,8 @@ The Familiar can do the same edits autonomously via the seven editing tools desc
 
 Click the **🔍** button in the top bar after sending a message to see the complete prompt that was actually sent to the LLM on the previous turn, color-coded by source:
 
-- **Entity-Core (Thalamus)** — the block server-side `thalamus.enrich()` prepended; captured from the live `/api/chat` response so you see exactly what was injected, not a re-derived preview
+- **Entity-Core (static)** (purple) — the cacheable identity prefix prepended to the system message
+- **Entity-Core (dynamic @ depth)** (teal) — the per-turn block (memories / graph / temporal) depth-injected as its own system message at the cache-friendly position. See [`architecture.md#prompt-cache-aware-assembly`](architecture.md#prompt-cache-aware-assembly) for why these are split
 - **System prompt**, **Character profile**, **User profile** — the configured base segments
 - **Lore — system top / before character / after character / system bottom / injected at depth** — every Tome entry the activation engine matched, grouped by injection position
 - **Post-history prompt** — the trailing user instruction (if configured)

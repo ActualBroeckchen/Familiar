@@ -89,7 +89,7 @@ Server-side session-memorization queue:
 The cognitive-module mediator. Currently bridges two specialists; designed to grow into more.
 
 - On startup, spawns `entity-core` (Deno) and `Unruh` (Python via `uv`) as separate child processes over stdio using the MCP (Model Context Protocol) SDK. entity-core is launched with `deno run -A --unstable-cron`, granting it all Deno permissions — fine for a personal local tool, restrictable to `--allow-read=<data-dir> --allow-write=<data-dir> --allow-env` for shared deployments. Unruh runs via `uv run python -m unruh`; `uv` is resolved via `resolveUvBinary()`, which probes common install locations so the spawn works even when PATH doesn't carry uv (e.g. GUI launchers on Windows).
-- Exposes a single `enrich(userMessage)` function called once per chat request. It fires four MCP tool calls in parallel — entity-core's `identity_get_all`, `memory_search`, `graph_node_search`, plus Unruh's `temporal_context` — and assembles the results into a structured context block prepended to the system message. Each call is wrapped in `Promise.allSettled` so any one failing doesn't take the others out. Unruh's call is additionally wrapped in a 2-second `Promise.race` timeout so a slow Unruh can't block the chat path. Empty sub-blocks are omitted entirely from the assembled block.
+- Exposes a single `enrich(userMessage)` function called once per chat request. It fires four MCP tool calls in parallel — entity-core's `identity_get_all`, `memory_search`, `graph_node_search`, plus Unruh's `temporal_context` — and **returns the results as `{ static, dynamic }` so server.js can place them where the upstream LLM's prefix cache wants them** (see [Prompt-cache-aware assembly](#prompt-cache-aware-assembly) below). Each call is wrapped in `Promise.allSettled` so any one failing doesn't take the others out. Unruh's call is additionally wrapped in a 2-second `Promise.race` timeout so a slow Unruh can't block the chat path. Empty sub-blocks are omitted entirely.
 - Resolves entity-core's API key from the user-designated saved connection (see [Entity-Core → API key](entity-core.md#api-key-designation)). When the designation changes, `server.js` calls the exported `reconnectEntityCore()` which tears down the child and re-spawns it with fresh env (`ENTITY_CORE_LLM_API_KEY`, `_BASE_URL`, `_MODEL`, and `ZAI_*` aliases for z.ai providers). No server restart required.
 - Reconnect-with-backoff on the Unruh child: on close, schedules retries with exponential backoff (1s, 2s, 5s, 10s, 30s; max 10 attempts; counter resets on success). Entity-core uses the same `reconnectEntityCore()` path manually.
 - Returns an empty string (graceful degradation) if both peers are unreachable. Pre-existing exports for the Knowledge editor (`listMemories`, `createMemory`, `updateGraphNode`, etc.) still work and target entity-core directly.
@@ -137,6 +137,25 @@ Tool calls?
    ├── YES → execute client-side → append results → re-send (up to 5 rounds)
    └── NO  → render assistant message → save to localStorage + server
 ```
+
+## Prompt-cache-aware assembly
+
+LLM providers (z.ai, OpenAI, Anthropic) all cache the longest common prefix across consecutive requests and bill the cached region at a fraction of the normal rate (z.ai, for example, drops cached input tokens by ~90%). For Proto-Familiar this matters: the entity-core identity layer is multi-kilobyte and barely changes within a session, so caching it is a big save — but only if we don't accidentally put per-turn-dynamic content in front of it.
+
+`thalamus.js:enrich()` returns the context as two strings:
+
+| Block | What's in it | Lifetime | Where server.js puts it |
+|---|---|---|---|
+| `static` | base_instructions + all identity files (self / user / relationship / custom) | Stable across turns within a session (changes only when identity files are edited) | Prepended to the system message at index 0 |
+| `dynamic` | RAG memory matches + knowledge-graph excerpt + `[Temporal Context]` | Re-derived every turn (RAG is query-dependent, temporal is clock-dependent) | Inserted as a separate `role: 'system'` message at `max(1, messages.length - depth)` |
+
+The depth defaults to 4 and is configurable via the `thalamusDynamicDepth` setting (1–50, synced via `SERVER_SYNCED_KEYS`). Smaller values place the dynamic block closer to the current question (better model attention to the retrieved memories); larger values move it further back (more conversation history above the injection becomes cache-stable).
+
+`injectDynamicAtDepth(messages, dynamicContent, depth)` in `server.js` is a pure helper that does the array splice; `tests/depth-inject.test.mjs` covers its behaviour including the load-bearing invariant *"messages[0..injectedAt-1] is the same reference as the input"* — without that invariant, the prefix-cache claim is hollow.
+
+The `_thalamus` envelope returned to the client carries `{ static, dynamic, depth, injectedAt }` so the prompt inspector can render each block with its own color (purple for static, teal for dynamic) at the exact position the server placed it.
+
+---
 
 ## Security Design
 

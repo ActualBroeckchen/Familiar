@@ -154,24 +154,41 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     return res.status(400).json({ error: 'Messages array is required and must not be empty.' });
   }
 
-  // Enrich with entity-core context (memories + identity). Degrades gracefully.
+  // Enrich with entity-core + Unruh context. Split into a static
+  // prefix (identity + base instructions; stable across turns so the
+  // upstream LLM's prefix cache hits) and a dynamic block (RAG
+  // memories, graph excerpts, temporal context; varies per turn so
+  // we depth-inject it instead of letting it invalidate the prefix).
+  // Degrades gracefully — empty strings on either side just skip
+  // the corresponding injection.
   const lastUser = [...messages].reverse().find(m => m.role === 'user');
   const userText = typeof lastUser?.content === 'string'
     ? lastUser.content
     : ((lastUser?.content ?? []).find(c => c.type === 'text')?.text ?? '');
-  const entityContext = await enrich(userText);
+  const enriched = await enrich(userText);
+  const depth = getThalamusDynamicDepth();
 
   let enrichedMessages = messages;
-  if (entityContext) {
+
+  // 1) Prepend static block to the system message. Lives at the very
+  //    top of the prompt so the provider's prefix cache covers it.
+  if (enriched.static) {
     const sysIdx = messages.findIndex(m => m.role === 'system');
     if (sysIdx >= 0) {
       enrichedMessages = messages.map((m, i) =>
-        i === sysIdx ? { ...m, content: entityContext + '\n\n' + m.content } : m,
+        i === sysIdx ? { ...m, content: enriched.static + '\n\n' + m.content } : m,
       );
     } else {
-      enrichedMessages = [{ role: 'system', content: entityContext }, ...messages];
+      enrichedMessages = [{ role: 'system', content: enriched.static }, ...messages];
     }
   }
+
+  // 2) Depth-inject the dynamic block as a separate system message
+  //    N positions from the end. Computed AFTER the static prepend so
+  //    the index counts the (possibly newly-created) system message.
+  const injection = injectDynamicAtDepth(enrichedMessages, enriched.dynamic, depth);
+  enrichedMessages = injection.messages;
+  const injectedAt = injection.injectedAt;
 
   const payload = { model: model.trim(), messages: enrichedMessages, stream: !!stream };
   if (typeof temperature === 'number') payload.temperature = temperature;
@@ -193,19 +210,26 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     return res.status(502).json({ error: `Network error reaching ${provider}: ${err.message}` });
   }
 
+  // The envelope mirrored on every successful response so the client
+  // can render the prompt inspector verbatim instead of re-deriving.
+  // Carries both blocks separately + the injection coordinates so the
+  // inspector can show static-vs-dynamic regions distinctly.
+  const thalamusEnvelope = (enriched.static || enriched.dynamic) ? {
+    static:     enriched.static  || '',
+    dynamic:    enriched.dynamic || '',
+    depth,
+    injectedAt,
+  } : null;
+
   // Non-streaming path
   if (!stream) {
     const text = await upstream.text();
     res.status(upstream.status);
     res.setHeader('Content-Type', 'application/json');
-    // Attach the actual entity-core block that thalamus injected, so the
-    // client's prompt inspector can show what was sent verbatim (without
-    // re-running enrich() and risking drift). On parse failure or upstream
-    // error, fall through to a raw passthrough.
-    if (entityContext && upstream.ok) {
+    if (thalamusEnvelope && upstream.ok) {
       try {
         const parsed = JSON.parse(text);
-        parsed._thalamus = { entityContext };
+        parsed._thalamus = thalamusEnvelope;
         return res.send(JSON.stringify(parsed));
       } catch { /* upstream returned non-JSON — pass through unchanged */ }
     }
@@ -229,8 +253,8 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // could be opened. Uses the same `data: ` line format as the upstream
   // SSE stream; the client routes on the presence of `_thalamus` instead
   // of `choices`.
-  if (entityContext) {
-    res.write(`data: ${JSON.stringify({ _thalamus: { entityContext } })}\n\n`);
+  if (thalamusEnvelope) {
+    res.write(`data: ${JSON.stringify({ _thalamus: thalamusEnvelope })}\n\n`);
   }
 
   const reader = upstream.body.getReader();
@@ -262,25 +286,31 @@ app.post('/api/debug-prompt', async (req, res) => {
     return res.status(400).json({ error: 'messages array is required.' });
   }
 
+  // Mirror the /api/chat split: static into the system message,
+  // dynamic depth-injected. Keeps the debug-prompt preview accurate
+  // about what /api/chat would actually send.
   const lastUser = [...messages].reverse().find(m => m.role === 'user');
   const userText = typeof lastUser?.content === 'string'
     ? lastUser.content
     : ((lastUser?.content ?? []).find(c => c.type === 'text')?.text ?? '');
-  const entityContext = await enrich(userText);
+  const enriched = await enrich(userText);
+  const depth = getThalamusDynamicDepth();
 
   let enrichedMessages = messages;
-  if (entityContext) {
+  if (enriched.static) {
     const sysIdx = messages.findIndex(m => m.role === 'system');
     if (sysIdx >= 0) {
       enrichedMessages = messages.map((m, i) =>
-        i === sysIdx ? { ...m, content: entityContext + '\n\n' + m.content } : m,
+        i === sysIdx ? { ...m, content: enriched.static + '\n\n' + m.content } : m,
       );
     } else {
-      enrichedMessages = [{ role: 'system', content: entityContext }, ...messages];
+      enrichedMessages = [{ role: 'system', content: enriched.static }, ...messages];
     }
   }
+  const injection = injectDynamicAtDepth(enrichedMessages, enriched.dynamic, depth);
+  enrichedMessages = injection.messages;
 
-  res.json({ messages: enrichedMessages });
+  res.json({ messages: enrichedMessages, depth, injectedAt: injection.injectedAt });
 });
 
 // ── Log endpoints ───────────────────────────────────────────────
@@ -979,6 +1009,49 @@ app.get('/api/settings', async (_req, res) => {
     return res.status(500).json({ error: `failed to read settings: ${err.message}` });
   }
 });
+
+// Read the user's preferred depth for the dynamic-thalamus injection
+// (memories / graph / temporal go N positions from the end of the
+// conversation as a separate system message, leaving the identity
+// prefix on the system message stable for the upstream LLM's prefix
+// cache). Bounded to a sensible range; falls back to 4 on any error.
+//
+// Function declaration so it's hoisted — the /api/chat handler defined
+// earlier in the file references it before settings.json's path
+// constant declares itself further down. Module-level execution is
+// complete by the time HTTP requests arrive, so the SETTINGS_FILE
+// const it reads is initialised at call time.
+function getThalamusDynamicDepth() {
+  try {
+    const s = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
+    const d = parseInt(s.thalamusDynamicDepth, 10);
+    if (Number.isFinite(d) && d >= 1 && d <= 50) return d;
+  } catch { /* fall through to default */ }
+  return 4;
+}
+
+// Pure helper. Insert `dynamicContent` as a system message `depth`
+// positions from the end of `messages`, leaving the array stable
+// above that point for the upstream LLM's prefix cache. Returns the
+// new array plus the actual position used so the inspector can show
+// where it landed. Clamped to max(1, …) so even an empty conversation
+// keeps the injection below the system message.
+//
+// No-op (returns messages unchanged + injectedAt=null) when
+// dynamicContent is empty.
+function injectDynamicAtDepth(messages, dynamicContent, depth) {
+  if (!dynamicContent) return { messages, injectedAt: null };
+  const injectedAt = Math.max(1, messages.length - depth);
+  const dynamicMsg = { role: 'system', content: dynamicContent };
+  return {
+    messages: [
+      ...messages.slice(0, injectedAt),
+      dynamicMsg,
+      ...messages.slice(injectedAt),
+    ],
+    injectedAt,
+  };
+}
 
 // Resolve the fields entity-core actually cares about from a settings
 // snapshot, so we can tell whether a settings PUT changed any of them.

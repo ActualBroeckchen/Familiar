@@ -397,30 +397,30 @@ function identitySection(files, order) {
 // ── enrich ────────────────────────────────────────────────────────────────────
 
 /**
- * Build the full entity-core context for a user message.
- * Fires identity, memory, and graph queries in parallel then assembles:
+ * Build entity-core + Unruh context for a user message, split into a
+ * static prefix and a dynamic block for cache-aware prompt assembly.
  *
- *   <base_instructions>…</base_instructions>          (if present)
- *   ---
- *   My self files …                                   (XML-wrapped, ordered)
- *   ---
- *   User files …
- *   ---
- *   Relationship files …
- *   ---
- *   Custom files …
- *   ---
- *   Relevant Memories via RAG:                        (scored excerpts)
- *   ---
- *   Relevant Knowledge from Graph:                    (nodes + edges)
+ *   static  — base_instructions + all identity files (self / user /
+ *             relationship / custom). Stable across turns; lives at
+ *             the top of the system message so the upstream LLM's
+ *             prefix cache hits on it for the lifetime of the
+ *             identity files.
+ *   dynamic — RAG memory matches + knowledge-graph excerpt +
+ *             [Temporal Context]. Re-derived per request (varies by
+ *             query / by clock). Caller injects this at depth in the
+ *             message array so it doesn't invalidate the static
+ *             prefix.
  *
- * Returns '' on any error so the request degrades gracefully.
+ * Returns { static: '', dynamic: '' } on any error so the request
+ * degrades gracefully — server.js treats empty strings as "skip the
+ * injection".
  *
  * @param {string} userMessage
- * @returns {Promise<string>}
+ * @returns {Promise<{ static: string, dynamic: string }>}
  */
 export async function enrich(userMessage) {
-  if (!mcpClient && !unruhClient) return '';
+  const EMPTY = { static: '', dynamic: '' };
+  if (!mcpClient && !unruhClient) return EMPTY;
 
   try {
     // Fire all queries in parallel but independently — a failure in any
@@ -599,28 +599,43 @@ export async function enrich(userMessage) {
     // attention parsing scaffolding.
     const temporalLines = formatTemporalContext(parseToolText(temporalResult, null));
 
-    // ── Assemble (mirrors Psycheros buildSystemMessage) ───────────────────
-    const sections = [];
+    // ── Assemble into static + dynamic blocks ─────────────────────────────
+    //
+    // Static lives at the top of the system message (identity + base
+    // instructions don't change between turns within a session, so they
+    // sit in the cacheable prefix region of the upstream prompt).
+    //
+    // Dynamic gets depth-injected later in the conversation by server.js,
+    // because every byte of it changes between turns (RAG matches depend
+    // on the user message; temporal context depends on the clock). If we
+    // glued these into the prefix the way the previous architecture did,
+    // we'd invalidate the entire identity-cache region on every request.
+    const staticSections = [];
+    if (baseContent)   staticSections.push(baseContent);
+    if (selfContent)   staticSections.push(`---\nMy self files (from identity/self/ directory):\n\n${selfContent}`);
+    if (userContent)   staticSections.push(`---\nUser files (from identity/user/ directory):\n\n${userContent}`);
+    if (relContent)    staticSections.push(`---\nRelationship files (from identity/relationship/ directory):\n\n${relContent}`);
+    if (custContent)   staticSections.push(`---\nCustom files (from identity/custom/ directory):\n\n${custContent}`);
 
-    if (baseContent)   sections.push(baseContent);
-    if (selfContent)   sections.push(`---\nMy self files (from identity/self/ directory):\n\n${selfContent}`);
-    if (userContent)   sections.push(`---\nUser files (from identity/user/ directory):\n\n${userContent}`);
-    if (relContent)    sections.push(`---\nRelationship files (from identity/relationship/ directory):\n\n${relContent}`);
-    if (custContent)   sections.push(`---\nCustom files (from identity/custom/ directory):\n\n${custContent}`);
-    if (memLines)      sections.push(`---\nRelevant Memories via RAG:\n\n${memLines}`);
-    if (graphLines)    sections.push(`---\nRelevant Knowledge from Graph:\n${graphLines}`);
-    if (temporalLines) sections.push(`---\n[Temporal Context]\n${temporalLines}`);
+    const dynamicSections = [];
+    if (memLines)      dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
+    if (graphLines)    dynamicSections.push(`Relevant Knowledge from Graph:\n${graphLines}`);
+    if (temporalLines) dynamicSections.push(`[Temporal Context]\n${temporalLines}`);
 
-    if (sections.length === 0) {
+    const staticBlock  = staticSections.join('\n');
+    const dynamicBlock = dynamicSections.join('\n\n---\n\n');
+
+    const totalChars = staticBlock.length + dynamicBlock.length;
+    if (totalChars === 0) {
       console.warn('[thalamus] enrich() produced no content — identity files may be empty and no memories found');
     } else {
-      console.log(`[thalamus] enrich() injecting ${sections.length} section(s), ~${sections.join('\n').length} chars`);
+      console.log(`[thalamus] enrich() static=${staticBlock.length}ch dynamic=${dynamicBlock.length}ch`);
     }
 
-    return sections.join('\n');
+    return { static: staticBlock, dynamic: dynamicBlock };
   } catch (err) {
     console.error('[thalamus] enrich failed:', err.message);
-    return '';
+    return { static: '', dynamic: '' };
   }
 }
 

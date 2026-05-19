@@ -24,7 +24,11 @@ Before each LLM call (`POST /api/chat` and `POST /api/debug-prompt`), the server
 
 ## Context Block Structure
 
-The assembled context block is prepended to the system message in this order:
+The context is split into two regions, placed in the prompt by `server.js` based on how often each one changes — so the upstream LLM's prefix cache covers what's stable and only the dynamic part churns. See [`architecture.md#prompt-cache-aware-assembly`](architecture.md#prompt-cache-aware-assembly) for the full rationale.
+
+### Static block — prepended to the system message
+
+Stable across turns; lives at the top of the prompt so the provider's prefix cache covers it:
 
 ```
 <base_instructions>…</base_instructions>
@@ -39,10 +43,6 @@ My self files (from identity/self/ directory):
 <my_mechanics>…</my_mechanics>
 ---
 User files (from identity/user/ directory):
-
-<user_identity>…</user_identity>
----
-<user_life>…</user_life>
 …
 ---
 Relationship files (from identity/relationship/ directory):
@@ -50,7 +50,15 @@ Relationship files (from identity/relationship/ directory):
 ---
 Custom files (from identity/custom/ directory):
 …
----
+```
+
+Each identity file is wrapped in XML tags named after the file's `promptLabel` field. Files are sorted in the same canonical order entity-core uses internally. Sections with no content are omitted.
+
+### Dynamic block — depth-injected as a separate system message
+
+Re-derived every turn (query-dependent or clock-dependent), so it's injected `max(1, messages.length - depth)` positions from the end of the conversation — deep enough that the static prefix stays cacheable, close enough to the user's current question for the model to use:
+
+```
 Relevant Memories via RAG:
 
 [1] (from daily/2026-05-12, 87% relevant)
@@ -58,16 +66,23 @@ Memory text…
 
 [2] (from weekly/2026-W19, 72% relevant)
 Memory text…
+
 ---
+
 Relevant Knowledge from Graph:
 
 Node text…
   → edge label → connected node…
+
+---
+
+[Temporal Context]
+Current phase: morning correspondence (10:00–13:00)
+  14:00 — Chen's appointment
+  22:00 — cat play + dinner
 ```
 
-Each identity file is wrapped in XML tags named after the file's `promptLabel` field (e.g. `<my_identity>`, `<my_persona>`). Files are sorted in the same canonical order entity-core uses internally. Sections that have no content are omitted entirely.
-
-If entity-core is prepended to a message array that already has a system message, the block is inserted at the top of that system message. If there is no system message, a new one is created.
+Default depth = 4. Configurable via the **Context-cache depth** field in the Settings panel (synced across devices via `settings.json`'s `thalamusDynamicDepth`).
 
 ---
 

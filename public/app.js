@@ -582,6 +582,14 @@ const state = {
   fallbackConnectionIds:   [],   // ordered ids tried when primary fails/returns empty
   maxEmptyRetries:         2,    // retries per connection when response is empty
   entityCoreConnectionId:  null, // id of the connection whose API key entity-core uses
+  // ── Prompt-cache tuning ──────────────────────────────────
+  // How many messages from the end of the conversation the dynamic
+  // thalamus block gets injected at. Static identity stays at the
+  // top so the provider's prefix cache covers it; dynamic (memories /
+  // graph / temporal) goes N positions deep so it doesn't invalidate
+  // the prefix. 4 is a balance between cache wins and the model
+  // seeing the retrieved memories close to the current question.
+  thalamusDynamicDepth:    4,
 };
 
 // ── Persistence ──────────────────────────────────────────────────
@@ -604,6 +612,7 @@ const SERVER_SYNCED_KEYS = [
   'tomeCaseSensitive', 'tomeMatchWholeWords',
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
   'entityCoreConnectionId',
+  'thalamusDynamicDepth',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -668,6 +677,11 @@ function loadPersisted() {
   if (!Array.isArray(state.connections))           state.connections = [];
   if (!Array.isArray(state.fallbackConnectionIds)) state.fallbackConnectionIds = [];
   if (typeof state.maxEmptyRetries !== 'number')   state.maxEmptyRetries = 2;
+  if (typeof state.thalamusDynamicDepth !== 'number'
+      || state.thalamusDynamicDepth < 1
+      || state.thalamusDynamicDepth > 50) {
+    state.thalamusDynamicDepth = 4;
+  }
   migrateLegacyConnection();
 }
 
@@ -1600,7 +1614,14 @@ let lastSentMessages = null;
 /** Per-segment provenance for the system message of the last build. See buildApiMessages. */
 let lastBuildSegments = null;
 /** The entity-core block that the server actually prepended to the last request's system message. */
-let lastThalamusContext = null;
+// Last successful response's thalamus envelope, captured per-request:
+//   { static, dynamic, depth, injectedAt }
+// `static` lives at the top of the system message (cacheable prefix);
+// `dynamic` is the depth-injected block at position `injectedAt`.
+// Both are optional — server emits an empty string for whichever side
+// thalamus didn't produce. null between requests + when no successful
+// response has come back yet.
+let lastThalamus = null;
 
 // Extract a human-readable error string from an OpenAI-compatible
 // error response, which can shape `error` as either a bare string OR
@@ -1651,7 +1672,7 @@ async function sendMessage(userInput) {
   const userTimestamp = now;
   const apiMessages   = buildApiMessages(userInput);
   lastSentMessages    = apiMessages;
-  lastThalamusContext = null; // wait for the live answer to populate this
+  lastThalamus = null; // wait for the live answer to populate this
 
   // Optimistic UI
   appendUserMessage(userInput, userTimestamp);
@@ -1669,7 +1690,7 @@ async function sendMessage(userInput) {
     }
     setStatus('ok');
     state.turnCount = (state.turnCount ?? 0) + 1;
-    debugRecord('recv', `ok in ${Math.round(performance.now() - sendStart)}ms thalamus=${lastThalamusContext ? lastThalamusContext.length + 'ch' : 'none'}`);
+    debugRecord('recv', `ok in ${Math.round(performance.now() - sendStart)}ms thalamus=${lastThalamus ? `static=${(lastThalamus.static ?? '').length}ch dynamic=${(lastThalamus.dynamic ?? '').length}ch@d${lastThalamus.depth}` : 'none'}`);
   } catch (err) {
     setTyping(false);
     if (err.name !== 'AbortError') {
@@ -1759,7 +1780,7 @@ async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts
         try {
           const parsed = JSON.parse(raw);
           if (parsed._thalamus) {
-            lastThalamusContext = parsed._thalamus.entityContext ?? null;
+            lastThalamus = parsed._thalamus;
             continue;
           }
           const choice = parsed.choices?.[0];
@@ -1938,7 +1959,7 @@ async function attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifa
     if (!response.ok || data.error) {
       throw new Error(extractErrorText(data, `API error ${response.status}`));
     }
-    if (data._thalamus) lastThalamusContext = data._thalamus.entityContext ?? null;
+    if (data._thalamus) lastThalamus = data._thalamus;
 
     const choice       = data.choices?.[0];
     const message      = choice?.message;
@@ -2153,6 +2174,10 @@ function readSettingsFromUI() {
   state.streaming         = $('streaming-toggle').checked;
   state.temperature       = parseFloat($('temperature').value);
   state.maxTokens         = parseInt($('max-tokens').value, 10);
+  {
+    const v = parseInt($('thalamus-dynamic-depth')?.value, 10);
+    state.thalamusDynamicDepth = Number.isFinite(v) && v >= 1 && v <= 50 ? v : 4;
+  }
   state.userName          = $('user-name').value.trim() || 'User';
   state.charName          = $('char-name').value.trim() || 'Assistant';
   state.systemPrompt      = $('system-prompt').value;
@@ -2197,6 +2222,7 @@ function writeSettingsToUI() {
   setIfNotFocused($('temperature'),     'value',   state.temperature);
   $('temp-display').textContent = state.temperature;
   setIfNotFocused($('max-tokens'),         'value',   state.maxTokens);
+  if ($('thalamus-dynamic-depth')) setIfNotFocused($('thalamus-dynamic-depth'), 'value', state.thalamusDynamicDepth ?? 4);
   setIfNotFocused($('user-name'),          'value',   state.userName ?? 'User');
   setIfNotFocused($('char-name'),          'value',   state.charName ?? 'Assistant');
   setIfNotFocused($('system-prompt'),      'value',   state.systemPrompt);
@@ -2472,7 +2498,12 @@ function showMemorizationFailureNotice(reason) {
 // Human-readable labels for each prompt-segment source. The CSS class
 // `pi-src-<source>` controls the chip + left-rule colour.
 const PI_SOURCE_LABELS = {
-  'thalamus':          'Entity-Core (Thalamus)',
+  // Thalamus is split into two regions for cache-aware prompt assembly:
+  // the static block prepends the system message (cacheable prefix);
+  // the dynamic block is depth-injected as its own system message so
+  // changes don't invalidate the static prefix.
+  'thalamus-static':   'Entity-Core (static)',
+  'thalamus-dynamic':  'Entity-Core (dynamic @ depth)',
   'lore-sys-top':      'Lore · system top',
   'lore-before-char':  'Lore · before character',
   'lore-after-char':   'Lore · after character',
@@ -2510,7 +2541,8 @@ function openPromptInspector() {
   // Legend strip
   const legend = document.createElement('div');
   legend.className = 'pi-legend';
-  for (const src of ['thalamus', 'system-prompt', 'character-profile', 'user-profile',
+  for (const src of ['thalamus-static', 'thalamus-dynamic',
+                     'system-prompt', 'character-profile', 'user-profile',
                      'lore-sys-top', 'lore-before-char', 'lore-after-char', 'lore-sys-bottom',
                      'lore-at-depth', 'post-history']) {
     const chip = document.createElement('span');
@@ -2521,7 +2553,7 @@ function openPromptInspector() {
   body.appendChild(legend);
 
   // Note about provenance freshness
-  if (!lastThalamusContext) {
+  if (!lastThalamus || (!lastThalamus.static && !lastThalamus.dynamic)) {
     const note = document.createElement('p');
     note.className = 'field-hint';
     note.textContent = 'No entity-core block in the last response. Thalamus may have returned empty (no enrichment), or the request hadn\'t completed yet — re-open after the next reply lands.';
@@ -2530,7 +2562,12 @@ function openPromptInspector() {
 
   const atDepthSet = new Set((lastBuildSegments?.atDepthInjections ?? []).map(a => a.indexInFinal));
 
-  lastSentMessages.forEach((msg, idx) => {
+  // Renders one message wrap into `body`. Pulled into a helper so the
+  // server's depth-injected thalamus message (which isn't in
+  // lastSentMessages because the client doesn't see it until it's
+  // already on its way to the LLM) can be rendered the same way as
+  // the messages the client built itself.
+  const renderMessage = (msg, idx) => {
     const wrap = document.createElement('div');
     wrap.className = 'pi-msg';
     const roleClass = `pi-role-${msg.role ?? 'user'}`;
@@ -2549,11 +2586,21 @@ function openPromptInspector() {
     header.appendChild(copyBtn);
     wrap.appendChild(header);
 
-    // System message: split by source. Includes the entity-core block as its
-    // own first segment when present, then each tracked build segment.
+    // Synthetic message representing the server's depth-injected
+    // dynamic-thalamus block. Rendered with its own source color.
+    if (msg.__source === 'thalamus-dynamic') {
+      wrap.appendChild(piSegmentEl('thalamus-dynamic', fullText));
+      body.appendChild(wrap);
+      return;
+    }
+
+    // System message: split by source. Includes the entity-core
+    // STATIC block as its own first segment when present, then each
+    // tracked build segment. The DYNAMIC block lives in its own
+    // synthetic message at `injectedAt` (handled above), not here.
     if (role === 'system' && idx === 0 && lastBuildSegments?.systemSegments?.length) {
-      if (lastThalamusContext) {
-        wrap.appendChild(piSegmentEl('thalamus', lastThalamusContext));
+      if (lastThalamus?.static) {
+        wrap.appendChild(piSegmentEl('thalamus-static', lastThalamus.static));
       }
       for (const seg of lastBuildSegments.systemSegments) {
         wrap.appendChild(piSegmentEl(seg.source, seg.text));
@@ -2573,7 +2620,30 @@ function openPromptInspector() {
       wrap.appendChild(pre);
     }
     body.appendChild(wrap);
+  };
+
+  // Walk lastSentMessages. When we reach the index where the server
+  // depth-injected its dynamic block (`injectedAt`), render that
+  // synthetic message first, then continue. injectedAt counts indices
+  // in the pre-insertion array — which IS lastSentMessages — so a
+  // direct comparison works.
+  const dynamicAt = (lastThalamus?.dynamic && typeof lastThalamus.injectedAt === 'number')
+    ? lastThalamus.injectedAt
+    : null;
+
+  lastSentMessages.forEach((msg, idx) => {
+    if (idx === dynamicAt) {
+      renderMessage({ role: 'system', content: lastThalamus.dynamic, __source: 'thalamus-dynamic' }, idx);
+    }
+    renderMessage(msg, idx);
   });
+  // Edge case: dynamic injected at exactly lastSentMessages.length —
+  // it lands after every message the client sent. (Only possible when
+  // the conversation is empty, which shouldn't happen, but render
+  // defensively anyway.)
+  if (dynamicAt !== null && dynamicAt >= lastSentMessages.length) {
+    renderMessage({ role: 'system', content: lastThalamus.dynamic, __source: 'thalamus-dynamic' }, dynamicAt);
+  }
 
   $('prompt-inspector-modal').classList.remove('hidden');
 }
@@ -2860,7 +2930,7 @@ function init() {
   // ── Settings field listeners ─────────────────────────────────
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
-    'temperature', 'max-tokens', 'user-name', 'char-name',
+    'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',
@@ -4713,7 +4783,9 @@ async function buildDiagnosticReport() {
   add('topics',              String(state.topics?.length ?? 0));
   add('tomeRegistry',        String(state.tomeRegistry?.length ?? 0));
   add('customTools',         state.customTools ? `${state.customTools.length} chars` : '(empty)');
-  add('lastThalamusContext', lastThalamusContext ? `${lastThalamusContext.length} chars` : '(none — no enriched response captured yet)');
+  add('lastThalamus', lastThalamus
+    ? `static=${(lastThalamus.static ?? '').length}ch dynamic=${(lastThalamus.dynamic ?? '').length}ch @ depth=${lastThalamus.depth} (injectedAt=${lastThalamus.injectedAt})`
+    : '(none — no enriched response captured yet)');
 
   // localStorage estimate (rough — only our own keys)
   let lsBytes = 0;
@@ -4741,7 +4813,9 @@ async function buildDiagnosticReport() {
     add('roles',     lastSentMessages.map(m => m.role).join(','));
     add('system seg sources', (lastBuildSegments?.systemSegments ?? []).map(s => s.source).join(',') || '(none)');
     add('at-depth lore splices', String((lastBuildSegments?.atDepthInjections ?? []).length));
-    add('thalamus injection', lastThalamusContext ? `${lastThalamusContext.length} chars` : 'none');
+    add('thalamus injection', lastThalamus
+      ? `static=${(lastThalamus.static ?? '').length}ch dynamic=${(lastThalamus.dynamic ?? '').length}ch @ depth=${lastThalamus.depth}`
+      : 'none');
   }
 
   section(`Recent events (${debugLog.length} / cap ${DEBUG_LOG_CAP})`);
