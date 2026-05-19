@@ -314,6 +314,20 @@ if errorlevel 1 (
   echo [WARN] Shortcut creation failed - launch via Proto-Familiar.vbs in this folder.
 )
 
+REM Completion marker. Only reached after npm install succeeded (we
+REM exit /b 1 above on failure). The launchers check for this instead
+REM of node_modules to decide whether to (re)run the installer —
+REM node_modules can exist without the installer having run (a manual
+REM `npm install`), which would skip entity-core clone + shortcut
+REM creation. The marker is the reliable "installer actually completed"
+REM signal. Content is the version, for debugging.
+set "PF_VERSION="
+pushd "%SCRIPT_DIR%"
+for /f %%v in ('node -p "require('./package.json').version" 2^>nul') do set "PF_VERSION=%%v"
+popd
+if not defined PF_VERSION set "PF_VERSION=unknown"
+> "%SCRIPT_DIR%\.pf-install-complete" echo !PF_VERSION!
+
 echo.
 if "!MODE!"=="update" (
   echo === Update complete ===

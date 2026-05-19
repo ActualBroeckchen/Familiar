@@ -98,14 +98,22 @@ else
     kill -9 "$EXISTING_PID" 2>/dev/null || true
     rm -f "$PID_FILE"
   fi
-  if [ ! -d "$SCRIPT_DIR/node_modules" ]; then
-    say "Dependencies missing. Running installer first..."
+  # Trigger the installer if it hasn't completed here. We check the
+  # .pf-install-complete marker (written at the end of a successful
+  # install) rather than just node_modules, because node_modules can
+  # exist without the installer having run — e.g. a manual `npm install`
+  # — which would leave entity-core uncloned and the desktop entry
+  # uncreated. The marker is the reliable "installer actually ran"
+  # signal; node_modules + venv stay as additional triggers in case
+  # they get removed after a complete install.
+  if [ ! -f "$SCRIPT_DIR/.pf-install-complete" ] || [ ! -d "$SCRIPT_DIR/node_modules" ]; then
+    say "Installer hasn't completed here yet. Running it first..."
     bash "$SCRIPT_DIR/install.sh"
   elif [ -f "$SCRIPT_DIR/unruh/pyproject.toml" ] && [ ! -d "$SCRIPT_DIR/unruh/.venv" ]; then
-    # Symmetric to node_modules: Unruh ships in-tree (subdirectory) but
-    # its Python venv has to be materialised by uv. After a `git pull`
-    # that introduces Unruh, the user hits this branch — silently run
-    # the installer so they don't have to know about uv to start the app.
+    # Unruh ships in-tree (subdirectory) but its Python venv has to be
+    # materialised by uv. After a `git pull` that introduces Unruh, the
+    # user hits this branch — silently run the installer so they don't
+    # have to know about uv to start the app.
     say "Unruh dependencies missing. Running installer to set them up..."
     bash "$SCRIPT_DIR/install.sh"
   fi

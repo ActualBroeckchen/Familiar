@@ -294,6 +294,17 @@ case "$UNAME" in
     ;;
 esac
 
+# Completion marker. Written only after npm install succeeded (set -e
+# would have exited above on failure). The launchers check for this
+# instead of node_modules to decide whether to (re)run the installer —
+# node_modules can exist without the installer ever having run (a manual
+# `npm install`), which would skip entity-core clone + shortcut/desktop-
+# entry creation. The marker is the reliable "installer actually
+# completed" signal. Content is the version, for debugging / future
+# version-aware logic.
+PF_VERSION="$(node -p "require('$SCRIPT_DIR/package.json').version" 2>/dev/null || echo unknown)"
+printf '%s\n%s\n' "$PF_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$SCRIPT_DIR/.pf-install-complete" 2>/dev/null || true
+
 if [ "$MODE" = "update" ]; then
   say "Update complete."
   if [ "$ANYTHING_BACKED_UP" = "1" ]; then

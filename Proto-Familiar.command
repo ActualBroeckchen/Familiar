@@ -18,9 +18,13 @@ URL="http://localhost:$PORT"
 # toggle, that file is the source of truth and this env var is ignored.
 export TAILSCALE="${TAILSCALE:-0}"
 
-# First-run install
-if [ ! -d "node_modules" ]; then
-  echo "First run - installing dependencies..."
+# First-run install. Check the .pf-install-complete marker (written at
+# the end of a successful install) rather than just node_modules:
+# node_modules can exist from a manual `npm install` without the
+# installer having run, which would leave entity-core uncloned. The
+# marker is the reliable "installer actually ran" signal.
+if [ ! -f ".pf-install-complete" ] || [ ! -d "node_modules" ]; then
+  echo "Installer hasn't completed here yet - running it first..."
   bash ./install.sh
 elif [ -f "unruh/pyproject.toml" ] && [ ! -d "unruh/.venv" ]; then
   # Unruh ships in-tree; after a git pull that introduces it, the venv

@@ -363,6 +363,17 @@ try {
     Warn "  You can still launch via Proto-Familiar.vbs in this folder."
 }
 
+# Completion marker. Only reached after npm install succeeded (Fail
+# above exits otherwise). The launchers check for this instead of
+# node_modules to decide whether to (re)run the installer —
+# node_modules can exist without the installer having run (a manual
+# `npm install`), which would skip entity-core clone + shortcut
+# creation. The marker is the reliable "installer actually completed"
+# signal. Content is the version, for debugging.
+$pfVersion = "unknown"
+try { $pfVersion = (Get-Content (Join-Path $projectRoot "package.json") -Raw | ConvertFrom-Json).version } catch {}
+try { Set-Content -Path (Join-Path $projectRoot ".pf-install-complete") -Value $pfVersion -Encoding ASCII } catch {}
+
 Write-Host ""
 if ($updateMode) {
     Write-Host "Update complete." -ForegroundColor Green

@@ -69,19 +69,20 @@ if "!PID_ALIVE!"=="1" (
   del "%PID_FILE%" >nul 2>nul
 )
 
-if not exist "%SCRIPT_DIR%\node_modules" (
-  echo Dependencies missing. Running installer first...
+REM Trigger the installer if it hasn't completed here. The
+REM .pf-install-complete marker (written at the end of a successful
+REM install) is the reliable signal — node_modules can exist from a
+REM manual `npm install` without the installer having run, which would
+REM leave entity-core uncloned and the Desktop/Start Menu shortcuts
+REM uncreated. node_modules + the Unruh venv stay as additional
+REM triggers in case they're removed after a complete install.
+set "NEED_INSTALL=0"
+if not exist "%SCRIPT_DIR%\.pf-install-complete" set "NEED_INSTALL=1"
+if not exist "%SCRIPT_DIR%\node_modules" set "NEED_INSTALL=1"
+if exist "%SCRIPT_DIR%\unruh\pyproject.toml" if not exist "%SCRIPT_DIR%\unruh\.venv" set "NEED_INSTALL=1"
+if "!NEED_INSTALL!"=="1" (
+  echo Running installer to complete setup...
   call "%SCRIPT_DIR%\install.bat"
-) else (
-  REM Unruh ships in-tree as a subdirectory; its Python venv is
-  REM managed by uv. After a `git pull` that introduces Unruh, the
-  REM venv has to be materialised before Thalamus can connect.
-  REM Silently re-run the installer so users don't have to know
-  REM about uv to start the app.
-  if exist "%SCRIPT_DIR%\unruh\pyproject.toml" if not exist "%SCRIPT_DIR%\unruh\.venv" (
-    echo Unruh dependencies missing. Running installer to set them up...
-    call "%SCRIPT_DIR%\install.bat"
-  )
 )
 
 REM Prime PATH for the MCP children thalamus.js spawns. Deno (entity-core)
