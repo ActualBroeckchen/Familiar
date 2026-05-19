@@ -1602,6 +1602,24 @@ let lastBuildSegments = null;
 /** The entity-core block that the server actually prepended to the last request's system message. */
 let lastThalamusContext = null;
 
+// Extract a human-readable error string from an OpenAI-compatible
+// error response, which can shape `error` as either a bare string OR
+// a structured object like { message, type, code }. Stringifying the
+// object via `new Error(obj)` or template literals yields the famous
+// "[object Object]" — useless in diagnostics. Falls back to the
+// fallback string when no usable text is found.
+function extractErrorText(payload, fallback) {
+  const e = payload?.error;
+  if (e == null) return fallback;
+  if (typeof e === 'string') return e;
+  if (typeof e === 'object') {
+    if (typeof e.message === 'string' && e.message) return e.message;
+    if (typeof e.code === 'string' && e.code) return e.code;
+    try { return JSON.stringify(e); } catch { /* fall through */ }
+  }
+  return String(e) || fallback;
+}
+
 async function sendMessage(userInput) {
   userInput = userInput.trim();
   if (!userInput) return;
@@ -1655,9 +1673,16 @@ async function sendMessage(userInput) {
   } catch (err) {
     setTyping(false);
     if (err.name !== 'AbortError') {
-      appendErrorMessage(err.message || 'Request failed.');
+      // Belt-and-braces: err.message *should* be a string thanks to
+      // extractErrorText, but if some other throw site still hands
+      // us a non-string we coerce sensibly rather than printing
+      // "[object Object]" in the diagnostic.
+      const errText = typeof err.message === 'string' && err.message
+        ? err.message
+        : (() => { try { return JSON.stringify(err); } catch { return String(err); } })();
+      appendErrorMessage(errText || 'Request failed.');
       setStatus('err');
-      debugRecord('recv', `FAILED after ${Math.round(performance.now() - sendStart)}ms: ${err.message}`);
+      debugRecord('recv', `FAILED after ${Math.round(performance.now() - sendStart)}ms: ${errText}`);
     } else {
       debugRecord('recv', `aborted after ${Math.round(performance.now() - sendStart)}ms`);
     }
@@ -1706,7 +1731,7 @@ async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts
     if (!response.ok) {
       const body = await response.text();
       let msg = `API error ${response.status}`;
-      try { msg = JSON.parse(body).error || msg; } catch { /* non-JSON */ }
+      try { msg = extractErrorText(JSON.parse(body), msg); } catch { /* non-JSON */ }
       throw new Error(msg);
     }
 
@@ -1911,7 +1936,7 @@ async function attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifa
 
     const data = await response.json();
     if (!response.ok || data.error) {
-      throw new Error(data.error || `API error ${response.status}`);
+      throw new Error(extractErrorText(data, `API error ${response.status}`));
     }
     if (data._thalamus) lastThalamusContext = data._thalamus.entityContext ?? null;
 
