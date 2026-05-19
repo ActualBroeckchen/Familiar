@@ -6,8 +6,8 @@ REM   1. Detect & recycle any stale Proto-Familiar instance holding
 REM      the configured port (via PID file + Win32_Process+CommandLine
 REM      heuristic matching this project dir).
 REM   2. Trigger install.bat if node_modules or unruh\.venv is missing.
-REM   3. Prime PATH so the spawned node sees uv (and via thalamus.js,
-REM      Unruh's MCP child gets a working uv).
+REM   3. Prime PATH so the spawned node sees deno (entity-core) and uv
+REM      (Unruh) — the MCP children thalamus.js spawns.
 REM   4. Launch node server.js detached via PowerShell, write PID file,
 REM      wait for the port to come up, open the browser.
 REM
@@ -84,9 +84,17 @@ if not exist "%SCRIPT_DIR%\node_modules" (
   )
 )
 
-REM Prime PATH for uv (Astral's installer writes to %USERPROFILE%\.local\bin
-REM by default). thalamus.js has its own resolver but this lets the launched
-REM Node process find uv on PATH without needing a shell restart.
+REM Prime PATH for the MCP children thalamus.js spawns. Deno (entity-core)
+REM is spawned via a bare `deno` command with NO resolver fallback, so if
+REM it was installed by the official script (writes to %USERPROFILE%\.deno\bin)
+REM but the shell hasn't reloaded, the spawn fails with ENOENT and the
+REM identity layer silently doesn't load. uv (Unruh) has its own resolver
+REM in thalamus.js but priming here is symmetric and avoids relying on it.
+REM Mirrors start.sh / Proto-Familiar.command / tray.ps1, which prime both.
+where deno >nul 2>nul
+if errorlevel 1 (
+  if exist "%USERPROFILE%\.deno\bin\deno.exe" set "PATH=%USERPROFILE%\.deno\bin;%PATH%"
+)
 where uv >nul 2>nul
 if errorlevel 1 (
   if exist "%USERPROFILE%\.local\bin\uv.exe" set "PATH=%USERPROFILE%\.local\bin;%PATH%"
