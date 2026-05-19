@@ -20,8 +20,11 @@ from unruh.db import MIGRATIONS_DIR, run_migrations, now_iso
 
 @pytest.fixture
 def conn():
-    """Fresh in-memory DB with migrations applied."""
-    c = sqlite3.connect(":memory:", isolation_level=None)
+    """Fresh in-memory DB with migrations applied. Uses deferred-
+    transaction mode (no isolation_level=None) to match production
+    db.get_conn() after the #A4 fix, so tests exercise the same
+    commit/rollback semantics the real connection does."""
+    c = sqlite3.connect(":memory:")
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA foreign_keys = ON")
     run_migrations(c)

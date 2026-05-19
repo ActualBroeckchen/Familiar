@@ -152,6 +152,36 @@ class TestRecord:
         assert payload.get("source") == "token_volume"
 
 
+# ── Insert-helper validation ──────────────────────────────────────────
+
+
+class TestInsertValidation:
+    def test_insert_node_rejects_unknown_type(self, conn):
+        from unruh.db import now_iso
+        with pytest.raises(ValueError, match="unknown interest node type"):
+            interests._insert_node(
+                conn, node_type="nonsense", label="x",
+                payload={}, weight=1.0, ts=now_iso(),
+            )
+
+    def test_insert_node_accepts_each_known_type(self, conn):
+        from unruh.db import now_iso
+        for t in interests.INTEREST_NODE_TYPES:
+            nid = interests._insert_node(
+                conn, node_type=t, label=f"label-{t}",
+                payload={}, weight=1.0, ts=now_iso(),
+            )
+            assert nid
+
+    def test_insert_edge_rejects_unknown_kind(self, conn):
+        from unruh.db import now_iso, new_id
+        with pytest.raises(ValueError, match="unknown interest edge kind"):
+            interests._insert_edge(
+                conn, src_id=new_id(), dst_id=new_id(),
+                kind="nonsense", ts=now_iso(),
+            )
+
+
 # ── bookmark() ───────────────────────────────────────────────────────
 
 

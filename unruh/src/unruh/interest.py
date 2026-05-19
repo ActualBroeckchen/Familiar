@@ -144,6 +144,63 @@ def _find_by_label(conn: sqlite3.Connection, label: str) -> sqlite3.Row | None:
     ).fetchone()
 
 
+def _insert_node(
+    conn: sqlite3.Connection,
+    *,
+    node_type: str,
+    label: str,
+    payload: dict | None,
+    weight: float | None,
+    ts: str,
+) -> str:
+    """Insert an interest-layer node and return its new id. Single
+    INSERT path for record / bookmark / set_standing so the column
+    list lives in exactly one place. Validates node_type against
+    INTEREST_NODE_TYPES — mirrors schedule.add_node's enforcement so
+    a typo in a future caller fails loudly instead of writing an
+    un-renderable type into the graph."""
+    if node_type not in INTEREST_NODE_TYPES:
+        raise ValueError(
+            f"unknown interest node type {node_type!r}; "
+            f"expected one of {sorted(INTEREST_NODE_TYPES)}"
+        )
+    node_id = new_id()
+    conn.execute(
+        """INSERT INTO nodes
+               (id, layer, type, label, payload_json, when_ts, end_ts,
+                resolution, weight, last_touched, created_at, updated_at)
+           VALUES (?, 'interest', ?, ?, ?, NULL, NULL,
+                   NULL, ?, ?, ?, ?)""",
+        (node_id, node_type, label, json.dumps(payload or {}), weight, ts, ts, ts),
+    )
+    return node_id
+
+
+def _insert_edge(
+    conn: sqlite3.Connection,
+    *,
+    src_id: str,
+    dst_id: str,
+    kind: str,
+    ts: str,
+) -> str:
+    """Insert an interest-layer edge and return its new id. Validates
+    `kind` against INTEREST_EDGE_KINDS for the same reason _insert_node
+    validates type."""
+    if kind not in INTEREST_EDGE_KINDS:
+        raise ValueError(
+            f"unknown interest edge kind {kind!r}; "
+            f"expected one of {sorted(INTEREST_EDGE_KINDS)}"
+        )
+    edge_id = new_id()
+    conn.execute(
+        """INSERT INTO edges (id, src_id, dst_id, kind, payload_json, created_at)
+           VALUES (?, ?, ?, ?, '{}', ?)""",
+        (edge_id, src_id, dst_id, kind, ts),
+    )
+    return edge_id
+
+
 def record(
     conn: sqlite3.Connection,
     *,
@@ -182,14 +239,9 @@ def record(
         # First mention. Create as curiosity with the delta as its
         # initial raw weight. last_touched=now so the first decay
         # calculation starts from this instant.
-        node_id = new_id()
-        conn.execute(
-            """INSERT INTO nodes
-                   (id, layer, type, label, payload_json, when_ts, end_ts,
-                    resolution, weight, last_touched, created_at, updated_at)
-               VALUES (?, 'interest', 'curiosity', ?, ?, NULL, NULL,
-                       NULL, ?, ?, ?, ?)""",
-            (node_id, topic, json.dumps(payload_dict), delta, ts, ts, ts),
+        node_id = _insert_node(
+            conn, node_type="curiosity", label=topic,
+            payload=payload_dict, weight=delta, ts=ts,
         )
         return {
             "ok": True, "id": node_id, "type": "curiosity",
@@ -253,25 +305,15 @@ def bookmark(
     topic_id = rec["id"]
 
     ts = now_iso()
-    bookmark_id = new_id()
     payload = {"resource": resource.strip()}
     if note: payload["note"] = note.strip()
-    conn.execute(
-        """INSERT INTO nodes
-               (id, layer, type, label, payload_json, when_ts, end_ts,
-                resolution, weight, last_touched, created_at, updated_at)
-           VALUES (?, 'interest', 'bookmark', ?, ?, NULL, NULL,
-                   NULL, NULL, ?, ?, ?)""",
-        (bookmark_id, topic.strip(), json.dumps(payload), ts, ts, ts),
+    bookmark_id = _insert_node(
+        conn, node_type="bookmark", label=topic.strip(),
+        payload=payload, weight=None, ts=ts,
     )
-
-    edge_id = new_id()
-    conn.execute(
-        """INSERT INTO edges (id, src_id, dst_id, kind, payload_json, created_at)
-           VALUES (?, ?, ?, 'bookmarked', '{}', ?)""",
-        (edge_id, bookmark_id, topic_id, ts),
+    edge_id = _insert_edge(
+        conn, src_id=bookmark_id, dst_id=topic_id, kind="bookmarked", ts=ts,
     )
-
     return {"ok": True, "bookmark_id": bookmark_id, "topic_id": topic_id, "edge_id": edge_id}
 
 
@@ -302,14 +344,9 @@ def set_standing(
     if value_ref: payload["value_ref"] = value_ref.strip()
 
     if existing is None:
-        node_id = new_id()
-        conn.execute(
-            """INSERT INTO nodes
-                   (id, layer, type, label, payload_json, when_ts, end_ts,
-                    resolution, weight, last_touched, created_at, updated_at)
-               VALUES (?, 'interest', 'standing_value', ?, ?, NULL, NULL,
-                       NULL, ?, ?, ?, ?)""",
-            (node_id, topic, json.dumps(payload), weight, ts, ts, ts),
+        node_id = _insert_node(
+            conn, node_type="standing_value", label=topic,
+            payload=payload, weight=weight, ts=ts,
         )
         return {"ok": True, "id": node_id, "created": True}
 
