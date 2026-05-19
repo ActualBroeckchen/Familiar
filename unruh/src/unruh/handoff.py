@@ -30,6 +30,15 @@ from typing import Any
 
 from .db import new_id, now_iso
 
+# Defensive caps at the storage boundary. The intent + threads come from
+# an LLM summary (untrusted external output); a runaway model could
+# return a wall of text that then bloats every future session's prompt.
+# These bounds keep a handoff cheap. Generous enough that a well-behaved
+# "one short sentence + a few threads" summary is never touched.
+MAX_INTENT_CHARS = 500
+MAX_THREADS = 10
+MAX_THREAD_CHARS = 200
+
 
 def set_handoff(
     conn: sqlite3.Connection,
@@ -47,11 +56,11 @@ def set_handoff(
     means we don't write a row, so the next session won't render a
     hollow header. Returns {ok, id, skipped}.
     """
-    intent_clean = (intent or "").strip() or None
+    intent_clean = (intent or "").strip()[:MAX_INTENT_CHARS] or None
     thread_list = [
-        t.strip() for t in (threads or [])
+        t.strip()[:MAX_THREAD_CHARS] for t in (threads or [])
         if isinstance(t, str) and t.strip()
-    ]
+    ][:MAX_THREADS]
 
     if not intent_clean and not thread_list:
         return {"ok": True, "id": None, "skipped": True}

@@ -66,6 +66,19 @@ class TestSetHandoff:
         handoffs.set_handoff(conn, intent="x", threads=["real", "  ", "", "  also real "])
         assert handoffs.get_handoff(conn)["open_threads"] == ["real", "also real"]
 
+    def test_caps_runaway_intent_and_threads(self, conn):
+        # Untrusted LLM output: a wall of text + too many threads must
+        # be bounded so it can't bloat every future prompt.
+        handoffs.set_handoff(
+            conn,
+            intent="x" * 5000,
+            threads=["t" * 5000] + [f"thread {i}" for i in range(50)],
+        )
+        h = handoffs.get_handoff(conn)
+        assert len(h["intent"]) == handoffs.MAX_INTENT_CHARS
+        assert len(h["open_threads"]) == handoffs.MAX_THREADS
+        assert all(len(t) <= handoffs.MAX_THREAD_CHARS for t in h["open_threads"])
+
     def test_new_handoff_supersedes_prior_unconsumed(self, conn):
         first = handoffs.set_handoff(conn, intent="first session")
         second = handoffs.set_handoff(conn, intent="second session")

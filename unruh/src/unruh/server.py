@@ -11,12 +11,23 @@ Tools exposed (stable contract — Thalamus depends on these shapes):
     schedule_get_window   — read items in a time window (+ touching edges)
     schedule_resolve      — mark a task/event done/cancelled/carried
 
+  Interest (M4–M5):
+    interest_record       — bump engagement weight for a topic
+    interest_bookmark     — save a resource against a topic
+    interest_set_standing — promote a topic to an always-on standing value
+    interest_list         — list interests by effective (decayed) weight
+
+  Session handoff (M6):
+    session_set_handoff           — store a session-end intent + threads
+    session_get_handoff           — read the latest (un)consumed handoff
+    session_mark_handoff_consumed — stop a surfaced handoff re-appearing
+
   Briefing (called per-message by Thalamus):
     temporal_context   — assembled handoff + schedule + interests payload
 
-Interest-layer tools (interest_*) land in M4; the temporal_context
-payload already has placeholder keys for them so the formatter in
-thalamus.js renders cleanly even when M4 isn't shipped yet.
+The temporal_context payload always carries all three sub-blocks
+(handoff / schedule / interests); empty ones render as nothing so the
+formatter in thalamus.js / temporal-format.js stays clean.
 """
 
 from __future__ import annotations
@@ -374,15 +385,15 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
 
       {
         ts:        '<iso-8601>',
-        schedule:  { phase: {...} | null, window: [...] },
-        interests: { standing: [...], live: [...] },   # M4 populates
-        handoff:   { intent: ..., open_threads: [...] } # M6 populates
+        schedule:  { phase: {...} | null, window: [...] },           # M3
+        interests: { standing: [...], live: [...] },                 # M4–M5
+        handoff:   { intent: ...|null, open_threads: [...], id: ...} # M6
       }
 
-    M3 populates `schedule`, M4 populates `interests`. Empty
-    sub-blocks render as empty in the prompt; Thalamus's formatter
-    omits the [Temporal Context] section entirely when everything
-    is empty.
+    The handoff `id` rides along so the chat path can mark it consumed
+    after surfacing it once; the renderer ignores it. Empty sub-blocks
+    render as nothing in the prompt; Thalamus's formatter omits the
+    [Temporal Context] section entirely when everything is empty.
     """
     with get_conn() as conn:
         phase = sched.current_phase(conn, at=now)
