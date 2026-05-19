@@ -236,6 +236,21 @@ const RELATIONSHIP_ORDER = [
 // ── Connection ────────────────────────────────────────────────────────────────
 
 async function connect() {
+  // Skip cleanly when entity-core isn't installed, mirroring
+  // connectUnruh's pre-check. Without this, a missing checkout (fresh
+  // clone before install.sh runs, or a user who skipped the
+  // entity-core clone) lets the spawn fail with ENOENT, which fires
+  // onclose, which spins scheduleEntityCoreReconnect through all 10
+  // attempts over ~3 minutes — pure log noise for a permanent
+  // condition that a retry can't fix. Returning here means no
+  // transport, no onclose, no retry loop. A real reconnect after a
+  // transient crash still proceeds (the checkout exists, so this
+  // check passes).
+  if (!existsSync(ENTITY_CORE_ENTRY)) {
+    console.log('[thalamus] entity-core not found at', ENTITY_CORE_ENTRY, '— skipping (run install.sh / install.bat to clone it)');
+    return;
+  }
+
   // Resolve the per-connection env block fresh on every connect so a
   // reconnect after a settings change picks up the new key without a
   // server restart. StdioClientTransport merges this with PATH/HOME/etc
