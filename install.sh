@@ -117,10 +117,20 @@ if [ "$MODE" = "update" ]; then
 fi
 
 # --- Pull latest Proto-Familiar (update mode only) -----------------------
-if [ "$MODE" = "update" ] && [ -d "$SCRIPT_DIR/.git" ] && command -v git >/dev/null 2>&1; then
-  say "Pulling latest Proto-Familiar (git pull --ff-only)..."
-  if ! ( cd "$SCRIPT_DIR" && git pull --ff-only ); then
-    warn "git pull --ff-only failed (local changes, non-default branch, or no network). Continuing with current checkout — your work tree is unchanged."
+if [ "$MODE" = "update" ]; then
+  if [ -d "$SCRIPT_DIR/.git" ] && command -v git >/dev/null 2>&1; then
+    say "Pulling latest Proto-Familiar (git pull --ff-only)..."
+    if ! ( cd "$SCRIPT_DIR" && git pull --ff-only ); then
+      warn "git pull --ff-only failed (local changes, non-default branch, or no network). Continuing with current checkout — your work tree is unchanged."
+    fi
+  elif [ ! -d "$SCRIPT_DIR/.git" ]; then
+    # No .git means this is a downloaded ZIP, not a clone — the installer
+    # can't pull updates, so the user would silently stay on this version.
+    warn "This folder is NOT a git checkout — it looks like a downloaded ZIP."
+    warn "  The installer can't pull updates here; you'll stay on this version."
+    warn "  To get updates, install with git instead:"
+    warn "    git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git"
+    warn "  then run the installer from the cloned folder. See docs/getting-started.md."
   fi
 fi
 
@@ -322,6 +332,15 @@ if [ "$MODE" = "update" ]; then
   fi
 else
   say "Install complete."
+fi
+# Show version + branch so it's verifiable here, and so a wrong-branch
+# checkout (e.g. a ZIP of main missing newer work) is obvious.
+say "Version: Proto-Familiar v$PF_VERSION"
+if [ -d "$SCRIPT_DIR/.git" ] && command -v git >/dev/null 2>&1; then
+  PF_BRANCH="$( cd "$SCRIPT_DIR" && git rev-parse --abbrev-ref HEAD 2>/dev/null )"
+  [ -n "$PF_BRANCH" ] && say "Branch:  $PF_BRANCH"
+else
+  say "Branch:  (not a git checkout — downloaded ZIP; updates disabled)"
 fi
 echo
 echo "  Launch:"

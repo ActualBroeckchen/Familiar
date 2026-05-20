@@ -274,6 +274,36 @@ the reconnect loop repeatedly:
 
 ---
 
+## Updating & versions
+
+### The installer says "already up to date" but I'm not getting the new version
+
+Almost always one of two things:
+
+- **You installed from a downloaded ZIP, not a `git clone`.** GitHub's "Download ZIP" gives you a folder like `Proto-Familiar-main` that is **not** a git repository — there's no `.git` inside it. The installer pulls updates with `git`, so on a ZIP it silently can't, and you stay on whatever version the ZIP captured. (The "up to date" you saw may also have been **npm's** `up to date` line, which is about node modules, not the app.) The installer now warns about this explicitly and prints `Branch: (not a git checkout …)` at the end. **Fix:** reinstall via git so updates work:
+
+  ```
+  git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git
+  ```
+
+  then run the installer from the cloned folder. Back up `tomes/`, `logs/`, `settings.json`, and entity-core's `data/` first if you're replacing an existing folder (the installer also auto-backs these up into `.pf-backups/` in update mode).
+
+- **The version you want is on a different branch.** A `git clone` checks out the default branch (usually `main`); work in progress may live on a feature branch that hasn't been merged yet. `git pull` only updates the branch you're on, so if the new code is elsewhere you'll see "Already up to date." Check your branch with `git branch --show-current` (the installer also prints `Branch:` at the end). To switch: `git checkout <branch>` then re-run the installer.
+
+### Where do I check which version I'm running?
+
+Three places, all showing the server's `package.json` version:
+
+- **In the app:** the **version badge in the sidebar footer** reads `Proto-Familiar vX.Y.Z`.
+- **Endpoints:** open `http://localhost:8742/api/version` or `/api/health` in a browser.
+- **At install time:** the installer now prints `Version: Proto-Familiar vX.Y.Z` and the git `Branch:` when it finishes.
+
+If the badge shows an old version after an update, you likely need to **restart the server** (the launchers do this) and **hard-refresh the browser** (Ctrl-Shift-R / Cmd-Shift-R) so the cached UI reloads.
+
+### Windows: `'wmic' is not recognized` / `Invalid path` during the backup step
+
+`wmic` was removed in Windows 11 24H2, and older `install.bat` used it to build the backup timestamp — when it failed, the backup folder got a malformed name with a colon in it (`Invalid path`). Fixed: the installer now generates the timestamp with PowerShell. Re-run the latest `install.bat` and the backup step works. (Your data was never at risk — the failure was only in naming the backup copy.)
+
 ## Port conflicts & start-up
 
 ### `Error: listen EADDRINUSE: address already in use 0.0.0.0:8742`

@@ -67,8 +67,11 @@ REM Defensive copy of at-risk dirs into .pf-backups\<timestamp>\ before
 REM any git op runs. Safety net on top of git's own protections.
 set "ANYTHING_BACKED_UP=0"
 if "!MODE!"=="update" (
-  for /f "tokens=2 delims==" %%T in ('wmic os get LocalDateTime /value ^| find "="') do set "DT=%%T"
-  set "STAMP=!DT:~0,8!T!DT:~8,6!Z"
+  REM Timestamp via PowerShell, not wmic — wmic is removed on Windows 11
+  REM 24H2+ (and was the cause of the "Invalid path" backup errors there).
+  REM Format is filesystem-safe (no colons).
+  for /f %%T in ('powershell -NoProfile -Command "(Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')" 2^>nul') do set "STAMP=%%T"
+  if not defined STAMP set "STAMP=backup"
   set "BACKUP_DIR=%BACKUP_ROOT%\!STAMP!"
   call :backupIfExists      "%SCRIPT_DIR%\tomes" "tomes"
   call :backupIfExists      "%SCRIPT_DIR%\logs"  "logs"
@@ -88,14 +91,23 @@ if "!MODE!"=="update" (
 )
 
 REM --- Pull latest Proto-Familiar (update mode only) ---
-if "!MODE!"=="update" if exist "%SCRIPT_DIR%\.git" (
-  where git >nul 2>nul
-  if not errorlevel 1 (
-    echo Pulling latest Proto-Familiar ^(git pull --ff-only^)...
-    pushd "%SCRIPT_DIR%"
-    git pull --ff-only
-    if errorlevel 1 echo [WARN] git pull --ff-only failed. Work tree is unchanged.
-    popd
+if "!MODE!"=="update" (
+  if exist "%SCRIPT_DIR%\.git" (
+    where git >nul 2>nul
+    if not errorlevel 1 (
+      echo Pulling latest Proto-Familiar ^(git pull --ff-only^)...
+      pushd "%SCRIPT_DIR%"
+      git pull --ff-only
+      if errorlevel 1 echo [WARN] git pull --ff-only failed. Work tree is unchanged.
+      popd
+    )
+  ) else (
+    echo [WARN] This folder is NOT a git checkout - it looks like a downloaded ZIP.
+    echo        The installer cannot pull updates here, so you will stay on this
+    echo        version no matter how often you re-run it. To get updates, install
+    echo        with git instead:
+    echo          git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git
+    echo        then run the installer from the cloned folder. See docs\getting-started.md.
   )
 )
 
@@ -346,6 +358,14 @@ if "!MODE!"=="update" (
   if "!ANYTHING_BACKED_UP!"=="1" echo Pre-update backup: !BACKUP_DIR!
 ) else (
   echo === Install complete ===
+)
+echo   Version:   Proto-Familiar v!PF_VERSION!
+REM Show the branch so a wrong-branch checkout (e.g. a ZIP of main that's
+REM missing newer work) is obvious right here, not a mystery later.
+if exist "%SCRIPT_DIR%\.git" (
+  for /f %%b in ('git -C "%SCRIPT_DIR%" rev-parse --abbrev-ref HEAD 2^>nul') do echo   Branch:    %%b
+) else (
+  echo   Branch:    not a git checkout ^(downloaded ZIP - updates are disabled^)
 )
 echo   Start:     start.bat   ^(double-click^)
 echo   Stop:      stop.bat    ^(double-click^)

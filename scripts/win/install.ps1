@@ -113,6 +113,14 @@ if ($updateMode -and (Test-Path (Join-Path $projectRoot ".git")) -and (Have "git
         & git pull --ff-only
         if ($LASTEXITCODE -ne 0) { Warn "git pull --ff-only failed. Work tree is unchanged." }
     } finally { Pop-Location }
+} elseif ($updateMode -and -not (Test-Path (Join-Path $projectRoot ".git"))) {
+    # No .git — this is a downloaded ZIP, not a clone. The installer can't
+    # pull updates here, so the user would silently stay on this version.
+    Warn "This folder is NOT a git checkout - it looks like a downloaded ZIP."
+    Warn "  The installer can't pull updates here; you'll stay on this version."
+    Warn "  To get updates, install with git instead:"
+    Warn "    git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git"
+    Warn "  then run the installer from the cloned folder. See docs\getting-started.md."
 }
 
 $haveWinget = Have "winget"
@@ -388,6 +396,15 @@ if ($updateMode) {
     if ($anythingBackedUp) { Write-Host "Pre-update backup: $backupDir" -ForegroundColor Green }
 } else {
     Write-Host "Install complete." -ForegroundColor Green
+}
+# Show version + branch so it's verifiable here, and a wrong-branch
+# checkout (e.g. a ZIP of main missing newer work) is obvious.
+Write-Host "Version: Proto-Familiar v$pfVersion" -ForegroundColor Green
+if ((Test-Path (Join-Path $projectRoot ".git")) -and (Have "git")) {
+    $pfBranch = (& git -C $projectRoot rev-parse --abbrev-ref HEAD 2>$null)
+    if ($pfBranch) { Write-Host "Branch:  $pfBranch" -ForegroundColor Green }
+} else {
+    Write-Host "Branch:  (not a git checkout - downloaded ZIP; updates disabled)" -ForegroundColor Yellow
 }
 Write-Host "Launch any time via:"
 Write-Host "  - Desktop shortcut: Proto-Familiar"
