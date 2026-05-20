@@ -108,6 +108,20 @@ function Start-Server {
         return
     }
     Set-Status "starting"
+    # Prime PATH for the MCP children thalamus.js spawns (deno for
+    # entity-core, uv for Unruh). Both have their own resolvers in
+    # thalamus.js, but if either was just installed by the bundled
+    # installer in this same session, the child inherits PATH from
+    # this PS process — so PATH-priming here means the very first
+    # boot after install works without a reboot.
+    $denoBin = Join-Path $env:USERPROFILE ".deno\bin"
+    if ((Test-Path (Join-Path $denoBin "deno.exe")) -and ($env:PATH -notlike "*$denoBin*")) {
+        $env:PATH = "$denoBin;$env:PATH"
+    }
+    $uvBin = Join-Path $env:USERPROFILE ".local\bin"
+    if ((Test-Path (Join-Path $uvBin "uv.exe")) -and ($env:PATH -notlike "*$uvBin*")) {
+        $env:PATH = "$uvBin;$env:PATH"
+    }
     $env:PORT = $script:port
     $env:TAILSCALE = $script:tailscale
     try {

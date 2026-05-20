@@ -25,6 +25,7 @@ Proxy request to selected provider.
 - `messages`
 - `stream` (boolean)
 - optional: `temperature`, `max_tokens`, `tools`, `tool_choice`
+- optional: `enrich` — enrichment mode (`true`/omitted = full, `"static"` = persona only, `false` = none)
 
 Returns:
 
@@ -79,6 +80,13 @@ Deletes one saved session log.
 
 - `POST /api/entity/memory` — write a long-term memory entry (`save_memory` tool)
 - `POST /api/entity/identity` — append to or update a section of an identity file (`update_identity` tool)
+
+### Unruh (temporal context)
+
+- `POST /api/interest/engage` — record a turn's engagement (open topics + reply length) so interests accrue weight
+- `POST /api/session/handoff` — store a session-end intent + open threads for the next session to resume from
+
+Both fire-and-forget; both degrade silently when the Unruh module is absent.
 
 ### `POST /api/debug-prompt`
 

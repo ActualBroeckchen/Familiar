@@ -37,12 +37,14 @@ Load persisted settings + history from localStorage
 |---|---|
 | **App start** | Settings and history loaded from `localStorage`. If the last message was ≥ 3 hours ago, the old session is finalized silently and a new one starts. |
 | **Message sent** | `lastMessage` timestamp updated; 3-hour inactivity timer resets. Session written to server (fire-and-forget). |
-| **3-hour idle timeout** | Session stamped with `endedAt` and saved. New session starts automatically. A memorization job is enqueued on the server. |
-| **Manual clear** | **Clear** button closes the current session, enqueues a memorization job, and starts a fresh one. |
-| **Tab close** | A `beforeunload` handler uses `navigator.sendBeacon` to enqueue the current session before the page unloads. |
+| **3-hour idle timeout** | Session stamped with `endedAt` and saved. New session starts automatically. A memorization job is enqueued on the server, and (if the Unruh module is present and **Session handoff** is on) a handoff summary is generated. |
+| **Manual clear** | **Clear** button closes the current session, enqueues a memorization job, generates a handoff summary, and starts a fresh one. |
+| **Tab close** | A `beforeunload` handler uses `navigator.sendBeacon` to enqueue the current session before the page unloads. (Handoff is *not* generated here — its summary needs an async LLM round-trip that can't complete during unload, so a tab-closed session starts the next one cold.) |
 | **Topic end** | Clicking **□ Topic end** (or the active topic pill) always opens the summary review dialog so you can write or edit the entry, and — when an API key is set and the range contains readable messages — also enqueues a topic-scoped memorization for that range. With no key or no readable messages the dialog drops into a blank manual form with a hint. |
 | **Memorize now** | The **✦ Memorize now** button in the Chat sidebar enqueues the current session on demand without ending it. |
 | **Per-session Memorize button** | Each row in the Logs modal has a **Memorize** button. It opens a chooser with **Auto-summarize** (enqueue a job for that historical session and wait inline for the result) or **Manual topics** (open the session in a read-only viewer with topic-mark buttons and review each entry before saving). Both write to **Session Memories**. |
+
+> **Memorization vs. handoff.** These are two different things that both fire at session end. *Memorization* (below) writes durable long-term entries to **Session Memories** for later recall. The *session handoff* is a lightweight, single-use "what I was doing / what's unfinished" note stored in Unruh and surfaced at the top of the **next** session's temporal context, then consumed. See [Temporal context (Unruh)](features.md#temporal-context-unruh).
 
 ### Session ID and Timestamps
 

@@ -922,6 +922,10 @@ button { cursor: pointer; font-family: var(--font); }
   background: rgba(255,180,80,0.15);
   color: var(--warn-color, #fb0);
 }
+.connection-item .conn-badge.ec {
+  background: rgba(120,200,140,0.15);
+  color: #6c6;
+}
 .connection-item .conn-actions {
   display: flex;
   flex-direction: column;
@@ -2017,8 +2021,14 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
 .pi-seg .pi-chip { align-self: flex-start; }
 
 /* Per-source palette. Each rule sets the left rule and the chip in unison. */
-.pi-src-thalamus           { border-left-color: #cba6f7; }
-.pi-src-thalamus .pi-chip  { color: #cba6f7; background: rgba(203,166,247,0.10); border-color: rgba(203,166,247,0.40); }
+/* Thalamus static block — purple, lives at the top of the system message. */
+.pi-src-thalamus-static            { border-left-color: #cba6f7; }
+.pi-src-thalamus-static .pi-chip   { color: #cba6f7; background: rgba(203,166,247,0.10); border-color: rgba(203,166,247,0.40); }
+/* Thalamus dynamic block — teal, depth-injected. Distinct hue so the cache
+   boundary between the static prefix and the per-turn dynamic stuff is
+   visually obvious in the inspector. */
+.pi-src-thalamus-dynamic           { border-left-color: #94e2d5; }
+.pi-src-thalamus-dynamic .pi-chip  { color: #94e2d5; background: rgba(148,226,213,0.10); border-color: rgba(148,226,213,0.40); }
 
 .pi-src-system-prompt          { border-left-color: var(--warn-color); }
 .pi-src-system-prompt .pi-chip { color: var(--warn-color); background: rgba(249,226,175,0.10); border-color: rgba(249,226,175,0.40); }

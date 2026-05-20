@@ -23,13 +23,16 @@ import {
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   createGraphNode, createGraphEdge,
   createSnapshot, restoreSnapshot,
+  reconnectEntityCore,
+  recordInterest, recordHandoff,
+  shutdownUnruh, shutdownEntityCore,
 } from './thalamus.js';
 import {
   enqueueMemorization,
   listJobs as listMemorizationJobs,
   acknowledgeJob as acknowledgeMemorizationJob,
   cancelJob as cancelMemorizationJob,
-  startMemorizationWorker,
+  startMemorizationWorker, stopMemorizationWorker,
   findOrCreateSessionMemoriesTome,
 } from './memorization.js';
 
@@ -108,13 +111,10 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '4mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Provider base URLs — all use OpenAI-compatible chat completions format
-// zai-coding uses the Coding Plan endpoint (separate quota from the standard API)
-const PROVIDER_URLS = {
-  nanogpt:     'https://nano-gpt.com/api/v1/chat/completions',
-  zai:         'https://api.z.ai/api/paas/v4/chat/completions',
-  'zai-coding': 'https://api.z.ai/api/coding/paas/v4/chat/completions',
-};
+// Provider chat-completions URLs live in providers.js so thalamus.js can
+// share them when it builds the env block for entity-core. See that file
+// for the rationale and how to add a new provider.
+import { PROVIDER_URLS } from './providers.js';
 
 // Simple in-memory rate limiter for /api/chat: max 20 requests per minute per IP.
 // Protects against accidental public exposure and runaway tool-call loops.
@@ -140,7 +140,16 @@ function chatRateLimit(req, res, next) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice } = req.body;
+  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag } = req.body;
+  // Enrichment mode:
+  //   true / undefined → full (identity + memory + graph + temporal),
+  //                      and consume any surfaced session handoff.
+  //   'static'         → identity / persona only — no memory bloat, no
+  //                      temporal block, no handoff consumption. Used by
+  //                      the handoff summariser so its note is in the
+  //                      Familiar's voice without the dynamic context.
+  //   false            → none.
+  const enrichMode = enrichFlag === false ? 'none' : enrichFlag === 'static' ? 'static' : 'full';
 
   const url = PROVIDER_URLS[provider];
   if (!url) {
@@ -156,24 +165,47 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     return res.status(400).json({ error: 'Messages array is required and must not be empty.' });
   }
 
-  // Enrich with entity-core context (memories + identity). Degrades gracefully.
+  // Enrich with entity-core + Unruh context. Split into a static
+  // prefix (identity + base instructions; stable across turns so the
+  // upstream LLM's prefix cache hits) and a dynamic block (RAG
+  // memories, graph excerpts, temporal context; varies per turn so
+  // we depth-inject it instead of letting it invalidate the prefix).
+  // Degrades gracefully — empty strings on either side just skip
+  // the corresponding injection.
   const lastUser = [...messages].reverse().find(m => m.role === 'user');
   const userText = typeof lastUser?.content === 'string'
     ? lastUser.content
     : ((lastUser?.content ?? []).find(c => c.type === 'text')?.text ?? '');
-  const entityContext = await enrich(userText);
+  // consumeHandoff: only the full chat path surfaces + consumes the
+  // session handoff. 'static' fetches persona only (handoff summariser);
+  // 'none' skips enrichment entirely.
+  const enriched =
+      enrichMode === 'full'   ? await enrich(userText, { consumeHandoff: true })
+    : enrichMode === 'static' ? await enrich(userText, { staticOnly: true })
+    : { static: '', dynamic: '' };
+  const depth = getThalamusDynamicDepth();
 
   let enrichedMessages = messages;
-  if (entityContext) {
+
+  // 1) Prepend static block to the system message. Lives at the very
+  //    top of the prompt so the provider's prefix cache covers it.
+  if (enriched.static) {
     const sysIdx = messages.findIndex(m => m.role === 'system');
     if (sysIdx >= 0) {
       enrichedMessages = messages.map((m, i) =>
-        i === sysIdx ? { ...m, content: entityContext + '\n\n' + m.content } : m,
+        i === sysIdx ? { ...m, content: enriched.static + '\n\n' + m.content } : m,
       );
     } else {
-      enrichedMessages = [{ role: 'system', content: entityContext }, ...messages];
+      enrichedMessages = [{ role: 'system', content: enriched.static }, ...messages];
     }
   }
+
+  // 2) Depth-inject the dynamic block as a separate system message
+  //    N positions from the end. Computed AFTER the static prepend so
+  //    the index counts the (possibly newly-created) system message.
+  const injection = injectDynamicAtDepth(enrichedMessages, enriched.dynamic, depth);
+  enrichedMessages = injection.messages;
+  const injectedAt = injection.injectedAt;
 
   const payload = { model: model.trim(), messages: enrichedMessages, stream: !!stream };
   if (typeof temperature === 'number') payload.temperature = temperature;
@@ -195,19 +227,26 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     return res.status(502).json({ error: `Network error reaching ${provider}: ${err.message}` });
   }
 
+  // The envelope mirrored on every successful response so the client
+  // can render the prompt inspector verbatim instead of re-deriving.
+  // Carries both blocks separately + the injection coordinates so the
+  // inspector can show static-vs-dynamic regions distinctly.
+  const thalamusEnvelope = (enriched.static || enriched.dynamic) ? {
+    static:     enriched.static  || '',
+    dynamic:    enriched.dynamic || '',
+    depth,
+    injectedAt,
+  } : null;
+
   // Non-streaming path
   if (!stream) {
     const text = await upstream.text();
     res.status(upstream.status);
     res.setHeader('Content-Type', 'application/json');
-    // Attach the actual entity-core block that thalamus injected, so the
-    // client's prompt inspector can show what was sent verbatim (without
-    // re-running enrich() and risking drift). On parse failure or upstream
-    // error, fall through to a raw passthrough.
-    if (entityContext && upstream.ok) {
+    if (thalamusEnvelope && upstream.ok) {
       try {
         const parsed = JSON.parse(text);
-        parsed._thalamus = { entityContext };
+        parsed._thalamus = thalamusEnvelope;
         return res.send(JSON.stringify(parsed));
       } catch { /* upstream returned non-JSON — pass through unchanged */ }
     }
@@ -231,8 +270,8 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // could be opened. Uses the same `data: ` line format as the upstream
   // SSE stream; the client routes on the presence of `_thalamus` instead
   // of `choices`.
-  if (entityContext) {
-    res.write(`data: ${JSON.stringify({ _thalamus: { entityContext } })}\n\n`);
+  if (thalamusEnvelope) {
+    res.write(`data: ${JSON.stringify({ _thalamus: thalamusEnvelope })}\n\n`);
   }
 
   const reader = upstream.body.getReader();
@@ -264,25 +303,119 @@ app.post('/api/debug-prompt', async (req, res) => {
     return res.status(400).json({ error: 'messages array is required.' });
   }
 
+  // Mirror the /api/chat split: static into the system message,
+  // dynamic depth-injected. Keeps the debug-prompt preview accurate
+  // about what /api/chat would actually send.
   const lastUser = [...messages].reverse().find(m => m.role === 'user');
   const userText = typeof lastUser?.content === 'string'
     ? lastUser.content
     : ((lastUser?.content ?? []).find(c => c.type === 'text')?.text ?? '');
-  const entityContext = await enrich(userText);
+  const enriched = await enrich(userText);
+  const depth = getThalamusDynamicDepth();
 
   let enrichedMessages = messages;
-  if (entityContext) {
+  if (enriched.static) {
     const sysIdx = messages.findIndex(m => m.role === 'system');
     if (sysIdx >= 0) {
       enrichedMessages = messages.map((m, i) =>
-        i === sysIdx ? { ...m, content: entityContext + '\n\n' + m.content } : m,
+        i === sysIdx ? { ...m, content: enriched.static + '\n\n' + m.content } : m,
       );
     } else {
-      enrichedMessages = [{ role: 'system', content: entityContext }, ...messages];
+      enrichedMessages = [{ role: 'system', content: enriched.static }, ...messages];
     }
   }
+  const injection = injectDynamicAtDepth(enrichedMessages, enriched.dynamic, depth);
+  enrichedMessages = injection.messages;
 
-  res.json({ messages: enrichedMessages });
+  res.json({ messages: enrichedMessages, depth, injectedAt: injection.injectedAt });
+});
+
+// ── Interest engagement (M5) ─────────────────────────────────────
+
+// Translate per-turn chat signals into an interest-weight delta.
+// Pure function so the weight semantics live in one testable place.
+//
+// Two signals (the third, session-boundary survival, lands with the
+// M6 handoff):
+//
+//   token volume — a long, expansive answer signals the topic pulled
+//     real engagement. Measured in response characters (chars/4 ≈
+//     tokens; we don't run a tokenizer). Scaled so a ~1500-char
+//     response contributes ~0.1 (matching the manual record default),
+//     capped so a single huge dump can't dominate.
+//
+//   persistence — a topic that's stayed open across several messages
+//     is one the conversation keeps returning to. `spanMessages` is
+//     how many messages the topic has been open for; each turn of
+//     persistence adds a little, capped.
+//
+// Both components are additive. A deep, sustained topic (long answers
+// across many turns) accrues fastest; a one-off short mention gets a
+// small bump that decay erases within a couple of weeks.
+const ENGAGE_TOKEN_SCALE_CHARS = 1500; // chars that map to one TOKEN_UNIT
+const ENGAGE_TOKEN_UNIT        = 0.1;
+const ENGAGE_TOKEN_CAP         = 0.5;
+const ENGAGE_PERSIST_PER_TURN  = 0.05;
+const ENGAGE_PERSIST_CAP       = 0.3;
+
+function interestEngagementDelta({ responseChars = 0, spanMessages = 0 } = {}) {
+  const rc = Number.isFinite(responseChars) && responseChars > 0 ? responseChars : 0;
+  const sm = Number.isFinite(spanMessages) && spanMessages > 0 ? spanMessages : 0;
+  const tokenComponent = Math.min((rc / ENGAGE_TOKEN_SCALE_CHARS) * ENGAGE_TOKEN_UNIT, ENGAGE_TOKEN_CAP);
+  const persistComponent = Math.min(sm * ENGAGE_PERSIST_PER_TURN, ENGAGE_PERSIST_CAP);
+  return tokenComponent + persistComponent;
+}
+
+// POST /api/interest/engage
+// Body: { topics: [{ label, spanMessages }], responseChars }
+// Records an engagement bump for each active topic from the turn that
+// just completed. Fire-and-forget from the client's perspective —
+// returns the computed deltas for debugging but never blocks or fails
+// the conversation. Degrades silently when Unruh is down.
+const ENGAGE_MAX_TOPICS = 32; // sanity cap; real sessions have a handful
+
+app.post('/api/interest/engage', async (req, res) => {
+  const { topics, responseChars } = req.body ?? {};
+  if (!Array.isArray(topics) || topics.length === 0) {
+    return res.json({ ok: true, recorded: [] });
+  }
+  // Dedup by label so two open topics sharing a label don't
+  // double-count the same engagement; keep the larger span when they
+  // collide. Bounded to ENGAGE_MAX_TOPICS so a malformed payload
+  // can't drive an unbounded sequence of Unruh calls.
+  const byLabel = new Map();
+  for (const t of topics.slice(0, ENGAGE_MAX_TOPICS)) {
+    const label = typeof t?.label === 'string' ? t.label.trim() : '';
+    if (!label) continue;
+    const span = Number.isFinite(t?.spanMessages) ? t.spanMessages : 0;
+    byLabel.set(label, Math.max(byLabel.get(label) ?? 0, span));
+  }
+  const recorded = [];
+  for (const [label, spanMessages] of byLabel) {
+    const delta = interestEngagementDelta({ responseChars, spanMessages });
+    if (delta <= 0) continue;
+    const ok = await recordInterest({ topic: label, delta, source: 'chat' });
+    recorded.push({ topic: label, delta, ok });
+  }
+  res.json({ ok: true, recorded });
+});
+
+// ── Session handoff (M6) ─────────────────────────────────────────
+
+// POST /api/session/handoff
+// Body: { intent, threads: [...], sessionId }
+// Stores a session-end handoff in Unruh so the next session resumes
+// mid-thought. Fire-and-forget from the client; degrades silently
+// when Unruh is down. The frontend generates intent/threads by asking
+// the chat LLM to summarise the ending session.
+app.post('/api/session/handoff', async (req, res) => {
+  const { intent, threads, sessionId } = req.body ?? {};
+  const ok = await recordHandoff({
+    intent: typeof intent === 'string' ? intent : null,
+    threads: Array.isArray(threads) ? threads : [],
+    sessionId: typeof sessionId === 'string' ? sessionId : null,
+  });
+  res.json({ ok });
 });
 
 // ── Log endpoints ───────────────────────────────────────────────
@@ -600,7 +733,10 @@ app.post('/api/tomes/default/entries', async (req, res) => {
       selective:           false,
       selectiveLogic:      0,
       enabled:             true,
-      position:            0,
+      // At-depth, not a system-message position — these keyword-triggered
+      // entries would invalidate the prompt prefix cache if injected into
+      // it. See the same rationale in memorization.js.
+      position:            4,
       depth:               4,
       role:                0,
       scanDepth:           null,
@@ -982,6 +1118,80 @@ app.get('/api/settings', async (_req, res) => {
   }
 });
 
+// Read the user's preferred depth for the dynamic-thalamus injection
+// (memories / graph / temporal go N positions from the end of the
+// conversation as a separate system message, leaving the identity
+// prefix on the system message stable for the upstream LLM's prefix
+// cache). Bounded to a sensible range; falls back to 4 on any error.
+//
+// Function declaration so it's hoisted — the /api/chat handler defined
+// earlier in the file references it before settings.json's path
+// constant declares itself further down. Module-level execution is
+// complete by the time HTTP requests arrive, so the SETTINGS_FILE
+// const it reads is initialised at call time.
+function getThalamusDynamicDepth() {
+  try {
+    const s = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
+    const d = parseInt(s.thalamusDynamicDepth, 10);
+    if (Number.isFinite(d) && d >= 1 && d <= 50) return d;
+  } catch { /* fall through to default */ }
+  return 4;
+}
+
+// Pure helper. Insert `dynamicContent` as a system message `depth`
+// positions from the end of `messages`, leaving the array stable
+// above that point for the upstream LLM's prefix cache. Returns the
+// new array plus the actual position used so the inspector can show
+// where it landed.
+//
+// Two clamps:
+//   - lower bound `1` if there's a system message at index 0 — keeps
+//     the dynamic injection below the static prefix so the cache stays
+//     valid. `0` when there's no system message anyway (no cache to
+//     protect).
+//   - upper bound `messages.length` — appended at the end when the
+//     conversation is so short that `len - depth` would otherwise put
+//     the dynamic block AFTER what would be the position-clamped index
+//     (i.e. an empty messages array).
+//
+// No-op (returns messages unchanged + injectedAt=null) when
+// dynamicContent is empty.
+function injectDynamicAtDepth(messages, dynamicContent, depth) {
+  if (!dynamicContent) return { messages, injectedAt: null };
+  const hasSystemAtStart = messages.length > 0 && messages[0]?.role === 'system';
+  const minIdx = hasSystemAtStart ? 1 : 0;
+  const injectedAt = Math.max(minIdx, messages.length - depth);
+  const dynamicMsg = { role: 'system', content: dynamicContent };
+  return {
+    messages: [
+      ...messages.slice(0, injectedAt),
+      dynamicMsg,
+      ...messages.slice(injectedAt),
+    ],
+    injectedAt,
+  };
+}
+
+// Resolve the fields entity-core actually cares about from a settings
+// snapshot, so we can tell whether a settings PUT changed any of them.
+// Anything else (UI prefs, system prompts, etc.) doesn't require an
+// entity-core respawn and shouldn't trigger one.
+function entityCoreCredsSnapshot(settings) {
+  const id = settings?.entityCoreConnectionId ?? null;
+  if (!id) return { id: null, apiKey: '', provider: '', model: '' };
+  const conn = (settings.connections ?? []).find(c => c?.id === id);
+  if (!conn) return { id, apiKey: '', provider: '', model: '' };
+  return {
+    id,
+    apiKey:   conn.apiKey   ?? '',
+    provider: conn.provider ?? '',
+    model:    conn.model    ?? '',
+  };
+}
+function entityCoreCredsEqual(a, b) {
+  return a.id === b.id && a.apiKey === b.apiKey && a.provider === b.provider && a.model === b.model;
+}
+
 app.put('/api/settings', async (req, res) => {
   const { settings } = req.body ?? {};
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
@@ -993,14 +1203,35 @@ app.put('/api/settings', async (req, res) => {
   if (serialised.length > SETTINGS_MAX_BYTES) {
     return badRequest(res, `settings exceed ${SETTINGS_MAX_BYTES}-byte limit`);
   }
+
+  // Snapshot the prior entity-core creds so we can detect a real change
+  // after the write. Missing file => empty snapshot (counts as "no creds
+  // before"); any failure here is non-fatal — we just won't re-spawn.
+  let priorCreds = { id: null, apiKey: '', provider: '', model: '' };
+  try {
+    const raw = await fsp.readFile(SETTINGS_FILE, 'utf8');
+    priorCreds = entityCoreCredsSnapshot(JSON.parse(raw));
+  } catch { /* no prior settings — first write */ }
+
   try {
     const tmp = SETTINGS_FILE + '.tmp';
     await fsp.writeFile(tmp, serialised, 'utf8');
     await fsp.rename(tmp, SETTINGS_FILE);
-    return res.json({ ok: true });
   } catch (err) {
     return res.status(500).json({ error: `failed to write settings: ${err.message}` });
   }
+
+  // If the entity-core API-key designation changed (different connection
+  // picked, or the same connection's key/provider/model edited), respawn
+  // the child so it picks up the new env. Fire-and-forget so the PUT
+  // returns quickly; reconnect logs itself.
+  const nextCreds = entityCoreCredsSnapshot(settings);
+  if (!entityCoreCredsEqual(priorCreds, nextCreds)) {
+    console.log('[server] entity-core API-key designation changed — respawning');
+    reconnectEntityCore().catch(err => console.error('[server] reconnectEntityCore failed:', err.message));
+  }
+
+  return res.json({ ok: true });
 });
 
 app.get('/api/tailscale', async (_req, res) => {
@@ -1030,7 +1261,7 @@ app.post('/api/tailscale', async (req, res) => {
   });
 });
 
-app.listen(PORT, HOST, async () => {
+const httpServer = app.listen(PORT, HOST, async () => {
   const lines = ['', `Proto-Familiar ${PKG_VERSION} running at:`];
   lines.push(`  http://localhost:${PORT}`);
   if (tailscaleState.enabled) {
@@ -1045,3 +1276,36 @@ app.listen(PORT, HOST, async () => {
   console.log(lines.join('\n') + '\n');
   startMemorizationWorker();
 });
+
+// Graceful shutdown — fires on SIGTERM (stop.sh / stop.bat / docker
+// stop), SIGINT (Ctrl-C), and SIGHUP (terminal closes). Without this,
+// the memorization setIntervals would keep the event loop alive past
+// httpServer.close(), and the MCP children (entity-core, Unruh) would
+// be left to die from stdin EOF — which works on Unix but can be slow
+// on Windows. With this handler:
+//   1. Stop accepting new HTTP connections.
+//   2. Stop the memorization tick + prune intervals.
+//   3. Close the Unruh MCP client (its onclose-reconnect is suppressed
+//      via the unruhShuttingDown flag inside shutdownUnruh).
+//   4. process.exit(0) with a fallback timer in case anything hangs.
+let _shuttingDown = false;
+async function handleSignal(signal) {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+  console.log(`\n[server] ${signal} received — shutting down…`);
+  // Hard-exit safety net: never let a stuck handle keep the process
+  // alive past this window. SIGKILL-equivalent if anything misbehaves.
+  setTimeout(() => {
+    console.error('[server] graceful shutdown timed out — forcing exit');
+    process.exit(1);
+  }, 5000).unref();
+  try { httpServer.close(); } catch { /* already closed */ }
+  try { stopMemorizationWorker(); } catch { /* already stopped */ }
+  try { shutdownEntityCore(); } catch { /* already disconnected */ }
+  try { shutdownUnruh(); } catch { /* already disconnected */ }
+  // Give the close handshakes a tiny window, then exit.
+  setTimeout(() => process.exit(0), 250).unref();
+}
+process.on('SIGTERM', () => handleSignal('SIGTERM'));
+process.on('SIGINT',  () => handleSignal('SIGINT'));
+process.on('SIGHUP',  () => handleSignal('SIGHUP'));

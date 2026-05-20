@@ -34,6 +34,37 @@ Chat still works without entity-core — `enrich()` returns an empty
 string and every request goes through unenriched. But the Knowledge
 editor will be unusable until the MCP child reconnects.
 
+### Logs say `entity-core not found … skipping`, or it keeps reconnecting
+
+Two distinct entity-core startup states, distinguished by what the
+`[thalamus]` logs say:
+
+- **`entity-core not found at <path> — skipping (run install.sh /
+  install.bat to clone it)`** — entity-core isn't cloned. `connect()`
+  pre-checks for the checkout (symmetric with how Unruh checks its
+  venv) and skips cleanly: one line, no retry loop. Run the installer
+  to clone it, or set `ENTITY_CORE_PATH` if you keep it somewhere
+  non-standard.
+
+- **Repeated `Reconnecting to entity-core in …ms (attempt N/10)`** —
+  entity-core *is* cloned, but the `deno` spawn is failing. The
+  checkout exists so the skip-check passes, then the spawn errors and
+  the backoff loop runs (1s, 2s, 5s, 10s, 30s; max 10 attempts) before
+  giving up. The usual cause is **`deno` not installed, or installed
+  but not findable**. `thalamus.js` resolves `deno` from `~/.deno/bin`,
+  `~/.cargo/bin`, Homebrew, and (Windows) `%USERPROFILE%\.deno\bin`
+  before falling back to `PATH` — so this only bites when deno genuinely
+  isn't in any of those. (This is the one entity-core failure mode that
+  still spins rather than skipping: it's rare, because the installer
+  installs deno *when* it clones entity-core, so "cloned but no deno" is
+  an unusual hand-edited state.)
+
+  **Fix:** re-run `./install.sh` / `install.bat` (it installs deno and
+  caches entity-core's deps), or install Deno yourself from
+  <https://deno.com/> and point `DENO_BIN` at the binary if it lives
+  somewhere unusual. Restart Proto-Familiar afterward to retry — the
+  loop doesn't re-arm itself once it's given up.
+
 ### Map view is empty or stuck on "Loading…"
 
 If the toolbar's Type filter has a value, only nodes of that type are
@@ -146,6 +177,135 @@ additive and reversible by deleting the thing you just made.
 entity-core prunes snapshots older than `ENTITY_CORE_SNAPSHOT_RETENTION_DAYS`
 (default 30 days). Bump that env var before starting Proto-Familiar
 if you need longer retention.
+
+---
+
+## Entity-core API key (consolidator)
+
+### `[Consolidation] Failed weekly/...: No LLM API key configured (ENTITY_CORE_LLM_API_KEY or ZAI_API_KEY)`
+
+Entity-core's background consolidator runs on a schedule (weekly /
+monthly / yearly) and needs an LLM API key of its own — distinct from
+whatever the chat path uses. The error message names the API key but
+fires whenever any of `API_KEY` / `BASE_URL` / `MODEL` is unset.
+
+**Fix:** open Proto-Familiar's **Connections** sidebar, click
+**+ entity-core** on the connection whose key + model entity-core
+should use. The badge **entity-core** appears next to the row. The
+server detects the change on the next settings save and respawns
+the entity-core child with the new env — no Proto-Familiar restart
+needed; the next scheduled consolidation will succeed.
+
+You can pick any saved connection (any provider). It doesn't have
+to be your primary or any fallback — entity-core is independent of
+the chat path.
+
+### `LLM call failed: API request failed with status 404: Not Found`
+
+Entity-core has a key + provider but the model or endpoint isn't
+serving requests. Two common causes:
+
+- The connection's `model` field doesn't exist at that provider —
+  switch to a model you know works for chat with the same
+  connection.
+- The connection's `provider` tag isn't in `providers.js`'s
+  `PROVIDER_URLS` map, so the wrong base URL is being passed. The
+  server logs a warning at boot: `[thalamus] entity-core: provider
+  "<tag>" has no known URL — add it to PROVIDER_URLS in
+  providers.js`. Either edit the map or pick a connection with one
+  of the supported provider tags (`nanogpt`, `zai`, `zai-coding`).
+
+### Designation change didn't take effect
+
+Server-side respawn happens on `PUT /api/settings`, fire-and-
+forget. Check the server logs for:
+
+```
+[server] entity-core API-key designation changed — respawning
+[thalamus] Connected to entity-core at <path> (API key from connection "<provider>")
+```
+
+If you see the first line but not the second, the spawn itself
+failed — usually because `deno` isn't on PATH for the server
+process. Restart Proto-Familiar via the launcher script (which
+primes `~/.deno/bin`); a bare `npm start` from a shell without
+that path will inherit the same gap.
+
+---
+
+## Unruh (temporal context)
+
+### `[thalamus] Unruh venv missing at .../unruh/.venv — run \`cd unruh && uv sync\` to enable temporal context`
+
+Unruh's Python venv hasn't been materialised yet — usually because
+you pulled the branch but haven't re-run the installer.
+
+**Fix:** re-run `./install.sh` (Linux/macOS) or `install.bat`
+(Windows), or just relaunch — the launchers and `npm start` /
+`npm run dev` all trigger the installer automatically when this
+state is detected. Manual fallback: `cd unruh && uv sync`.
+
+If you don't intend to use Unruh at all, the warning is harmless —
+the rest of Proto-Familiar boots and runs without it. You'll just
+miss the `[Temporal Context]` block in the prompt.
+
+### `[ensure-unruh] uv is not installed`
+
+uv (Astral's Python package manager) isn't on PATH. The installer
+auto-installs it for you — run `./install.sh` or `install.bat`
+(or `Proto-Familiar.vbs`) and the next launch will find it.
+
+Manual install: see <https://docs.astral.sh/uv/>. After install,
+make sure `~/.local/bin` (Unix) or `%USERPROFILE%\.local\bin`
+(Windows) is on the PATH that `node server.js` inherits.
+
+### Unruh process keeps reconnecting in the logs
+
+`thalamus.js` reconnects to Unruh with exponential backoff (1s, 2s,
+5s, 10s, 30s; max 10 attempts) when the child closes. If you see
+the reconnect loop repeatedly:
+
+- Run `uv run python -m unruh` from `./unruh/` manually to see the
+  real error message (it normally goes to a stderr stream that
+  thalamus doesn't surface).
+- Common cause: a Python syntax error in a recent `unruh/` change.
+- After 10 attempts the loop gives up — restart Proto-Familiar to
+  retry.
+
+---
+
+## Port conflicts & start-up
+
+### `Error: listen EADDRINUSE: address already in use 0.0.0.0:8742`
+
+Something else is on the port. The `npm start` prestart hook and
+the launcher scripts both auto-recycle Proto-Familiar's *own* stale
+instances, but they refuse to kill anything else.
+
+**If the holder IS a stale Proto-Familiar:** the prestart message
+identifies it by PID and tries to free the port. If that loop fails,
+run `./stop.sh` / `stop.bat` (which kills every `node server.js`
+rooted at this dir) and retry.
+
+**If the holder is something else:** the prestart message will say
+`port X is held by PID Y, which isn't a Proto-Familiar instance` —
+stop that process, or run with a different port:
+
+```
+PORT=8080 npm start
+PORT=8080 ./start.sh
+```
+
+### Server quits immediately after `npm start` with no error
+
+Most likely a prestart hook failure surfaced as a non-zero exit
+before `node server.js` ran. Run the hooks individually to see the
+real message:
+
+```
+node scripts/ensure-unruh-deps.mjs
+node scripts/ensure-port-free.mjs
+```
 
 ---
 

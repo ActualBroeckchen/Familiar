@@ -27,6 +27,16 @@ Process:
 3. If you can't decide between patch and minor, prefer minor — it's
    cheaper than the wrong call going out as a "patch".
 
+### Versioning during long-running feature branches
+
+When a major in-flight feature (e.g. Unruh) has its own dedicated
+branch and is the *only* thing the MINOR slot is being held for, do
+**not** bump MINOR mid-flight for ancillary work. Everything else —
+new endpoints, UX reworks, even refactors — bumps PATCH only. The
+minor slot is reserved for the feature's completion. The branch name
+itself signals which feature owns the next minor (e.g. on the `Unruh`
+branch, stay at `0.2.X-alpha` until Unruh is merged).
+
 When uncertain whether a change warrants a bump (formatting, comment
 only, whitespace), skip it. Otherwise bump.
 

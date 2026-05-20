@@ -39,6 +39,20 @@ Open with **☰** in the top bar.
 | Streaming | Enable/disable SSE streaming |
 | Temperature | Sampling temperature (0.0–2.0) |
 | Max tokens | Maximum response length in tokens |
+| Context-cache depth | How many messages from the end of the conversation the dynamic enrichment block (memories / graph / temporal) is injected at (`thalamusDynamicDepth`, default 4). Identity stays at the top so the provider's prefix cache covers it; the dynamic block goes deeper so per-turn churn doesn't invalidate the cache. Smaller = the model sees retrieved context closer to the question; larger = more cache hits on long sessions. |
+| Session handoff | When on (`handoffEnabled`, default on), the end of a session runs one short summary call (cheapest connection) so the next session resumes mid-thought via the temporal context. One extra small generation per session boundary — turn off to skip it. See [Temporal context](#temporal-context-unruh). |
+
+### Saved connections (sidebar)
+
+The **Connections** sidebar section keeps multiple named provider / key / model combos so you can switch without re-typing. Each row has three independent toggles:
+
+| Toggle | Behaviour |
+|---|---|
+| **Primary** (radio, mutually exclusive) | The connection used for the chat path. Selecting it copies its fields into the active Provider / API Key / Model inputs. |
+| **+ fallback** | Adds this connection to the ordered fallback list. When the primary returns an empty response or fails, the client retries in fallback order. Arrows let you reorder. |
+| **+ entity-core** (single-select across all rows) | Designates this connection's API key + model for entity-core's background consolidator. Triggers a server-side respawn of the entity-core child with the new env on save — no Proto-Familiar restart needed. See [Entity-Core → API key designation](entity-core.md#api-key-designation). |
+
+The list syncs across devices via `settings.json` along with the rest of your settings (Tailscale-mediated).
 
 ### Names
 
@@ -138,11 +152,43 @@ The Familiar can do the same edits autonomously via the seven editing tools desc
 
 ---
 
+## Temporal context (Unruh)
+
+A sibling Python MCP module (`unruh/`, alpha) adds a `[Temporal Context]` block to the dynamic enrichment — the Familiar's sense of *when* it is and *what's been going on*, distinct from entity-core's identity/memory layer. It runs as its own child process (`uv run python -m unruh`) and degrades gracefully: if it isn't installed or is down, the block is simply absent. Design rationale lives in [`unruh-design.md`](unruh-design.md); the three layers it surfaces:
+
+### Schedule
+
+Events, tasks, phases, and states on a timeline. The block shows the **current phase** (e.g. "morning correspondence") plus an upcoming **window** of events/tasks, rendered in your local timezone as landmarks ("today 14:00 — Chen's appointment") rather than ISO timestamps. Seed a default daily rhythm with `cd unruh && uv run python -m unruh seed-routine`.
+
+### Interests
+
+Two kinds, both rendered under the temporal block:
+
+- **Standing values** — always-on identity-level orientations (e.g. "caring for the user's wellbeing"). They never decay, so they surface every turn.
+- **Live interests** — topics the Familiar engages with accrue **weight** automatically: longer replies and topics the conversation keeps returning to bump it (the signal comes from your open [Topic](topics.md) markers). Weight **decays** when a topic goes untouched (≈5-day half-life), so a passing curiosity fades within a couple of weeks while a sustained interest climbs into "active pursuit". Bookmarks are a supplementary explicit signal.
+
+Interests are read-only from the UI today; they accrue from chat and surface in the prompt. Tuning constants (decay rate, accrual scales) are code-level for now.
+
+### Session handoff
+
+When a session ends (idle auto-end or **Clear history**), the Familiar summarises the conversation into an **intent** ("what I was doing") plus **open threads** ("what's unfinished"), in its own voice, and stores it. The next session's first message surfaces it at the top of `[Temporal Context]`:
+
+```
+Last session:
+  intent — I was helping you outline the thesis intro; you were stuck on the hook
+  open — lead with the anecdote or the statistic?
+```
+
+…then marks it consumed so it doesn't repeat. This is one short extra generation per session boundary (cheapest connection, persona-only enrichment so it stays in character without pulling in memories) — turn it off with the **Session handoff** setting. It runs on idle-end and Clear, not on tab-close (an async summary can't complete during page unload), so a tab-closed session simply starts the next one cold.
+
+---
+
 ## Prompt Inspector
 
 Click the **🔍** button in the top bar after sending a message to see the complete prompt that was actually sent to the LLM on the previous turn, color-coded by source:
 
-- **Entity-Core (Thalamus)** — the block server-side `thalamus.enrich()` prepended; captured from the live `/api/chat` response so you see exactly what was injected, not a re-derived preview
+- **Entity-Core (static)** (purple) — the cacheable identity prefix prepended to the system message
+- **Entity-Core (dynamic @ depth)** (teal) — the per-turn block (memories / graph / temporal) depth-injected as its own system message at the cache-friendly position. See [`architecture.md#prompt-cache-aware-assembly`](architecture.md#prompt-cache-aware-assembly) for why these are split
 - **System prompt**, **Character profile**, **User profile** — the configured base segments
 - **Lore — system top / before character / after character / system bottom / injected at depth** — every Tome entry the activation engine matched, grouped by injection position
 - **Post-history prompt** — the trailing user instruction (if configured)

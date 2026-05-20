@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
 # Proto-Familiar installer (macOS / Linux)
 #
-# Fresh install: installs Node deps, auto-installs Deno (if missing),
-#   clones entity-core (release tag) as a sibling directory, pre-caches
-#   its Deno module graph, and registers a desktop entry on Linux.
+# Fresh install: installs Node deps, auto-installs Deno + uv (if
+#   missing), clones entity-core (release tag) as a sibling directory,
+#   pre-caches its Deno module graph, syncs Unruh's Python venv from
+#   unruh/uv.lock, and registers a desktop entry on Linux.
 #
 # Update mode: triggered automatically when node_modules/ already exists.
 #   Pulls latest Proto-Familiar (git pull --ff-only), refreshes
-#   entity-core to the pinned tag, re-runs the idempotent npm install
-#   and deno cache. Re-runs Node/Deno checks (and auto-install if needed)
-#   so the system catches up to new requirements too.
+#   entity-core to the pinned tag, re-runs idempotent npm install +
+#   deno cache + uv sync. Re-runs Node / Deno / uv checks (and
+#   auto-installs anything missing) in both modes so the system catches
+#   up to new requirements.
+#
+# Desktop entry creation is idempotent and runs in both modes: it
+# creates the entry only when it doesn't already exist, so a fresh
+# clone over an old data dir (or any path that lands in update mode
+# without an existing desktop entry) still gets the application-menu
+# shortcut.
 #
 # User-data safety: BEFORE any git operation in update mode the installer
 # takes a defensive copy of tomes/, logs/, and entity-core's data/ into
@@ -211,26 +219,101 @@ elif [ -n "$ENTITY_CORE_PKG_DIR" ]; then
   warn "Skipping entity-core dep pre-cache (Deno not available). First server start will download them."
 fi
 
-# --- Platform-specific launcher polish (install mode only) --------------
-# In update mode, the desktop entry / launcher already exists. Re-running
-# the desktop-entry script is harmless but adds noise; skip for clarity.
-UNAME="$(uname -s 2>/dev/null || echo unknown)"
-if [ "$MODE" = "install" ]; then
-  case "$UNAME" in
-    Linux)
-      if [ -f "$SCRIPT_DIR/scripts/linux/install-desktop-entry.sh" ]; then
-        say "Installing application-menu entry..."
-        bash "$SCRIPT_DIR/scripts/linux/install-desktop-entry.sh" || warn "Desktop entry install failed (non-fatal)."
+# --- uv check (auto-install if missing, in both modes) -----------------
+# uv is the Python package/runtime manager Unruh uses. The official
+# installer writes to ~/.local/bin by default. We pre-add that to PATH so
+# the subsequent `uv sync` works without needing a shell restart;
+# start.sh / Proto-Familiar.command do the same probe at launch time.
+if [ -d "$HOME/.local/bin" ]; then PATH="$HOME/.local/bin:$PATH"; fi
+if [ -d "$HOME/.cargo/bin" ]; then PATH="$HOME/.cargo/bin:$PATH"; fi
+if command -v uv >/dev/null 2>&1; then
+  say "uv $(uv --version 2>&1 | head -n1) found."
+  HAVE_UV=1
+else
+  if command -v curl >/dev/null 2>&1; then
+    say "uv not found — installing via the official Astral script (writes to ~/.local/bin)..."
+    if curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1; then
+      PATH="$HOME/.local/bin:$PATH"
+      if command -v uv >/dev/null 2>&1; then
+        say "uv $(uv --version 2>&1 | head -n1) installed."
+        HAVE_UV=1
+      else
+        warn "uv install ran but 'uv' is still not on PATH. Open a new terminal and re-run, or install manually from https://docs.astral.sh/uv/."
+        HAVE_UV=0
       fi
-      ;;
-    Darwin)
-      if [ -f "$SCRIPT_DIR/Proto-Familiar.command" ]; then
-        chmod +x "$SCRIPT_DIR/Proto-Familiar.command" || true
-        say "macOS launcher ready: double-click Proto-Familiar.command in Finder."
-      fi
-      ;;
-  esac
+    else
+      warn "uv auto-install failed. Unruh (temporal context) will be disabled until you install uv from https://docs.astral.sh/uv/."
+      HAVE_UV=0
+    fi
+  else
+    warn "Neither 'uv' nor 'curl' available. Unruh needs uv; install from https://docs.astral.sh/uv/."
+    HAVE_UV=0
+  fi
 fi
+
+# --- Unruh dependency sync (idempotent; fast when nothing changed) -----
+# Materialises unruh/.venv from unruh/uv.lock. uv sync is a no-op when
+# nothing has changed, so re-running in update mode after a git pull
+# picks up any locked-dep changes cleanly.
+if [ "$HAVE_UV" = "1" ] && [ -f "$SCRIPT_DIR/unruh/pyproject.toml" ]; then
+  say "Syncing Unruh dependencies (only fetches what's new)..."
+  if ( cd "$SCRIPT_DIR/unruh" && uv sync --quiet ); then
+    say "Unruh dependencies synced."
+    # Apply any pending DB migrations now (idempotent) so a schema change
+    # shipped in this update is in place before the first chat, rather
+    # than lazily on the first Unruh connect. Opening a connection runs
+    # run_migrations(). Best-effort: on failure it still applies on first
+    # start, so this is non-fatal.
+    if ( cd "$SCRIPT_DIR/unruh" && uv run --no-sync python -c "from unruh.db import get_conn; get_conn().close()" >/dev/null 2>&1 ); then
+      say "Unruh database up to date."
+    else
+      warn "Unruh DB migration step skipped — it will apply on first start."
+    fi
+  else
+    warn "uv sync failed — Unruh will be disabled until this is resolved."
+  fi
+elif [ -f "$SCRIPT_DIR/unruh/pyproject.toml" ]; then
+  warn "Skipping Unruh dep sync (uv not available). Temporal context will be disabled until uv is installed."
+fi
+
+# --- Platform-specific launcher polish (idempotent, runs in both modes) -
+# Previously gated on install mode only, which silently skipped desktop-
+# entry creation on update mode — fine when the entry already existed,
+# broken when it didn't (manual cleanup, restored backup, OS reinstall
+# that preserved the project dir). Both branches below check for the
+# target's presence first, so re-running is cheap.
+UNAME="$(uname -s 2>/dev/null || echo unknown)"
+case "$UNAME" in
+  Linux)
+    DESKTOP_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/applications/proto-familiar.desktop"
+    if [ -f "$SCRIPT_DIR/scripts/linux/install-desktop-entry.sh" ] && [ ! -f "$DESKTOP_FILE" ]; then
+      say "Installing application-menu entry..."
+      bash "$SCRIPT_DIR/scripts/linux/install-desktop-entry.sh" || warn "Desktop entry install failed (non-fatal)."
+    elif [ -f "$DESKTOP_FILE" ]; then
+      say "Application-menu entry already present at $DESKTOP_FILE."
+    fi
+    ;;
+  Darwin)
+    if [ -f "$SCRIPT_DIR/Proto-Familiar.command" ]; then
+      # chmod +x is idempotent and cheap; always run so a re-clone or a
+      # filesystem that drops the executable bit (network shares, some
+      # zip extractors) doesn't break the double-click path.
+      chmod +x "$SCRIPT_DIR/Proto-Familiar.command" || true
+      [ "$MODE" = "install" ] && say "macOS launcher ready: double-click Proto-Familiar.command in Finder."
+    fi
+    ;;
+esac
+
+# Completion marker. Written only after npm install succeeded (set -e
+# would have exited above on failure). The launchers check for this
+# instead of node_modules to decide whether to (re)run the installer —
+# node_modules can exist without the installer ever having run (a manual
+# `npm install`), which would skip entity-core clone + shortcut/desktop-
+# entry creation. The marker is the reliable "installer actually
+# completed" signal. Content is the version, for debugging / future
+# version-aware logic.
+PF_VERSION="$(node -p "require('$SCRIPT_DIR/package.json').version" 2>/dev/null || echo unknown)"
+printf '%s\n%s\n' "$PF_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$SCRIPT_DIR/.pf-install-complete" 2>/dev/null || true
 
 if [ "$MODE" = "update" ]; then
   say "Update complete."
@@ -252,4 +335,7 @@ echo "  Trouble?       see docs/troubleshooting.md"
 echo
 if [ "$HAVE_DENO" = "0" ]; then
   warn "Reminder: install Deno before first start if you want entity-core enrichment."
+fi
+if [ "${HAVE_UV:-0}" = "0" ]; then
+  warn "Reminder: install uv before first start if you want Unruh (temporal context)."
 fi

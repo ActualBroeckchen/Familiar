@@ -57,6 +57,14 @@ Per-entry overrides for scan depth, case sensitivity, and whole-word can be set 
 
 When multiple entries activate at the same position, they are concatenated in insertion-order with `---` separators.
 
+### Cache-safety rule: system positions require `constant`
+
+The four system-message positions (`sys_top`, `before_char`, `after_char`, `sys_bottom`) all land in the prompt's **cacheable prefix** — the region upstream providers cache and bill at a fraction of the rate (see [`architecture.md`](architecture.md#prompt-cache-aware-assembly)). A **non-constant** (keyword-triggered) entry there flips on and off between turns, which invalidates that cache every time it changes.
+
+So the entry editor restricts the system positions to **constant** entries only. A non-constant entry must use `at_depth` (4), which splices into the conversation *below* the cached prefix and so never disturbs it. Unchecking **Constant** disables the system positions and snaps the entry to `at_depth`.
+
+Auto-created entries (session memorization, the `save_to_tome` tool) are non-constant, so they're now written at `at_depth` by default. To migrate older entries that predate this rule, open a tome's entries and click **↓ Non-constant → depth 4** — it relocates every non-constant entry sitting in a system position to `at_depth`, leaving constant entries (and entries already at depth) untouched.
+
 ---
 
 ## Selective Logic

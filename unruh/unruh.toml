@@ -1,0 +1,14 @@
+# Unruh runtime config. Stub — real fields land with later milestones.
+#
+# Anything in this file is optional; defaults are baked into the code.
+# Override path: set UNRUH_CONFIG to point at a different toml.
+
+[runtime]
+# Timezone for user-facing rendering. Captured once at process boot,
+# not re-detected per request. Override with UNRUH_TZ env var.
+# tz = "America/Los_Angeles"
+
+[weights]
+# Half-life of a live-interest weight, in days. See Milestone 5 in
+# docs/unruh-implementation-plan.md.
+# tau_days = 5.0

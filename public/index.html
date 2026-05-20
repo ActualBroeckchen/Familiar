@@ -103,6 +103,18 @@
             <label for="max-tokens">Max Tokens</label>
             <input type="number" id="max-tokens" value="2048" min="128" max="128000" step="128">
           </div>
+
+          <div class="field">
+            <label for="thalamus-dynamic-depth">Context-cache depth</label>
+            <input type="number" id="thalamus-dynamic-depth" value="4" min="1" max="50" step="1">
+            <div class="field-hint">How many messages from the end of the conversation the dynamic-thalamus block (memories / graph / temporal) is injected at. Identity stays at the top (cacheable); dynamic stuff goes here. Smaller = better model attention, larger = more cache hits on long sessions.</div>
+          </div>
+
+          <div class="field-row">
+            <label for="handoff-toggle">Session handoff</label>
+            <input type="checkbox" id="handoff-toggle" checked>
+          </div>
+          <div class="field-hint">When on, the end of a session runs a short summary (cheapest connection) so the next session resumes mid-thought via the temporal context. One small extra generation per session boundary — turn off to save it.</div>
         </div>
 
         <!-- Saved Connections & Fallbacks -->
@@ -578,6 +590,7 @@
         <h2 class="modal-title" id="tome-entries-modal-title">Tome Entries</h2>
         <div class="modal-header-actions">
           <button class="btn-ghost" id="tome-entries-back-btn">← Back</button>
+          <button class="btn-ghost" id="tome-entries-depth-btn" title="Move every non-constant (keyword-triggered) entry out of the system-message positions to @ chat depth 4, so they stop invalidating the prompt cache. Constant entries are left in place.">↓ Non-constant → depth 4</button>
           <button class="btn-secondary" id="tome-entries-new-btn">+ New</button>
           <button class="icon-btn modal-close" id="tome-entries-modal-close" aria-label="Close">✕</button>
         </div>
@@ -762,6 +775,7 @@
               <option value="3">⬇ Bottom of system message</option>
               <option value="4">@ At chat depth</option>
             </select>
+            <div class="field-hint hidden" id="lore-ed-position-lock-hint">System-message positions are limited to <strong>constant</strong> entries — a keyword-triggered entry there would invalidate the prompt cache each time it flips. Non-constant entries inject @ chat depth. Check <em>Constant</em> to unlock the other positions.</div>
           </div>
           <div class="field" id="lore-ed-depth-field">
             <label for="lore-ed-depth">Depth <span class="label-hint">(from end)</span></label>

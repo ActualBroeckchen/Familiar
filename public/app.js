@@ -572,15 +572,31 @@ const state = {
   tomeMatchWholeWords:   false,  // global whole-word keyword matching
   turnCount:             0,      // conversation turn counter (used by entry.delay)
   generationMode:        'normal', // current generation mode (used by entry.triggers[])
-  lorebook:          { entries: {} }, // legacy field kept for compatibility
   tomeCache:         {},         // { [tomeId]: tomeObject } — not persisted
   tomeRegistry:      [],         // array of { id, name, enabled, entryCount } — not persisted
   topics:            [],         // session-level; stored under pf_topics_{sessionId}
   // ── Saved connections (primary + fallbacks) ─────────────
-  connections:           [],     // [{ id, name, provider, apiKey, model }]
-  primaryConnectionId:   null,   // id of the active/primary connection
-  fallbackConnectionIds: [],     // ordered ids tried when primary fails/returns empty
-  maxEmptyRetries:       2,      // retries per connection when response is empty
+  connections:             [],   // [{ id, name, provider, apiKey, model }]
+  primaryConnectionId:     null, // id of the active/primary connection
+  fallbackConnectionIds:   [],   // ordered ids tried when primary fails/returns empty
+  maxEmptyRetries:         2,    // retries per connection when response is empty
+  entityCoreConnectionId:  null, // id of the connection whose API key entity-core uses
+  // ── Prompt-cache tuning ──────────────────────────────────
+  // How many messages from the end of the conversation the dynamic
+  // thalamus block gets injected at. Static identity stays at the
+  // top so the provider's prefix cache covers it; dynamic (memories /
+  // graph / temporal) goes N positions deep so it doesn't invalidate
+  // the prefix. 4 is a balance between cache wins and the model
+  // seeing the retrieved memories close to the current question.
+  thalamusDynamicDepth:    4,
+  // ── Session handoff (M6) ─────────────────────────────────
+  // When on, the end of a session triggers a small LLM call (cheapest
+  // available connection) that summarises the conversation into an
+  // intent + open threads, stored in Unruh and surfaced at the top of
+  // the next session's [Temporal Context] so the Familiar resumes
+  // mid-thought. It's one extra short generation per session boundary;
+  // turn it off if you'd rather not spend that.
+  handoffEnabled:          true,
 };
 
 // ── Persistence ──────────────────────────────────────────────────
@@ -602,6 +618,8 @@ const SERVER_SYNCED_KEYS = [
   'tomeScanDepth', 'tomeRecursive', 'tomeMaxRecursionSteps',
   'tomeCaseSensitive', 'tomeMatchWholeWords',
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
+  'entityCoreConnectionId',
+  'thalamusDynamicDepth', 'handoffEnabled',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -666,6 +684,12 @@ function loadPersisted() {
   if (!Array.isArray(state.connections))           state.connections = [];
   if (!Array.isArray(state.fallbackConnectionIds)) state.fallbackConnectionIds = [];
   if (typeof state.maxEmptyRetries !== 'number')   state.maxEmptyRetries = 2;
+  if (typeof state.thalamusDynamicDepth !== 'number'
+      || state.thalamusDynamicDepth < 1
+      || state.thalamusDynamicDepth > 50) {
+    state.thalamusDynamicDepth = 4;
+  }
+  if (typeof state.handoffEnabled !== 'boolean') state.handoffEnabled = true;
   migrateLegacyConnection();
 }
 
@@ -822,6 +846,10 @@ function migrateLegacyConnection() {
   state.fallbackConnectionIds = (state.fallbackConnectionIds || [])
     .filter(id => state.connections.find(c => c.id === id))
     .filter(id => id !== state.primaryConnectionId);
+  // Clear the entity-core designation if it points at a missing connection.
+  if (state.entityCoreConnectionId && !state.connections.find(c => c.id === state.entityCoreConnectionId)) {
+    state.entityCoreConnectionId = null;
+  }
 }
 
 function getPrimaryConnection() {
@@ -893,6 +921,7 @@ function saveNewConnection(name) {
 function deleteConnection(id) {
   state.connections = state.connections.filter(c => c.id !== id);
   state.fallbackConnectionIds = state.fallbackConnectionIds.filter(x => x !== id);
+  if (state.entityCoreConnectionId === id) state.entityCoreConnectionId = null;
   if (state.primaryConnectionId === id) {
     state.primaryConnectionId = state.connections[0]?.id ?? null;
     const newPrimary = getPrimaryConnection();
@@ -928,6 +957,26 @@ function toggleFallback(id, enabled) {
   renderConnectionsList();
 }
 
+/**
+ * Designate (or clear) the connection whose API key entity-core uses.
+ * Single-select: setting this on one connection clears it from any
+ * other. Setting it to the currently-designated id clears the
+ * designation entirely (so the same toggle button works for both
+ * directions). server.js compares old vs new on PUT /api/settings and
+ * respawns entity-core when this (or the pointed-at connection's key)
+ * changes — so the user sees the new key take effect on the next
+ * chat message, no restart required.
+ */
+function setEntityCoreConnection(id) {
+  if (state.entityCoreConnectionId === id) {
+    state.entityCoreConnectionId = null;
+  } else {
+    state.entityCoreConnectionId = id;
+  }
+  saveSettings();
+  renderConnectionsList();
+}
+
 function moveFallback(id, delta) {
   const arr = [...state.fallbackConnectionIds];
   const idx = arr.indexOf(id);
@@ -946,9 +995,10 @@ function renderConnectionsList() {
   if (!ul) return;
   ul.innerHTML = '';
   for (const conn of state.connections) {
-    const isPrimary = conn.id === state.primaryConnectionId;
-    const fbIdx     = state.fallbackConnectionIds.indexOf(conn.id);
+    const isPrimary  = conn.id === state.primaryConnectionId;
+    const fbIdx      = state.fallbackConnectionIds.indexOf(conn.id);
     const isFallback = fbIdx >= 0 && !isPrimary;
+    const isEntityCore = conn.id === state.entityCoreConnectionId;
 
     const li = document.createElement('li');
     li.className = 'connection-item' + (isPrimary ? ' is-primary' : '');
@@ -965,32 +1015,61 @@ function renderConnectionsList() {
     // Info column
     const info = document.createElement('div');
     info.className = 'conn-info';
-    const badgeHtml = isPrimary
-      ? '<span class="conn-badge">primary</span>'
-      : (isFallback ? `<span class="conn-badge fb">fallback #${fbIdx + 1}</span>` : '');
+    const primaryBadge   = isPrimary    ? '<span class="conn-badge">primary</span>' : '';
+    const fallbackBadge  = (!isPrimary && isFallback) ? `<span class="conn-badge fb">fallback #${fbIdx + 1}</span>` : '';
+    const entityBadge    = isEntityCore ? '<span class="conn-badge ec">entity-core</span>' : '';
     info.innerHTML =
-      `<div class="conn-name">${esc(conn.name)}${badgeHtml}</div>` +
+      `<div class="conn-name">${esc(conn.name)}${primaryBadge}${fallbackBadge}${entityBadge}</div>` +
       `<div class="conn-meta">${esc(conn.provider)} / ${esc(conn.model || '—')}</div>`;
 
     // Actions column
     const actions = document.createElement('div');
     actions.className = 'conn-actions';
 
+    // a11y note: each action button gets both `title` (sighted hover
+    // tooltip) and `aria-label` (screen-reader announcement) because
+    // the visible textContent is a symbol (✓ / + / ▲ / ▼ / ✕) that
+    // doesn't announce meaningfully on its own. Toggle buttons use
+    // aria-pressed so assistive tech can convey on/off state.
     const fbBtn = document.createElement('button');
     fbBtn.type = 'button';
     fbBtn.textContent = isFallback ? '✓ fallback' : '+ fallback';
     fbBtn.title = isPrimary ? 'Primary connection cannot also be a fallback' : 'Toggle fallback';
+    fbBtn.setAttribute('aria-label', `${isFallback ? 'Remove' : 'Add'} "${conn.name}" as fallback`);
+    fbBtn.setAttribute('aria-pressed', isFallback ? 'true' : 'false');
     fbBtn.disabled = isPrimary;
     fbBtn.addEventListener('click', () => toggleFallback(conn.id, !isFallback));
     actions.appendChild(fbBtn);
 
+    // Entity-core designation: single-select across all connections. Tells
+    // the server which API key to pass to the entity-core child process
+    // via ENTITY_CORE_LLM_API_KEY (and ZAI_API_KEY for z.ai providers).
+    // Independent of primary/fallback — you can point entity-core at any
+    // connection regardless of how the chat path uses it.
+    const ecBtn = document.createElement('button');
+    ecBtn.type = 'button';
+    ecBtn.textContent = isEntityCore ? '✓ entity-core' : '+ entity-core';
+    ecBtn.title = isEntityCore
+      ? 'Currently the API key source for entity-core (click to clear)'
+      : 'Use this connection’s API key for entity-core';
+    ecBtn.setAttribute('aria-label', isEntityCore
+      ? `Clear entity-core API-key designation from "${conn.name}"`
+      : `Use "${conn.name}" as entity-core API-key source`);
+    ecBtn.setAttribute('aria-pressed', isEntityCore ? 'true' : 'false');
+    ecBtn.addEventListener('click', () => setEntityCoreConnection(conn.id));
+    actions.appendChild(ecBtn);
+
     if (isFallback) {
       const upBtn = document.createElement('button');
-      upBtn.type = 'button'; upBtn.textContent = '▲'; upBtn.title = 'Try earlier in fallback order';
+      upBtn.type = 'button'; upBtn.textContent = '▲';
+      upBtn.title = 'Try earlier in fallback order';
+      upBtn.setAttribute('aria-label', `Move "${conn.name}" earlier in fallback order`);
       upBtn.disabled = fbIdx === 0;
       upBtn.addEventListener('click', () => moveFallback(conn.id, -1));
       const dnBtn = document.createElement('button');
-      dnBtn.type = 'button'; dnBtn.textContent = '▼'; dnBtn.title = 'Try later in fallback order';
+      dnBtn.type = 'button'; dnBtn.textContent = '▼';
+      dnBtn.title = 'Try later in fallback order';
+      dnBtn.setAttribute('aria-label', `Move "${conn.name}" later in fallback order`);
       dnBtn.disabled = fbIdx === state.fallbackConnectionIds.length - 1;
       dnBtn.addEventListener('click', () => moveFallback(conn.id, +1));
       actions.appendChild(upBtn);
@@ -998,7 +1077,9 @@ function renderConnectionsList() {
     }
 
     const delBtn = document.createElement('button');
-    delBtn.type = 'button'; delBtn.textContent = '✕'; delBtn.title = 'Delete connection';
+    delBtn.type = 'button'; delBtn.textContent = '✕';
+    delBtn.title = 'Delete connection';
+    delBtn.setAttribute('aria-label', `Delete connection "${conn.name}"`);
     delBtn.addEventListener('click', () => {
       if (confirm(`Delete connection "${conn.name}"?`)) deleteConnection(conn.id);
     });
@@ -1558,7 +1639,32 @@ let lastSentMessages = null;
 /** Per-segment provenance for the system message of the last build. See buildApiMessages. */
 let lastBuildSegments = null;
 /** The entity-core block that the server actually prepended to the last request's system message. */
-let lastThalamusContext = null;
+// Last successful response's thalamus envelope, captured per-request:
+//   { static, dynamic, depth, injectedAt }
+// `static` lives at the top of the system message (cacheable prefix);
+// `dynamic` is the depth-injected block at position `injectedAt`.
+// Both are optional — server emits an empty string for whichever side
+// thalamus didn't produce. null between requests + when no successful
+// response has come back yet.
+let lastThalamus = null;
+
+// Extract a human-readable error string from an OpenAI-compatible
+// error response, which can shape `error` as either a bare string OR
+// a structured object like { message, type, code }. Stringifying the
+// object via `new Error(obj)` or template literals yields the famous
+// "[object Object]" — useless in diagnostics. Falls back to the
+// fallback string when no usable text is found.
+function extractErrorText(payload, fallback) {
+  const e = payload?.error;
+  if (e == null) return fallback;
+  if (typeof e === 'string') return e;
+  if (typeof e === 'object') {
+    if (typeof e.message === 'string' && e.message) return e.message;
+    if (typeof e.code === 'string' && e.code) return e.code;
+    try { return JSON.stringify(e); } catch { /* fall through */ }
+  }
+  return String(e) || fallback;
+}
 
 async function sendMessage(userInput) {
   userInput = userInput.trim();
@@ -1591,7 +1697,7 @@ async function sendMessage(userInput) {
   const userTimestamp = now;
   const apiMessages   = buildApiMessages(userInput);
   lastSentMessages    = apiMessages;
-  lastThalamusContext = null; // wait for the live answer to populate this
+  lastThalamus = null; // wait for the live answer to populate this
 
   // Optimistic UI
   appendUserMessage(userInput, userTimestamp);
@@ -1609,13 +1715,23 @@ async function sendMessage(userInput) {
     }
     setStatus('ok');
     state.turnCount = (state.turnCount ?? 0) + 1;
-    debugRecord('recv', `ok in ${Math.round(performance.now() - sendStart)}ms thalamus=${lastThalamusContext ? lastThalamusContext.length + 'ch' : 'none'}`);
+    debugRecord('recv', `ok in ${Math.round(performance.now() - sendStart)}ms thalamus=${lastThalamus ? `static=${(lastThalamus.static ?? '').length}ch dynamic=${(lastThalamus.dynamic ?? '').length}ch@d${lastThalamus.depth}` : 'none'}`);
+    // M5: feed this turn's engagement into Unruh's interest layer.
+    // Fire-and-forget — never blocks the UI or surfaces errors.
+    recordTopicEngagement();
   } catch (err) {
     setTyping(false);
     if (err.name !== 'AbortError') {
-      appendErrorMessage(err.message || 'Request failed.');
+      // Belt-and-braces: err.message *should* be a string thanks to
+      // extractErrorText, but if some other throw site still hands
+      // us a non-string we coerce sensibly rather than printing
+      // "[object Object]" in the diagnostic.
+      const errText = typeof err.message === 'string' && err.message
+        ? err.message
+        : (() => { try { return JSON.stringify(err); } catch { return String(err); } })();
+      appendErrorMessage(errText || 'Request failed.');
       setStatus('err');
-      debugRecord('recv', `FAILED after ${Math.round(performance.now() - sendStart)}ms: ${err.message}`);
+      debugRecord('recv', `FAILED after ${Math.round(performance.now() - sendStart)}ms: ${errText}`);
     } else {
       debugRecord('recv', `aborted after ${Math.round(performance.now() - sendStart)}ms`);
     }
@@ -1624,6 +1740,162 @@ async function sendMessage(userInput) {
     $('user-input').focus();
     abortController = null;
   }
+}
+
+/**
+ * M5 weight instrumentation. After a turn completes, attribute the
+ * engagement to whatever topics are currently open (state.topics with
+ * endIndex === null) and post it to the server, which translates the
+ * signals into an interest-weight delta and bumps Unruh.
+ *
+ * Topic attribution uses the user's manual topic markers — approach
+ * (a) from the plan. No topic markers open → nothing to attribute, so
+ * we no-op (weights only accrue for marked topics until the LLM-based
+ * detector of approach (b) lands).
+ *
+ * Signals sent per topic:
+ *   - responseChars: length of this turn's assistant reply (token-
+ *     volume proxy; shared across all open topics for the turn).
+ *   - spanMessages: how many messages the topic has been open for
+ *     (persistence proxy).
+ *
+ * Fully fire-and-forget: any failure is swallowed so interest
+ * bookkeeping can never disrupt the conversation.
+ */
+function recordTopicEngagement() {
+  try {
+    const openTopics = state.topics.filter(t => t.endIndex === null);
+    if (openTopics.length === 0) return;
+
+    // Length of this turn's final assistant reply. Stop at the FIRST
+    // assistant message scanning back from the end — that's this
+    // turn's answer. (Don't skip an empty one and walk into a prior
+    // turn's reply, which would over-attribute the token-volume
+    // signal. An empty final reply legitimately means zero token
+    // volume; persistence still counts.)
+    let responseChars = 0;
+    for (let i = state.messages.length - 1; i >= 0; i--) {
+      const m = state.messages[i];
+      if (m.role === 'assistant') {
+        responseChars = typeof m.content === 'string' ? m.content.length : 0;
+        break;
+      }
+    }
+
+    const topics = openTopics.map(t => ({
+      label:        t.label,
+      spanMessages: Math.max(1, state.messages.length - t.startIndex),
+    }));
+
+    fetch('/api/interest/engage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topics, responseChars }),
+    }).catch(() => { /* best-effort — interest accrual is non-critical */ });
+  } catch { /* never let bookkeeping break the turn */ }
+}
+
+/**
+ * Parse the handoff JSON the summariser LLM returns. Models wrap JSON
+ * in prose or ```json fences despite instructions, so be liberal:
+ * strip fences, grab the first {...}, validate the shape. Returns
+ * { active_intent, open_threads } or null if nothing usable.
+ */
+function parseHandoffJSON(text) {
+  if (typeof text !== 'string' || !text.trim()) return null;
+  let s = text.trim();
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) s = fence[1].trim();
+  const brace = s.match(/\{[\s\S]*\}/);
+  if (brace) s = brace[0];
+  try {
+    const o = JSON.parse(s);
+    const intent = typeof o.active_intent === 'string' ? o.active_intent.trim() : '';
+    const threads = Array.isArray(o.open_threads)
+      ? o.open_threads.filter(t => typeof t === 'string' && t.trim()).map(t => t.trim())
+      : [];
+    if (!intent && threads.length === 0) return null;
+    return { active_intent: intent, open_threads: threads };
+  } catch { return null; }
+}
+
+/**
+ * M6 session handoff. On session end, summarise the just-ended
+ * conversation into { active_intent, open_threads } via the cheapest
+ * available connection and store it in Unruh, so the next session's
+ * first [Temporal Context] resumes mid-thought.
+ *
+ * Fully best-effort and fire-and-forget: it captures the messages by
+ * value (caller passes a copy taken before startNewSession clears
+ * state), never blocks the session-end flow, and swallows every error.
+ * Gated on state.handoffEnabled so cost-conscious users can opt out.
+ */
+async function generateAndStoreHandoff(messages, sessionId) {
+  try {
+    if (!state.handoffEnabled) return;
+    if (!Array.isArray(messages) || messages.length < 2) return; // nothing worth summarising
+
+    const seq = getConnectionSequence();
+    if (seq.length === 0) return;
+    const conn = seq[0];
+
+    // Compact transcript of the last few user/assistant turns. Tool
+    // and system messages are dropped — they're noise for an intent
+    // summary.
+    const recent = messages
+      .filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
+      .slice(-12)
+      .map(m => `${m.role}: ${m.content.trim()}`)
+      .join('\n');
+    if (!recent.trim()) return;
+
+    // The server prepends your identity/persona (static enrichment),
+    // so write the note in your own voice — a private memory-to-self
+    // the next session will read as "what I was doing last".
+    const sysPrompt =
+      'The text above is who you are. You are writing a short private handoff note to your ' +
+      'future self for the next time you talk with this user, capturing what you were doing ' +
+      'and what\'s still open. Respond with ONLY minified JSON, no prose, no code fence: ' +
+      '{"active_intent": string, "open_threads": string[]}. ' +
+      'active_intent: one short sentence, in your own first-person voice, on the through-line of ' +
+      'the session (address the user as "you"). ' +
+      'open_threads: specific unfinished questions or tasks, each a short phrase (empty array if none).';
+
+    const resp = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: conn.provider, apiKey: conn.apiKey, model: conn.model,
+        messages: [
+          { role: 'system', content: sysPrompt },
+          { role: 'user', content: recent },
+        ],
+        stream: false,
+        temperature: 0.3,
+        max_tokens: 400,
+        // 'static' enrichment: include the Familiar's persona/identity
+        // so the handoff note is in character, but skip memory + graph
+        // + temporal — those would bloat the summary and the temporal
+        // fetch would consume the very handoff we're about to write.
+        enrich: 'static',
+      }),
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const content = data?.choices?.[0]?.message?.content ?? '';
+    const parsed = parseHandoffJSON(content);
+    if (!parsed) return;
+
+    await fetch('/api/session/handoff', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        intent:  parsed.active_intent,
+        threads: parsed.open_threads,
+        sessionId,
+      }),
+    });
+  } catch { /* best-effort — a missed handoff just means the next session starts cold */ }
 }
 
 /**
@@ -1664,7 +1936,7 @@ async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts
     if (!response.ok) {
       const body = await response.text();
       let msg = `API error ${response.status}`;
-      try { msg = JSON.parse(body).error || msg; } catch { /* non-JSON */ }
+      try { msg = extractErrorText(JSON.parse(body), msg); } catch { /* non-JSON */ }
       throw new Error(msg);
     }
 
@@ -1692,7 +1964,7 @@ async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts
         try {
           const parsed = JSON.parse(raw);
           if (parsed._thalamus) {
-            lastThalamusContext = parsed._thalamus.entityContext ?? null;
+            lastThalamus = parsed._thalamus;
             continue;
           }
           const choice = parsed.choices?.[0];
@@ -1869,9 +2141,9 @@ async function attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifa
 
     const data = await response.json();
     if (!response.ok || data.error) {
-      throw new Error(data.error || `API error ${response.status}`);
+      throw new Error(extractErrorText(data, `API error ${response.status}`));
     }
-    if (data._thalamus) lastThalamusContext = data._thalamus.entityContext ?? null;
+    if (data._thalamus) lastThalamus = data._thalamus;
 
     const choice       = data.choices?.[0];
     const message      = choice?.message;
@@ -2086,6 +2358,11 @@ function readSettingsFromUI() {
   state.streaming         = $('streaming-toggle').checked;
   state.temperature       = parseFloat($('temperature').value);
   state.maxTokens         = parseInt($('max-tokens').value, 10);
+  {
+    const v = parseInt($('thalamus-dynamic-depth')?.value, 10);
+    state.thalamusDynamicDepth = Number.isFinite(v) && v >= 1 && v <= 50 ? v : 4;
+  }
+  if ($('handoff-toggle')) state.handoffEnabled = $('handoff-toggle').checked;
   state.userName          = $('user-name').value.trim() || 'User';
   state.charName          = $('char-name').value.trim() || 'Assistant';
   state.systemPrompt      = $('system-prompt').value;
@@ -2127,9 +2404,11 @@ function writeSettingsToUI() {
   setIfNotFocused($('api-key'),         'value',   state.apiKey);
   setIfNotFocused($('model-input'),     'value',   state.model);
   setIfNotFocused($('streaming-toggle'),'checked', state.streaming);
+  if ($('handoff-toggle')) setIfNotFocused($('handoff-toggle'), 'checked', state.handoffEnabled !== false);
   setIfNotFocused($('temperature'),     'value',   state.temperature);
   $('temp-display').textContent = state.temperature;
   setIfNotFocused($('max-tokens'),         'value',   state.maxTokens);
+  if ($('thalamus-dynamic-depth')) setIfNotFocused($('thalamus-dynamic-depth'), 'value', state.thalamusDynamicDepth ?? 4);
   setIfNotFocused($('user-name'),          'value',   state.userName ?? 'User');
   setIfNotFocused($('char-name'),          'value',   state.charName ?? 'Assistant');
   setIfNotFocused($('system-prompt'),      'value',   state.systemPrompt);
@@ -2248,6 +2527,10 @@ async function autoEndSession() {
     await saveToServer();
     memorizeViaBeacon(sessionMessages, sessionId, { scope: 'session' });
     state._beaconedSessionId = sessionId;
+    // M6: summarise this session into a handoff for the next one.
+    // Fire-and-forget on the captured copy — never blocks the
+    // session-end flow, surfaces at the next session's first message.
+    generateAndStoreHandoff(sessionMessages, sessionId);
     startNewSession();
     showSessionEndedNotice();
   } else {
@@ -2405,7 +2688,12 @@ function showMemorizationFailureNotice(reason) {
 // Human-readable labels for each prompt-segment source. The CSS class
 // `pi-src-<source>` controls the chip + left-rule colour.
 const PI_SOURCE_LABELS = {
-  'thalamus':          'Entity-Core (Thalamus)',
+  // Thalamus is split into two regions for cache-aware prompt assembly:
+  // the static block prepends the system message (cacheable prefix);
+  // the dynamic block is depth-injected as its own system message so
+  // changes don't invalidate the static prefix.
+  'thalamus-static':   'Entity-Core (static)',
+  'thalamus-dynamic':  'Entity-Core (dynamic @ depth)',
   'lore-sys-top':      'Lore · system top',
   'lore-before-char':  'Lore · before character',
   'lore-after-char':   'Lore · after character',
@@ -2443,7 +2731,8 @@ function openPromptInspector() {
   // Legend strip
   const legend = document.createElement('div');
   legend.className = 'pi-legend';
-  for (const src of ['thalamus', 'system-prompt', 'character-profile', 'user-profile',
+  for (const src of ['thalamus-static', 'thalamus-dynamic',
+                     'system-prompt', 'character-profile', 'user-profile',
                      'lore-sys-top', 'lore-before-char', 'lore-after-char', 'lore-sys-bottom',
                      'lore-at-depth', 'post-history']) {
     const chip = document.createElement('span');
@@ -2454,7 +2743,7 @@ function openPromptInspector() {
   body.appendChild(legend);
 
   // Note about provenance freshness
-  if (!lastThalamusContext) {
+  if (!lastThalamus || (!lastThalamus.static && !lastThalamus.dynamic)) {
     const note = document.createElement('p');
     note.className = 'field-hint';
     note.textContent = 'No entity-core block in the last response. Thalamus may have returned empty (no enrichment), or the request hadn\'t completed yet — re-open after the next reply lands.';
@@ -2463,7 +2752,12 @@ function openPromptInspector() {
 
   const atDepthSet = new Set((lastBuildSegments?.atDepthInjections ?? []).map(a => a.indexInFinal));
 
-  lastSentMessages.forEach((msg, idx) => {
+  // Renders one message wrap into `body`. Pulled into a helper so the
+  // server's depth-injected thalamus message (which isn't in
+  // lastSentMessages because the client doesn't see it until it's
+  // already on its way to the LLM) can be rendered the same way as
+  // the messages the client built itself.
+  const renderMessage = (msg, idx) => {
     const wrap = document.createElement('div');
     wrap.className = 'pi-msg';
     const roleClass = `pi-role-${msg.role ?? 'user'}`;
@@ -2482,11 +2776,21 @@ function openPromptInspector() {
     header.appendChild(copyBtn);
     wrap.appendChild(header);
 
-    // System message: split by source. Includes the entity-core block as its
-    // own first segment when present, then each tracked build segment.
+    // Synthetic message representing the server's depth-injected
+    // dynamic-thalamus block. Rendered with its own source color.
+    if (msg.__source === 'thalamus-dynamic') {
+      wrap.appendChild(piSegmentEl('thalamus-dynamic', fullText));
+      body.appendChild(wrap);
+      return;
+    }
+
+    // System message: split by source. Includes the entity-core
+    // STATIC block as its own first segment when present, then each
+    // tracked build segment. The DYNAMIC block lives in its own
+    // synthetic message at `injectedAt` (handled above), not here.
     if (role === 'system' && idx === 0 && lastBuildSegments?.systemSegments?.length) {
-      if (lastThalamusContext) {
-        wrap.appendChild(piSegmentEl('thalamus', lastThalamusContext));
+      if (lastThalamus?.static) {
+        wrap.appendChild(piSegmentEl('thalamus-static', lastThalamus.static));
       }
       for (const seg of lastBuildSegments.systemSegments) {
         wrap.appendChild(piSegmentEl(seg.source, seg.text));
@@ -2506,7 +2810,30 @@ function openPromptInspector() {
       wrap.appendChild(pre);
     }
     body.appendChild(wrap);
+  };
+
+  // Walk lastSentMessages. When we reach the index where the server
+  // depth-injected its dynamic block (`injectedAt`), render that
+  // synthetic message first, then continue. injectedAt counts indices
+  // in the pre-insertion array — which IS lastSentMessages — so a
+  // direct comparison works.
+  const dynamicAt = (lastThalamus?.dynamic && typeof lastThalamus.injectedAt === 'number')
+    ? lastThalamus.injectedAt
+    : null;
+
+  lastSentMessages.forEach((msg, idx) => {
+    if (idx === dynamicAt) {
+      renderMessage({ role: 'system', content: lastThalamus.dynamic, __source: 'thalamus-dynamic' }, idx);
+    }
+    renderMessage(msg, idx);
   });
+  // Edge case: dynamic injected at exactly lastSentMessages.length —
+  // it lands after every message the client sent. (Only possible when
+  // the conversation is empty, which shouldn't happen, but render
+  // defensively anyway.)
+  if (dynamicAt !== null && dynamicAt >= lastSentMessages.length) {
+    renderMessage({ role: 'system', content: lastThalamus.dynamic, __source: 'thalamus-dynamic' }, dynamicAt);
+  }
 
   $('prompt-inspector-modal').classList.remove('hidden');
 }
@@ -2793,7 +3120,7 @@ function init() {
   // ── Settings field listeners ─────────────────────────────────
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
-    'temperature', 'max-tokens', 'user-name', 'char-name',
+    'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle', 'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',
@@ -2913,6 +3240,8 @@ function init() {
         saveToServer(); // fire-and-forget — stamps the log with endedAt
         memorizeViaBeacon(sessionMessages, sessionId, { scope: 'session' });
         state._beaconedSessionId = sessionId;
+        // M6: summarise the cleared session into a handoff for the next.
+        generateAndStoreHandoff(sessionMessages, sessionId);
         startNewSession();
       } else {
         startNewSession();
@@ -3039,6 +3368,7 @@ function init() {
     openTomesModal();
   });
   $('tome-entries-new-btn').addEventListener('click', () => openLoreEditor(null));
+  $('tome-entries-depth-btn').addEventListener('click', moveNonConstantToDepth);
 
   // New tome modal
   $('new-tome-modal-close').addEventListener('click', closeNewTomeModal);
@@ -3065,6 +3395,8 @@ function init() {
     $('lore-ed-depth-field').classList.toggle('hidden', !isAtDepth);
     $('lore-ed-role-field').classList.toggle('hidden', !isAtDepth);
   });
+  // Cache-safety: re-evaluate the position lock whenever "constant" flips.
+  $('lore-ed-constant').addEventListener('change', applyLorePositionLock);
   $('lore-ed-probability').addEventListener('input', () => {
     $('lore-ed-prob-display').textContent = `${$('lore-ed-probability').value}%`;
   });
@@ -4646,7 +4978,9 @@ async function buildDiagnosticReport() {
   add('topics',              String(state.topics?.length ?? 0));
   add('tomeRegistry',        String(state.tomeRegistry?.length ?? 0));
   add('customTools',         state.customTools ? `${state.customTools.length} chars` : '(empty)');
-  add('lastThalamusContext', lastThalamusContext ? `${lastThalamusContext.length} chars` : '(none — no enriched response captured yet)');
+  add('lastThalamus', lastThalamus
+    ? `static=${(lastThalamus.static ?? '').length}ch dynamic=${(lastThalamus.dynamic ?? '').length}ch @ depth=${lastThalamus.depth} (injectedAt=${lastThalamus.injectedAt})`
+    : '(none — no enriched response captured yet)');
 
   // localStorage estimate (rough — only our own keys)
   let lsBytes = 0;
@@ -4674,7 +5008,9 @@ async function buildDiagnosticReport() {
     add('roles',     lastSentMessages.map(m => m.role).join(','));
     add('system seg sources', (lastBuildSegments?.systemSegments ?? []).map(s => s.source).join(',') || '(none)');
     add('at-depth lore splices', String((lastBuildSegments?.atDepthInjections ?? []).length));
-    add('thalamus injection', lastThalamusContext ? `${lastThalamusContext.length} chars` : 'none');
+    add('thalamus injection', lastThalamus
+      ? `static=${(lastThalamus.static ?? '').length}ch dynamic=${(lastThalamus.dynamic ?? '').length}ch @ depth=${lastThalamus.depth}`
+      : 'none');
   }
 
   section(`Recent events (${debugLog.length} / cap ${DEBUG_LOG_CAP})`);
@@ -5964,6 +6300,71 @@ async function keCreateSnapshot() {
 
 // ── Tome entry editor ─────────────────────────────────────────────
 
+// Cache-safety lock for lore-entry positions. System-message positions
+// (0–3) live in the cacheable prompt prefix; a non-constant
+// (keyword-triggered) entry there flips on/off between turns and
+// invalidates the upstream prefix cache each time. So restrict those
+// positions to constant entries — non-constant entries must inject
+// @ depth (4), which sits below the cached prefix in the conversation.
+// Reactive: disables the system options + snaps to @depth when the
+// "constant" box is unchecked.
+function applyLorePositionLock() {
+  const constant = $('lore-ed-constant').checked;
+  const sel = $('lore-ed-position');
+  for (const opt of sel.options) {
+    opt.disabled = (opt.value !== '4') && !constant;
+  }
+  if (!constant && sel.value !== '4') {
+    sel.value = '4';
+    sel.dispatchEvent(new Event('change')); // refresh depth/role field visibility
+  }
+  const hint = $('lore-ed-position-lock-hint');
+  if (hint) hint.classList.toggle('hidden', constant);
+}
+
+// Bulk action: relocate every non-constant entry that's sitting in a
+// system-message position (0–3, the cache-breaking ones) to @ depth 4.
+// Constant entries and entries already @ depth are left untouched —
+// they're already cache-safe. Operates on the currently-open tome.
+async function moveNonConstantToDepth() {
+  if (!_currentTomeId) return;
+  const tomeName = state.tomeCache[_currentTomeId]?.name ?? 'this tome';
+  if (!confirm(
+    `Move every non-constant entry in "${tomeName}" that's in a system-message position to @ chat depth 4?\n\n` +
+    `Keyword-triggered (non-constant) entries in the system message break the prompt cache when they flip on and off. ` +
+    `This relocates them below the cached prefix. Constant entries, and entries already @ depth, are left as they are.`
+  )) return;
+  try {
+    const res = await fetch(`/api/tomes/${_currentTomeId}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const tomeData = await res.json();
+    const entries = tomeData.entries ?? {};
+    let moved = 0;
+    for (const uid of Object.keys(entries)) {
+      const e = entries[uid];
+      if (e.constant !== true && normEntryPos(e.position) !== 4) {
+        e.position = 4;
+        e.depth = 4;
+        moved++;
+      }
+    }
+    if (moved === 0) {
+      alert('Nothing to move — every non-constant entry is already @ depth (or all entries are constant).');
+      return;
+    }
+    await fetch(`/api/tomes/${_currentTomeId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries }),
+    });
+    state.tomeCache[_currentTomeId] = tomeData;
+    refreshTomeEntriesList();
+    alert(`Moved ${moved} non-constant ${moved === 1 ? 'entry' : 'entries'} to @ depth 4.`);
+  } catch (err) {
+    alert(`Failed to move entries: ${err.message}`);
+  }
+}
+
 function openLoreEditor(uid) {
   _loreEditUid = uid ?? null;
   const entry  = uid ? (state.tomeCache[_currentTomeId]?.entries[uid] ?? {}) : {};
@@ -6001,6 +6402,10 @@ function openLoreEditor(uid) {
   $('lore-ed-role-field').classList.toggle('hidden', !isAtDepth);
   $('lore-ed-depth').value = entry.depth ?? 4;
   $('lore-ed-role').value  = String(entry.role ?? 0);
+  // Enforce the constant-only-in-prefix rule for the loaded entry
+  // (also corrects a legacy non-constant system-position entry to
+  // @depth in the UI; saving then persists the fix).
+  applyLorePositionLock();
 
   // Timing
   const prob = entry.probability ?? 100;
@@ -6099,6 +6504,15 @@ async function saveLoreEditorEntry() {
     session_id:          existing.session_id ?? state.sessionId,
     message_range:       existing.message_range ?? null,
   };
+
+  // Cache-safety backstop. The editor UI prevents this, but an imported
+  // tome or a hand-edited JSON could still carry a non-constant entry in
+  // a system-message position (0–3) — which would invalidate the prompt
+  // prefix cache. Force such entries to @ depth (4).
+  if (!entry.constant && entry.position !== 4) {
+    entry.position = 4;
+    if (!entry.depth) entry.depth = 4;
+  }
 
   try {
     if (!_currentTomeId) throw new Error('No tome selected.');

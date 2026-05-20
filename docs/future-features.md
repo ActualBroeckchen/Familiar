@@ -4,6 +4,18 @@ Scratch pad for ideas that are pending design or implementation. Add an
 entry as a top-level bullet, with enough context for a future session to
 pick it up without re-deriving the problem.
 
+## In flight
+
+- **Unruh — temporal-context cognitive module.** Sibling specialist to
+  entity-core, gives the Familiar a meaningful relationship with time
+  (schedule + interests as two graph layers, intent handoff at session
+  boundaries, decay-based weight tracking, proactive messaging). Live
+  work happens on the `Unruh` branch; design in
+  [`unruh-design.md`](unruh-design.md), milestone-by-milestone plan in
+  [`unruh-implementation-plan.md`](unruh-implementation-plan.md). M1+M2
+  (process skeleton + Thalamus second-peer wiring) shipped; M3 onward
+  is the next pickup point.
+
 ## Memory entries
 
 - **Time-code on memory entries.** Memory entries (Tome entries written

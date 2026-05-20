@@ -272,7 +272,11 @@ async function processJob(job) {
         selective:           false,
         selectiveLogic:      0,
         enabled:             true,
-        position:            0,
+        // At-depth (4), not a system-message position: these are
+        // non-constant (keyword-triggered) entries, so injecting them
+        // into the cacheable prompt prefix would invalidate it every
+        // time they activate. At-depth keeps the prefix stable.
+        position:            4,
         depth:               4,
         role:                0,
         scanDepth:           null,
@@ -360,14 +364,25 @@ function pruneAcknowledged() {
 }
 
 let _started = false;
+let _tickInterval = null;
+let _pruneInterval = null;
 export function startMemorizationWorker() {
   if (_started) return;
   _started = true;
   loadQueue().then(() => {
-    setInterval(() => { tick().catch(() => {}); }, TICK_MS);
-    setInterval(() => { if (pruneAcknowledged()) persistQueue().catch(() => {}); }, 60 * 60 * 1000);
+    _tickInterval  = setInterval(() => { tick().catch(() => {}); }, TICK_MS);
+    _pruneInterval = setInterval(() => { if (pruneAcknowledged()) persistQueue().catch(() => {}); }, 60 * 60 * 1000);
     tick().catch(() => {});
   });
+}
+
+// Stop the worker cleanly so process exit can complete. Called by
+// server.js's SIGTERM/SIGINT handler. Without this, the setIntervals
+// here keep the event loop alive past server.close().
+export function stopMemorizationWorker() {
+  if (_tickInterval)  { clearInterval(_tickInterval);  _tickInterval  = null; }
+  if (_pruneInterval) { clearInterval(_pruneInterval); _pruneInterval = null; }
+  _started = false;
 }
 
 // ── Public API used by server endpoints ─────────────────────────

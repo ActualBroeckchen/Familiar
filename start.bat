@@ -1,5 +1,21 @@
 @echo off
 REM Proto-Familiar launcher (Windows) - double-click to run.
+REM
+REM Responsibilities, in order:
+REM   1. Detect & recycle any stale Proto-Familiar instance holding
+REM      the configured port (via PID file + Win32_Process+CommandLine
+REM      heuristic matching this project dir).
+REM   2. Trigger install.bat if node_modules or unruh\.venv is missing.
+REM   3. Prime PATH so the spawned node sees deno (entity-core) and uv
+REM      (Unruh) — the MCP children thalamus.js spawns.
+REM   4. Launch node server.js detached via PowerShell, write PID file,
+REM      wait for the port to come up, open the browser.
+REM
+REM Stop with stop.bat — kills every node.exe whose CommandLine
+REM references server.js in this dir, not just the tracked PID.
+REM
+REM The system-tray launcher (Proto-Familiar.vbs -> tray.ps1) is the
+REM canonical Windows path; this .bat is for terminal users.
 
 setlocal EnableDelayedExpansion
 set "SCRIPT_DIR=%~dp0"
@@ -53,9 +69,36 @@ if "!PID_ALIVE!"=="1" (
   del "%PID_FILE%" >nul 2>nul
 )
 
-if not exist "%SCRIPT_DIR%\node_modules" (
-  echo Dependencies missing. Running installer first...
+REM Trigger the installer if it hasn't completed here. The
+REM .pf-install-complete marker (written at the end of a successful
+REM install) is the reliable signal — node_modules can exist from a
+REM manual `npm install` without the installer having run, which would
+REM leave entity-core uncloned and the Desktop/Start Menu shortcuts
+REM uncreated. node_modules + the Unruh venv stay as additional
+REM triggers in case they're removed after a complete install.
+set "NEED_INSTALL=0"
+if not exist "%SCRIPT_DIR%\.pf-install-complete" set "NEED_INSTALL=1"
+if not exist "%SCRIPT_DIR%\node_modules" set "NEED_INSTALL=1"
+if exist "%SCRIPT_DIR%\unruh\pyproject.toml" if not exist "%SCRIPT_DIR%\unruh\.venv" set "NEED_INSTALL=1"
+if "!NEED_INSTALL!"=="1" (
+  echo Running installer to complete setup...
   call "%SCRIPT_DIR%\install.bat"
+)
+
+REM Prime PATH for the MCP children thalamus.js spawns. Deno (entity-core)
+REM is spawned via a bare `deno` command with NO resolver fallback, so if
+REM it was installed by the official script (writes to %USERPROFILE%\.deno\bin)
+REM but the shell hasn't reloaded, the spawn fails with ENOENT and the
+REM identity layer silently doesn't load. uv (Unruh) has its own resolver
+REM in thalamus.js but priming here is symmetric and avoids relying on it.
+REM Mirrors start.sh / Proto-Familiar.command / tray.ps1, which prime both.
+where deno >nul 2>nul
+if errorlevel 1 (
+  if exist "%USERPROFILE%\.deno\bin\deno.exe" set "PATH=%USERPROFILE%\.deno\bin;%PATH%"
+)
+where uv >nul 2>nul
+if errorlevel 1 (
+  if exist "%USERPROFILE%\.local\bin\uv.exe" set "PATH=%USERPROFILE%\.local\bin;%PATH%"
 )
 
 echo Starting Proto-Familiar on %URL% ^(log: %LOG_FILE%^) ...

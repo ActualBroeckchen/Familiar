@@ -1,0 +1,53 @@
+{
+  "_comment": "Default routine for a fresh Unruh install. Loadable via `unruh seed-routine`. Phases are anchored to the user's known landmarks (wake ~10 AM, cat play + dinner ~10 PM, per docs/unruh-design.md §Familiar's Routine). 'time' fields are HH:MM in the user's local time; the loader stamps them to today's date in UTC. Edit this file to reshape the routine, then re-run `unruh seed-routine --replace` to apply.",
+  "phases": [
+    {
+      "label": "early morning",
+      "time":  "06:00",
+      "end":   "10:00",
+      "texture": "before the user wakes — quiet observation, nothing demanded"
+    },
+    {
+      "label": "morning correspondence",
+      "time":  "10:00",
+      "end":   "13:00",
+      "texture": "user's wake / meds / cat-breakfast landmark; warmest part of the day to land"
+    },
+    {
+      "label": "afternoon work",
+      "time":  "13:00",
+      "end":   "18:00",
+      "texture": "longer-form focus; ideas can stretch out here"
+    },
+    {
+      "label": "evening wind-down",
+      "time":  "18:00",
+      "end":   "22:00",
+      "texture": "softer pace; reflection more than initiation"
+    },
+    {
+      "label": "cat play",
+      "time":  "22:00",
+      "end":   "23:00",
+      "texture": "the user's evening landmark — short, recurring, present"
+    },
+    {
+      "label": "late night",
+      "time":  "23:00",
+      "end":   "06:00",
+      "texture": "user is winding down or asleep; nothing demanded"
+    }
+  ],
+  "anchor_events": [
+    {
+      "label": "wake, meds, cat breakfast",
+      "time":  "10:00",
+      "during_phase": "morning correspondence"
+    },
+    {
+      "label": "cat play + dinner",
+      "time":  "22:00",
+      "during_phase": "cat play"
+    }
+  ]
+}

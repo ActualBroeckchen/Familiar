@@ -24,7 +24,11 @@ Before each LLM call (`POST /api/chat` and `POST /api/debug-prompt`), the server
 
 ## Context Block Structure
 
-The assembled context block is prepended to the system message in this order:
+The context is split into two regions, placed in the prompt by `server.js` based on how often each one changes — so the upstream LLM's prefix cache covers what's stable and only the dynamic part churns. See [`architecture.md#prompt-cache-aware-assembly`](architecture.md#prompt-cache-aware-assembly) for the full rationale.
+
+### Static block — prepended to the system message
+
+Stable across turns; lives at the top of the prompt so the provider's prefix cache covers it:
 
 ```
 <base_instructions>…</base_instructions>
@@ -39,10 +43,6 @@ My self files (from identity/self/ directory):
 <my_mechanics>…</my_mechanics>
 ---
 User files (from identity/user/ directory):
-
-<user_identity>…</user_identity>
----
-<user_life>…</user_life>
 …
 ---
 Relationship files (from identity/relationship/ directory):
@@ -50,7 +50,15 @@ Relationship files (from identity/relationship/ directory):
 ---
 Custom files (from identity/custom/ directory):
 …
----
+```
+
+Each identity file is wrapped in XML tags named after the file's `promptLabel` field. Files are sorted in the same canonical order entity-core uses internally. Sections with no content are omitted.
+
+### Dynamic block — depth-injected as a separate system message
+
+Re-derived every turn (query-dependent or clock-dependent), so it's injected `max(1, messages.length - depth)` positions from the end of the conversation — deep enough that the static prefix stays cacheable, close enough to the user's current question for the model to use:
+
+```
 Relevant Memories via RAG:
 
 [1] (from daily/2026-05-12, 87% relevant)
@@ -58,16 +66,23 @@ Memory text…
 
 [2] (from weekly/2026-W19, 72% relevant)
 Memory text…
+
 ---
+
 Relevant Knowledge from Graph:
 
 Node text…
   → edge label → connected node…
+
+---
+
+[Temporal Context]
+Current phase: morning correspondence (10:00–13:00)
+  14:00 — Chen's appointment
+  22:00 — cat play + dinner
 ```
 
-Each identity file is wrapped in XML tags named after the file's `promptLabel` field (e.g. `<my_identity>`, `<my_persona>`). Files are sorted in the same canonical order entity-core uses internally. Sections that have no content are omitted entirely.
-
-If entity-core is prepended to a message array that already has a system message, the block is inserted at the top of that system message. If there is no system message, a new one is created.
+Default depth = 4. Configurable via the **Context-cache depth** field in the Settings panel (synced across devices via `settings.json`'s `thalamusDynamicDepth`).
 
 ---
 
@@ -121,6 +136,36 @@ The auto-snapshots are pruned by entity-core's own retention policy (`ENTITY_COR
 ## Prompt inspector
 
 To see exactly what was sent to the LLM on the previous turn — including the full entity-core block, all lorebook injections, and the conversation history — click the **🔍 magnifying glass** button in the top bar after sending a message. The entity-core block is captured from a `_thalamus` envelope the server attaches to every `/api/chat` response (both streaming and non-streaming), so the inspector shows the actual injected text rather than a re-derived preview that could drift if intervening memory or identity writes have changed what `enrich()` would now return. See [Prompt Inspector](features.md#prompt-inspector) for the full source palette.
+
+---
+
+## API key designation
+
+Entity-core's background **consolidator** (weekly / monthly / yearly memory summaries) makes its own outbound LLM calls — independent of whatever the chat path uses. It reads three env vars from the spawn environment: `ENTITY_CORE_LLM_API_KEY`, `ENTITY_CORE_LLM_BASE_URL`, and `ENTITY_CORE_LLM_MODEL`, falling back to `ZAI_API_KEY` / `ZAI_BASE_URL` / `ZAI_MODEL`. Missing any of the three causes the consolidator to error with `No LLM API key configured (ENTITY_CORE_LLM_API_KEY or ZAI_API_KEY)` — the message names the key but fires for any of the three.
+
+Proto-Familiar wires this for you. In the sidebar's **Connections** section, click **+ entity-core** on any saved connection to designate it as the source. The badge **entity-core** appears next to the row.
+
+When the designation changes, server.js diffs the entity-core creds (id + apiKey + provider + model) before and after the settings save. If anything material changed, it fires `reconnectEntityCore()` on `thalamus.js` — which tears down the entity-core child and respawns it with the new env. The next chat or scheduled consolidation picks up the new key automatically; no Proto-Familiar restart needed.
+
+The connection you designate is independent of the chat path. It doesn't have to be your primary or any fallback. Click the **+ entity-core** button a second time on the same row to clear the designation; click on a different row to move it.
+
+### Env vars Proto-Familiar sets
+
+When you designate a connection, `thalamus.js` resolves the env block via `loadEntityCoreEnv()` (reads `settings.json` directly) and passes it to `StdioClientTransport({ env: ... })`. The MCP SDK merges this with `DEFAULT_INHERITED_ENV_VARS` (PATH, HOME, etc.) so PATH is preserved.
+
+| Env var | Always set? | Notes |
+|---|---|---|
+| `ENTITY_CORE_LLM_API_KEY` | yes | Bearer token from the designated connection |
+| `ENTITY_CORE_LLM_BASE_URL` | yes | Full chat-completions URL (see [providers.js](../providers.js) — entity-core POSTs to this exactly, no path appending) |
+| `ENTITY_CORE_LLM_MODEL` | yes | Model name from the connection |
+| `ENTITY_CORE_LLM_PROVIDER` | yes | Informational provider tag |
+| `ZAI_API_KEY` | only for `zai` / `zai-coding` providers | Alternate name some entity-core builds read |
+| `ZAI_BASE_URL` | only for `zai` / `zai-coding` providers | Same |
+| `ZAI_MODEL` | only for `zai` / `zai-coding` providers | Same |
+
+If you designate a connection whose provider isn't in `providers.js`'s `PROVIDER_URLS` map, `thalamus.js` logs a warning at boot naming the provider so you can either pick a supported one or add yours to the map.
+
+If you don't designate anything, the env block is empty and entity-core spawns with no LLM credentials — same as before this feature existed. enrichment still works (it doesn't need outbound LLM calls), but the consolidator will fail on its next tick with the error above.
 
 ---
 

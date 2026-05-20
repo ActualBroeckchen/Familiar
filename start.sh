@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
-# Proto-Familiar launcher (macOS / Linux)
-# Starts the server (which auto-spawns entity-core via thalamus.js) and opens the UI.
+# Proto-Familiar launcher (macOS / Linux).
+#
+# Responsibilities, in order:
+#   1. Prime PATH so spawned MCP children find deno + uv even when the
+#      shell hasn't reloaded after install.
+#   2. Detect & recycle any stale Proto-Familiar instance holding the
+#      configured port (via PID file + pgrep+cwd-match heuristic).
+#   3. Trigger install.sh if node_modules or unruh/.venv is missing.
+#   4. Launch `node server.js` detached, write PID file, open browser.
+#
+# Stop with ./stop.sh — kills every node server.js rooted here, not
+# just the tracked PID. server.js auto-spawns entity-core (Deno) and
+# Unruh (Python via uv) as MCP children; both die when server.js does.
 
 set -e
 
@@ -22,6 +33,13 @@ say() { printf '\033[1;36m==> %s\033[0m\n' "$*"; }
 # and the identity layer silently doesn't load.
 if ! command -v deno >/dev/null 2>&1 && [ -x "$HOME/.deno/bin/deno" ]; then
   export PATH="$HOME/.deno/bin:$PATH"
+fi
+
+# Same pattern for `uv` (Unruh / temporal context). Astral's installer
+# writes to ~/.local/bin by default. thalamus.js has its own resolver
+# but PATH-priming here means install.sh below can also find it.
+if ! command -v uv >/dev/null 2>&1 && [ -x "$HOME/.local/bin/uv" ]; then
+  export PATH="$HOME/.local/bin:$PATH"
 fi
 
 # Already running?
@@ -80,8 +98,23 @@ else
     kill -9 "$EXISTING_PID" 2>/dev/null || true
     rm -f "$PID_FILE"
   fi
-  if [ ! -d "$SCRIPT_DIR/node_modules" ]; then
-    say "Dependencies missing. Running installer first..."
+  # Trigger the installer if it hasn't completed here. We check the
+  # .pf-install-complete marker (written at the end of a successful
+  # install) rather than just node_modules, because node_modules can
+  # exist without the installer having run — e.g. a manual `npm install`
+  # — which would leave entity-core uncloned and the desktop entry
+  # uncreated. The marker is the reliable "installer actually ran"
+  # signal; node_modules + venv stay as additional triggers in case
+  # they get removed after a complete install.
+  if [ ! -f "$SCRIPT_DIR/.pf-install-complete" ] || [ ! -d "$SCRIPT_DIR/node_modules" ]; then
+    say "Installer hasn't completed here yet. Running it first..."
+    bash "$SCRIPT_DIR/install.sh"
+  elif [ -f "$SCRIPT_DIR/unruh/pyproject.toml" ] && [ ! -d "$SCRIPT_DIR/unruh/.venv" ]; then
+    # Unruh ships in-tree (subdirectory) but its Python venv has to be
+    # materialised by uv. After a `git pull` that introduces Unruh, the
+    # user hits this branch — silently run the installer so they don't
+    # have to know about uv to start the app.
+    say "Unruh dependencies missing. Running installer to set them up..."
     bash "$SCRIPT_DIR/install.sh"
   fi
   say "Starting Proto-Familiar on $URL (logs: $LOG_FILE) ..."

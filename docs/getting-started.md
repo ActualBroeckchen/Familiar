@@ -2,13 +2,13 @@
 
 ## Quickest path: one double-click
 
-Proto-Familiar ships with a one-click installer and launcher for each platform. The installer takes care of Node, Deno, Git, `npm install`, and the entity-core clone; the launcher starts the server, opens your browser, and gives you a single button to shut everything down.
+Proto-Familiar ships with a one-click installer and launcher for each platform. The installer takes care of Node, Deno, Git, uv, `npm install`, the entity-core clone, and the Unruh Python venv; the launcher starts the server, opens your browser, and gives you a single button to shut everything down. Re-running the installer is safe and idempotent — shortcuts and desktop entries are only created when they don't already exist.
 
 ### Windows
 
 1. Clone or download the repo.
 2. Double-click **`Proto-Familiar.vbs`**.
-3. On first run a console window opens and auto-installs Node 18+, Deno, and Git via `winget install --scope user` (no admin prompt). It then runs `npm install`, clones [entity-core](https://github.com/PsycherosAI/Psycheros) into the sibling directory, and creates Desktop + Start Menu shortcuts named **Proto-Familiar**.
+3. On first run a console window opens and auto-installs Node 18+, Deno, Git, and uv via `winget install --scope user` (no admin prompt). If winget is unavailable or a specific install fails, each tool has a fallback path: Deno + uv via their official PowerShell one-liners, Node + Git via opening the download page and waiting for you to confirm. Once prereqs are in place, the installer runs `npm install`, clones [entity-core](https://github.com/PsycherosAI/Psycheros) into the sibling directory, syncs the Unruh Python venv from `unruh/uv.lock`, and creates Desktop + Start Menu shortcuts named **Proto-Familiar**.
 4. After install, a tray icon appears (bottom-right, you may need to click the `^` to reveal hidden icons) and your browser opens at `http://localhost:8742`.
 
 **Tray icon controls:**
@@ -30,30 +30,31 @@ The tray app is single-instance — double-clicking the shortcut a second time j
 
 1. Clone or download the repo.
 2. Double-click **`Proto-Familiar.command`** in Finder.
-3. On first run it runs `./install.sh`, which checks Node 18+ and Deno, runs `npm install`, and clones entity-core. On subsequent runs it skips straight to launching.
-4. A Terminal window opens showing server logs; your browser opens automatically at `http://localhost:8742`.
+3. On first run it runs `./install.sh`, which checks Node 18+, auto-installs Deno + uv via their official one-liner installers if missing, runs `npm install`, clones entity-core, and syncs the Unruh Python venv. On subsequent runs it skips straight to launching.
+4. A Terminal window opens showing server logs; your browser opens automatically at `http://localhost:8742`. The launcher auto-recycles any stale Proto-Familiar holding the port before binding.
 
-**To shut down**, press **Ctrl-C** in the Terminal window, then close it (Cmd-W). Because `node` runs in the foreground, Ctrl-C cleanly stops both Proto-Familiar and its entity-core child.
+**To shut down**, press **Ctrl-C** in the Terminal window, then close it (Cmd-W). Because `node` runs in the foreground, Ctrl-C cleanly stops Proto-Familiar, entity-core, and Unruh.
 
 > If macOS Gatekeeper warns about an unidentified developer, right-click `Proto-Familiar.command` → **Open** the first time.
 
 ### Linux
 
 1. Clone the repo.
-2. Run `./install.sh` once. It checks Node and Deno, runs `npm install`, clones entity-core, and registers a `.desktop` entry under `~/.local/share/applications/` so **Proto-Familiar** appears in your app launcher / activities overview.
+2. Run `./install.sh` once. It checks Node, auto-installs Deno + uv via their official one-liner installers (`curl … | sh`) if missing, runs `npm install`, clones entity-core, syncs the Unruh Python venv, and registers a `.desktop` entry under `~/.local/share/applications/` so **Proto-Familiar** appears in your app launcher / activities overview. Re-runnable — the desktop entry is created only if it doesn't already exist.
 3. Launch from the app menu, or run `./start.sh`. Stop with `./stop.sh`.
 
 ---
 
 ## Requirements
 
-The installer handles these automatically on Windows (via `winget`). Install manually if you're on a platform without an automated path:
+The installer handles these automatically on every platform. Install manually only if you prefer to drive each tool yourself:
 
 | Requirement | Version | Notes |
 |---|---|---|
 | [Node.js](https://nodejs.org/) | 18 or newer | Built-in `fetch` API required |
-| [Deno](https://deno.com/) | 2 or newer | Only needed for the entity-core identity layer |
-| [Git](https://git-scm.com/) | any recent | Only needed for the entity-core clone step |
+| [Deno](https://deno.com/) | 2 or newer | For the entity-core identity layer; auto-installed via the official installer when missing |
+| [uv](https://docs.astral.sh/uv/) | 0.4 or newer | For the Unruh temporal-context module; ships its own Python ≥ 3.11, so no system Python install needed |
+| [Git](https://git-scm.com/) | any recent | For the entity-core clone step |
 
 ---
 
@@ -75,11 +76,13 @@ The repo also ships three plain shell scripts you can call directly:
 
 | Script | What it does |
 |---|---|
-| `./install.sh` | First run: `npm install` + clone entity-core + register Linux desktop entry. Subsequent runs auto-detect the existing install (presence of `node_modules/`) and switch to **update mode**: `git pull --ff-only` on Proto-Familiar, refresh entity-core to the pinned tag, re-run the idempotent `npm install` and `deno cache`. No prerequisite installs and no shortcut creation in update mode. |
-| `./start.sh` | Start server in the background, write PID file, open browser |
-| `./stop.sh` | Kill the PID-file process (and its entity-core child) |
+| `./install.sh` | First run: auto-installs Deno + uv, runs `npm install`, clones entity-core, pre-caches its Deno dep graph, syncs the Unruh Python venv from `unruh/uv.lock`, and registers the Linux desktop entry. Subsequent runs auto-detect the existing install (presence of `node_modules/`) and switch to **update mode**: `git pull --ff-only` on Proto-Familiar, refresh entity-core to the pinned tag, re-run idempotent `npm install` + `deno cache` + `uv sync`. Prereq installs and shortcut / desktop-entry creation now run in both modes (idempotent — they skip when the target already exists). |
+| `./start.sh` | Detect and recycle any stale Proto-Familiar holding the port, trigger the installer if `node_modules/` or `unruh/.venv/` is missing, prime PATH for Deno + uv, then start the server in the background, write the PID file, and open the browser. |
+| `./stop.sh` | Kill every `node server.js` rooted at this dir (covers the tracked PID and any strays). Entity-core and Unruh die with the parent. |
 
-Windows equivalents (`install.bat`, `start.bat`, `stop.bat`, and the PowerShell installer under `scripts/win/install.ps1`) behave identically — `install.bat` detects `node_modules\` and routes to update mode the same way. The recommended Windows entry point is `Proto-Familiar.vbs` — it avoids the brief console flash and gives you the tray icon.
+Windows equivalents (`install.bat`, `start.bat`, `stop.bat`, and the PowerShell installer under `scripts/win/install.ps1`) behave identically — `install.bat` detects `node_modules\` and routes to update mode the same way, auto-installs prereqs via winget (with PowerShell-installer fallbacks for Deno + uv when winget is missing), and creates Desktop + Start Menu shortcuts idempotently. The recommended Windows entry point is `Proto-Familiar.vbs` — it avoids the brief console flash and gives you the tray icon, and re-runs the installer whenever `node_modules\` or `unruh\.venv\` is missing.
+
+`npm start` and `npm run dev` are also valid entry points. They run two prestart hooks (`scripts/ensure-unruh-deps.mjs` and `scripts/ensure-port-free.mjs`) that sync the Unruh venv and recycle any stale Proto-Familiar before binding, so launching this way has the same auto-recovery behaviour as the launcher scripts.
 
 ---
 
@@ -91,7 +94,19 @@ Windows equivalents (`install.bat`, `start.bat`, `stop.bat`, and the PowerShell 
 4. Select or type a **model name**.
 5. Start chatting.
 
-Your API key lives in browser `localStorage` and is sent only to `localhost`.
+Your API key lives in `settings.json` server-side (and is mirrored to browser `localStorage` as an offline cache) and is sent only to `localhost`.
+
+### Designating a connection for entity-core
+
+Entity-core's background consolidator (weekly / monthly / yearly memory summaries) needs an LLM API key of its own. Tell it which to use:
+
+1. In the sidebar, open the **Connections** section.
+2. Save one or more connections via **+ Save current as connection** (any provider works — `nanogpt`, `zai`, or `zai-coding`).
+3. Click **+ entity-core** on the connection whose key + model entity-core should use. The badge **entity-core** appears next to the connection's name. Click again on the same row to clear, or on a different row to move the designation.
+
+When the designation changes, server.js detects it on the next `PUT /api/settings` and respawns the entity-core child process with the new env (`ENTITY_CORE_LLM_API_KEY`, `ENTITY_CORE_LLM_BASE_URL`, `ENTITY_CORE_LLM_MODEL`; plus `ZAI_API_KEY` / `ZAI_BASE_URL` / `ZAI_MODEL` for z.ai providers). No server restart needed — the new key takes effect on the next chat or scheduled consolidation.
+
+Independent of the chat path: the connection you designate as entity-core's source doesn't have to be your primary or any fallback. You can point entity-core at any connection regardless of how chat traffic uses it.
 
 ---
 
@@ -188,6 +203,18 @@ That exposes the loopback server over HTTPS to your tailnet without changing Pro
 | `HOST` | `0.0.0.0` | Bind address. The runtime gate keeps non-loopback requests out until you flip the in-UI toggle — override only if you need to force a different bind. |
 | `TAILSCALE` | `0` | Seeds the persisted toggle state on first launch (when `.proto-familiar-config.json` doesn't exist yet). After that, the in-UI toggle is the source of truth. |
 | `ENTITY_CORE_PATH` | auto: probes `../entity-core/packages/entity-core/src/mod.ts`, then `../entity-core/src/mod.ts`, then the legacy `../entity-core-alpha/…` paths in the same order | Absolute path to entity-core's `src/mod.ts`. Override if your entity-core install is not in the sibling directory or to force a specific layout. |
+| `UNRUH_PATH` | auto: `./unruh/src/unruh/__main__.py` | Absolute path to Unruh's entry module. Rarely needed — Unruh ships in-tree at `./unruh/`. |
+| `UV_BIN` | auto: probes `~/.local/bin/uv`, `~/.cargo/bin/uv`, `/usr/local/bin/uv`, `/opt/homebrew/bin/uv` on Unix, and the Windows equivalents | Absolute path to the `uv` binary thalamus.js uses to spawn Unruh. Override if `uv` is installed somewhere unusual and isn't on the PATH that `node server.js` inherits. |
+
+Entity-core's own env vars (read by entity-core itself, not by Proto-Familiar; documented for completeness because the **+ entity-core** connection designation sets them automatically):
+
+| Variable | Set by Proto-Familiar | Purpose |
+|---|---|---|
+| `ENTITY_CORE_LLM_API_KEY` | always, from the designated connection | Bearer token for entity-core's outbound LLM calls (consolidation, embeddings) |
+| `ENTITY_CORE_LLM_BASE_URL` | always, derived from the connection's provider | Full chat-completions URL (entity-core POSTs to this exactly — no path appending) |
+| `ENTITY_CORE_LLM_MODEL` | always, from the connection | Model name for entity-core's outbound LLM calls |
+| `ENTITY_CORE_LLM_PROVIDER` | always | Informational provider tag (`nanogpt` / `zai` / `zai-coding`) |
+| `ZAI_API_KEY` / `ZAI_BASE_URL` / `ZAI_MODEL` | only when provider is `zai` or `zai-coding` | Alternate names entity-core falls back to if the `ENTITY_CORE_LLM_*` variants are unset. Setting both pairs makes any entity-core build work without re-config. |
 
 ---
 
@@ -226,7 +253,7 @@ Proto-Familiar's version lives in `package.json` (`version` field) and is the **
 - The startup banner: `Proto-Familiar <v> running at:`
 - The sidebar footer badge in the UI.
 
-Current release: `0.1.2-alpha`. Pre-release while the schema and storage layout are still in flux.
+The current release tag is whatever's in `package.json`'s `version` field — read at boot and exposed through the surfaces above. While in alpha the version stays in the `0.2.x` series; the minor slot is reserved for the next major milestone (currently the Unruh temporal-context module — see [`unruh-implementation-plan.md`](unruh-implementation-plan.md)).
 
 Bump policy (followed by AI agents working in this repo via [`CLAUDE.md`](../CLAUDE.md)):
 
@@ -246,7 +273,12 @@ Bump policy (followed by AI agents working in this repo via [`CLAUDE.md`](../CLA
 | Windows: tray icon doesn't appear | Click the `^` arrow in the system tray to reveal hidden icons, or check `.proto-familiar.log` / `.proto-familiar.log.err` in the project folder. |
 | Windows: `node` not on PATH after install | Close the install window, open a new shell (so PATH refreshes), and double-click `Proto-Familiar.vbs` again. |
 | Windows: SmartScreen blocks the `.vbs` | Click **More info → Run anyway**. The script is plain text — feel free to read it first. |
+| Windows: shortcuts not created on a fresh install | Re-run `Proto-Familiar.vbs` — shortcut creation is idempotent and creates each `.lnk` only if it doesn't already exist (so re-running picks up any that are missing without touching the ones that are present). |
 | macOS: "unidentified developer" warning | Right-click `Proto-Familiar.command` → **Open** the first time. |
-| Linux: app menu entry missing | Some desktops require a logout/login cycle, or run `update-desktop-database ~/.local/share/applications/`. |
-| Port already in use | `PORT=8080 ./start.sh` (or set `PORT` before launching the Windows/macOS app) |
-| Server won't stop cleanly | Delete `.proto-familiar.pid` and kill stray `node` / `deno` processes, then relaunch. |
+| Linux: app menu entry missing | Re-run `./install.sh` (creates the entry if missing). Some desktops require a logout/login cycle, or run `update-desktop-database ~/.local/share/applications/`. |
+| Port already in use | The launchers / `npm start` auto-recycle their own stale instance. If something else is on the port, the prestart hook tells you the holding PID — stop that process or set `PORT=8080` and re-launch. |
+| Server won't stop cleanly | `./stop.sh` (or `stop.bat`) kills every `node server.js` rooted at this dir, not just the tracked PID. If even that fails, delete `.proto-familiar.pid` by hand and re-run stop. |
+| `[thalamus] Unruh venv missing` warning | Re-run the installer (`./install.sh`, `install.bat`, or just `Proto-Familiar.vbs`) — or, if uv is already installed, run `cd unruh && uv sync` manually. Proto-Familiar boots and runs without Unruh, just without the temporal-context block. |
+| `entity-core: provider "..." has no known URL` warning | The connection you designated for entity-core uses a provider tag that isn't in `PROVIDER_URLS` in `providers.js`. Either pick a different connection or add the provider to that map. |
+| Consolidator: `No LLM API key configured (ENTITY_CORE_LLM_API_KEY or ZAI_API_KEY)` | No connection is designated as entity-core's source. Open the sidebar's Connections section and click **+ entity-core** on a connection. The respawn happens automatically. |
+| Consolidator: `API request failed with status 404` | The designated connection's model doesn't exist at that provider's endpoint, or the env was set partially. Try a different model on the same provider, or re-pick the connection so the env is fully repopulated. |

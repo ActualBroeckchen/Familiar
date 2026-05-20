@@ -4,7 +4,7 @@
 
 | OS | Entry point | What happens |
 |---|---|---|
-| **Windows** | Double-click `Proto-Familiar.vbs` | First run: auto-installs Node/Deno/Git via winget, runs `npm install`, clones entity-core, creates Desktop + Start Menu shortcuts. Every run: tray icon appears, browser opens. Right-click the tray icon → **Quit** to stop. |
+| **Windows** | Double-click `Proto-Familiar.vbs` | First run: auto-installs Node/Deno/Git/uv via winget, runs `npm install`, clones entity-core, syncs the Unruh Python venv, creates Desktop + Start Menu shortcuts. Every run: tray icon appears, browser opens. Right-click the tray icon → **Quit** to stop. |
 | **macOS** | Double-click `Proto-Familiar.command` | First run installs, then opens browser. Ctrl-C in the Terminal window stops everything. |
 | **Linux** | Run `./install.sh` once, then launch **Proto-Familiar** from your app menu | The installer registers a `.desktop` entry under `~/.local/share/applications/`. Stop with `./stop.sh`. |
 
@@ -13,10 +13,11 @@ Open `http://localhost:8742` in your browser (this happens automatically on laun
 ## Requirements
 
 - Node.js 18+
-- Deno 2+ (optional, only for entity-core)
+- Deno 2+ (optional, only for the entity-core identity layer)
 - Git (optional, only for the entity-core clone step)
+- uv (optional, only for the Unruh temporal-context module; ships its own Python)
 
-On Windows the installer pulls all three via `winget --scope user`. On macOS/Linux install them yourself if they're missing — the installer will warn.
+On Windows the installer pulls all of these via `winget --scope user`; on macOS/Linux it installs Deno + uv via their official one-liners. All are optional — Proto-Familiar runs as a plain chat UI without them, just without the identity (entity-core) and temporal-context (Unruh) layers.
 
 ## Manual install
 

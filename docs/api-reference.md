@@ -37,26 +37,32 @@ Proxies a chat completion request to the selected LLM provider. Supports both st
 | `max_tokens` | number | No | Maximum response tokens |
 | `tools` | array | No | OpenAI function-calling tool definitions |
 | `tool_choice` | string/object | No | Tool choice directive (e.g. `"auto"`) |
+| `enrich` | boolean/string | No | Enrichment mode. `true`/omitted = full (identity + memory + graph + temporal, and consume any surfaced session handoff); `"static"` = persona/identity only (no memory/temporal, no handoff consumption — used by the handoff summariser so its note is in character without the dynamic context); `false` = none. |
 
-**Enrichment:** Before forwarding, the server calls `thalamus.js:enrich()` to prepend entity-core identity, memory, and knowledge-graph context to the system message. If entity-core is unavailable, the request proceeds without enrichment.
+**Enrichment:** Before forwarding, the server calls `thalamus.js:enrich()`, which returns the entity-core + Unruh context split into two parts for prompt-cache efficiency (see [`architecture.md`](architecture.md#prompt-cache-aware-assembly)):
+
+- **`static`** — base instructions + identity files. Prepended to the system message (stable across turns, so the provider's prefix cache covers it).
+- **`dynamic`** — RAG memories, knowledge-graph excerpt, and Unruh temporal context. Injected as a separate `system` message `depth` positions from the end of the conversation, so per-turn churn doesn't invalidate the static prefix. Depth comes from the `thalamusDynamicDepth` setting (default 4).
+
+If entity-core and Unruh are both unavailable, the request proceeds without enrichment.
 
 **Streaming response (`stream: true`):**
 
-Returns `Content-Type: text/event-stream`. The first `data:` line is a `_thalamus` envelope carrying the entity-core block this request was actually enriched with (omitted entirely when `enrich()` returned empty); the remaining events follow the OpenAI SSE format:
+Returns `Content-Type: text/event-stream`. The first `data:` line is a `_thalamus` envelope describing what this request was enriched with (omitted entirely when `enrich()` returned nothing); the remaining events follow the OpenAI SSE format:
 
 ```
-data: {"_thalamus":{"entityContext":"<my_identity>\n…\n</my_identity>\n\n<memories>\n…"}}
+data: {"_thalamus":{"static":"<my_identity>…","dynamic":"Relevant Memories…","depth":4,"injectedAt":3}}
 
 data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}
 
 data: [DONE]
 ```
 
-Clients should route on the presence of `_thalamus` and skip the normal `choices` parsing for that line.
+The envelope shape is `{ static, dynamic, depth, injectedAt }`: the two context blocks plus the depth used and the actual index the dynamic block landed at (so the prompt inspector can render both regions in their real positions). Clients should route on the presence of `_thalamus` and skip the normal `choices` parsing for that line.
 
 **Non-streaming response (`stream: false`):**
 
-Returns the provider's JSON response with the provider's original HTTP status code. On a successful response the server parses the JSON and attaches a top-level `_thalamus: { entityContext }` field carrying the actual injected block (omitted when `enrich()` returned empty or the upstream body wasn't JSON).
+Returns the provider's JSON response with the provider's original HTTP status code. On a successful response the server parses the JSON and attaches a top-level `_thalamus: { static, dynamic, depth, injectedAt }` field (omitted when `enrich()` returned nothing or the upstream body wasn't JSON).
 
 **Error responses:**
 
@@ -660,6 +666,62 @@ Creates do not auto-snapshot — they are additive and reversible via the matchi
 | `GET /api/entity/snapshots` | List available snapshots |
 | `POST /api/entity/snapshots` | Create a snapshot now (user-triggered; in addition to the auto-snapshots before destructive ops) |
 | `POST /api/entity/snapshots/:id/restore` | Restore one snapshot — overwrites current memory / identity / graph with its contents |
+
+---
+
+## Interest layer
+
+### `POST /api/interest/engage`
+
+Records a turn's engagement into Unruh's interest layer (Milestone 5). The frontend calls this fire-and-forget after each completed turn; it never blocks or fails the conversation, and degrades silently when Unruh is unavailable.
+
+**Request body:**
+
+```json
+{
+  "topics": [{ "label": "owl aerodynamics", "spanMessages": 6 }],
+  "responseChars": 1840
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `topics` | array | Yes | Currently-open topic markers. Each `{ label, spanMessages }`. Empty array → no-op. Deduped by label (largest span wins); capped at 32 entries. |
+| `topics[].label` | string | Yes | Topic label; the interest node is looked up / created by this. |
+| `topics[].spanMessages` | number | No | How many messages the topic has been open for (persistence signal). |
+| `responseChars` | number | No | Length of the turn's final assistant reply (token-volume signal; chars ≈ tokens × 4). |
+
+**Weight formula** (`interestEngagementDelta` in `server.js`): `min(responseChars / 1500 × 0.1, 0.5)` (token volume) `+ min(spanMessages × 0.05, 0.3)` (persistence). The per-topic delta is forwarded to Unruh's `interest_record` tool with `source: "chat"`, which applies decay-then-add.
+
+**Response:** `{ "ok": true, "recorded": [{ "topic": "...", "delta": 0.23, "ok": true }] }`. `recorded[].ok` is `false` when Unruh was down for that bump.
+
+---
+
+## Session handoff
+
+### `POST /api/session/handoff`
+
+Stores a session-end handoff in Unruh (Milestone 6) so the next session resumes mid-thought. The frontend calls this fire-and-forget when a session ends, after summarising the conversation into an intent + open threads via the chat LLM (using `enrich: "static"` so the summary is in the Familiar's voice). Degrades silently when Unruh is unavailable.
+
+**Request body:**
+
+```json
+{
+  "intent": "I was helping you outline the thesis intro; you were stuck on the hook",
+  "threads": ["lead with the anecdote or the statistic?", "tighten the second paragraph"],
+  "sessionId": "f1e2d3c4-..."
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `intent` | string | No | One-sentence "what you were doing last", in the Familiar's voice. |
+| `threads` | string[] | No | Unfinished questions/tasks. Blank entries are dropped. |
+| `sessionId` | string | No | Source session id (provenance). |
+
+A handoff with neither intent nor threads is a no-op (no hollow "Last session:" header). Writing a new handoff supersedes any prior unconsumed one. The next session's first `/api/chat` surfaces it at the top of `[Temporal Context]` and marks it consumed so it doesn't repeat.
+
+**Response:** `{ "ok": true }` (`ok: false` when Unruh was down).
 
 ---
 
