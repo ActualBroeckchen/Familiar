@@ -123,8 +123,15 @@ backing the claim.
   `chat-with-ponderings.mjs`, `pondering-loop-demo.mjs`,
   `threat-demo.mjs` — CLI runners for each step.
 
-Production wiring (server.js / thalamus.js) covers steps 1-3' + 4b.
-Step 4a (autonomous loop) is implemented but not yet started at
-server boot — that's a small follow-up once you've decided the
-default cadence is right and chosen how to gate it (env var vs
-settings toggle).
+Production wiring (server.js / thalamus.js) covers **all five steps,
+end to end**:
+
+- Steps 1–3' are integrated into the chat path (`enrich()`).
+- Step 4a's autonomous loop **boots with the server by default** and
+  is controlled by:
+  - **Settings → Sidebar → Autonomous pondering** (UI toggle, default ON)
+  - **Settings → Pondering interval scale** (1× – 10×; stretches only)
+  - `PROTO_FAMILIAR_PONDERING_DISABLED=1` env var (hard off-switch)
+- Step 4b's detector + tracker + framing is integrated into both the
+  chat path and the autonomous loop (high threat shortens cadence;
+  `[CARE CHECK]` block surfaces in replies).

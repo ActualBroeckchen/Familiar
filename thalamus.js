@@ -470,6 +470,28 @@ export async function recordInterest({ topic, delta, source = 'chat' }) {
 }
 
 /**
+ * List live (non-standing) interests with current decayed weights.
+ * Best-effort: empty array if Unruh is unreachable or the call fails.
+ * Used by the autonomous pondering loop (server-side, step 4a) so it
+ * can reuse the already-spawned Unruh subprocess instead of opening
+ * its own MCP connection per tick.
+ */
+export async function listLiveInterests({ limit = 20 } = {}) {
+  if (!unruhClient) return [];
+  try {
+    const result  = await unruhClient.callTool({
+      name: 'interest_list',
+      arguments: { limit, include_standing: false },
+    });
+    const payload = parseToolText(result, {});
+    return Array.isArray(payload.live) ? payload.live : [];
+  } catch (err) {
+    console.error('[thalamus] listLiveInterests failed:', err?.message ?? err);
+    return [];
+  }
+}
+
+/**
  * Store a session-end handoff (M6) into Unruh. The chat path (frontend)
  * summarises the ending session into intent + open threads and posts
  * them here via server.js; we forward to the `session_set_handoff`

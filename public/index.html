@@ -115,6 +115,18 @@
             <input type="checkbox" id="handoff-toggle" checked>
           </div>
           <div class="field-hint">When on, the end of a session runs a short summary (cheapest connection) so the next session resumes mid-thought via the temporal context. One small extra generation per session boundary — turn off to save it.</div>
+
+          <div class="field-row">
+            <label for="pondering-toggle">Autonomous pondering</label>
+            <input type="checkbox" id="pondering-toggle" checked>
+          </div>
+          <div class="field-hint">When on, your Familiar thinks on its own during idle periods — picking topics from accrued interest weights and writing real entries to its Ponderings tome (which it can later reference in chat). Cadence is conservative (30 min – 6 hr depending on tier) and only runs when interests have been accrued; fresh installs stay silent. Off skips the whole thing.</div>
+
+          <div class="field">
+            <label for="pondering-scale">Pondering interval scale</label>
+            <input type="number" id="pondering-scale" value="1" min="1" max="10" step="0.5">
+            <div class="field-hint">Multiplies the base ponder interval. 1× = default cadence (30 min – 6 hr). 2× doubles every interval (1 hr – 12 hr). Use this to dial token cost down without disabling entirely. Only stretches, never speeds up.</div>
+          </div>
         </div>
 
         <!-- Saved Connections & Fallbacks -->

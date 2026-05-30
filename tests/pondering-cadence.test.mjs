@@ -87,3 +87,36 @@ test('THREAT_CADENCE_MULTIPLIER is frozen', () => {
 test('PONDER_INTERVAL_MS is frozen', () => {
   assert.throws(() => { PONDER_INTERVAL_MS.high = 1; }, TypeError);
 });
+
+// ── User-set interval scale (≥1× only — stretches, never speeds up) ──
+
+test('computeRequiredInterval: scale=1 → unchanged from default', () => {
+  assert.equal(computeRequiredInterval(10, 0, { scale: 1 }), PONDER_INTERVAL_MS.high);
+  assert.equal(computeRequiredInterval(5,  0, { scale: 1 }), PONDER_INTERVAL_MS.mid);
+});
+
+test('computeRequiredInterval: scale=2 → doubles the interval', () => {
+  assert.equal(computeRequiredInterval(10, 0, { scale: 2 }), PONDER_INTERVAL_MS.high * 2);
+  assert.equal(computeRequiredInterval(5,  0, { scale: 2 }), PONDER_INTERVAL_MS.mid * 2);
+});
+
+test('computeRequiredInterval: scale composes with threat multiplier', () => {
+  // severe (0.15×) AND 2× user scale → net 0.30× — same as plain high threat.
+  assert.equal(
+    computeRequiredInterval(10, 8, { scale: 2 }),
+    Math.round(PONDER_INTERVAL_MS.high * 0.15 * 2),
+  );
+});
+
+test('computeRequiredInterval: scale<1 is clamped to 1 (UI only allows ≥1×)', () => {
+  // Even if a stale settings file somehow passes 0.5, we don\'t let
+  // the system ponder MORE often than the tier defaults.
+  assert.equal(computeRequiredInterval(10, 0, { scale: 0.5 }),  PONDER_INTERVAL_MS.high);
+  assert.equal(computeRequiredInterval(10, 0, { scale: -1 }),   PONDER_INTERVAL_MS.high);
+  assert.equal(computeRequiredInterval(10, 0, { scale: NaN }),  PONDER_INTERVAL_MS.high);
+});
+
+test('computeRequiredInterval: no scale option → backward compat (=1×)', () => {
+  assert.equal(computeRequiredInterval(10),       PONDER_INTERVAL_MS.high);
+  assert.equal(computeRequiredInterval(10, 0),    PONDER_INTERVAL_MS.high);
+});

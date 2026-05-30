@@ -24,11 +24,13 @@ import {
   createGraphNode, createGraphEdge,
   createSnapshot, restoreSnapshot,
   reconnectEntityCore,
-  recordInterest, recordHandoff,
+  recordInterest, recordHandoff, listLiveInterests,
   shutdownUnruh, shutdownEntityCore,
 } from './thalamus.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
+import { ponderOnce } from './pondering.js';
+import { startPonderingLoop, stopPonderingLoop } from './pondering-loop.js';
 import {
   enqueueMemorization,
   listJobs as listMemorizationJobs,
@@ -1323,7 +1325,78 @@ const httpServer = app.listen(PORT, HOST, async () => {
   }
   console.log(lines.join('\n') + '\n');
   startMemorizationWorker();
+  startAutonomousPondering();
 });
+
+// ── Autonomous pondering loop (step 4a) ─────────────────────────────
+// Default-ON. The loop ticks every minute and on each tick:
+//   1. Re-reads settings.json (so toggles + scale take effect within
+//      a minute, no restart needed).
+//   2. Gates on ponderingEnabled + a valid primary connection. Either
+//      missing → silent skip ('disabled').
+//   3. Reads live interest weights from Unruh and current threat from
+//      the local threat tracker.
+//   4. Picks one interest (weight-proportional), ponders it via
+//      ponderOnce — writes a real, timestamped tome entry.
+//
+// Tuning:
+//   - User can toggle off in Settings or set PROTO_FAMILIAR_PONDERING_
+//     DISABLED=1 (env var, hard override).
+//   - User can stretch intervals via Settings → Pondering interval
+//     scale (1×-10×).
+//   - Cadence base tiers are in pondering-cadence.js (30 min to 6 hr).
+//   - Threat tier multipliers (calm 1.0× → severe 0.15×) and the
+//     user scale are both applied.
+function readSettingsSync() {
+  try { return JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')); }
+  catch { return {}; }
+}
+function primaryConnectionFrom(settings) {
+  const id    = settings?.primaryConnectionId;
+  const conns = Array.isArray(settings?.connections) ? settings.connections : [];
+  return conns.find(c => c?.id === id) ?? null;
+}
+
+function startAutonomousPondering() {
+  if (process.env.PROTO_FAMILIAR_PONDERING_DISABLED === '1') {
+    console.log('[pondering] PROTO_FAMILIAR_PONDERING_DISABLED=1 — autonomous loop is OFF');
+    return;
+  }
+  startPonderingLoop({
+    tickMs: 60_000,
+    isEnabled: async () => {
+      const s = readSettingsSync();
+      if (s.ponderingEnabled === false) return false;
+      const conn = primaryConnectionFrom(s);
+      return !!(conn?.apiKey && conn?.provider && conn?.model);
+    },
+    getIntervalScale: async () => {
+      const s = readSettingsSync();
+      const v = Number(s?.ponderingIntervalScale);
+      return Number.isFinite(v) && v >= 1 ? v : 1;
+    },
+    getInterests: () => listLiveInterests({ limit: 20 }),
+    getThreat:    async () => (await getThreat()).weight,
+    runPonder:    async (topic) => {
+      const s    = readSettingsSync();
+      const conn = primaryConnectionFrom(s);
+      if (!conn?.apiKey) throw new Error('no primary connection configured');
+      return ponderOnce({
+        topic,
+        provider: conn.provider,
+        apiKey:   conn.apiKey,
+        model:    conn.model,
+      });
+    },
+    onTick: (r) => {
+      if (r.acted) {
+        console.log(`[pondering] "${r.picked.label}" (weight ${r.picked.weight?.toFixed?.(2) ?? r.picked.weight}, threat ${r.threatLevel?.toFixed?.(2) ?? r.threatLevel}, scale ${r.scale}×) → "${r.result.title}"`);
+      }
+    },
+    onError: (err) => console.error('[pondering]', err?.message ?? err),
+  });
+  console.log('[pondering] Autonomous pondering ENABLED (default). Toggle in Settings → Sidebar → Autonomous pondering; scale intervals via Pondering interval scale; hard-disable with PROTO_FAMILIAR_PONDERING_DISABLED=1.');
+}
 
 // Graceful shutdown — fires on SIGTERM (stop.sh / stop.bat / docker
 // stop), SIGINT (Ctrl-C), and SIGHUP (terminal closes). Without this,
@@ -1349,6 +1422,7 @@ async function handleSignal(signal) {
   }, 5000).unref();
   try { httpServer.close(); } catch { /* already closed */ }
   try { stopMemorizationWorker(); } catch { /* already stopped */ }
+  try { await stopPonderingLoop(); } catch { /* already stopped */ }
   try { shutdownEntityCore(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }
   // Give the close handshakes a tiny window, then exit.

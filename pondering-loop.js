@@ -51,38 +51,52 @@ const DEFAULT_TICK_MS = 60_000; // poll once per minute by default
 export async function runOneTick({
   getInterests,
   runPonder,
-  getThreat       = async () => 0,
-  computeInterval = computeRequiredInterval,
-  rng             = Math.random,
-  now             = Date.now,
-  lastPonderAt    = 0,
+  getThreat        = async () => 0,
+  isEnabled        = async () => true,
+  getIntervalScale = async () => 1,
+  computeInterval  = computeRequiredInterval,
+  rng              = Math.random,
+  now              = Date.now,
+  lastPonderAt     = 0,
 }) {
   if (typeof getInterests !== 'function') throw new Error('getInterests is required');
   if (typeof runPonder    !== 'function') throw new Error('runPonder is required');
 
-  // Fetch interests + threat in parallel — both are cheap, both feed
+  // Short-circuit if user has toggled the loop off or the system isn't
+  // configured to ponder (no primary connection, no key, etc.). Cheap
+  // — the gate is checked before any other I/O — so a disabled loop
+  // costs almost nothing per tick.
+  if (!(await isEnabled())) {
+    return { acted: false, reason: 'disabled', at: now() };
+  }
+
+  // Fetch interests + threat + scale in parallel — all cheap, all feed
   // the cadence decision, and we want one consistent moment-in-time
   // view for this tick.
-  const [interests, threatLevel] = await Promise.all([getInterests(), getThreat()]);
+  const [interests, threatLevel, scale] = await Promise.all([
+    getInterests(),
+    getThreat(),
+    getIntervalScale(),
+  ]);
 
   if (!Array.isArray(interests) || interests.length === 0) {
-    return { acted: false, reason: 'no_interests', threatLevel, at: now() };
+    return { acted: false, reason: 'no_interests', threatLevel, scale, at: now() };
   }
 
   const topWeight = Math.max(0, ...interests.map(i => Number(i?.weight) || 0));
-  const required  = computeInterval(topWeight, Number(threatLevel) || 0);
+  const required  = computeInterval(topWeight, Number(threatLevel) || 0, { scale: Number(scale) || 1 });
   const since     = now() - lastPonderAt;
   if (since < required) {
-    return { acted: false, reason: 'too_soon', sinceMs: since, requiredMs: required, topWeight, threatLevel, at: now() };
+    return { acted: false, reason: 'too_soon', sinceMs: since, requiredMs: required, topWeight, threatLevel, scale, at: now() };
   }
 
   const picked = pickInterest(interests, { rng });
   if (!picked) {
-    return { acted: false, reason: 'no_eligible_pick', threatLevel, at: now() };
+    return { acted: false, reason: 'no_eligible_pick', threatLevel, scale, at: now() };
   }
 
   const result = await runPonder(picked.label, picked);
-  return { acted: true, picked, result, at: now(), topWeight, threatLevel, requiredMs: required };
+  return { acted: true, picked, result, at: now(), topWeight, threatLevel, scale, requiredMs: required };
 }
 
 // ── Singleton lifecycle ───────────────────────────────────────────

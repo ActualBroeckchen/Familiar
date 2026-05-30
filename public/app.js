@@ -597,6 +597,17 @@ const state = {
   // mid-thought. It's one extra short generation per session boundary;
   // turn it off if you'd rather not spend that.
   handoffEnabled:          true,
+
+  // Autonomous pondering loop (step 4a). When on, the server wakes
+  // the Familiar on its own cadence during idle periods to think
+  // about whatever's on its mind (highest interest weights), writing
+  // real entries to the Familiar's Ponderings tome. Default on.
+  // The scale multiplier lets the user STRETCH (≥1×) the cadence
+  // to reduce token spend — base tiers are already conservative
+  // (30 min to 6 hr). Off via this toggle, or hard-disable with the
+  // PROTO_FAMILIAR_PONDERING_DISABLED=1 env var on the server.
+  ponderingEnabled:        true,
+  ponderingIntervalScale:  1,
 };
 
 // ── Persistence ──────────────────────────────────────────────────
@@ -620,6 +631,7 @@ const SERVER_SYNCED_KEYS = [
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
   'entityCoreConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
+  'ponderingEnabled', 'ponderingIntervalScale',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -690,6 +702,12 @@ function loadPersisted() {
     state.thalamusDynamicDepth = 4;
   }
   if (typeof state.handoffEnabled !== 'boolean') state.handoffEnabled = true;
+  if (typeof state.ponderingEnabled !== 'boolean') state.ponderingEnabled = true;
+  if (typeof state.ponderingIntervalScale !== 'number'
+      || state.ponderingIntervalScale < 1
+      || state.ponderingIntervalScale > 10) {
+    state.ponderingIntervalScale = 1;
+  }
   migrateLegacyConnection();
 }
 
@@ -2363,6 +2381,11 @@ function readSettingsFromUI() {
     state.thalamusDynamicDepth = Number.isFinite(v) && v >= 1 && v <= 50 ? v : 4;
   }
   if ($('handoff-toggle')) state.handoffEnabled = $('handoff-toggle').checked;
+  if ($('pondering-toggle')) state.ponderingEnabled = $('pondering-toggle').checked;
+  if ($('pondering-scale')) {
+    const n = parseFloat($('pondering-scale').value);
+    state.ponderingIntervalScale = Number.isFinite(n) && n >= 1 && n <= 10 ? n : 1;
+  }
   state.userName          = $('user-name').value.trim() || 'User';
   state.charName          = $('char-name').value.trim() || 'Assistant';
   state.systemPrompt      = $('system-prompt').value;
@@ -2405,6 +2428,8 @@ function writeSettingsToUI() {
   setIfNotFocused($('model-input'),     'value',   state.model);
   setIfNotFocused($('streaming-toggle'),'checked', state.streaming);
   if ($('handoff-toggle')) setIfNotFocused($('handoff-toggle'), 'checked', state.handoffEnabled !== false);
+  if ($('pondering-toggle')) setIfNotFocused($('pondering-toggle'), 'checked', state.ponderingEnabled !== false);
+  if ($('pondering-scale'))  setIfNotFocused($('pondering-scale'),  'value',   state.ponderingIntervalScale ?? 1);
   setIfNotFocused($('temperature'),     'value',   state.temperature);
   $('temp-display').textContent = state.temperature;
   setIfNotFocused($('max-tokens'),         'value',   state.maxTokens);
@@ -3120,7 +3145,8 @@ function init() {
   // ── Settings field listeners ─────────────────────────────────
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
-    'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle', 'user-name', 'char-name',
+    'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle',
+    'pondering-toggle', 'pondering-scale', 'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',

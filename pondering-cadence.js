@@ -54,22 +54,26 @@ function threatMultiplier(threatLevel) {
 
 /**
  * Required interval (ms) between ponderings given the current top
- * interest weight and (optional) current threat level. Returns
- * Infinity when there's nothing eligible to ponder about — threat
- * alone never creates a topic, so a calm-but-distressed system still
- * stays quiet if no interests are accrued.
+ * interest weight, optional current threat level, and optional user
+ * "stretch" scale (≥1.0).
  *
  * @param {number} topWeight   — highest live-interest weight
  * @param {number} threatLevel — current effective threat (default 0)
+ * @param {object} options
+ * @param {number} options.scale — user-set multiplier ≥1.0 (default 1.0).
+ *                                 Values <1 are clamped to 1 — the UI
+ *                                 only lets users SLOW the cadence,
+ *                                 not speed it past the tier defaults.
  */
-export function computeRequiredInterval(topWeight, threatLevel = 0) {
+export function computeRequiredInterval(topWeight, threatLevel = 0, { scale = 1.0 } = {}) {
   if (!Number.isFinite(topWeight) || topWeight <= 0) return Infinity;
   let base;
   if (topWeight >= 8)      base = PONDER_INTERVAL_MS.high;
   else if (topWeight >= 4) base = PONDER_INTERVAL_MS.mid;
   else if (topWeight >= 2) base = PONDER_INTERVAL_MS.low;
   else                     base = PONDER_INTERVAL_MS.idle;
-  return Math.round(base * threatMultiplier(threatLevel));
+  const safeScale = Number.isFinite(scale) && scale >= 1 ? scale : 1;
+  return Math.round(base * threatMultiplier(threatLevel) * safeScale);
 }
 
 /** Human-readable tier name for the given top weight. For logs / UI. */

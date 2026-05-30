@@ -206,6 +206,76 @@ test('runOneTick: getThreat default = 0 (backward compat — old callers still w
   assert.equal(r.threatLevel, 0);
 });
 
+// ── isEnabled gate (settings toggle / PROTO_FAMILIAR_PONDERING_DISABLED) ──
+
+test('runOneTick: isEnabled=false short-circuits before any I/O', async () => {
+  let calledInterests = false, calledPonder = false;
+  const r = await runOneTick({
+    getInterests: async () => { calledInterests = true; return [{ label: 'x', weight: 9 }]; },
+    runPonder:    async () => { calledPonder = true; return null; },
+    isEnabled:    async () => false,
+    now:          () => 1000,
+  });
+  assert.equal(r.acted,        false);
+  assert.equal(r.reason,       'disabled');
+  assert.equal(calledInterests, false, 'disabled gate must skip getInterests');
+  assert.equal(calledPonder,    false, 'disabled gate must skip runPonder');
+});
+
+test('runOneTick: isEnabled=true allows normal path (backward compat default)', async () => {
+  const r = await runOneTick({
+    getInterests: async () => [{ label: 'x', weight: 9 }],
+    runPonder:    async () => ({ uid: 'ok' }),
+    isEnabled:    async () => true,
+    computeInterval: () => 0,
+    now:          () => 1000,
+  });
+  assert.equal(r.acted, true);
+});
+
+// ── User interval scale ──
+
+test('runOneTick: getIntervalScale is passed to computeInterval', async () => {
+  let observedScale = null;
+  const r = await runOneTick({
+    getInterests:     async () => [{ label: 'x', weight: 5 }],
+    runPonder:        async () => 'pondered',
+    getIntervalScale: async () => 3,
+    computeInterval:  (w, t, { scale } = {}) => { observedScale = scale; return 0; },
+    now:              () => 1000,
+  });
+  assert.equal(observedScale, 3);
+  assert.equal(r.acted,       true);
+  assert.equal(r.scale,       3);
+});
+
+test('runOneTick: scale=2 doubles the required interval (and can flip too_soon)', async () => {
+  // wait of 40 min, weight 5 (mid → 60 min base):
+  //   scale=1 → 60 min req, 40 min wait → too_soon
+  //   scale=2 → 120 min req, 40 min wait → still too_soon
+  //   But with weight 10 (high → 30 min base):
+  //     scale=1 → 30 min req, 40 min wait → fires
+  //     scale=2 → 60 min req, 40 min wait → too_soon
+  const fortyMin = 40 * 60_000;
+  const fires = await runOneTick({
+    getInterests:     async () => [{ label: 'x', weight: 10 }],
+    runPonder:        async () => 'pondered',
+    getIntervalScale: async () => 1,
+    now:              () => fortyMin,
+    lastPonderAt:     0,
+  });
+  assert.equal(fires.acted, true, 'high tier with scale=1 fires at 40min wait');
+  const skipped = await runOneTick({
+    getInterests:     async () => [{ label: 'x', weight: 10 }],
+    runPonder:        async () => 'pondered',
+    getIntervalScale: async () => 2,
+    now:              () => fortyMin,
+    lastPonderAt:     0,
+  });
+  assert.equal(skipped.acted, false, 'high tier with scale=2 skips at 40min wait');
+  assert.equal(skipped.reason, 'too_soon');
+});
+
 test('runOneTick: high threat shortens cadence — same wait, low threat skips, high threat fires', async () => {
   // Wait of 5 minutes with weight 5:
   //   no threat   → mid tier (60 min) → too_soon
