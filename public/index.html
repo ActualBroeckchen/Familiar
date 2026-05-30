@@ -880,6 +880,9 @@
         <button class="ke-tab ke-tab-active" data-temporal-tab="interests"  role="tab">Interests</button>
         <button class="ke-tab"               data-temporal-tab="threat"     role="tab">Threat</button>
         <button class="ke-tab"               data-temporal-tab="ponderings" role="tab">Ponderings</button>
+        <button class="ke-tab"               data-temporal-tab="schedule"   role="tab">Schedule</button>
+        <button class="ke-tab"               data-temporal-tab="routine"    role="tab">Routine</button>
+        <button class="ke-tab"               data-temporal-tab="handoff"    role="tab">Handoff</button>
       </div>
       <div class="modal-body ke-body">
 
@@ -917,6 +920,60 @@
             <span id="te-pond-summary" class="field-hint" style="margin-left:auto"></span>
           </div>
           <div class="ke-list" id="te-pond-list" style="height: calc(100% - 40px); overflow:auto"></div>
+        </div>
+
+        <!-- SCHEDULE PANE -->
+        <div class="ke-pane" id="te-pane-schedule">
+          <div class="ke-toolbar">
+            <button id="te-sched-refresh" class="btn-ghost">Refresh</button>
+            <label>Window (hours)
+              <input type="number" id="te-sched-hours" value="48" min="1" max="720" step="1" style="width: 5em">
+            </label>
+            <button id="te-sched-add" class="btn-secondary" style="margin-left:auto">+ Add event / task</button>
+          </div>
+          <div id="te-sched-form" style="display:none; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+            <div style="display: flex; gap: 8px; flex-wrap: wrap">
+              <label>Type
+                <select id="te-sched-type">
+                  <option value="event">event</option>
+                  <option value="task">task</option>
+                  <option value="state">state</option>
+                </select>
+              </label>
+              <label style="flex: 1; min-width: 12em">Label
+                <input type="text" id="te-sched-label" placeholder="e.g. dentist appointment">
+              </label>
+              <label>When (ISO UTC; blank for open task)
+                <input type="text" id="te-sched-when" placeholder="2026-06-01T14:00:00Z">
+              </label>
+              <label>End (optional)
+                <input type="text" id="te-sched-end"  placeholder="2026-06-01T15:00:00Z">
+              </label>
+            </div>
+            <div style="margin-top: 8px; display: flex; gap: 8px; justify-content: flex-end">
+              <button id="te-sched-form-cancel" class="btn-ghost">Cancel</button>
+              <button id="te-sched-form-save"   class="btn-send">Create</button>
+            </div>
+          </div>
+          <div class="ke-list" id="te-sched-list" style="height: calc(100% - 80px); overflow:auto"></div>
+        </div>
+
+        <!-- ROUTINE PANE -->
+        <div class="ke-pane" id="te-pane-routine">
+          <div class="ke-toolbar">
+            <button id="te-routine-refresh" class="btn-ghost">Refresh</button>
+            <span id="te-routine-summary" class="field-hint" style="margin-left:auto"></span>
+          </div>
+          <div class="ke-list" id="te-routine-list" style="height: calc(100% - 40px); overflow:auto"></div>
+        </div>
+
+        <!-- HANDOFF PANE -->
+        <div class="ke-pane" id="te-pane-handoff">
+          <div class="ke-toolbar">
+            <button id="te-handoff-refresh" class="btn-ghost">Refresh</button>
+            <span id="te-handoff-summary" class="field-hint" style="margin-left:auto"></span>
+          </div>
+          <div class="ke-list" id="te-handoff-list" style="height: calc(100% - 40px); overflow:auto"></div>
         </div>
 
       </div>

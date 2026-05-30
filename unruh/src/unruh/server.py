@@ -192,6 +192,47 @@ def schedule_resolve(id: str, resolution: str) -> dict[str, Any]:
         return _err(str(e))
 
 
+@mcp.tool()
+def schedule_update_node(
+    id: str,
+    label: str | None = None,
+    when: str | None = None,
+    end: str | None = None,
+    payload: dict | None = None,
+) -> dict[str, Any]:
+    """Patch a schedule-layer node in place.
+
+    Args:
+        id: node id to update.
+        label: new label (non-empty). Omit / None to leave unchanged.
+        when: new ISO-8601 UTC start. Pass "" (empty string) to clear.
+        end: new ISO-8601 UTC end. Pass "" to clear.
+        payload: new payload dict — REPLACES the existing payload.
+
+    Returns: {ok: True, updated: <bool>}.
+    """
+    try:
+        with get_conn() as conn:
+            updated = sched.update_node(
+                conn, id=id, label=label, when=when, end=end, payload=payload,
+            )
+        return {"ok": True, "updated": updated}
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def schedule_delete_node(id: str) -> dict[str, Any]:
+    """Permanently remove a schedule-layer node (and its edges).
+
+    Returns: {ok: True, deleted: <bool>}. Interest-layer nodes are
+    never affected — use interest_demote_standing for those.
+    """
+    with get_conn() as conn:
+        deleted = sched.delete_node(conn, id=id)
+    return {"ok": True, "deleted": deleted}
+
+
 # ── Interest layer (M4) ───────────────────────────────────────────────
 
 

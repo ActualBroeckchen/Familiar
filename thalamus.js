@@ -492,6 +492,126 @@ export async function listLiveInterests({ limit = 20 } = {}) {
 }
 
 /**
+ * Bump (or reduce) an interest weight by `delta`. Positive delta adds
+ * engagement; negative delta is currently unsupported by Unruh's
+ * interest_record tool but we expose the wrapper for symmetry — the
+ * UI passes only positive deltas. Returns { ok, error? }.
+ */
+export async function bumpInterest({ topic, delta, source = 'manual' }) {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'interest_record',
+      arguments: { topic, delta, source },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+}
+
+/** Demote a standing value to a live interest. */
+export async function demoteStanding({ id }) {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'interest_demote_standing',
+      arguments: { id },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+}
+
+// ── Schedule wrappers (M9b) ──────────────────────────────────────
+
+export async function getScheduleWindow({ from_ts, to_ts, limit = 200 } = {}) {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', nodes: [], edges: [] };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_get_window',
+      arguments: { from_ts, to_ts, limit, include_open_tasks: true },
+    });
+    return parseToolText(r, { ok: false, nodes: [], edges: [] });
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err), nodes: [], edges: [] };
+  }
+}
+
+export async function addScheduleNode({ type, label, when, end, payload }) {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_add_node',
+      arguments: { type, label, when, end, payload },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function updateScheduleNode({ id, label, when, end, payload }) {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  const args = { id };
+  if (label   !== undefined) args.label   = label;
+  if (when    !== undefined) args.when    = when;
+  if (end     !== undefined) args.end     = end;
+  if (payload !== undefined) args.payload = payload;
+  try {
+    const r = await unruhClient.callTool({ name: 'schedule_update_node', arguments: args });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function resolveScheduleNode({ id, resolution }) {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_resolve',
+      arguments: { id, resolution },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function deleteScheduleNode({ id }) {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_delete_node',
+      arguments: { id },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+// ── Handoff wrappers (M9b) ───────────────────────────────────────
+
+export async function getHandoff({ include_consumed = true } = {}) {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', handoffs: [] };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'session_get_handoff',
+      arguments: { include_consumed },
+    });
+    return parseToolText(r, { ok: false, handoffs: [] });
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err), handoffs: [] };
+  }
+}
+
+export async function markHandoffConsumed({ id }) {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'session_mark_handoff_consumed',
+      arguments: { id },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+/**
  * Full interest snapshot — live + standing — for the Temporal editor
  * UI (M9). Best-effort: empty arrays if Unruh is unreachable.
  *

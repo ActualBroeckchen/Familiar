@@ -143,6 +143,90 @@ class TestResolve:
             sched.resolve(conn, id=t, resolution="kinda done")
 
 
+# ── Update / delete (M9b) ─────────────────────────────────────────────
+
+
+class TestUpdateNode:
+    def test_update_label(self, conn):
+        t = sched.add_node(conn, type="task", label="old")
+        assert sched.update_node(conn, id=t, label="new")
+        row = conn.execute("SELECT label FROM nodes WHERE id=?", (t,)).fetchone()
+        assert row["label"] == "new"
+
+    def test_update_when_and_end(self, conn):
+        t = sched.add_node(conn, type="task", label="x")
+        assert sched.update_node(conn, id=t, when="2030-01-01T12:00:00+00:00", end="2030-01-01T13:00:00+00:00")
+        row = conn.execute("SELECT when_ts, end_ts FROM nodes WHERE id=?", (t,)).fetchone()
+        assert row["when_ts"] == "2030-01-01T12:00:00+00:00"
+        assert row["end_ts"]  == "2030-01-01T13:00:00+00:00"
+
+    def test_update_clears_when_with_empty_string(self, conn):
+        t = sched.add_node(conn, type="event", label="x", when="2030-01-01T12:00:00+00:00")
+        assert sched.update_node(conn, id=t, when="")
+        row = conn.execute("SELECT when_ts FROM nodes WHERE id=?", (t,)).fetchone()
+        assert row["when_ts"] is None
+
+    def test_update_replaces_payload(self, conn):
+        t = sched.add_node(conn, type="task", label="x", payload={"a": 1, "b": 2})
+        assert sched.update_node(conn, id=t, payload={"c": 3})
+        import json as _json
+        row = conn.execute("SELECT payload_json FROM nodes WHERE id=?", (t,)).fetchone()
+        assert _json.loads(row["payload_json"]) == {"c": 3}
+
+    def test_update_unknown_id_returns_false(self, conn):
+        assert sched.update_node(conn, id="nope", label="x") is False
+
+    def test_update_no_fields_returns_false(self, conn):
+        t = sched.add_node(conn, type="task", label="x")
+        assert sched.update_node(conn, id=t) is False
+
+    def test_update_empty_label_rejected(self, conn):
+        t = sched.add_node(conn, type="task", label="x")
+        with pytest.raises(ValueError, match="label cannot be cleared"):
+            sched.update_node(conn, id=t, label="   ")
+
+    def test_update_does_not_touch_interest_layer_nodes(self, conn):
+        # Manually insert an interest-layer node and confirm update_node ignores it.
+        conn.execute(
+            "INSERT INTO nodes (id, layer, type, label, payload_json, created_at, updated_at) "
+            "VALUES ('iv', 'interest', 'live_interest', 'curiosity', '{}', ?, ?)",
+            (now_iso(), now_iso()),
+        )
+        assert sched.update_node(conn, id="iv", label="hijacked") is False
+        row = conn.execute("SELECT label FROM nodes WHERE id='iv'").fetchone()
+        assert row["label"] == "curiosity"
+
+
+class TestDeleteNode:
+    def test_delete_existing(self, conn):
+        t = sched.add_node(conn, type="task", label="kill me")
+        assert sched.delete_node(conn, id=t)
+        row = conn.execute("SELECT id FROM nodes WHERE id=?", (t,)).fetchone()
+        assert row is None
+
+    def test_delete_cascades_edges(self, conn):
+        a = sched.add_node(conn, type="task", label="a")
+        b = sched.add_node(conn, type="task", label="b")
+        sched.add_edge(conn, src=a, dst=b, kind="causes")
+        assert sched.delete_node(conn, id=a)
+        # Edge should also be gone (ON DELETE CASCADE).
+        rows = conn.execute("SELECT COUNT(*) AS n FROM edges").fetchone()
+        assert rows["n"] == 0
+
+    def test_delete_unknown_id_returns_false(self, conn):
+        assert sched.delete_node(conn, id="nope") is False
+
+    def test_delete_does_not_touch_interest_layer(self, conn):
+        conn.execute(
+            "INSERT INTO nodes (id, layer, type, label, payload_json, created_at, updated_at) "
+            "VALUES ('iv2', 'interest', 'live_interest', 'curiosity', '{}', ?, ?)",
+            (now_iso(), now_iso()),
+        )
+        assert sched.delete_node(conn, id="iv2") is False
+        row = conn.execute("SELECT id FROM nodes WHERE id='iv2'").fetchone()
+        assert row is not None
+
+
 # ── Reads ─────────────────────────────────────────────────────────────
 
 

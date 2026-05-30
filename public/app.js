@@ -3365,6 +3365,13 @@ function init() {
     $('te-threat-reset').addEventListener('click',   teResetThreat);
     $('te-pond-refresh').addEventListener('click',   teLoadPonderings);
     $('te-pond-limit').addEventListener('change',    teLoadPonderings);
+    $('te-sched-refresh').addEventListener('click',  teLoadSchedule);
+    $('te-sched-hours').addEventListener('change',   teLoadSchedule);
+    $('te-sched-add').addEventListener('click',      () => teToggleScheduleForm(true));
+    $('te-sched-form-cancel').addEventListener('click', () => teToggleScheduleForm(false));
+    $('te-sched-form-save').addEventListener('click', teSaveScheduleNode);
+    $('te-routine-refresh').addEventListener('click', teLoadRoutine);
+    $('te-handoff-refresh').addEventListener('click', teLoadHandoff);
   }
   $('ke-mem-refresh').addEventListener('click', keLoadMemories);
   $('ke-mem-granularity').addEventListener('change', keLoadMemories);
@@ -6581,7 +6588,7 @@ async function saveLoreEditorEntry() {
 // interests beyond demote is deferred to a later pass — for now the
 // observable surface is enough for catching bugs.
 
-const TE_TABS = ['interests', 'threat', 'ponderings'];
+const TE_TABS = ['interests', 'threat', 'ponderings', 'schedule', 'routine', 'handoff'];
 
 function openTemporalModal() {
   $('temporal-modal').classList.remove('hidden');
@@ -6603,6 +6610,9 @@ function teSwitchTab(name) {
   if      (name === 'interests')  teLoadInterests();
   else if (name === 'threat')     teLoadThreat();
   else if (name === 'ponderings') teLoadPonderings();
+  else if (name === 'schedule')   teLoadSchedule();
+  else if (name === 'routine')    teLoadRoutine();
+  else if (name === 'handoff')    teLoadHandoff();
 }
 
 function teEscapeHtml(s) {
@@ -6654,8 +6664,43 @@ async function teLoadInterests() {
       html.push('<p class="logs-empty">No interests yet. They accrue as you chat — see thalamus.recordInterest.</p>');
     }
     list.innerHTML = html.join('');
+    list.querySelectorAll('.te-int-bump').forEach(btn => {
+      btn.addEventListener('click', () => teBumpInterest(btn.dataset.intLabel));
+    });
+    list.querySelectorAll('.te-int-demote').forEach(btn => {
+      btn.addEventListener('click', () => teDemoteStanding(btn.dataset.intId));
+    });
   } catch (err) {
     list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+async function teBumpInterest(label) {
+  const raw = prompt(`Bump weight for "${label}" by how much?\n\nPositive number; typical engagement bumps are 0.5 – 3.0.`, '1');
+  if (raw == null) return;
+  const delta = parseFloat(raw);
+  if (!Number.isFinite(delta) || delta <= 0) { alert('Enter a positive number.'); return; }
+  try {
+    const r = await fetch('/api/temporal/interests/bump', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic: label, delta, source: 'manual_ui' }),
+    }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'bump failed');
+    teLoadInterests();
+  } catch (err) {
+    alert(`Bump failed: ${err.message}`);
+  }
+}
+
+async function teDemoteStanding(id) {
+  if (!confirm('Demote this standing value to a regular live interest?\n\nIt will start decaying like any other live interest from this moment on. The original payload (value_ref, etc.) is preserved.')) return;
+  try {
+    const r = await fetch(`/api/temporal/interests/${encodeURIComponent(id)}/demote`, { method: 'POST' }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'demote failed');
+    teLoadInterests();
+  } catch (err) {
+    alert(`Demote failed: ${err.message}`);
   }
 }
 
@@ -6664,17 +6709,21 @@ function teRenderInterest(i, isStanding) {
   const raw   = Number(i.raw_weight);
   const tier  = teEscapeHtml(i.tier ?? '?');
   const label = teEscapeHtml(i.label ?? '(no label)');
+  const id    = teEscapeHtml(i.id ?? '');
   const lt    = teTimeAgo(i.last_touched);
   const ref   = i.value_ref ? `<div style="font-size: 0.85em; opacity: 0.7">anchor: <code>${teEscapeHtml(i.value_ref)}</code></div>` : '';
-  // Effective vs raw: when they differ, decay has happened. Show both.
   const decayed = (!isStanding && Number.isFinite(raw) && Number.isFinite(w) && Math.abs(raw - w) > 0.01)
     ? ` <span style="opacity:0.6">(raw ${raw.toFixed(2)}, decayed)</span>` : '';
+  const actions = isStanding
+    ? `<button class="btn-ghost te-int-demote" data-int-id="${id}" style="font-size: 0.8em; padding: 2px 8px" title="Demote to live interest (lets it start decaying)">Demote</button>`
+    : `<button class="btn-ghost te-int-bump"   data-int-label="${label}" style="font-size: 0.8em; padding: 2px 8px" title="Manually bump this interest's weight">+ Bump</button>`;
   return `
     <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
       <div style="display: flex; gap: 8px; align-items: baseline">
         <strong style="flex: 1">${label}</strong>
         <span style="font-family: monospace">${Number.isFinite(w) ? w.toFixed(2) : '?'}${decayed}</span>
         <span style="font-size: 0.85em; opacity: 0.7; padding: 1px 6px; border: 1px solid var(--border-subtle, #2a2a2a); border-radius: 3px">${tier}</span>
+        ${actions}
       </div>
       <div style="font-size: 0.85em; opacity: 0.7; margin-top: 2px">last touched ${lt}</div>
       ${ref}
@@ -6790,4 +6839,284 @@ async function teDeletePondering(uid) {
     alert(`Delete failed: ${err.message}`);
   }
 }
+
+// ── Schedule tab (M9b) ────────────────────────────────────────────
+
+async function teLoadSchedule() {
+  const list = $('te-sched-list');
+  if (!list) return;
+  list.innerHTML = '<p class="logs-empty">Loading…</p>';
+  const hours = Math.max(1, parseInt($('te-sched-hours')?.value, 10) || 48);
+  const now   = new Date();
+  const from  = new Date(now.getTime() - hours * 30 * 60_000).toISOString();   // half-window behind
+  const to    = new Date(now.getTime() + hours * 30 * 60_000).toISOString();
+  try {
+    const r = await fetch(`/api/temporal/schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
+    const nodes = (data.nodes || [])
+      .filter(n => n.type !== 'phase')             // Routine tab handles phases
+      .sort((a, b) => (a.when || '').localeCompare(b.when || ''));
+    if (!nodes.length) {
+      list.innerHTML = '<p class="logs-empty">Nothing scheduled in this window. Use "+ Add" above to create an event or task.</p>';
+      return;
+    }
+    list.innerHTML = nodes.map(n => {
+      const id    = teEscapeHtml(n.id);
+      const label = teEscapeHtml(n.label);
+      const type  = teEscapeHtml(n.type);
+      const when  = n.when ? `<span style="font-family: monospace; font-size: 0.85em; opacity: 0.8">${teEscapeHtml(n.when)}</span>` : '<span style="opacity: 0.5; font-size: 0.85em">open</span>';
+      const end   = n.end  ? `<span style="font-family: monospace; font-size: 0.85em; opacity: 0.7"> → ${teEscapeHtml(n.end)}</span>` : '';
+      const resolution = n.resolution
+        ? `<span style="font-size: 0.85em; opacity: 0.7; padding: 1px 6px; border: 1px solid var(--border-subtle, #2a2a2a); border-radius: 3px">${teEscapeHtml(n.resolution)}</span>`
+        : '';
+      const resolveBtns = n.resolution ? '' : `
+        <button class="btn-ghost te-sched-resolve" data-id="${id}" data-resolution="done"      style="font-size: 0.8em; padding: 2px 8px">✓ done</button>
+        <button class="btn-ghost te-sched-resolve" data-id="${id}" data-resolution="cancelled" style="font-size: 0.8em; padding: 2px 8px">✕ cancel</button>`;
+      return `
+      <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+        <div style="display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap">
+          <span style="font-size: 0.8em; opacity: 0.6; min-width: 4em">${type}</span>
+          <strong style="flex: 1">${label}</strong>
+          ${resolution}
+          ${resolveBtns}
+          <button class="btn-ghost te-sched-delete" data-id="${id}" style="font-size: 0.8em; padding: 2px 8px" title="Permanently delete (cascades to edges)">🗑</button>
+        </div>
+        <div style="margin-top: 2px">${when}${end}</div>
+      </div>`;
+    }).join('');
+    list.querySelectorAll('.te-sched-resolve').forEach(btn => {
+      btn.addEventListener('click', () => teResolveSchedule(btn.dataset.id, btn.dataset.resolution));
+    });
+    list.querySelectorAll('.te-sched-delete').forEach(btn => {
+      btn.addEventListener('click', () => teDeleteSchedule(btn.dataset.id));
+    });
+  } catch (err) {
+    list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+async function teResolveSchedule(id, resolution) {
+  try {
+    const r = await fetch(`/api/temporal/schedule/${encodeURIComponent(id)}/resolve`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ resolution }),
+    }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'resolve failed');
+    teLoadSchedule();
+  } catch (err) {
+    alert(`Resolve failed: ${err.message}`);
+  }
+}
+
+async function teDeleteSchedule(id) {
+  if (!confirm('Permanently delete this schedule node? Any edges referencing it will also be removed.')) return;
+  try {
+    const r = await fetch(`/api/temporal/schedule/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'delete failed');
+    teLoadSchedule();
+  } catch (err) {
+    alert(`Delete failed: ${err.message}`);
+  }
+}
+
+function teToggleScheduleForm(show) {
+  const form = $('te-sched-form');
+  if (!form) return;
+  form.style.display = show ? '' : 'none';
+  if (show) {
+    $('te-sched-label').value = '';
+    $('te-sched-when').value  = '';
+    $('te-sched-end').value   = '';
+    $('te-sched-type').value  = 'event';
+    setTimeout(() => $('te-sched-label')?.focus(), 0);
+  }
+}
+
+async function teSaveScheduleNode() {
+  const type  = $('te-sched-type').value;
+  const label = $('te-sched-label').value.trim();
+  const when  = $('te-sched-when').value.trim() || null;
+  const end   = $('te-sched-end').value.trim()  || null;
+  if (!label) { alert('Label is required.'); return; }
+  try {
+    const r = await fetch('/api/temporal/schedule', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ type, label, when, end }),
+    }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'create failed');
+    teToggleScheduleForm(false);
+    teLoadSchedule();
+  } catch (err) {
+    alert(`Create failed: ${err.message}`);
+  }
+}
+
+// ── Routine tab (M9b) — phase nodes only ──────────────────────────
+
+async function teLoadRoutine() {
+  const list = $('te-routine-list');
+  if (!list) return;
+  list.innerHTML = '<p class="logs-empty">Loading…</p>';
+  // Phases span a day; fetch a big window so all phases are visible.
+  const now  = new Date();
+  const from = new Date(now.getTime() - 36 * 60 * 60_000).toISOString();
+  const to   = new Date(now.getTime() + 36 * 60 * 60_000).toISOString();
+  try {
+    const r = await fetch(`/api/temporal/schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=500`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
+    // Phases only. Dedupe by label (the seed re-renders every day) and
+    // keep the latest copy. Sort by when_ts time-of-day.
+    const byLabel = new Map();
+    for (const n of (data.nodes || [])) {
+      if (n.type !== 'phase') continue;
+      const prev = byLabel.get(n.label);
+      if (!prev || (n.when || '') > (prev.when || '')) byLabel.set(n.label, n);
+    }
+    const phases = Array.from(byLabel.values()).sort((a, b) => {
+      const ta = (a.when || '').slice(11);
+      const tb = (b.when || '').slice(11);
+      return ta.localeCompare(tb);
+    });
+
+    $('te-routine-summary').textContent = `${phases.length} phase(s)`;
+    if (!phases.length) {
+      list.innerHTML = '<p class="logs-empty">No routine phases yet. Run <code>uv run unruh seed-routine</code> (in the unruh/ dir) to seed defaults.</p>';
+      return;
+    }
+    list.innerHTML = phases.map(p => {
+      const id      = teEscapeHtml(p.id);
+      const label   = teEscapeHtml(p.label);
+      const texture = teEscapeHtml(p.payload?.texture ?? '');
+      // Show time-of-day only (the date repeats every day for phases).
+      const whenT   = teEscapeHtml((p.when || '').slice(11, 16) || '?');
+      const endT    = teEscapeHtml((p.end  || '').slice(11, 16) || '?');
+      return `
+      <div data-phase-id="${id}" style="padding: 10px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+        <div style="display: flex; gap: 8px; align-items: baseline">
+          <strong style="flex: 1" class="te-phase-label" data-id="${id}" data-field="label">${label}</strong>
+          <span style="font-family: monospace; opacity: 0.85" class="te-phase-time">
+            <span class="te-phase-when" data-id="${id}" data-field="when">${whenT}</span> –
+            <span class="te-phase-end"  data-id="${id}" data-field="end">${endT}</span>
+          </span>
+          <button class="btn-ghost te-phase-edit" data-id="${id}" style="font-size: 0.8em; padding: 2px 8px">Edit</button>
+        </div>
+        ${texture ? `<div style="font-size: 0.9em; opacity: 0.75; margin-top: 4px; font-style: italic">${texture}</div>` : ''}
+      </div>`;
+    }).join('');
+    list.querySelectorAll('.te-phase-edit').forEach(btn => {
+      btn.addEventListener('click', () => teEditPhase(btn.dataset.id, phases.find(p => p.id === btn.dataset.id)));
+    });
+  } catch (err) {
+    list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+async function teEditPhase(id, phase) {
+  if (!phase) return;
+  const label = prompt('Phase label:', phase.label);
+  if (label == null) return;
+  const whenT = prompt('Start time (HH:MM, 24-hour, UTC):', (phase.when || '').slice(11, 16));
+  if (whenT == null) return;
+  const endT  = prompt('End time (HH:MM, 24-hour, UTC):',   (phase.end  || '').slice(11, 16));
+  if (endT  == null) return;
+  const texture = prompt('Texture (short description of what the Familiar is like in this phase):', phase.payload?.texture ?? '');
+  if (texture == null) return;
+
+  // Re-stamp the date portion of the timestamps with today's date so
+  // the phase keeps cycling daily; Unruh's get_window will template
+  // these into the current day on read.
+  const today = new Date().toISOString().slice(0, 10);
+  const isoOrNull = (t) => /^\d{2}:\d{2}$/.test(t) ? `${today}T${t}:00+00:00` : null;
+  const when = isoOrNull(whenT.trim());
+  const end  = isoOrNull(endT.trim());
+  if (!when || !end) { alert('Times must be HH:MM (e.g. 09:30).'); return; }
+
+  try {
+    const r = await fetch(`/api/temporal/schedule/${encodeURIComponent(id)}`, {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        label: label.trim() || phase.label,
+        when, end,
+        payload: { ...(phase.payload || {}), texture: texture.trim() },
+      }),
+    }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'update failed');
+    teLoadRoutine();
+  } catch (err) {
+    alert(`Edit failed: ${err.message}`);
+  }
+}
+
+// ── Handoff tab (M9b) ─────────────────────────────────────────────
+
+async function teLoadHandoff() {
+  const list = $('te-handoff-list');
+  if (!list) return;
+  list.innerHTML = '<p class="logs-empty">Loading…</p>';
+  try {
+    const r = await fetch('/api/temporal/handoff');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
+    // session_get_handoff can return either a single most-recent
+    // handoff object or a list; normalize.
+    const items =
+        Array.isArray(data.handoffs) ? data.handoffs
+      : data.handoff                 ? [data.handoff]
+      : [];
+    $('te-handoff-summary').textContent = `${items.length} handoff(s)`;
+    if (!items.length) {
+      list.innerHTML = '<p class="logs-empty">No session handoffs stored yet. They\'re created at the end of each session by the handoff-summariser (Settings → Session handoff).</p>';
+      return;
+    }
+    list.innerHTML = items.map(h => {
+      const id      = teEscapeHtml(h.id ?? '');
+      const intent  = teEscapeHtml(h.intent ?? '');
+      const threads = Array.isArray(h.open_threads) ? h.open_threads : [];
+      const consumed = h.consumed
+        ? '<span style="font-size: 0.85em; opacity: 0.7; padding: 1px 6px; border: 1px solid var(--border-subtle, #2a2a2a); border-radius: 3px">consumed</span>'
+        : '<span style="font-size: 0.85em; padding: 1px 6px; border: 1px solid var(--border-subtle, #2a2a2a); border-radius: 3px; color: var(--text-warning, #d4a44c)">pending</span>';
+      const consumeBtn = h.consumed ? '' : `
+        <button class="btn-ghost te-handoff-consume" data-id="${id}" style="font-size: 0.8em; padding: 2px 8px" title="Mark as consumed so it stops surfacing in the next session">Mark consumed</button>`;
+      const threadsHtml = threads.length
+        ? `<ul style="margin: 4px 0 0 0; padding-left: 20px">${threads.map(t => `<li>${teEscapeHtml(typeof t === 'string' ? t : (t.label ?? JSON.stringify(t)))}</li>`).join('')}</ul>`
+        : '';
+      return `
+      <div style="padding: 10px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+        <div style="display: flex; gap: 8px; align-items: baseline">
+          <span style="opacity: 0.6; font-size: 0.85em">${teEscapeHtml(h.created_at ?? '')}</span>
+          <span style="flex: 1"></span>
+          ${consumed}
+          ${consumeBtn}
+        </div>
+        ${intent ? `<div style="margin-top: 6px">${intent}</div>` : ''}
+        ${threadsHtml ? `<div style="margin-top: 6px"><strong style="font-size: 0.9em">Open threads:</strong>${threadsHtml}</div>` : ''}
+      </div>`;
+    }).join('');
+    list.querySelectorAll('.te-handoff-consume').forEach(btn => {
+      btn.addEventListener('click', () => teConsumeHandoff(btn.dataset.id));
+    });
+  } catch (err) {
+    list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+async function teConsumeHandoff(id) {
+  if (!confirm('Mark this handoff as consumed?\n\nIt will stop surfacing at the top of new sessions, but the audit row stays in the DB.')) return;
+  try {
+    const r = await fetch(`/api/temporal/handoff/${encodeURIComponent(id)}/consume`, { method: 'POST' }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'mark-consumed failed');
+    teLoadHandoff();
+  } catch (err) {
+    alert(`Mark-consumed failed: ${err.message}`);
+  }
+}
+
 

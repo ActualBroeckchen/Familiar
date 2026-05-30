@@ -25,6 +25,10 @@ import {
   createSnapshot, restoreSnapshot,
   reconnectEntityCore,
   recordInterest, recordHandoff, listLiveInterests, listInterests,
+  bumpInterest, demoteStanding,
+  getScheduleWindow, addScheduleNode, updateScheduleNode,
+  resolveScheduleNode, deleteScheduleNode,
+  getHandoff, markHandoffConsumed,
   shutdownUnruh, shutdownEntityCore,
 } from './thalamus.js';
 import { scoreMessage } from './crisis-signals.js';
@@ -1332,6 +1336,67 @@ app.get('/api/temporal/ponderings', async (req, res) => {
 
 app.delete('/api/temporal/ponderings/:uid', async (req, res) => {
   try { res.json(await deletePondering({ uid: req.params.uid })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Interest CRUD (manual edits from the Temporal editor)
+app.post('/api/temporal/interests/bump', async (req, res) => {
+  const { topic, delta, source } = req.body ?? {};
+  if (!topic || typeof topic !== 'string') return badRequest(res, 'topic (string) is required');
+  const d = Number(delta);
+  if (!Number.isFinite(d) || d <= 0)        return badRequest(res, 'delta (positive number) is required');
+  try { res.json(await bumpInterest({ topic, delta: d, source: source ?? 'manual' })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/temporal/interests/:id/demote', async (req, res) => {
+  try { res.json(await demoteStanding({ id: req.params.id })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Schedule
+app.get('/api/temporal/schedule', async (req, res) => {
+  const from_ts = req.query.from || undefined;
+  const to_ts   = req.query.to   || undefined;
+  const limit   = Number.isFinite(+req.query.limit) ? +req.query.limit : 200;
+  try { res.json(await getScheduleWindow({ from_ts, to_ts, limit })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/temporal/schedule', async (req, res) => {
+  const { type, label, when, end, payload } = req.body ?? {};
+  if (!type  || typeof type  !== 'string') return badRequest(res, 'type (string) is required');
+  if (!label || typeof label !== 'string') return badRequest(res, 'label (string) is required');
+  try { res.json(await addScheduleNode({ type, label, when, end, payload })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/temporal/schedule/:id', async (req, res) => {
+  const { label, when, end, payload } = req.body ?? {};
+  try { res.json(await updateScheduleNode({ id: req.params.id, label, when, end, payload })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/temporal/schedule/:id/resolve', async (req, res) => {
+  const { resolution } = req.body ?? {};
+  if (!resolution || typeof resolution !== 'string') return badRequest(res, 'resolution (string) is required');
+  try { res.json(await resolveScheduleNode({ id: req.params.id, resolution })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/temporal/schedule/:id', async (req, res) => {
+  try { res.json(await deleteScheduleNode({ id: req.params.id })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Handoff
+app.get('/api/temporal/handoff', async (_req, res) => {
+  try { res.json(await getHandoff({ include_consumed: true })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/temporal/handoff/:id/consume', async (req, res) => {
+  try { res.json(await markHandoffConsumed({ id: req.params.id })); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 

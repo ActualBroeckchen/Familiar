@@ -134,6 +134,66 @@ def resolve(
     return cur.rowcount > 0
 
 
+def update_node(
+    conn: sqlite3.Connection,
+    *,
+    id: str,
+    label: str | None = None,
+    when: str | None = None,
+    end: str | None = None,
+    payload: dict | None = None,
+) -> bool:
+    """Patch a schedule-layer node in place. Any field passed as None
+    is left unchanged; pass an empty string to clear (when/end can be
+    nulled this way). payload, when given, REPLACES the existing JSON
+    payload — partial-merge is left to the caller because the M9 UI
+    surface only edits whole payloads anyway.
+
+    Returns True if a row was updated, False if no node matched.
+    """
+    sets: list[str] = []
+    args: list[Any] = []
+    if label is not None:
+        if not label.strip():
+            raise ValueError("label cannot be cleared (use delete_node if you want to remove the node)")
+        sets.append("label = ?")
+        args.append(label.strip())
+    if when is not None:
+        sets.append("when_ts = ?")
+        args.append(when or None)
+    if end is not None:
+        sets.append("end_ts = ?")
+        args.append(end or None)
+    if payload is not None:
+        sets.append("payload_json = ?")
+        args.append(json.dumps(payload))
+    if not sets:
+        return False
+    sets.append("updated_at = ?")
+    args.append(now_iso())
+    args.append(id)
+    cur = conn.execute(
+        f"UPDATE nodes SET {', '.join(sets)} WHERE id = ? AND layer = 'schedule'",
+        args,
+    )
+    return cur.rowcount > 0
+
+
+def delete_node(conn: sqlite3.Connection, *, id: str) -> bool:
+    """Permanently remove a schedule-layer node and any edges that
+    referenced it (via ON DELETE CASCADE on the edges table).
+
+    Returns True if a row was deleted, False if no node matched. The
+    layer guard ensures we never accidentally delete an interest-layer
+    node by id — those have their own demote/reset semantics.
+    """
+    cur = conn.execute(
+        "DELETE FROM nodes WHERE id = ? AND layer = 'schedule'",
+        (id,),
+    )
+    return cur.rowcount > 0
+
+
 # ── Reads ──────────────────────────────────────────────────────────────
 
 
