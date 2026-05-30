@@ -965,11 +965,11 @@
               <label style="flex: 1; min-width: 12em">Label
                 <input type="text" id="te-sched-label" placeholder="e.g. dentist appointment">
               </label>
-              <label>When (ISO UTC; blank for open task)
-                <input type="text" id="te-sched-when" placeholder="2026-06-01T14:00:00Z">
+              <label>When (your local time; blank for open task)
+                <input type="datetime-local" id="te-sched-when">
               </label>
               <label>End (optional)
-                <input type="text" id="te-sched-end"  placeholder="2026-06-01T15:00:00Z">
+                <input type="datetime-local" id="te-sched-end">
               </label>
             </div>
             <div style="margin-top: 8px; display: flex; gap: 8px; justify-content: flex-end">
@@ -993,11 +993,11 @@
               <label style="flex: 2; min-width: 12em">Label
                 <input type="text" id="te-routine-label" placeholder="e.g. morning correspondence">
               </label>
-              <label>Start (HH:MM, UTC)
-                <input type="text" id="te-routine-start" placeholder="10:00" style="width: 6em">
+              <label>Start (your local time)
+                <input type="time" id="te-routine-start">
               </label>
-              <label>End (HH:MM, UTC)
-                <input type="text" id="te-routine-end" placeholder="13:00" style="width: 6em">
+              <label>End (your local time)
+                <input type="time" id="te-routine-end">
               </label>
             </div>
             <label style="display:block; margin-top: 6px">Texture (optional — what is the Familiar like in this phase?)

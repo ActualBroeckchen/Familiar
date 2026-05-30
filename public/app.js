@@ -1171,8 +1171,19 @@ function formatDuration(ms) {
  * boundary the way the legacy module-level `elapsedTime` field can after a
  * state restore.
  */
+// Set by buildApiMessages while it's running so {{elapsedTime}} can
+// see the user message that's about to be sent — that message isn't
+// in state.messages yet (it only gets pushed after the response
+// lands), and without this the macro would compare the two prior
+// user messages and miss "user just returned after being away."
+let _pendingUserMsgTimestamp = null;
+
 function elapsedBetweenUserMessages() {
   const stamps = [];
+  if (_pendingUserMsgTimestamp) {
+    const t = new Date(_pendingUserMsgTimestamp).getTime();
+    if (Number.isFinite(t)) stamps.push(t);
+  }
   for (let i = state.messages.length - 1; i >= 0 && stamps.length < 2; i--) {
     const m = state.messages[i];
     if (m?.role === 'user' && m.timestamp) {
@@ -1267,7 +1278,16 @@ function toApiMessage({ role, content, tool_calls, tool_call_id }) {
  *   [user: userInput]            ← new turn
  *   [user: postHistoryPrompt]    ← optional, injected last
  */
-function buildApiMessages(userInput) {
+function buildApiMessages(userInput, pendingUserMsgTimestamp = null) {
+  _pendingUserMsgTimestamp = pendingUserMsgTimestamp;
+  try {
+  return _buildApiMessagesInner(userInput);
+  } finally {
+  _pendingUserMsgTimestamp = null;
+  }
+}
+
+function _buildApiMessagesInner(userInput) {
   const msgs = [];
   // Provenance for the prompt inspector. Each entry is { source, text }
   // where source is one of: lore-sys-top, system-prompt, lore-before-char,
@@ -1723,7 +1743,7 @@ async function sendMessage(userInput) {
   resetSessionTimeout();
 
   const userTimestamp = now;
-  const apiMessages   = buildApiMessages(userInput);
+  const apiMessages   = buildApiMessages(userInput, userTimestamp);
   lastSentMessages    = apiMessages;
   lastThalamus = null; // wait for the live answer to populate this
 
@@ -6645,6 +6665,78 @@ function teEscapeHtml(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// ── Local <-> UTC conversion helpers for the temporal editor ────────
+//
+// All Unruh storage is ISO-8601 UTC. The browser UI takes / shows
+// times in the user's local timezone. These helpers bridge the two
+// so a phase set to "10pm" really fires at 10pm by the user's clock,
+// not at 22:00 UTC.
+
+// "HH:MM" in user's LOCAL time, today's local date → ISO UTC string.
+function teLocalTimeTodayToIsoUtc(hhmm) {
+  if (!/^\d{1,2}:\d{2}$/.test(hhmm)) return null;
+  const [hh, mm] = hhmm.split(':').map(Number);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+  const now = new Date();
+  const local = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm, 0, 0);
+  return local.toISOString();
+}
+
+// <input type="datetime-local"> value ("YYYY-MM-DDTHH:MM"), which the
+// browser hands back as user's LOCAL wall-clock time with no offset →
+// ISO UTC string. Returns null on empty/invalid input.
+function teDatetimeLocalToIsoUtc(value) {
+  if (!value || typeof value !== 'string') return null;
+  // new Date("YYYY-MM-DDTHH:MM") parses as LOCAL time per spec.
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+// ISO UTC → local "HH:MM" for display in the routine list.
+function teIsoUtcToLocalHhMm(iso) {
+  if (!iso) return '?';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '?';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+// ISO UTC → "YYYY-MM-DDTHH:MM" for pre-filling a datetime-local input
+// from an existing schedule node.
+function teIsoUtcToDatetimeLocal(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// ISO UTC → friendly local datetime string for list rows ("today 22:00",
+// "tomorrow 09:30", "Mon 10:00", "May 30 14:00"). Keeps the timezone
+// implicit (the user's own) — no offset noise.
+function teIsoUtcToLocalFriendly(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const now = new Date();
+  const sameDay   = d.toDateString() === now.toDateString();
+  const tomorrow  = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
+  const isTomorrow = d.toDateString() === tomorrow.toDateString();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  if (sameDay)    return `today ${hh}:${mm}`;
+  if (isTomorrow) return `tomorrow ${hh}:${mm}`;
+  // Within a week: weekday + time; otherwise full date + time.
+  const diffDays = (d - now) / (24 * 60 * 60_000);
+  if (diffDays > -7 && diffDays < 7) {
+    return d.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  }
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
 function teTimeAgo(iso) {
   if (!iso) return 'never';
   const ms = Date.now() - Date.parse(iso);
@@ -6891,8 +6983,8 @@ async function teLoadSchedule() {
       const id    = teEscapeHtml(n.id);
       const label = teEscapeHtml(n.label);
       const type  = teEscapeHtml(n.type);
-      const when  = n.when ? `<span style="font-family: monospace; font-size: 0.85em; opacity: 0.8">${teEscapeHtml(n.when)}</span>` : '<span style="opacity: 0.5; font-size: 0.85em">open</span>';
-      const end   = n.end  ? `<span style="font-family: monospace; font-size: 0.85em; opacity: 0.7"> → ${teEscapeHtml(n.end)}</span>` : '';
+      const when  = n.when ? `<span style="font-size: 0.85em; opacity: 0.8">${teEscapeHtml(teIsoUtcToLocalFriendly(n.when))}</span>` : '<span style="opacity: 0.5; font-size: 0.85em">open</span>';
+      const end   = n.end  ? `<span style="font-size: 0.85em; opacity: 0.7"> → ${teEscapeHtml(teIsoUtcToLocalFriendly(n.end))}</span>` : '';
       const resolution = n.resolution
         ? `<span style="font-size: 0.85em; opacity: 0.7; padding: 1px 6px; border: 1px solid var(--border-subtle, #2a2a2a); border-radius: 3px">${teEscapeHtml(n.resolution)}</span>`
         : '';
@@ -6963,9 +7055,25 @@ function teToggleScheduleForm(show) {
 async function teSaveScheduleNode() {
   const type  = $('te-sched-type').value;
   const label = $('te-sched-label').value.trim();
-  const when  = $('te-sched-when').value.trim() || null;
-  const end   = $('te-sched-end').value.trim()  || null;
+  // <input type="datetime-local"> hands back "YYYY-MM-DDTHH:MM" (no
+  // offset, interpreted as user's local time). Convert to ISO UTC so
+  // the server stores absolute moments and the Familiar reads the
+  // right wall-clock no matter where the server's TZ is.
+  const whenLocal = $('te-sched-when').value;
+  const endLocal  = $('te-sched-end').value;
+  const when = teDatetimeLocalToIsoUtc(whenLocal);
+  const end  = teDatetimeLocalToIsoUtc(endLocal);
   if (!label) { alert('Label is required.'); return; }
+  // Reminders MUST have a fire time — the Python layer would reject
+  // the create otherwise, but failing fast here is friendlier.
+  if (type === 'reminder' && !when) {
+    alert('Reminders need a "When" time so they know when to fire.');
+    return;
+  }
+  if (type !== 'task' && !when) {
+    alert(`A "${type}" needs a "When" time. Tasks are the only type that can be open-ended.`);
+    return;
+  }
   try {
     const r = await fetch('/api/temporal/schedule', {
       method:  'POST',
@@ -7019,9 +7127,11 @@ async function teLoadRoutine() {
       const id      = teEscapeHtml(p.id);
       const label   = teEscapeHtml(p.label);
       const texture = teEscapeHtml(p.payload?.texture ?? '');
-      // Show time-of-day only (the date repeats every day for phases).
-      const whenT   = teEscapeHtml((p.when || '').slice(11, 16) || '?');
-      const endT    = teEscapeHtml((p.end  || '').slice(11, 16) || '?');
+      // Show time-of-day in the USER'S local TZ (storage is UTC).
+      // Slicing the raw ISO string would print UTC hours and lie to
+      // anyone not in UTC.
+      const whenT   = teEscapeHtml(teIsoUtcToLocalHhMm(p.when));
+      const endT    = teEscapeHtml(teIsoUtcToLocalHhMm(p.end));
       return `
       <div data-phase-id="${id}" style="padding: 10px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
         <div style="display: flex; gap: 8px; align-items: baseline">
@@ -7047,21 +7157,19 @@ async function teEditPhase(id, phase) {
   if (!phase) return;
   const label = prompt('Phase label:', phase.label);
   if (label == null) return;
-  const whenT = prompt('Start time (HH:MM, 24-hour, UTC):', (phase.when || '').slice(11, 16));
+  // Display existing times in user's LOCAL TZ so what they see is what
+  // they're editing (the storage is UTC, but the user thinks in their
+  // own clock).
+  const whenT = prompt('Start time (HH:MM, 24-hour, your local time):', teIsoUtcToLocalHhMm(phase.when));
   if (whenT == null) return;
-  const endT  = prompt('End time (HH:MM, 24-hour, UTC):',   (phase.end  || '').slice(11, 16));
+  const endT  = prompt('End time (HH:MM, 24-hour, your local time):',   teIsoUtcToLocalHhMm(phase.end));
   if (endT  == null) return;
   const texture = prompt('Texture (short description of what the Familiar is like in this phase):', phase.payload?.texture ?? '');
   if (texture == null) return;
 
-  // Re-stamp the date portion of the timestamps with today's date so
-  // the phase keeps cycling daily; Unruh's get_window will template
-  // these into the current day on read.
-  const today = new Date().toISOString().slice(0, 10);
-  const isoOrNull = (t) => /^\d{2}:\d{2}$/.test(t) ? `${today}T${t}:00+00:00` : null;
-  const when = isoOrNull(whenT.trim());
-  const end  = isoOrNull(endT.trim());
-  if (!when || !end) { alert('Times must be HH:MM (e.g. 09:30).'); return; }
+  const when = teLocalTimeTodayToIsoUtc(whenT.trim());
+  const end  = teLocalTimeTodayToIsoUtc(endT.trim());
+  if (!when || !end) { alert('Times must be HH:MM (e.g. 09:30) — entered in your local time.'); return; }
 
   try {
     const r = await fetch(`/api/temporal/schedule/${encodeURIComponent(id)}`, {
@@ -7095,17 +7203,18 @@ function teToggleRoutineForm(show) {
 
 async function teSavePhase() {
   const label   = $('te-routine-label').value.trim();
-  const startT  = $('te-routine-start').value.trim();
-  const endT    = $('te-routine-end').value.trim();
+  const startT  = $('te-routine-start').value;   // <input type="time"> already HH:MM
+  const endT    = $('te-routine-end').value;
   const texture = $('te-routine-texture').value.trim();
-  if (!label) { alert('Label is required.'); return; }
-  if (!/^\d{1,2}:\d{2}$/.test(startT) || !/^\d{1,2}:\d{2}$/.test(endT)) {
-    alert('Start and end must be HH:MM (e.g. 09:30).');
-    return;
-  }
-  const today = new Date().toISOString().slice(0, 10);
-  const when  = `${today}T${startT.padStart(5, '0')}:00+00:00`;
-  const end   = `${today}T${endT.padStart(5, '0')}:00+00:00`;
+  if (!label)          { alert('Label is required.'); return; }
+  if (!startT || !endT) { alert('Both start and end times are required.'); return; }
+  // Phases recur daily. We stamp today's local date + the local HH:MM,
+  // then convert to ISO UTC so the absolute moment is unambiguous.
+  // Unruh re-templates the date portion on read so the cycle keeps
+  // landing on the right day regardless.
+  const when = teLocalTimeTodayToIsoUtc(startT);
+  const end  = teLocalTimeTodayToIsoUtc(endT);
+  if (!when || !end) { alert('Could not parse the times. Use HH:MM (the picker should fill this).'); return; }
   try {
     const r = await fetch('/api/temporal/schedule', {
       method:  'POST',
