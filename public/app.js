@@ -6673,7 +6673,8 @@ async function teLoadInterests() {
     const live     = Array.isArray(data.live)     ? data.live     : [];
     const standing = Array.isArray(data.standing) ? data.standing : [];
 
-    $('te-int-summary').textContent = `${live.length} live · ${standing.length} standing`;
+    const intSummary = $('te-int-summary');
+    if (intSummary) intSummary.textContent = `${live.length} live · ${standing.length} standing`;
 
     const html = [];
     if (standing.length) {
@@ -7008,7 +7009,8 @@ async function teLoadRoutine() {
       return ta.localeCompare(tb);
     });
 
-    $('te-routine-summary').textContent = `${phases.length} phase(s)`;
+    const routineSummary = $('te-routine-summary');
+    if (routineSummary) routineSummary.textContent = `${phases.length} phase(s)`;
     if (!phases.length) {
       list.innerHTML = '<p class="logs-empty">No routine phases yet. Run <code>uv run unruh seed-routine</code> (in the unruh/ dir) to seed defaults.</p>';
       return;
@@ -7169,7 +7171,8 @@ async function teLoadHandoff() {
         Array.isArray(data.handoffs) ? data.handoffs
       : data.handoff                 ? [data.handoff]
       : [];
-    $('te-handoff-summary').textContent = `${items.length} handoff(s)`;
+    const handoffSummary = $('te-handoff-summary');
+    if (handoffSummary) handoffSummary.textContent = `${items.length} handoff(s)`;
     if (!items.length) {
       list.innerHTML = '<p class="logs-empty">No session handoffs stored yet. They\'re created at the end of each session by the handoff-summariser (Settings → Session handoff).</p>';
       return;
