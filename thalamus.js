@@ -458,10 +458,12 @@ export async function recordInterest({ topic, delta, source = 'chat' }) {
   if (!topic || typeof topic !== 'string' || !topic.trim()) return false;
   if (typeof delta !== 'number' || !Number.isFinite(delta) || delta <= 0) return false;
   try {
+    console.log(`[thalamus] → unruh: interest_record (topic="${topic.trim()}", delta=${delta}, source=${source})`);
     await unruhClient.callTool({
       name: 'interest_record',
       arguments: { topic: topic.trim(), delta, source },
     });
+    console.log('[thalamus] ← unruh: interest_record — ok');
     return true;
   } catch (err) {
     console.error('[thalamus] interest_record failed:', err?.message ?? err);
@@ -479,12 +481,15 @@ export async function recordInterest({ topic, delta, source = 'chat' }) {
 export async function listLiveInterests({ limit = 20 } = {}) {
   if (!unruhClient) return [];
   try {
+    console.log(`[thalamus] → unruh: interest_list (limit=${limit})`);
     const result  = await unruhClient.callTool({
       name: 'interest_list',
       arguments: { limit, include_standing: false },
     });
     const payload = parseToolText(result, {});
-    return Array.isArray(payload.live) ? payload.live : [];
+    const live    = Array.isArray(payload.live) ? payload.live : [];
+    console.log(`[thalamus] ← unruh: interest_list — ${live.length} live interests`);
+    return live;
   } catch (err) {
     console.error('[thalamus] listLiveInterests failed:', err?.message ?? err);
     return [];
@@ -500,12 +505,15 @@ export async function listLiveInterests({ limit = 20 } = {}) {
 export async function bumpInterest({ topic, delta, source = 'manual' }) {
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
+    console.log(`[thalamus] → unruh: interest_record/bump (topic="${topic}", delta=${delta})`);
     const r = await unruhClient.callTool({
       name: 'interest_record',
       arguments: { topic, delta, source },
     });
+    console.log('[thalamus] ← unruh: interest_record/bump — ok');
     return parseToolText(r, { ok: true });
   } catch (err) {
+    console.error('[thalamus] bumpInterest failed:', err?.message ?? err);
     return { ok: false, error: err?.message ?? String(err) };
   }
 }
@@ -514,12 +522,15 @@ export async function bumpInterest({ topic, delta, source = 'manual' }) {
 export async function demoteStanding({ id }) {
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
+    console.log(`[thalamus] → unruh: interest_demote_standing (id=${id})`);
     const r = await unruhClient.callTool({
       name: 'interest_demote_standing',
       arguments: { id },
     });
+    console.log('[thalamus] ← unruh: interest_demote_standing — ok');
     return parseToolText(r, { ok: true });
   } catch (err) {
+    console.error('[thalamus] demoteStanding failed:', err?.message ?? err);
     return { ok: false, error: err?.message ?? String(err) };
   }
 }
@@ -537,12 +548,15 @@ export async function setStandingInterest({ topic, weight = 1.0, value_ref }) {
     const args = { topic };
     if (Number.isFinite(weight)) args.weight = weight;
     if (value_ref) args.value_ref = value_ref;
+    console.log(`[thalamus] → unruh: interest_set_standing (topic="${topic}", weight=${weight})`);
     const r = await unruhClient.callTool({
       name: 'interest_set_standing',
       arguments: args,
     });
+    console.log('[thalamus] ← unruh: interest_set_standing — ok');
     return parseToolText(r, { ok: true });
   } catch (err) {
+    console.error('[thalamus] setStandingInterest failed:', err?.message ?? err);
     return { ok: false, error: err?.message ?? String(err) };
   }
 }
@@ -552,10 +566,12 @@ export async function setStandingInterest({ topic, weight = 1.0, value_ref }) {
 export async function getScheduleWindow({ from_ts, to_ts, limit = 200 } = {}) {
   if (!unruhClient) return { ok: false, error: 'unruh not connected', nodes: [], edges: [] };
   try {
+    console.log(`[thalamus] → unruh: schedule_get_window (limit=${limit})`);
     const r = await unruhClient.callTool({
       name: 'schedule_get_window',
       arguments: { from_ts, to_ts, limit, include_open_tasks: true },
     });
+    console.log('[thalamus] ← unruh: schedule_get_window — ok');
     return parseToolText(r, { ok: false, nodes: [], edges: [] });
   } catch (err) {
     return { ok: false, error: err?.message ?? String(err), nodes: [], edges: [] };
@@ -891,6 +907,8 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // one of them must not prevent the others from being injected.
     // Promise.allSettled never rejects. Unruh is queried alongside
     // entity-core; either or both may be absent and the rest still works.
+    if (mcpClient) console.log(`[thalamus] → entity-core: identity_get_all${staticOnly ? '' : ', memory_search, graph_node_search'}`);
+    if (unruhClient && !staticOnly) console.log('[thalamus] → unruh: temporal_context');
     const entityCorePromises = mcpClient ? [
       mcpClient.callTool({ name: 'identity_get_all', arguments: {} }),
       staticOnly ? Promise.reject(new Error('skipped (staticOnly)'))
@@ -927,10 +945,16 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       unruhPromise,
     ]);
 
-    if (idSettled.status       === 'rejected' && mcpClient)                console.error('[thalamus] identity_get_all failed:', idSettled.reason?.message ?? idSettled.reason);
-    if (memSettled.status      === 'rejected' && mcpClient   && !staticOnly) console.error('[thalamus] memory_search failed:',    memSettled.reason?.message ?? memSettled.reason);
-    if (graphSettled.status    === 'rejected' && mcpClient   && !staticOnly) console.error('[thalamus] graph_node_search failed:', graphSettled.reason?.message ?? graphSettled.reason);
-    if (temporalSettled.status === 'rejected' && unruhClient && !staticOnly) console.error('[thalamus] temporal_context failed:',  temporalSettled.reason?.message ?? temporalSettled.reason);
+    if (idSettled.status       === 'fulfilled') console.log('[thalamus] ← entity-core: identity_get_all — ok');
+    else if (mcpClient)                         console.error('[thalamus] identity_get_all failed:', idSettled.reason?.message ?? idSettled.reason);
+    if (!staticOnly) {
+      if (memSettled.status      === 'fulfilled') console.log('[thalamus] ← entity-core: memory_search — ok');
+      else if (mcpClient)                        console.error('[thalamus] memory_search failed:', memSettled.reason?.message ?? memSettled.reason);
+      if (graphSettled.status    === 'fulfilled') console.log('[thalamus] ← entity-core: graph_node_search — ok');
+      else if (mcpClient)                        console.error('[thalamus] graph_node_search failed:', graphSettled.reason?.message ?? graphSettled.reason);
+      if (temporalSettled.status === 'fulfilled') console.log('[thalamus] ← unruh: temporal_context — ok');
+      else if (unruhClient)                      console.error('[thalamus] temporal_context failed:', temporalSettled.reason?.message ?? temporalSettled.reason);
+    }
 
     const idResult       = idSettled.status       === 'fulfilled' ? idSettled.value       : null;
     const memResult      = memSettled.status      === 'fulfilled' ? memSettled.value      : null;
@@ -979,14 +1003,17 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
 
     if (graphNodes.length > 0) {
       // Traverse 1 hop from top-3 nodes; ignore individual failures
+      const traversalNodes = graphNodes.slice(0, 3);
+      console.log(`[thalamus] → entity-core: graph_subgraph ×${traversalNodes.length}`);
       const traversals = await Promise.allSettled(
-        graphNodes.slice(0, 3).map(n =>
+        traversalNodes.map(n =>
           mcpClient.callTool({
             name: 'graph_subgraph',
             arguments: { nodeId: n.id, depth: 1 },
           })
         )
       );
+      console.log(`[thalamus] ← entity-core: graph_subgraph (${traversals.filter(r => r.status === 'fulfilled').length}/${traversalNodes.length} ok)`);
 
       const nodeLabels = new Map(graphNodes.map(n => [n.id, n.label]));
       const nodeDescs  = new Map(graphNodes.map(n => [n.id, n.description ?? '']));
@@ -1255,7 +1282,10 @@ const PROTO_INSTANCE_ID = 'proto-familiar';
 
 async function callTool(name, args = {}) {
   if (!mcpClient) throw new Error('entity-core not connected');
+  const t0 = Date.now();
+  console.log(`[thalamus] → entity-core: ${name}`);
   const result = await mcpClient.callTool({ name, arguments: args });
+  console.log(`[thalamus] ← entity-core: ${name} (${Date.now() - t0}ms)`);
   return parseToolText(result, {});
 }
 
