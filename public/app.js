@@ -2179,7 +2179,7 @@ async function generateAndStoreHandoff(messages, sessionId) {
  * during the attempt and are returned so the caller can roll them back on a
  * failed attempt before retrying. Throws on HTTP / network / abort errors.
  */
-async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts) {
+async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput) {
   const pendingMsgs = [];   // tool_call + tool_result messages to commit
   const toolUseEls  = domArtifacts; // shared array — caller can roll back on error
   let   currentMsgs = apiMessages;
@@ -2204,6 +2204,16 @@ async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts
         stream:      true,
         temperature: state.temperature,
         max_tokens:  state.maxTokens,
+        // The Familiar's post-history prompt is also a user-role
+        // message at the end of `messages`, so naively extracting
+        // "last user" server-side picks up the template instead of
+        // {{user}}'s actual text. We send userInput explicitly on
+        // round 0 only — tool-round follow-ups (round > 0) carry
+        // the same user input and shouldn't re-score the threat
+        // tracker / re-stamp last-activity.
+        ...(round === 0 && typeof userInput === 'string' && userInput.trim()
+            ? { userMessage: userInput }
+            : {}),
         ...extraPayload,
       }),
     });
@@ -2324,7 +2334,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
       const domArtifacts = [];
       let result;
       try {
-        result = await attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts);
+        result = await attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput);
       } catch (err) {
         if (err.name === 'AbortError') { clearRetryStatus(); throw err; }
         // Roll back any tool-use blocks added during this failed attempt.
@@ -2383,7 +2393,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
   throw lastError || new Error('Request failed and no fallback connections succeeded.');
 }
 
-async function attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifacts) {
+async function attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput) {
   const pendingMsgs = [];
   let   currentMsgs = apiMessages;
   let   finalContent = '';
@@ -2407,6 +2417,12 @@ async function attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifa
         stream:      false,
         temperature: state.temperature,
         max_tokens:  state.maxTokens,
+        // See attemptStreamingOnce for why this is round-0-gated:
+        // post-history prompt is also role:'user', so naive
+        // server-side extraction picks the wrong message.
+        ...(round === 0 && typeof userInput === 'string' && userInput.trim()
+            ? { userMessage: userInput }
+            : {}),
         ...extraPayload,
       }),
     });
@@ -2480,7 +2496,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
       const domArtifacts = [];
       let result;
       try {
-        result = await attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifacts);
+        result = await attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput);
       } catch (err) {
         if (err.name === 'AbortError') { clearRetryStatus(); throw err; }
         for (const el of domArtifacts) el.remove?.();
