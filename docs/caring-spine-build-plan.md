@@ -135,3 +135,18 @@ end to end**:
 - Step 4b's detector + tracker + framing is integrated into both the
   chat path and the autonomous loop (high threat shortens cadence;
   `[CARE CHECK]` block surfaces in replies).
+
+**Silence-triage improvements (0.2.54-alpha):** The triage deliberation
+was subsequently hardened:
+
+- The LLM now receives the Familiar's full identity context *and* the
+  most recent session messages before deciding — no blind reasoning.
+- The deliberation prompt was made **neutral** (no passivity bias).
+- Outreach is **sequential**: the Familiar contacts you first (outbox
+  banner); trusted-contact escalation is deferred behind a deadline
+  (severe=30min, high=2h, moderate=6h). You acknowledging the outbox
+  item prevents escalation automatically.
+- Every triage tick is appended to `logs/triage-events.jsonl` and
+  readable via `GET /api/triage-events`.
+- Pending triage notices are injected into the `[DYNAMIC CONTEXT]`
+  block of the next `/api/chat` call so the Familiar can reference them.

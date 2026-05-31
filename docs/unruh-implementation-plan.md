@@ -645,7 +645,7 @@ Build them as three distinct paths sharing a delivery substrate.
 - [ ] **(12a) Timeblindness reminders.** Built on Milestone 11.
       Highest-volume, lowest-stakes. Delivery defaults to in-UI;
       Discord and email are opt-ins.
-- [ ] **(12b) Silence triage.**
+- [x] **(12b) Silence triage.** *(Shipped in 0.2.54-alpha)*
       - Store `threat_level` as a decaying-weight node in the
         interest layer (the design doc explicitly notes it is
         structurally identical to an interest weight, so reuse the
@@ -654,19 +654,29 @@ Build them as three distinct paths sharing a delivery substrate.
         → short interval. Cap the rates so a buggy threat detector
         cannot spam the user.
       - The actual triage *decision* is an LLM call with full
-        context, not a threshold check. Pass: recent messages,
-        relevant entity-core context, elapsed time, current
-        `temporal_context`. The LLM decides: do nothing, gentle
+        context, not a threshold check. Passes: recent session
+        messages, full identity context via `enrich('', { staticOnly: true })`,
+        elapsed time, current `temporal_context`. Prompt is neutral —
+        no passivity bias. The LLM decides: do nothing, gentle
         check-in, escalate.
+      - Every triage tick is appended to `logs/triage-events.jsonl`;
+        readable via `GET /api/triage-events`.
+      - Pending triage notices surface in the next `[DYNAMIC CONTEXT]`
+        block so the Familiar can reference them on reconnect.
       - Threat detection inputs: a short list of language patterns
         for elevation; explicit safety/coping language for
         reduction. Document the patterns somewhere editable, not
         hard-coded.
-- [ ] **(12c) Trusted-contact outreach.** Not a separate trigger —
-      an *action* the triage LLM in 12b can take. Configured contact
-      list lives in settings, with a per-contact channel
-      (Discord/email/SMS-bridge). All outbound to humans is logged
-      visibly to the user — no covert contact.
+- [x] **(12c) Trusted-contact outreach.** *(Shipped in 0.2.54-alpha)*
+      Not a separate trigger — an *action* the triage LLM in 12b can
+      take. Configured contact list lives in settings, with a per-contact
+      channel (Discord/email/SMS-bridge). All outbound to humans is
+      logged visibly to the user — no covert contact.
+      **Escalation is sequential:** Familiar contacts the user first
+      (outbox banner). The trusted-contact webhook fires only if the
+      deadline passes without acknowledgement (severe=30min, high=2h,
+      moderate=6h). `outbox.js` carries the pending contact and deadline
+      in `meta`; `checkAndFirePendingContacts()` in `server.js` fires it.
 
 **Acceptance:** Timeblindness reminders fire and deliver. Silence
 triage runs at intervals shaped by threat level, calls into the

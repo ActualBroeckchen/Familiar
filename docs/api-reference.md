@@ -238,6 +238,52 @@ Deletes the session log file for the given UUID.
 
 ---
 
+### `GET /api/triage-events`
+
+Returns the full history of silence-triage decisions, newest first. Each entry is one tick of the 5-minute triage loop, regardless of whether the Familiar acted. Stored as newline-delimited JSON at `logs/triage-events.jsonl`; returns an empty array when the file doesn't exist yet.
+
+This is the audit trail for debugging the silence-triage system — you can see every decision the LLM made (or every reason it was skipped), how long the silence was at the time, and what the threat tier was.
+
+**Response:**
+
+```json
+[
+  {
+    "threat":    { "tier": "high", "weight": 4.2 },
+    "silenceMs": 3840000,
+    "reason":    "llm_said_wait",
+    "decision":  { "action": "wait", "message": null },
+    "acted":     false,
+    "at":        "2026-06-01T03:14:00.000Z",
+    "loggedAt":  "2026-06-01T03:14:01.123Z"
+  },
+  {
+    "threat":    { "tier": "high", "weight": 4.2 },
+    "silenceMs": 4140000,
+    "reason":    "reached_out",
+    "decision":  { "action": "reach_out", "message": "Hey, I've been thinking about you…" },
+    "acted":     true,
+    "at":        "2026-06-01T03:19:00.000Z",
+    "loggedAt":  "2026-06-01T03:19:01.456Z"
+  }
+]
+```
+
+**`reason` values:**
+
+| Value | Meaning |
+|---|---|
+| `low_threat` | Threat tier is calm or mild — triage doesn't run at those tiers |
+| `no_activity` | No user activity recorded yet this session |
+| `too_recent` | Silence hasn't crossed the tier's threshold yet |
+| `reached_out` | Rate-limiter: the Familiar already reached out recently |
+| `llm_said_wait` | LLM deliberated and chose not to reach out this tick |
+| `acted` / (empty `reason` with `acted: true`) | The Familiar reached out |
+
+**`decision`** is `null` for ticks where the LLM wasn't called (low_threat / no_activity / too_recent / reached_out). For LLM-driven ticks it contains at minimum `{ action: "wait" | "reach_out", message }`. When the LLM proposed a deferred trusted-contact escalation, `decision.meta.pendingContact` holds `{ name, message, channel }` and `decision.meta.contactDeadlineTs` is the UNIX ms deadline.
+
+---
+
 ## Tomes
 
 Tomes are stored as individual JSON files in the `tomes/` directory. Each Tome is independently addressable and can be enabled or disabled. The activation engine aggregates entries from all enabled Tomes.
