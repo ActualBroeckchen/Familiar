@@ -329,3 +329,44 @@ test('regression: canonical true-positive cases still fire after tightening', ()
       `expected undamped ${id} on "${msg}": ${JSON.stringify(r.signals)}`);
   }
 });
+
+// ── -ing forms + idiomatic suicidal phrasings (Eury bug report) ────
+// Previously: "killing myself" / "ending myself" / "ending it all"
+// silently scored ZERO because the base patterns required literal
+// "kill" / "end" with no -ing alternative. This was a real false
+// negative on canonical ideation language.
+
+test('regression: -ing forms of suicidal_direct fire', () => {
+  const cases = [
+    'I keep thinking about killing myself.',
+    'About ending it all.',
+    'About ending myself.',
+    'I think about ending my life.',
+    'I want to end everything.',
+    'Wanting to die feels familiar.',
+    'I have been taking my own life into consideration.', // weaker but should still fire on "taking my own life"
+    'I took my own life on the table.',                    // edge — same phrase, different sense
+  ];
+  for (const msg of cases) {
+    const r = scoreMessage(msg);
+    assert.ok(r.signals.some(s => s.id === 'suicidal_direct' && !s.damped),
+      `expected suicidal_direct undamped on "${msg}": ${JSON.stringify(r.signals)}`);
+  }
+});
+
+test('regression: Eury verbatim test phrases score severe (level ≥ 7)', () => {
+  // The actual phrases from the report — these MUST fire severe or
+  // the whole detection layer is useless.
+  const phrases = [
+    'Okay. end it all end myself kill myself want to hurt myself',
+    'Sometimes I think about just giving up. About ending it all. About ending myself. I think about killing myself.',
+    'I think about killing myself.',
+    'Sometimes I want to end it all.',
+  ];
+  for (const msg of phrases) {
+    const r = scoreMessage(msg);
+    assert.ok(r.level >= 7, `expected level ≥ 7 (severe range) on "${msg}", got ${r.level}: ${JSON.stringify(r.signals)}`);
+    assert.ok(r.signals.some(s => s.tier === 'severe' && !s.damped),
+      `expected at least one undamped severe signal on "${msg}": ${JSON.stringify(r.signals)}`);
+  }
+});

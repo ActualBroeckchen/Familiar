@@ -42,22 +42,27 @@ export const SIGNALS = Object.freeze([
   // ── SEVERE ──────────────────────────────────────────────────────
   { id: 'suicidal_direct', tier: 'severe', weight: 8,
     patterns: [
-      /\b(want|going) to die\b/i,
-      // "kill myself" only — "kill me" alone is too ambiguous: it
-      // overwhelmingly appears in casual frustration ("just kill me,
-      // I forgot the password") rather than literal intent. The
-      // damping for casual contexts misses these because there's
-      // often no "lol" / "haha" anchor nearby.
-      /\bkill myself\b/i,
-      // "end my life" and "end it all" are specific. The bare
-      // alternatives ("end it" / "end things") fire constantly on
-      // benign uses: "end it for today", "end things between us"
-      // (break-ups), "end things at 5pm".
-      /\bend (my life|it all)\b/i,
+      // "wanting" / "going" / "want" — common -ing forms missed in v1.
+      /\b(want|wanting|going) to die\b/i,
+      // -ing form of kill ("killing myself") was missed in the
+      // previous pass — bare "kill" pattern doesn't match
+      // "killing" because of the trailing word boundary.
+      /\bkill(ing)? myself\b/i,
+      // Three things bundled here:
+      //  - "end my life"     / "ending my life"
+      //  - "end it all"      / "ending it all"
+      //  - "end myself"      / "ending myself"     (was missing entirely)
+      //  - "end everything"  / "ending everything" (added — clear ideation)
+      // "end it" / "end things" alone stay OUT — too many benign uses
+      // ("end it for today" / "end things between us").
+      /\bend(ing)? (my life|it all|myself|everything)\b/i,
       /\b(don'?t|do not) want to (be here|exist|live)( anymore| any longer)?\b/i,
       /\bwish I (was|were) dead\b/i,
       /\bnot worth living\b/i,
       /\b(commit |attempt(ed|ing)? )?suicid(e|al)\b/i,
+      // "take my own life" / "taking my own life" / "took my own life"
+      // — explicit, unambiguous.
+      /\b(take|taking|took|end|ending|ended) my own life\b/i,
     ],
     example: 'I want to die' },
 
