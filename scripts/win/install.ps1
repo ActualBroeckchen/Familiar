@@ -44,7 +44,7 @@ if (Test-Path $entityCoreDirNew) {
 }
 # Release page: https://github.com/PsycherosAI/Psycheros/releases/tag/<tag>
 $entityCoreRepo = "https://github.com/PsycherosAI/Psycheros.git"
-$entityCoreTag  = "entity-core-v0.2.2"
+$entityCoreTag  = "entity-core-v0.3.2"
 $backupRoot    = Join-Path $projectRoot ".pf-backups"
 
 function Have($cmd) { [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
