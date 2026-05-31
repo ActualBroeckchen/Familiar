@@ -154,7 +154,7 @@ function chatRateLimit(req, res, next) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag } = req.body;
+  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage } = req.body;
   // Enrichment mode:
   //   true / undefined → full (identity + memory + graph + temporal),
   //                      and consume any surfaced session handoff.
@@ -186,10 +186,22 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // we depth-inject it instead of letting it invalidate the prefix).
   // Degrades gracefully — empty strings on either side just skip
   // the corresponding injection.
+  //
+  // userText source preference:
+  //   1. req.body.userMessage  — explicit user input the frontend
+  //      sends on round 0 (skipped on tool-round follow-ups). This
+  //      is what {{user}} typed, NOT a templated post-history prompt.
+  //   2. last role:'user' in the messages array — the fallback,
+  //      which can pick up the post-history prompt because that's
+  //      also pushed as role:'user' at the end of the array. Direct
+  //      /api/chat callers without `userMessage` get this path.
   const lastUser = [...messages].reverse().find(m => m.role === 'user');
-  const userText = typeof lastUser?.content === 'string'
+  const userTextFromMessages = typeof lastUser?.content === 'string'
     ? lastUser.content
     : ((lastUser?.content ?? []).find(c => c.type === 'text')?.text ?? '');
+  const userText = (typeof userMessage === 'string' && userMessage.trim())
+    ? userMessage
+    : userTextFromMessages;
   // ── Crisis-signal detection (step 4b) ─────────────────────────────────
   // Fire-and-forget: score the current user message for distress markers
   // and feed the delta into the threat tracker. Gated to the full chat
