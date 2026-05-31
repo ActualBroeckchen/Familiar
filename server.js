@@ -206,9 +206,20 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     );
     const { level, signals } = scoreMessage(userText);
     if (level !== 0) {
-      recordThreat({ delta: level, source: 'chat', signals }).catch(err =>
-        console.error('[server] recordThreat failed:', err?.message ?? err),
-      );
+      // Loud, structured log so the silent-failure case ("the
+      // detector quietly stopped firing") can be diagnosed from
+      // the server log without instrumenting deeper. Includes
+      // every signal id (with `*` marking damped ones) so the
+      // weight breakdown is visible.
+      const sigSummary = signals.map(s => `${s.id}${s.damped ? '*' : ''}`).join(',');
+      console.log(`[threat] scored ${level >= 0 ? '+' : ''}${level} on chat msg [${sigSummary}]`);
+      recordThreat({ delta: level, source: 'chat', signals })
+        .then(r => {
+          if (r.disabled)        console.log('[threat]   record skipped: detector is DISABLED (PROTO_FAMILIAR_THREAT_DISABLED=1)');
+          else if (r.ok === false) console.warn(`[threat]   record failed: ${r.error}`);
+          else                   console.log(`[threat]   recorded — new tier ${r.tier} (weight ${r.weight})`);
+        })
+        .catch(err => console.error('[threat]   record threw:', err?.message ?? err));
     }
   }
   // liveTurn: only the full chat path may reconcile state (consume the
@@ -1454,6 +1465,11 @@ const httpServer = app.listen(PORT, HOST, async () => {
     lines.push('  External-device access is disabled. Toggle the Tailscale icon in the top bar to enable.');
   }
   console.log(lines.join('\n') + '\n');
+  if (process.env.PROTO_FAMILIAR_THREAT_DISABLED === '1') {
+    console.log('[threat] crisis-signal detection is DISABLED by env var (PROTO_FAMILIAR_THREAT_DISABLED=1).');
+  } else {
+    console.log('[threat] crisis-signal detection ACTIVE in chat path. Each fire is logged as "[threat] scored ±N on chat msg [signal,...]". Hard-disable with PROTO_FAMILIAR_THREAT_DISABLED=1.');
+  }
   startMemorizationWorker();
   startAutonomousPondering();
   startRemindersScheduler();
