@@ -169,6 +169,21 @@ Two kinds, both rendered under the temporal block:
 
 Interests are read-only from the UI today; they accrue from chat and surface in the prompt. Tuning constants (decay rate, accrual scales) are code-level for now.
 
+#### Idle bookmark surfacing
+
+When you've been quiet for **30 minutes or more**, the next message triggers *idle mode*: `[Temporal Context]` includes a "Bookmarks to revisit" section with up to 3 due bookmarks, and the Familiar is invited to weave one in naturally if the moment fits.
+
+After the response completes, the system checks whether each surfaced bookmark's topic or label was actually mentioned in the reply and records the outcome:
+
+| Outcome | Interval adjustment |
+|---|---|
+| **Engaged** — topic appeared in the response | `interval × 1.5` (max 168 h / 7 days) |
+| **Ignored** — topic did not appear | `interval × 0.75` (min 4 h) |
+
+Three consecutive ignores additionally reduce the topic's interest weight by 0.05, letting neglected bookmarks gradually fade without being deleted.
+
+The default resurface interval is **24 hours**. The **Interests tab** in the Temporal editor shows every bookmark with its outcome badge (Engaged / Ignored / Pending), consecutive-ignore count, last-surfaced time, and current adaptive interval.
+
 ### Session handoff
 
 When a session ends (idle auto-end or **Clear history**), the Familiar summarises the conversation into an **intent** ("what I was doing") plus **open threads** ("what's unfinished"), in its own voice, and stores it. The next session's first message surfaces it at the top of `[Temporal Context]`:
