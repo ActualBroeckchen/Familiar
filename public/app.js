@@ -2463,6 +2463,9 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
       state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp });
       state.messages.push(...pendingMsgs);
       state.messages.push({ role: 'assistant', content,            timestamp: ts });
+      // Stamp the assistant element's index now that the message is committed,
+      // so the "End topic here" button can resolve the correct state index.
+      shell.el.dataset.msgIndex = String(state.messages.length - 1);
       saveHistory();
       refreshTopicGutter();
       wireCopyButton(shell.copyBtn, () => content);
@@ -2610,13 +2613,16 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
         throw new Error(`All connections returned empty responses (last: "${conn.name}").`);
       }
 
-      const { bubble, copyBtn } = appendAssistantShell(timestamp);
+      const { el: shellEl, bubble, copyBtn } = appendAssistantShell(timestamp);
       bubble.innerHTML = renderMarkdown(content);
       scrollToBottom();
 
       state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp });
       state.messages.push(...pendingMsgs);
       state.messages.push({ role: 'assistant', content,            timestamp });
+      // Stamp the assistant element's index now that the message is committed,
+      // so the "End topic here" button can resolve the correct state index.
+      shellEl.dataset.msgIndex = String(state.messages.length - 1);
       saveHistory();
       refreshTopicGutter();
       wireCopyButton(copyBtn, () => content);
