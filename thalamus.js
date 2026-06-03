@@ -973,6 +973,17 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
   const EMPTY = { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
   if (!mcpClient && !unruhClient) return EMPTY;
 
+  // Return-state hoisted to function scope so the outer catch — if it
+  // ever fires — returns WHATEVER blocks already succeeded rather than
+  // collapsing everything to empty. The IDLE_THRESHOLD_MS regression
+  // (June 2026) demonstrated the cost of all-or-nothing: one
+  // ReferenceError nuked identity, memory, graph, ponderings, and
+  // temporal even though they were independent.
+  let staticBlock       = '';
+  let dynamicBlock      = '';
+  let surfacedBookmarks = [];
+  let surfacedTasks     = [];
+
   try {
     // staticOnly: fetch ONLY the identity layer (the persona / "who the
     // Familiar is"), skipping memory, graph, and temporal entirely.
@@ -1011,11 +1022,19 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     //
     // M8 idle-mode: if lastUserMessageAt is set and the user has been quiet
     // longer than IDLE_THRESHOLD_MS, pass mode='idle' so Unruh returns due
-    // bookmarks alongside the standard interests block.
+    // bookmarks alongside the standard interests block. Wrapped so any
+    // failure here (e.g. the IDLE_THRESHOLD_MS regression) degrades to
+    // non-idle rather than collapsing the whole enrich() call into the
+    // outer catch.
     const nowTs = new Date().toISOString();
-    const isIdle = !staticOnly
-      && lastUserMessageAt != null
-      && (Date.now() - new Date(lastUserMessageAt).getTime()) >= IDLE_THRESHOLD_MS;
+    let isIdle = false;
+    try {
+      isIdle = !staticOnly
+        && lastUserMessageAt != null
+        && (Date.now() - new Date(lastUserMessageAt).getTime()) >= IDLE_THRESHOLD_MS;
+    } catch (err) {
+      console.error('[thalamus] idle-mode check failed (defaulting to non-idle):', err?.message ?? err);
+    }
     if (isIdle) console.log(`[thalamus] idle mode active (last user msg: ${lastUserMessageAt})`);
     const unruhArgs = { now: nowTs, ...(isIdle ? { mode: 'idle' } : {}) };
     const unruhPromise = (unruhClient && !staticOnly)
@@ -1050,32 +1069,51 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     const temporalResult = temporalSettled.status === 'fulfilled' ? temporalSettled.value : null;
 
     // ── Identity ──────────────────────────────────────────────────────────
-    const id = parseToolText(idResult, {});
-
-    // base_instructions.md goes first without a section header
-    const baseFile = (id.self ?? []).find(f => f.filename === 'base_instructions.md');
-    const baseContent = baseFile?.content?.trim()
-      ? wrapFile(baseFile.filename, baseFile.content, baseFile.promptLabel)
-      : '';
-
-    const selfFiles   = (id.self ?? []).filter(f => f.filename !== 'base_instructions.md');
-    const selfContent = identitySection(selfFiles, SELF_ORDER);
-    const userContent = identitySection(id.user ?? [], USER_ORDER);
-    const relContent  = identitySection(id.relationship ?? [], RELATIONSHIP_ORDER);
-    const custContent = identitySection(id.custom ?? [], []);
+    // Identity is the most load-bearing block — it's who I AM. Wrapping
+    // each layer separately so a malformed user/, relationship/, or
+    // custom/ file can't take down the rest of identity (or anything
+    // else downstream). `id` is hoisted because surface candidates later
+    // reads id.custom for what_lapses_cost.md.
+    let id = {};
+    let baseContent = '';
+    let selfContent = '';
+    let userContent = '';
+    let relContent  = '';
+    let custContent = '';
+    try {
+      id = parseToolText(idResult, {});
+      const baseFile = (id.self ?? []).find(f => f.filename === 'base_instructions.md');
+      baseContent = baseFile?.content?.trim()
+        ? wrapFile(baseFile.filename, baseFile.content, baseFile.promptLabel)
+        : '';
+      const selfFiles = (id.self ?? []).filter(f => f.filename !== 'base_instructions.md');
+      selfContent = identitySection(selfFiles, SELF_ORDER);
+      userContent = identitySection(id.user ?? [], USER_ORDER);
+      relContent  = identitySection(id.relationship ?? [], RELATIONSHIP_ORDER);
+      custContent = identitySection(id.custom ?? [], []);
+    } catch (err) {
+      console.error('[thalamus] identity assembly failed (defaulting to empty):', err?.message ?? err);
+    }
 
     // ── Memories ──────────────────────────────────────────────────────────
-    const mem = parseToolText(memResult, {});
-    const memLines = (mem.results ?? [])
-      .map((r, i) => {
-        const score  = ((r.score ?? r.vectorScore ?? 0) * 100).toFixed(0);
-        const source = [r.granularity, r.date].filter(Boolean).join('/');
-        return `[${i + 1}] (from ${source}, ${score}% relevant)\n${(r.excerpt ?? '').trim()}`;
-      })
-      .filter(s => s.length > 5)
-      .join('\n\n');
+    let memLines = '';
+    try {
+      const mem = parseToolText(memResult, {});
+      memLines = (mem.results ?? [])
+        .map((r, i) => {
+          const score  = ((r.score ?? r.vectorScore ?? 0) * 100).toFixed(0);
+          const source = [r.granularity, r.date].filter(Boolean).join('/');
+          return `[${i + 1}] (from ${source}, ${score}% relevant)\n${(r.excerpt ?? '').trim()}`;
+        })
+        .filter(s => s.length > 5)
+        .join('\n\n');
+    } catch (err) {
+      console.error('[thalamus] memory assembly failed (defaulting to empty):', err?.message ?? err);
+    }
 
     // ── Knowledge graph ───────────────────────────────────────────────────
+    let graphLines = '';
+    try {
     const graphData  = parseToolText(graphResult, {});
     // graph_node_search returns { results: [{ node: {...}, score }, ...] }.
     // Older / alternate shapes return { nodes: [...] } with flat nodes.
@@ -1087,7 +1125,6 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     const graphNodes = rawGraphItems
       .map(item => (item && item.node) ? item.node : item)
       .filter(n => n && n.id);
-    let graphLines = '';
 
     if (graphNodes.length > 0) {
       // Traverse 1 hop from top-3 nodes; ignore individual failures
@@ -1172,13 +1209,25 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
 
       graphLines = lines.join('\n');
     }
+    } catch (err) {
+      console.error('[thalamus] graph assembly failed (defaulting to empty):', err?.message ?? err);
+      graphLines = '';
+    }
 
     // ── Temporal context (Unruh) ──────────────────────────────────────────
     // We deliberately omit the section entirely when there is nothing
     // to say rather than print a hollow "[Temporal Context]" header, so
-    // the LLM doesn't waste attention parsing scaffolding.
-    const temporalPayload = parseToolText(temporalResult, null);
-    const temporalLines = formatTemporalContext(temporalPayload);
+    // the LLM doesn't waste attention parsing scaffolding. Hoisted so the
+    // surface-candidates assembly + standing-value bridge see the payload
+    // even when temporalLines string assembly fails.
+    let temporalPayload = null;
+    let temporalLines = '';
+    try {
+      temporalPayload = parseToolText(temporalResult, null);
+      temporalLines = formatTemporalContext(temporalPayload);
+    } catch (err) {
+      console.error('[thalamus] temporal assembly failed (defaulting to empty):', err?.message ?? err);
+    }
 
     // Session handoff (M6) is surfaced as part of [Temporal Context].
     // On a live turn, mark it consumed once we've surfaced it so it
@@ -1280,8 +1329,11 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     //
     //    Skipped on staticOnly (handoff-summary turns don't surface
     //    candidates — wrong context, wrong moment).
+    // surfacedTasks is hoisted at function scope so the outer catch
+    // can surface it; reset to [] here in case a previous turn's value
+    // leaked through (it can't — this is fresh per call — but defensive).
     let surfaceCandidatesBlock = '';
-    let surfacedTasks = [];
+    surfacedTasks = [];
     if (!staticOnly) {
       try {
         const windowItems = Array.isArray(temporalPayload?.schedule?.window)
@@ -1350,19 +1402,35 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (temporalLines)          dynamicSections.push(`[Temporal Context]\n${temporalLines}`);
     if (surfaceCandidatesBlock) dynamicSections.push(surfaceCandidatesBlock);
 
-    const staticBlock  = staticSections.join('\n');
-    const dynamicBlock = dynamicSections.join('\n\n---\n\n');
+    staticBlock  = staticSections.join('\n');
+    dynamicBlock = dynamicSections.join('\n\n---\n\n');
 
     const totalChars = staticBlock.length + dynamicBlock.length;
+    // Per-block diagnostic: trivial to scan for which contributors had
+    // content this turn. If something stops contributing without an
+    // error log alongside, that's the trail.
+    const presence = [
+      baseContent       ? 'base'      : null,
+      selfContent       ? 'self'      : null,
+      userContent       ? 'user'      : null,
+      relContent        ? 'rel'       : null,
+      custContent       ? 'cust'      : null,
+      memLines          ? 'mem'       : null,
+      graphLines        ? 'graph'     : null,
+      ponderingsBlock   ? 'pondering' : null,
+      careBlock         ? 'care'      : null,
+      temporalLines     ? 'temporal'  : null,
+      surfaceCandidatesBlock ? 'surface' : null,
+    ].filter(Boolean).join(',');
     if (totalChars === 0) {
       console.warn('[thalamus] enrich() produced no content — identity files may be empty and no memories found');
     } else {
-      console.log(`[thalamus] enrich() static=${staticBlock.length}ch dynamic=${dynamicBlock.length}ch`);
+      console.log(`[thalamus] enrich() static=${staticBlock.length}ch dynamic=${dynamicBlock.length}ch blocks=[${presence}]`);
     }
 
     // M8: surface the bookmark list so server.js can call
     // reportSurfacingOutcomes() after the response comes back.
-    const surfacedBookmarks = Array.isArray(temporalPayload?.bookmarks)
+    surfacedBookmarks = Array.isArray(temporalPayload?.bookmarks)
       ? temporalPayload.bookmarks
       : [];
     if (surfacedBookmarks.length > 0) {
@@ -1371,8 +1439,19 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
 
     return { static: staticBlock, dynamic: dynamicBlock, surfacedBookmarks, surfacedTasks };
   } catch (err) {
-    console.error('[thalamus] enrich failed:', err.message);
-    return { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
+    // Last-resort net. By the time anything reaches this catch, the
+    // per-block try/catches above have already absorbed the survivable
+    // failures, so this represents something truly catastrophic
+    // (Promise.allSettled rejecting, the runtime itself throwing) —
+    // but we still return whatever partial state was built up rather
+    // than collapsing identity + everything to empty.
+    console.error('[thalamus] enrich outer catch (returning partial state):', err?.message ?? err);
+    return {
+      static:            staticBlock,
+      dynamic:           dynamicBlock,
+      surfacedBookmarks,
+      surfacedTasks,
+    };
   }
 }
 

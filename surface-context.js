@@ -292,24 +292,8 @@ function truncate(text, max) {
   return s.slice(0, max) + '…';
 }
 
-// ── Dedup state (slice-2 storage) ─────────────────────────────────
+// ── Dedup state ──────────────────────────────────────────────────
 //
 // The dedup gate reads the most-recent offer time per task from the
-// surface-events file (see surface-events.js). Slice 1 held this in
-// a separate `.surface-history.json`; slice 2 consolidates it into
-// the richer event stream so reflection has one place to look. The
-// loadSurfacingHistory shim below stays as a no-op import for any
-// caller that still reaches for it — the real source is now
-// getRecentOfferTimes() in surface-events.js.
-
-export async function loadSurfacingHistory() {
-  // Re-export under the slice-1 name for any caller that still
-  // imports it; routes to the event-store-backed offer map.
-  const { getRecentOfferTimes } = await import('./surface-events.js');
-  return getRecentOfferTimes();
-}
-
-// recordSurfacingOffers is removed — callers now use
-// recordSurfaceOffers() from surface-events.js, which captures the
-// full event record (state snapshot, confidence, etc.) rather than
-// just a timestamp.
+// surface-events file (see surface-events.js getRecentOfferTimes).
+// No state lives in this module — surface-events.js owns the stream.

@@ -11,15 +11,25 @@
 // ponderings. The derived insights (lifted to entity-core's identity
 // layer) belong to the human's continuity; the raw behavioural stream
 // belongs to this instance.
+//
+// Concurrency: every read-modify-write goes through `withDirLock` so
+// fire-and-forget callers (chat-turn tagOutcomes, recordSurfaceOffers
+// queued in parallel, markReflected during a pondering tick) can't
+// race each other into lost data. Pattern mirrors pondering.js.
 
 import fs from 'node:fs/promises';
+import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const EVENTS_PATH = path.resolve(__dirname, 'tomes', '.surface-events.json');
+export const DEFAULT_TOMES_DIR = path.resolve(__dirname, 'tomes');
+
+function eventsPathFor(tomesDir) {
+  return path.join(tomesDir, '.surface-events.json');
+}
 
 // Retention bounds — prune events whose age and outcome no longer
 // have analytical value. Reflection looks at the tail; ancient events
@@ -43,13 +53,43 @@ export const OUTCOMES = Object.freeze({
   UNRESPONDED:           'unresponded',
 });
 
+// ── Locks ────────────────────────────────────────────────────────
+//
+// Per-tomesDir mutex chain. Mirrors the pondering.js pattern: every
+// writer awaits the previous queued op for the same dir. Tests using
+// mkdtempSync get their own lock chain so production traffic isn't
+// blocked by test serialisation.
+
+const _locks = new Map();
+function withDirLock(tomesDir, fn) {
+  const prev = _locks.get(tomesDir) ?? Promise.resolve();
+  let release;
+  const next = new Promise(r => { release = r; });
+  const chained = prev.then(() => next);
+  _locks.set(tomesDir, chained);
+  const run = (async () => {
+    await prev;
+    try { return await fn(); }
+    finally {
+      release();
+      if (_locks.get(tomesDir) === chained) _locks.delete(tomesDir);
+    }
+  })();
+  return run;
+}
+
 // ── File I/O ─────────────────────────────────────────────────────
 
 const EMPTY_STORE = { version: 2, last_reflection_at: null, events: [] };
 
-export async function loadSurfaceEvents() {
+/**
+ * Read the events file. Lock-free — writes are atomic
+ * (.tmp + rename) so a concurrent reader either sees the old or new
+ * snapshot, never a half-written file.
+ */
+export async function loadSurfaceEvents(tomesDir = DEFAULT_TOMES_DIR) {
   try {
-    const raw = await fs.readFile(EVENTS_PATH, 'utf8');
+    const raw = await fs.readFile(eventsPathFor(tomesDir), 'utf8');
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object' && Array.isArray(parsed.events)) {
       return {
@@ -62,10 +102,20 @@ export async function loadSurfaceEvents() {
   return { ...EMPTY_STORE, events: [] };
 }
 
-async function saveSurfaceEvents(store) {
+/**
+ * Atomic write: serialise to a `.tmp` file, then rename onto the
+ * target. The rename is atomic at the filesystem level, so a reader
+ * never sees a partial file even if the writer crashes mid-write.
+ * Must run inside withDirLock; the public mutators all do.
+ */
+async function saveSurfaceEvents(store, tomesDir = DEFAULT_TOMES_DIR) {
   try {
+    mkdirSync(tomesDir, { recursive: true });
     const pruned = pruneEvents(store);
-    await fs.writeFile(EVENTS_PATH, JSON.stringify(pruned, null, 2), 'utf8');
+    const eventsPath = eventsPathFor(tomesDir);
+    const tmp = eventsPath + '.tmp';
+    await fs.writeFile(tmp, JSON.stringify(pruned, null, 2), 'utf8');
+    await fs.rename(tmp, eventsPath);
   } catch (err) {
     console.error('[surface-events] save failed:', err?.message ?? err);
   }
@@ -94,39 +144,45 @@ function pruneEvents(store) {
  * I offered — used later by reflection to correlate state with
  * outcome.
  *
- * @param {Array<object>} candidates — output of selectSurfaceCandidates()
- * @param {object} stateSnapshot     — { threat_tier, routine_phase, ... }
- * @param {number} [nowMs]
+ * Serialised through withDirLock so concurrent offers + tagger
+ * runs can't lose data.
  */
-export async function recordSurfaceOffers(candidates, stateSnapshot = {}, nowMs = Date.now()) {
+export async function recordSurfaceOffers(
+  candidates,
+  stateSnapshot = {},
+  nowMs = Date.now(),
+  tomesDir = DEFAULT_TOMES_DIR,
+) {
   if (!Array.isArray(candidates) || candidates.length === 0) return;
-  const store = await loadSurfaceEvents();
-  for (const c of candidates) {
-    if (!c?.id) continue;
-    store.events.push({
-      id:             randomUUID(),
-      task_id:        c.id,
-      task_label:     c.label,
-      task_type:      c.type,
-      stakes_tier:    c.stakesTier,
-      confidence:     c.confidence,
-      offered_at:     nowMs,
-      state_snapshot: { ...stateSnapshot },
-      outcome:        null,
-      outcome_at:     null,
-    });
-  }
-  await saveSurfaceEvents(store);
+  return withDirLock(tomesDir, async () => {
+    const store = await loadSurfaceEvents(tomesDir);
+    for (const c of candidates) {
+      if (!c?.id) continue;
+      store.events.push({
+        id:             randomUUID(),
+        task_id:        c.id,
+        task_label:     c.label,
+        task_type:      c.type,
+        stakes_tier:    c.stakesTier,
+        confidence:     c.confidence,
+        offered_at:     nowMs,
+        state_snapshot: { ...stateSnapshot },
+        outcome:        null,
+        outcome_at:     null,
+      });
+    }
+    await saveSurfaceEvents(store, tomesDir);
+  });
 }
 
 // ── Dedup lookup ─────────────────────────────────────────────────
 
 /**
  * Return { taskId → most-recent offer ms } for the dedup gate.
- * Pulled from the same event stream so there's one source of truth.
+ * Read-only — no lock needed.
  */
-export async function getRecentOfferTimes() {
-  const store = await loadSurfaceEvents();
+export async function getRecentOfferTimes(tomesDir = DEFAULT_TOMES_DIR) {
+  const store = await loadSurfaceEvents(tomesDir);
   const map = {};
   for (const e of store.events ?? []) {
     if (!e?.task_id) continue;
@@ -159,64 +215,64 @@ function resolutionToOutcome(resolution) {
  * temporal_context payload the chat turn already loaded, so this
  * adds zero MCP calls.
  *
- * @param {object} opts
- * @param {Array}  opts.windowItems  — temporalPayload.schedule.window (open + resolved)
- * @param {number} [opts.now]
- * @returns {Promise<{ tagged: number, skipped: number }>}
+ * Serialised through withDirLock so a concurrent recordSurfaceOffers
+ * can't clobber tag writes.
  */
-export async function tagOutcomes({ windowItems, now = Date.now() }) {
-  const store = await loadSurfaceEvents();
-  if (!store.events?.length) return { tagged: 0, skipped: 0 };
+export async function tagOutcomes({ windowItems, now = Date.now(), tomesDir = DEFAULT_TOMES_DIR } = {}) {
+  return withDirLock(tomesDir, async () => {
+    const store = await loadSurfaceEvents(tomesDir);
+    if (!store.events?.length) return { tagged: 0, skipped: 0 };
 
-  const byId = new Map();
-  for (const item of windowItems ?? []) {
-    if (item?.id) byId.set(item.id, item);
-  }
-
-  let tagged = 0;
-  let skipped = 0;
-  let mutated = false;
-
-  for (const ev of store.events) {
-    if (ev.outcome) continue; // already tagged
-    const item = byId.get(ev.task_id);
-    let outcome = null;
-
-    if (item && item.resolution) {
-      outcome = resolutionToOutcome(item.resolution);
-    } else if (now - ev.offered_at >= UNRESPONDED_THRESHOLD_MS) {
-      // Old enough to give up waiting. The task may have aged out of
-      // the window entirely (no resolution we can see) or still be
-      // unresolved; either way, my surface didn't land in a
-      // measurable way.
-      outcome = OUTCOMES.UNRESPONDED;
-    } else {
-      skipped += 1;
-      continue;
+    const byId = new Map();
+    for (const item of windowItems ?? []) {
+      if (item?.id) byId.set(item.id, item);
     }
 
-    if (outcome) {
-      ev.outcome    = outcome;
-      ev.outcome_at = now;
-      tagged += 1;
-      mutated = true;
-    } else {
-      skipped += 1;
-    }
-  }
+    let tagged = 0;
+    let skipped = 0;
+    let mutated = false;
 
-  if (mutated) await saveSurfaceEvents(store);
-  return { tagged, skipped };
+    for (const ev of store.events) {
+      if (ev.outcome) continue; // already tagged
+      const item = byId.get(ev.task_id);
+      let outcome = null;
+
+      if (item && item.resolution) {
+        outcome = resolutionToOutcome(item.resolution);
+      } else if (now - ev.offered_at >= UNRESPONDED_THRESHOLD_MS) {
+        // Old enough to give up waiting. The task may have aged out of
+        // the window entirely (no resolution we can see) or still be
+        // unresolved; either way, my surface didn't land in a
+        // measurable way.
+        outcome = OUTCOMES.UNRESPONDED;
+      } else {
+        skipped += 1;
+        continue;
+      }
+
+      if (outcome) {
+        ev.outcome    = outcome;
+        ev.outcome_at = now;
+        tagged += 1;
+        mutated = true;
+      } else {
+        skipped += 1;
+      }
+    }
+
+    if (mutated) await saveSurfaceEvents(store, tomesDir);
+    return { tagged, skipped };
+  });
 }
 
 // ── Reflection inputs ────────────────────────────────────────────
 
 /**
  * Return tagged outcomes whose outcome_at is after last_reflection_at.
- * The reflection loop reads these to look for patterns.
+ * Read-only — no lock needed.
  */
-export async function getNewOutcomesSinceLastReflection() {
-  const store = await loadSurfaceEvents();
+export async function getNewOutcomesSinceLastReflection(tomesDir = DEFAULT_TOMES_DIR) {
+  const store = await loadSurfaceEvents(tomesDir);
   const since = typeof store.last_reflection_at === 'number'
     ? store.last_reflection_at
     : 0;
@@ -232,17 +288,20 @@ export async function getNewOutcomesSinceLastReflection() {
  * outcomes is noise; reflection on noise produces noise in
  * what_lapses_cost.md.
  */
-export async function shouldReflectNow({ minOutcomes = 5 } = {}) {
-  const fresh = await getNewOutcomesSinceLastReflection();
+export async function shouldReflectNow({ minOutcomes = 5, tomesDir = DEFAULT_TOMES_DIR } = {}) {
+  const fresh = await getNewOutcomesSinceLastReflection(tomesDir);
   return fresh.length >= minOutcomes;
 }
 
 /**
  * Mark a reflection as having happened — subsequent fresh-outcome
- * queries will only see events tagged AFTER this moment.
+ * queries will only see events tagged AFTER this moment. Serialised
+ * through withDirLock so it can't race a concurrent tagger run.
  */
-export async function markReflected(nowMs = Date.now()) {
-  const store = await loadSurfaceEvents();
-  store.last_reflection_at = nowMs;
-  await saveSurfaceEvents(store);
+export async function markReflected(nowMs = Date.now(), tomesDir = DEFAULT_TOMES_DIR) {
+  return withDirLock(tomesDir, async () => {
+    const store = await loadSurfaceEvents(tomesDir);
+    store.last_reflection_at = nowMs;
+    await saveSurfaceEvents(store, tomesDir);
+  });
 }
