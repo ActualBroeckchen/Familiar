@@ -76,6 +76,13 @@ const UNRUH_VENV = path.join(UNRUH_ROOT, '.venv');
 // Real Unruh queries are graph reads in the kilobytes — 2s is generous.
 const UNRUH_CALL_TIMEOUT_MS = 2000;
 
+// How long my human has to be quiet before the next chat turn enters
+// "idle mode" — temporal_context is called with mode='idle' so Unruh
+// returns up to a few due bookmarks for me to weave in if a moment
+// opens. 30 minutes matches the documented behaviour in README.md and
+// docs/features.md.
+const IDLE_THRESHOLD_MS = 30 * 60 * 1000;
+
 // Resolve `uv` to an absolute path. GUI launchers (Proto-Familiar.command,
 // the .vbs / tray.ps1) inherit a minimal PATH that often misses ~/.local/bin
 // or %LOCALAPPDATA%\uv\bin, so a bare `command: 'uv'` to StdioClientTransport
