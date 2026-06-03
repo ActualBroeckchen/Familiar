@@ -1571,8 +1571,13 @@ function _buildApiMessagesInner(userInput) {
   msgs.push({ role: 'user', content: userInput });
 
   // ── Post-history prompt ───────────────────────────────────────
+  // role:'system' rather than role:'user' so it's semantically a
+  // priming directive (not a {{user}} turn), and so the "last
+  // role:'user' in the array" extraction server-side picks up
+  // {{user}}'s actual input. (The chat path also sends an explicit
+  // userMessage field for the same reason — belt-and-suspenders.)
   if (state.postHistoryPrompt.trim())
-    msgs.push({ role: 'user', content: applyNameVars(state.postHistoryPrompt.trim()) });
+    msgs.push({ role: 'system', content: applyNameVars(state.postHistoryPrompt.trim()) });
 
   lastBuildSegments = { systemSegments, atDepthInjections };
   return msgs;
