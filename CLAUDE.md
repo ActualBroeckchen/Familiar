@@ -301,6 +301,17 @@ section extends it to **proposal framing** — what I suggest
 
 ## Other repo conventions worth knowing
 
+- **`docs/architecture.md` is part of the working code, not optional
+  reference material.** When component responsibilities, the data
+  flow, the prompt-assembly order, the set of autonomous loops, or
+  the public HTTP surface changes — update `docs/architecture.md`
+  in the **same commit** as the code change. Drift between code and
+  this doc is one of the top drivers of "future-me has no idea why
+  X is wired the way it is" bugs. Read it before any architectural
+  change so the change fits the current shape (or so the rewrite is
+  deliberate). The robust-over-cheap principle applies: don't add a
+  component without recording where it fits, and don't move things
+  without updating the diagram.
 - **`entity-core` directory**: new installs land at `../entity-core`;
   pre-rename installs at `../entity-core-alpha` are still detected as a
   fallback in `thalamus.js`, `install.{sh,bat}`, `scripts/win/install.ps1`,

@@ -1,171 +1,438 @@
 # Architecture
 
+> **Keep this current.** When component responsibilities, data flow,
+> or the prompt-assembly order changes in code, update this doc in
+> the same commit. CLAUDE.md mandates it because architecture
+> drift is a top driver of "future-me has no idea why X" bugs.
+
 ## Overview
 
-Proto-Familiar is a Node.js application split into a thin Express server and a vanilla-JS single-page frontend. The server's primary job is to proxy LLM requests (avoiding browser CORS restrictions), enrich them with cognitive-module context (entity-core for identity + memory + graph; Unruh, in development, for temporal context), and persist session logs and Tomes.
+Proto-Familiar is a Node.js application — a thin Express server +
+vanilla-JS single-page frontend — that surfaces a persistent AI
+companion (the Familiar) bonded to one human. It is an **embodiment**
+of the same entity Psycheros holds in `entity-core`; see
+[CLAUDE.md](../CLAUDE.md#entity-as-subject--the-design-value-under-everything)
+and the [Psycheros PHILOSOPHY.md](https://github.com/PsycherosAI/Psycheros/blob/main/PHILOSOPHY.md)
+for the design value that everything below descends from.
+
+The server's responsibilities:
+
+1. **Proxy LLM requests** so the user's API key never leaves localhost.
+2. **Enrich every request** with cognitive-module context: identity +
+   memory + graph from entity-core, temporal context + ponderings +
+   care-check framing from Unruh + the caring-spine modules.
+3. **Run autonomous loops** for the proactive surfaces — pondering,
+   reminders, silence-triage — that fire without a human request.
+4. **Persist** session logs, Tomes, ponderings, outbox items,
+   threat state, last-activity.
 
 ```
 Browser (public/)
     │
-    │  HTTP + SSE
+    │  HTTP + SSE  + /api/outbox polling for proactive deliveries
     ▼
 server.js  (Express, Node 18+, ESM)
     │
-    ├── thalamus.js       ──►  entity-core  (Deno, stdio MCP)   — identity / memory / graph
-    │                     ──►  Unruh        (Python via uv, stdio MCP) — schedule / interests
-    ├── memorization.js   ──►  persistent queue + worker for session memorization
-    ├── providers.js          shared chat-completions URL map
+    │  ── cognitive bridge (per-request enrichment) ──────────────
+    ├── thalamus.js       ──►  entity-core  (Deno, stdio MCP)    — identity / memory / graph
+    │                     ──►  Unruh        (Python via uv, MCP) — schedule / interests / handoff / routine
     │
-    ├── logs/         (session JSON files, git-ignored)
-    └── tomes/        (per-Tome JSON files; queue file .memorization-queue.json git-ignored)
+    │  ── caring spine (per-request + autonomous) ─────────────────
+    ├── crisis-signals.js   ── pattern detector run on each user msg
+    ├── threat-tracker.js   ── decaying scalar, persistent, audit history
+    ├── recent-ponderings.js── read recent free-cycle thoughts into chat
+    ├── pondering.js        ── one-shot ponder primitive (LLM call → tome entry)
+    ├── pondering-loop.js   ── autonomous: wakes on cadence, ponders
+    ├── reminders-loop.js   ── autonomous: fires due reminders into outbox
+    ├── silence-triage-loop.js ── autonomous: LLM-deliberated check-ins
+    ├── outbox.js           ── persistent delivery queue (reminders, triage, alerts)
+    ├── last-activity.js    ── timestamps user activity for the silence loop
+    │
+    │  ── classical infrastructure ──────────────────────────────
+    ├── memorization.js     ── per-session memorization queue + worker
+    ├── temporal-format.js  ── pure renderer for Unruh's payload
+    ├── providers.js        ── shared chat-completions URL map
+    │
+    ├── logs/               session JSON files (git-ignored)
+    └── tomes/              per-Tome JSON files + state caches
+        ├── .memorization-queue.json   (git-ignored)
+        ├── .threat-state.json{,.tmp}  (git-ignored)
+        ├── .outbox.json{,.tmp}        (git-ignored)
+        └── .last-activity.json{,.tmp} (git-ignored)
 ```
 
-Thalamus is a **plural-peer mediator**: each cognitive module is a separate stdio MCP child process spawned at server boot. Failures degrade independently — entity-core down doesn't take Unruh out, and vice versa — and `enrich()` fans out across whichever peers are connected via `Promise.allSettled`. Empty results omit their section entirely; the LLM only sees scaffolding when there's something to put in it.
+Thalamus is a **plural-peer mediator**: each cognitive module is a
+separate stdio MCP child spawned at boot. Failures degrade
+independently — entity-core down doesn't take Unruh out, and vice
+versa — and `enrich()` fans out across whichever peers are connected
+via `Promise.allSettled`. Empty sub-blocks render as nothing in the
+prompt; the LLM only sees scaffolding when there's content.
+
+The **caring spine** modules are not MCP children — they are
+Node-side modules that read from / write to Unruh and the local
+state files. They run alongside the chat path (detection,
+ponderings injection, care-check framing) and as background loops
+(pondering, reminders, triage).
 
 ## File Structure
 
 ```
 /
-├── server.js                Express server — API proxy, log/tome/memorize endpoints, settings
-├── thalamus.js              MCP bridge — spawns entity-core + Unruh, enriches every LLM request
-├── temporal-format.js       Pure renderer for Unruh's payload (split out for testability)
-├── memorization.js          Session-memorization queue + worker (persistent, retrying)
+├── server.js                Express server — chat proxy, all HTTP endpoints, autonomous-loop boot
+├── thalamus.js              MCP bridge — entity-core + Unruh, plus all the helper wrappers
+├── crisis-signals.js        Pattern-based detector — 5 tiers, ~13 signal categories, damping
+├── threat-tracker.js        Decaying scalar with audit history, off-switches, file persistence
+├── pondering.js             Pure `ponderOnce()` primitive — LLM call + tome write
+├── pondering-cadence.js     Tiered interval formula + threat multiplier + user-stretch scale
+├── pondering-loop.js        Autonomous singleton loop; integrates with cadence + isEnabled gate
+├── reminders-loop.js        Autonomous singleton loop; polls Unruh for due reminders
+├── silence-triage-loop.js   Autonomous singleton loop; LLM-deliberated proactive check-ins
+├── outbox.js                Delivery queue (reminders / triage / outbound_alert), dedup on originId
+├── last-activity.js         Tiny persistent "user last typed at" timestamp
+├── recent-ponderings.js     Read recent pondering tome entries for in-chat reference
+├── interest-picker.js       Weight-proportional sampler for the pondering loop
+├── temporal-format.js       Pure renderer for the Unruh temporal_context payload
+├── memorization.js          Persistent per-session memorization queue + worker
 ├── providers.js             Shared chat-completions URL map (used by server.js + thalamus.js)
+├── entity-ref.js            Validate entity-core:self/file.md#section refs (M7 standing-value bridge)
 ├── package.json
 ├── .gitignore
 │
 ├── logs/                    Session JSON files (auto-created, git-ignored)
-├── tomes/                   Per-Tome JSON files (auto-created, git-ignored)
+├── tomes/                   Per-Tome JSON files (auto-created, git-ignored on UUID names)
 │
-├── unruh/                   In-tree Python module (Unruh — temporal context, WIP)
+├── unruh/                   In-tree Python module (Unruh — temporal context)
 │   ├── pyproject.toml       uv-managed Python project, deps locked in uv.lock
-│   ├── src/unruh/server.py  MCP server exposing health_check + temporal_context tools
+│   ├── src/unruh/server.py  MCP server exposing every temporal tool
+│   ├── src/unruh/schedule.py + interest.py + handoff.py
 │   ├── data/                SQLite + state (auto-created, git-ignored)
-│   └── tests/               pytest contract tests on the tool return shapes
+│   └── tests/               pytest contract tests
 │
 ├── scripts/
-│   ├── import-entity.js     Import an entity-core data directory into the local instance
-│   ├── import-tome.js       Convert a SillyTavern lorebook export to Proto-Familiar tome format
+│   ├── import-entity.js     Import an entity-core data directory
+│   ├── import-tome.js       Convert SillyTavern lorebook export → Proto-Familiar tome
 │   ├── ensure-unruh-deps.mjs npm prestart hook: materialise unruh/.venv if missing
-│   └── ensure-port-free.mjs npm prestart hook: auto-recycle stale Proto-Familiar on the port
+│   ├── ensure-port-free.mjs  npm prestart hook: auto-recycle stale Proto-Familiar
+│   ├── ponder-once.mjs       CLI: one-shot ponder via TEMP_KEY
+│   ├── ponder-from-interests.mjs CLI: live demo of the pondering loop
+│   ├── pondering-loop-demo.mjs   CLI: autonomous loop demo (fast-forward cadence)
+│   ├── chat-with-ponderings.mjs  CLI: demo of pondering reference in chat
+│   ├── threat-demo.mjs            CLI: end-to-end detection + care-check rendering
+│   ├── seed-test-interests.mjs    CLI: seed Unruh interests for the pondering demo
+│   └── _unruh-mcp.mjs             Shared MCP-client helper for the CLI scripts
 │
-├── tests/                   Node test suite (run via `npm test`)
+├── tests/                   Node test suite (`npm test`)
 │
 ├── public/
-│   ├── index.html           App shell — sidebar, chat pane, all modals
-│   ├── style.css            All styling — dark/light themes, responsive layout
-│   └── app.js               All frontend logic — state, API calls, rendering, topics, Tomes engine
+│   ├── index.html           App shell — sidebar, chat pane, Temporal editor modal, all modals
+│   ├── style.css            All styling — dark/light themes, outbox banners, modal/tab styles
+│   └── app.js               All frontend logic — state, API calls, rendering, topics, Tomes,
+│                            temporal editor, outbox banner polling, BUILTIN_TOOLS definitions
 │
-├── docs/                    This documentation (incl. unruh-design.md + unruh-implementation-plan.md)
-│
-└── Research/                Background reading on architecture and mental-health AI design
+└── docs/                    This documentation (incl. research/ for design-input notes)
 ```
 
-## Component Responsibilities
+## Component responsibilities
 
-### `server.js`
+### `server.js` — the HTTP surface + autonomous-loop boot
 
-The Express server handles:
-- **`POST /api/chat`** — validates the request, calls `thalamus.js:enrich()` to assemble entity-core + Unruh context, then proxies the enriched request to the upstream LLM provider. The static block (identity) prepends the system message; the dynamic block (memories / graph / temporal) is depth-injected (see [Prompt-cache-aware assembly](#prompt-cache-aware-assembly)). Supports both streaming (SSE) and non-streaming modes. Attaches a `_thalamus` envelope (`{ static, dynamic, depth, injectedAt }`) to every successful response — on the non-streaming path as a top-level JSON field, on the streaming path as the first SSE `data:` line, so the prompt inspector can show the actual injected text in its real positions.
-- **`POST /api/debug-prompt`** — returns the enriched message array without calling any upstream LLM; available for offline preview. The live prompt inspector reads the `_thalamus` envelope from `/api/chat` instead, so what it shows reflects the actual injection rather than a re-derived preview that could drift after intervening memory or identity writes.
-- **`POST /api/interest/engage`** — records a turn's engagement (open topics + reply length) into Unruh's interest layer via `recordInterest()` → `interest_record`. Fire-and-forget; the weight delta is computed by the pure `interestEngagementDelta()` helper. See [api-reference.md](api-reference.md#interest-layer).
-- **`POST /api/session/handoff`** — stores a session-end intent + open threads into Unruh via `recordHandoff()` → `session_set_handoff`, so the next session resumes mid-thought. Fire-and-forget. The summary is generated client-side with `enrich: "static"` (persona only) so it's in character without consuming the handoff it's writing. See [api-reference.md](api-reference.md#session-handoff).
-- **Log endpoints** (`/api/log`, `/api/logs`, `/api/logs/:id`, `DELETE /api/logs/:id`) — persist and retrieve session JSON files from the `logs/` directory.
-- **Tome endpoints** (`GET /api/tomes`, `POST /api/tomes`, `GET /api/tomes/:id`, `PUT /api/tomes/:id`, `PATCH /api/tomes/:id`, `DELETE /api/tomes/:id`, `DELETE /api/tomes/:id/entries/:uid`) — manage individual Tome files in the `tomes/` directory.
-- **Memorization endpoints** (`POST /api/memorize`, `GET /api/memorize`, `POST /api/memorize/:id/ack`, `DELETE /api/memorize/:id`) — enqueue, list, acknowledge, and cancel session-memorization jobs. The `POST` endpoint accepts both `application/json` (fetch) and `text/plain` JSON (sendBeacon, used in the browser's `beforeunload` handler).
-- **`GET /api/health`** — lightweight uptime probe.
-- **Static file serving** — serves `public/` at the root.
+The Express server handles every external request and manages the
+lifecycle of the autonomous loops:
 
-### `memorization.js`
+**Chat / enrichment:**
+- `POST /api/chat` — validates request, fires `recordUserActivity()`
+  (fire-and-forget timestamp) + `scoreMessage()` → `recordThreat()`
+  on the user text, then `thalamus.enrich()` to assemble static +
+  dynamic context. Returns the `_thalamus` envelope so the prompt
+  inspector can show what was actually injected.
+- `POST /api/debug-prompt` — offline preview (no upstream call).
+- `POST /api/interest/engage` — fire-and-forget engagement bump.
+- `POST /api/session/handoff` — store session-end intent for the
+  next session.
 
-Server-side session-memorization queue:
-- Loads / persists a JSON queue at `tomes/.memorization-queue.json` (atomic write via `tmp` + rename, single-writer mutex). Git-ignored because each job contains the user's API key.
-- A single in-process worker ticks every 5 seconds, picks the next `pending` job whose `nextAttemptAt` has elapsed, calls the configured LLM provider directly (same `PROVIDER_URLS` map as `server.js`), parses the JSON response, and writes entries to the dedicated **Session Memories** Tome — creating it if it doesn't exist yet.
-- Writes go through a per-Tome-file mutex (`withTomeLock`) so concurrent jobs writing to the same Tome serialise their read-modify-write cycles and never clobber each other.
-- Failed jobs retry with exponential backoff (5s → 30s → 2m → 10m → 30m, max 5 attempts), then transition to `failed`. Jobs left in `processing` after a server restart are automatically requeued.
-- Idempotency: enqueueing a job with the same `sessionId + scope + topicId + messageRange` as an already-active job returns the existing `jobId` with `deduped: true`.
-- Terminal jobs (`done` / `failed`) stay in the queue with their result/error until the client acknowledges them, then are pruned after 24 hours.
+**Logs / Tomes:** familiar endpoints for session JSON and Tome CRUD.
 
-### `thalamus.js`
+**Memorization:** `POST /api/memorize` + `GET /api/memorize` +
+ack/cancel — see `memorization.js`.
 
-The cognitive-module mediator. Currently bridges two specialists; designed to grow into more.
+**Temporal editor (M9):**
+- `GET /api/temporal/interests` — live + standing with decay metadata
+- `POST /api/temporal/interests/bump` — manual engagement bump
+- `POST /api/temporal/interests/:id/demote` — demote standing value
+- `POST /api/temporal/interests/set-standing` — promote topic to standing
+- `GET /api/temporal/schedule[?from&to&limit]` — windowed events/tasks
+- `POST /api/temporal/schedule` — add event/task/state/phase/reminder
+- `PATCH /api/temporal/schedule/:id` — partial update
+- `POST /api/temporal/schedule/:id/resolve` — mark done/cancelled/etc.
+- `DELETE /api/temporal/schedule/:id` — hard delete (edges cascade)
+- `GET /api/temporal/phases` — **date-independent** routine surface
+- `GET /api/temporal/handoff` + `POST .../handoff/:id/consume`
+- `GET /api/temporal/reminders/health` — observability on the loop
+- `GET /api/temporal/ponderings[?limit&sinceDays]` + DELETE
 
-- On startup, spawns `entity-core` (Deno) and `Unruh` (Python via `uv`) as separate child processes over stdio using the MCP (Model Context Protocol) SDK. entity-core is launched with `deno run -A --unstable-cron`, granting it all Deno permissions — fine for a personal local tool, restrictable to `--allow-read=<data-dir> --allow-write=<data-dir> --allow-env` for shared deployments. Unruh runs via `uv run python -m unruh`; `uv` is resolved via `resolveUvBinary()`, which probes common install locations so the spawn works even when PATH doesn't carry uv (e.g. GUI launchers on Windows).
-- Exposes a single `enrich(userMessage)` function called once per chat request. It fires four MCP tool calls in parallel — entity-core's `identity_get_all`, `memory_search`, `graph_node_search`, plus Unruh's `temporal_context` — and **returns the results as `{ static, dynamic }` so server.js can place them where the upstream LLM's prefix cache wants them** (see [Prompt-cache-aware assembly](#prompt-cache-aware-assembly) below). Each call is wrapped in `Promise.allSettled` so any one failing doesn't take the others out. Unruh's call is additionally wrapped in a 2-second `Promise.race` timeout so a slow Unruh can't block the chat path. Empty sub-blocks are omitted entirely.
-- Resolves entity-core's API key from the user-designated saved connection (see [Entity-Core → API key](entity-core.md#api-key-designation)). When the designation changes, `server.js` calls the exported `reconnectEntityCore()` which tears down the child and re-spawns it with fresh env (`ENTITY_CORE_LLM_API_KEY`, `_BASE_URL`, `_MODEL`, and `ZAI_*` aliases for z.ai providers). No server restart required.
-- Reconnect-with-backoff on the Unruh child: on close, schedules retries with exponential backoff (1s, 2s, 5s, 10s, 30s; max 10 attempts; counter resets on success). Entity-core uses the same `reconnectEntityCore()` path manually.
-- Returns an empty string (graceful degradation) if both peers are unreachable. Pre-existing exports for the Knowledge editor (`listMemories`, `createMemory`, `updateGraphNode`, etc.) still work and target entity-core directly.
+**Threat surface:**
+- `GET /api/threat` — current tier + weight + last_touched + disabled
+- `GET /api/threat/history?limit=N` — audit trail
+- `POST /api/threat/reset` — manual reset to calm (always works)
 
-### `public/app.js`
+**Outbox surface:**
+- `GET /api/outbox[?pending=1&limit=N]` — UI banner polling
+- `POST /api/outbox/:id/acknowledge`
+- `POST /api/outbox/clear-acknowledged`
 
-All frontend logic in a single ES5-style script:
-- **State management** — a plain `state` object holds provider, API key, model, all prompt fields, messages, session metadata, topics, Tome registry + cache, and tool settings.
-- **Persistence** — settings and message history are stored in `localStorage`; sessions are also written to the server via `POST /api/log` (fire-and-forget). Tomes are stored server-side in `tomes/`.
-- **Message building** — `buildApiMessages()` assembles the full message array for each request: system message (with Tome injections at each position), conversation history, new user turn, post-history prompt.
-- **Tome engine** — full SillyTavern-compatible World Info implementation across multiple Tomes: keyword scanning, injection positions, selective logic, timed effects (sticky/cooldown), recursion, and group exclusion. Entries are aggregated from all enabled Tomes before activation.
-- **Tool calling loop** — sends tools with each request, executes results client-side, and re-sends up to 5 rounds.
-- **Topics** — tracks named conversation slices with coloured gutter bars; triggers LLM-generated summaries saved to a Tome on topic end.
-- **Session memorization** — enqueues a job to the server (`POST /api/memorize`) on idle timeout, manual Clear, tab close (`beforeunload` via `navigator.sendBeacon`), topic end, or the **Memorize now** button. Polls `GET /api/memorize` every 30 seconds (and on window focus) to toast completed or failed jobs, then ACKs them. The LLM call and Tome write happen entirely server-side in `memorization.js`.
-- **UI rendering** — renders messages, tool-call blocks, topic bars, modals, and settings panels.
+**Settings + Tailscale gate:** as before.
 
-## Data Flow — Single Chat Request
+**Autonomous-loop boot** (`app.listen()` callback):
+- `startMemorizationWorker()`
+- `startAutonomousPondering()` — Settings-toggleable + env-var off-switch
+- `startRemindersScheduler()`
+- `startSilenceTriage()`
+
+Each loop has a `stop*()` function called from the SIGTERM /
+SIGINT / SIGHUP handler so clean shutdown awaits any in-flight tick.
+
+### `thalamus.js` — the cognitive-module mediator
+
+Spawns and reconnects entity-core (Deno) + Unruh (Python via uv) as
+stdio MCP children. Exposes:
+
+- **`enrich(userMessage, { liveTurn, staticOnly })`** — the central
+  per-request call. Fans out to identity + memory + graph (entity-core)
+  + temporal_context (Unruh) + local-disk reads (recent ponderings,
+  threat state). Returns `{ static, dynamic }`. See [Prompt
+  assembly](#prompt-assembly) below for what goes where.
+- **Interest helpers:** `recordInterest`, `bumpInterest`, `demoteStanding`,
+  `setStandingInterest`, `listLiveInterests`, `listInterests`.
+- **Schedule helpers:** `getScheduleWindow`, `addScheduleNode`,
+  `updateScheduleNode`, `resolveScheduleNode`, `deleteScheduleNode`,
+  `getDueReminders`, `getRemindersHealth`, `listPhases`.
+- **Handoff helpers:** `recordHandoff`, `getHandoff`,
+  `markHandoffConsumed`.
+- **Entity-core spawn / reconnect:** auto re-spawns when settings
+  change the entity-core connection.
+- **Standing-value bridge (M7):** on every liveTurn, reconciles
+  standing values whose `value_ref` points at a now-gone entity-core
+  identity fact (demotes them to live interests).
+
+### Caring-spine modules
+
+**`crisis-signals.js`** — auditable, pattern-based detector. Returns
+`{ level, signals[] }` per message. 5 tiers (severe / high / moderate /
+mild / safety). Damping for negation / hypothetical / others-speech /
+hyperbolic context. The patterns are tuned for high precision on
+SEVERE (the "cut me off" / "I want to die from embarrassment" false
+positives are the regression cases the test suite watches).
+
+**`threat-tracker.js`** — persistent decaying scalar at
+`tomes/.threat-state.json` with 3-day half-life. Cap MAX=10, floor 0,
+FIFO audit history (50). Off-switches: `PROTO_FAMILIAR_THREAT_DISABLED=1`
+silences recording; `resetThreat()` always works regardless.
+
+**`pondering.js`** — pure `ponderOnce({topic, provider, apiKey, model})`
+that calls the LLM as the Familiar and writes a real first-person tome
+entry to "Familiar's Ponderings" (entries are `enabled: false` so they
+don't auto-fire as RAG lore — they're inspectable artifacts).
+
+**`recent-ponderings.js`** — reads the N most recent pondering entries
+within sinceDays and formats them as a prompt-injection block. Used by
+thalamus.enrich() in every chat turn so the Familiar can reference
+their own real recent thoughts.
+
+**`pondering-cadence.js`** — pure tiered formula:
+`computeRequiredInterval(topWeight, threatLevel, { scale })`. Tiers:
+high=30min / mid=60min / low=2h / idle=6h. Threat multiplies (severe
+0.15× → calm 1.0×). User scale stretches (≥1×).
+
+**`pondering-loop.js`** — autonomous singleton.
+`runOneTick({getInterests, runPonder, getThreat, isEnabled,
+getIntervalScale})` is the pure-ish surface; `startPonderingLoop`
+wraps it with setInterval + lifecycle. Reentrancy-guarded; stop awaits
+in-flight ticks.
+
+**`reminders-loop.js`** — autonomous singleton. Every 30s, calls
+Unruh's `reminders_due` MCP tool, enqueues each into the outbox
+(idempotent on origin id so retries don't double-banner), then marks
+the schedule node `resolution='fired'`. Health-watch warns when
+`overdue` climbs across consecutive ticks.
+
+**`silence-triage-loop.js`** — autonomous singleton. Every 5min, gates
+on tier (calm/mild = no-op) and cool-down (LLM-controlled
+`nextCheckInMs`, clamped to [30s, 24h], with per-tier defaults if
+omitted). Tier-rise preempts the cool-down. The LLM call IS the
+decision — `wait` is honored. On `reach_out`, posts to outbox; if
+`contactHuman` is included AND the name matches a configured trusted
+contact, schedules a deferred Discord-webhook delivery (held until
+the user acknowledges or `CONTACT_ESCALATION_DELAY_MS` elapses).
+
+**`outbox.js`** — `tomes/.outbox.json` persistent queue. `enqueueOutbox`
+dedups on `(kind, originId)` while unacknowledged. `listOutbox`
+newest-first. `acknowledgeOutbox` / `clearAcknowledged`. `updateOutboxMeta`
+for the triage loop's pending-contact deferral.
+
+**`last-activity.js`** — single timestamp in `tomes/.last-activity.json`
+stamped from the chat path; consumed by the silence-triage loop.
+
+### `memorization.js` — session memorization
+
+Unchanged from the original design. Persistent queue at
+`tomes/.memorization-queue.json`, 5-second tick, exponential backoff,
+per-Tome write mutex, idempotent enqueue on
+`sessionId+scope+topicId+messageRange`.
+
+### `public/app.js` — frontend (one file)
+
+- **State + persistence** as before.
+- **BUILTIN_TOOLS** — the LLM-callable tool definitions including the
+  seven temporal-write tools (`schedule_add_event/task/reminder/phase`,
+  `schedule_resolve`, `interest_bump`, `interest_set_standing`) plus
+  the knowledge-editing tools.
+- **buildApiMessages** — assembles the request. Now sends an explicit
+  `userMessage` field on round 0 (avoids the "post-history prompt
+  shadows the actual user input" bug); post-history prompt is
+  `role: 'system'` not `'user'`.
+- **Temporal editor modal** — six tabs (Interests / Threat /
+  Ponderings / Schedule / Routine / Handoff), each with CRUD where
+  applicable. The Routine tab hits `/api/temporal/phases` so phases
+  on past dates surface (they recur).
+- **Local-time helpers** for the time pickers: convert between
+  `<input type="time">` + `<input type="datetime-local">` and ISO UTC
+  via real local-time semantics, not string-slicing.
+- **Outbox banner polling** — `startOutboxPolling()` polls
+  `/api/outbox` every 30s and renders reminder / triage / outbound_alert
+  items as gentle dismissible banners at the top of the chat.
+- **Trusted contacts** UI for M12c (Discord webhook list).
+- **Topic system** — gutter bars, "▷ Topic start" / "■ Topic end"
+  buttons per-message, summarizer modal.
+- **Tome engine** unchanged from the original SillyTavern-compatible
+  implementation.
+
+## Data flow — single chat request
 
 ```
 User types message
-        │
-        ▼
-builApiMessages()
-   ├── activateTomeEntries()   ← keyword scan across all enabled Tomes → inject at each position
-   ├── applyNameVars()          ← {{user}} / {{char}} / {{elapsedTime}} / {{timeSinceLastSession}} substitution
-   └── assembles system + history + new user turn + post-history prompt
-        │
-        ▼
-POST /api/chat  { provider, apiKey, model, messages, stream, tools, … }
-        │
-        ▼  server.js
-enrich(lastUserMessage)            ← thalamus.js
-   ├── identity_get_all  ──►  entity-core (MCP)
-   ├── memory_search     ──►  entity-core (MCP)
-   └── graph_node_search ──►  entity-core (MCP)
-        │
-        ▼
-Prepend entity-core block to system message
-        │
-        ▼
+       │
+       ▼
+buildApiMessages(userInput, userTimestamp)
+   ├── activateTomeEntries()    ← keyword scan across all enabled Tomes
+   ├── applyNameVars()           ← {{user}} / {{char}} / {{elapsedTime}}
+   ├── pushes role:'user' content: userInput
+   └── pushes role:'system' content: postHistoryPrompt   (was 'user' — fixed)
+       │
+       ▼
+POST /api/chat  { messages, userMessage: userInput, … }
+       │                                  ↑ explicit field — server uses this for
+       │                                    detection + RAG query, not "last role:'user'"
+       ▼  server.js
+recordUserActivity()                     (fire-and-forget)
+scoreMessage(userMessage)                ← crisis-signals.js
+   if level ≠ 0 → recordThreat(level, signals)   ← threat-tracker.js (logged: "[threat] scored ±N")
+       │
+       ▼
+thalamus.enrich(userMessage, { liveTurn: true })
+   ├── identity_get_all     ──►  entity-core (MCP)        → static block
+   ├── memory_search        ──►  entity-core (MCP)        ┐
+   ├── graph_node_search    ──►  entity-core (MCP)        │
+   ├── temporal_context     ──►  Unruh (MCP)              │ dynamic block:
+   │     ├── current phase                                │  - RAG memory matches
+   │     ├── full routine (live phases, date-independent) │  - graph excerpt
+   │     ├── schedule window (events/tasks/reminders)     │  - "Today's rhythm"
+   │     ├── interests (standing + live with weights)     │  - schedule sections
+   │     └── handoff (session-end note)                   │  - interests
+   ├── getRecentPonderings() ──► local tome read          │  - [CARE CHECK]
+   └── getThreat()           ──► local file read          ┘  - [Temporal Context]
+       │
+       ▼
+Prompt assembly (see "Prompt assembly" below)
+       │
+       ▼
 fetch(providerURL, enrichedPayload)
-        │
-        ▼  SSE stream or JSON
+       │
+       ▼  SSE stream or JSON
 Tool calls?
-   ├── YES → execute client-side → append results → re-send (up to 5 rounds)
+   ├── YES → execute client-side (incl. schedule_add_task etc.) → re-send (up to 5 rounds)
    └── NO  → render assistant message → save to localStorage + server
 ```
 
-## Prompt-cache-aware assembly
+## Prompt assembly (cache-aware)
 
-LLM providers (z.ai, OpenAI, Anthropic) all cache the longest common prefix across consecutive requests and bill the cached region at a fraction of the normal rate (z.ai, for example, drops cached input tokens by ~90%). For Proto-Familiar this matters: the entity-core identity layer is multi-kilobyte and barely changes within a session, so caching it is a big save — but only if we don't accidentally put per-turn-dynamic content in front of it.
+LLM providers cache the longest common prefix across consecutive
+requests. The static identity block barely changes within a session,
+so caching it is a big save — but only if per-turn-dynamic content
+doesn't sit in front of it.
 
-`thalamus.js:enrich()` returns the context as two strings:
+`thalamus.enrich()` returns `{ static, dynamic }`:
 
-| Block | What's in it | Lifetime | Where server.js puts it |
+| Block | Contents | Lifetime | Placement |
 |---|---|---|---|
-| `static` | base_instructions + all identity files (self / user / relationship / custom) | Stable across turns within a session (changes only when identity files are edited) | Prepended to the system message at index 0 |
-| `dynamic` | RAG memory matches + knowledge-graph excerpt + `[Temporal Context]` | Re-derived every turn (RAG is query-dependent, temporal is clock-dependent) | Inserted as a separate `role: 'system'` message at `max(1, messages.length - depth)` |
+| `static` | `base_instructions.md` + identity files (self / user / relationship / custom) | Stable across turns in a session | Prepended to the system message at index 0 |
+| `dynamic` | RAG memory matches → knowledge-graph excerpt → recent ponderings → `[CARE CHECK]` (if threat ≠ calm) → `[Temporal Context]` | Re-derived every turn | Inserted as a separate `role: 'system'` message at `max(1, messages.length - depth)` |
 
-The depth defaults to 4 and is configurable via the `thalamusDynamicDepth` setting (1–50, synced via `SERVER_SYNCED_KEYS`). Smaller values place the dynamic block closer to the current question (better model attention to the retrieved memories); larger values move it further back (more conversation history above the injection becomes cache-stable).
+The depth defaults to 4 (`thalamusDynamicDepth`, 1–50, server-synced).
 
-`injectDynamicAtDepth(messages, dynamicContent, depth)` in `server.js` is a pure helper that does the array splice; `tests/depth-inject.test.mjs` covers its behaviour including the load-bearing invariant *"messages[0..injectedAt-1] is the same reference as the input"* — without that invariant, the prefix-cache claim is hollow.
+Within `dynamic`, the order is deliberate:
+1. **RAG memories** — direct retrieval relevance, weight-bearing facts
+2. **Graph excerpt** — entity-relationship context
+3. **Recent ponderings** — the Familiar's own quiet thoughts (honesty loop)
+4. **`[CARE CHECK]`** — only present when threat tier ≠ calm; carries identity-anchored guidance per tier
+5. **`[Temporal Context]`** — handoff + today's rhythm + schedule window + interests
 
-The `_thalamus` envelope returned to the client carries `{ static, dynamic, depth, injectedAt }` so the prompt inspector can render each block with its own color (purple for static, teal for dynamic) at the exact position the server placed it.
+`injectDynamicAtDepth(messages, dynamicContent, depth)` in `server.js`
+is a pure helper; `tests/depth-inject.test.mjs` guards the
+load-bearing invariant *"messages[0..injectedAt-1] is the same
+reference as the input"* — without it, the prefix-cache claim is
+hollow.
 
----
+## Autonomous loops — when and what
 
-## Security Design
+| Loop | Cadence | Off-switch | What it does |
+|---|---|---|---|
+| Memorization | 5s tick | (none — always on) | Drains queue of session-memorization jobs |
+| Pondering | 1min tick + tier-based interval | Settings toggle + `PROTO_FAMILIAR_PONDERING_DISABLED=1` | Picks an interest, ponders it, writes a real tome entry |
+| Reminders | 30s tick | `PROTO_FAMILIAR_REMINDERS_DISABLED=1` | Polls `reminders_due`, enqueues into outbox, marks fired |
+| Silence triage | 5min tick + LLM-set cool-down | `PROTO_FAMILIAR_TRIAGE_DISABLED=1` | LLM decides "should I reach out?" given threat + silence |
+| Threat detection | per chat msg (in-band) | `PROTO_FAMILIAR_THREAT_DISABLED=1` | Patterns score user text; tracker accumulates with decay |
 
-- **API key handling:** The key travels from browser to `localhost` only. It is never logged or stored by the server — it is used once per request and discarded. The browser persists the key in `localStorage`; do not use the app on shared or untrusted devices.
-- **Path traversal prevention:** All file-backed endpoints validate IDs against a strict UUID regex (`/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/`) before constructing any file path. This covers session log IDs, Tome IDs, and Tome entry UIDs.
-- **Rate limiting:** `POST /api/chat` enforces a per-IP cap of 20 requests per minute (in-memory, no external dependency) to guard against runaway tool-call loops and accidental public exposure.
-- **Prompt inspector endpoint:** `POST /api/debug-prompt` returns the full entity-core enriched context with no authentication. It is intended for local development only — disable or firewall it before any non-localhost deployment.
-- **Entity-core permissions:** `thalamus.js` spawns entity-core with `deno run -A`, granting the subprocess all Deno permissions. Acceptable for a personal local tool. For shared deployments, scope to the minimum required flags once audited.
-- **Input size limit:** `express.json` is capped at 4 MB. Individual memory and identity write endpoints have tighter per-field caps (8 KB).
-- **Local-only default + runtime gate:** The server binds to `0.0.0.0` but a middleware rejects every non-loopback request with `403` until the in-UI Tailscale toggle is flipped on. Effective behaviour out of the box matches the historical localhost-only bind. `/api/debug-prompt`, the entity-core knowledge editor API, and the toggle endpoint itself (`POST /api/tailscale`) are all unauthenticated, so the toggle should stay off unless you trust everyone on the network. Don't expose to the public internet without adding authentication middleware.
-- **No telemetry:** No data is sent anywhere except the proxied LLM request to the configured provider.
+The autonomous loops do not run during shutdown — server.js's SIGTERM
+handler awaits each loop's `stop*()` before closing the MCP children.
+
+## Security design
+
+- **API key handling:** key travels browser → `localhost` only. Server
+  uses it once per request and discards. Browser persists in
+  `localStorage`; don't use on shared / untrusted devices.
+- **Path traversal:** all file-backed endpoints validate IDs against
+  strict UUID regex before constructing paths. Covers session logs,
+  Tome IDs, Tome entry UIDs.
+- **Rate limiting:** `POST /api/chat` is per-IP, 20/min, in-memory.
+- **Prompt inspector + temporal editor + threat surface:** unauthenticated.
+  Intended for localhost. Disable / firewall before any non-loopback
+  deployment.
+- **Entity-core permissions:** spawned with `deno run -A`. Acceptable for
+  a personal local tool; scope down for shared deployments.
+- **Input size:** `express.json` capped at 4MB; per-field memory + identity
+  writes capped at 8KB.
+- **Tailscale gate:** server binds `0.0.0.0` but rejects non-loopback
+  with `403` until the in-UI Tailscale toggle is on. Toggle endpoint
+  is itself unauthenticated — leave off unless you trust the network.
+- **Trusted-contact outreach (M12c):** Discord webhook only. Every
+  outbound is duplicated into the user's chat outbox (`kind:
+  'outbound_alert'`) so there is no covert contact. Hallucinated
+  contact names are server-side rejected. Empty contacts list = no
+  outreach possible. See
+  [docs/threat-detection.md](threat-detection.md).
+- **No telemetry:** no data leaves localhost except the proxied LLM
+  request to the user-configured provider.
+
+## Related docs
+
+- [`CLAUDE.md`](../CLAUDE.md) — agent guide, philosophy, robust-over-cheap,
+  proactivity-is-desired, entity-as-subject conventions.
+- [`docs/threat-detection.md`](threat-detection.md) — the caring spine
+  in detail, off-switches, every signal pattern.
+- [`docs/caring-spine-build-plan.md`](caring-spine-build-plan.md) — the
+  per-step build path that landed the spine.
+- [`docs/unruh-design.md`](unruh-design.md),
+  [`docs/unruh-implementation-plan.md`](unruh-implementation-plan.md)
+  — temporal-context module.
+- [`docs/research/`](research/) — research notes that feed future
+  design decisions (task-handling obstacles, etc.).
