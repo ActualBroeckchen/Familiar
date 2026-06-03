@@ -48,7 +48,7 @@ if exist "%ENTITY_CORE_DIR_NEW%" (
 )
 REM Release page: https://github.com/PsycherosAI/Psycheros/releases/tag/<tag>
 set "ENTITY_CORE_REPO=https://github.com/PsycherosAI/Psycheros.git"
-set "ENTITY_CORE_TAG=entity-core-v0.2.2"
+set "ENTITY_CORE_TAG=entity-core-v0.3.2"
 set "BACKUP_ROOT=%SCRIPT_DIR%\.pf-backups"
 
 REM --- Detect mode ---

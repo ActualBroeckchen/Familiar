@@ -413,6 +413,25 @@ def interest_list(
         )
 
 
+@mcp.tool()
+def interest_list_bookmarks(limit: int = 100) -> dict[str, Any]:
+    """List all bookmark nodes with their surfacing metadata.
+
+    Returns the full bookmark list suitable for display in the temporal
+    editor UI, including the M8 surfacing-tracking fields:
+    last_surfaced_at, last_surfacing_outcome, resurface_after_hours,
+    and consecutive_ignores.
+
+    Args:
+        limit: maximum number of bookmarks to return.
+
+    Returns: {ok: True, bookmarks: [...]}.
+    """
+    with get_conn() as conn:
+        bms = interests.list_bookmarks(conn, limit=limit)
+        return {"ok": True, "bookmarks": bms}
+
+
 # ── Session handoff (M6) ──────────────────────────────────────────────
 
 

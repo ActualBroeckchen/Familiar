@@ -458,10 +458,12 @@ export async function recordInterest({ topic, delta, source = 'chat' }) {
   if (!topic || typeof topic !== 'string' || !topic.trim()) return false;
   if (typeof delta !== 'number' || !Number.isFinite(delta) || delta <= 0) return false;
   try {
+    console.log(`[thalamus] → unruh: interest_record (topic="${topic.trim()}", delta=${delta}, source=${source})`);
     await unruhClient.callTool({
       name: 'interest_record',
       arguments: { topic: topic.trim(), delta, source },
     });
+    console.log('[thalamus] ← unruh: interest_record — ok');
     return true;
   } catch (err) {
     console.error('[thalamus] interest_record failed:', err?.message ?? err);
@@ -479,12 +481,15 @@ export async function recordInterest({ topic, delta, source = 'chat' }) {
 export async function listLiveInterests({ limit = 20 } = {}) {
   if (!unruhClient) return [];
   try {
+    console.log(`[thalamus] → unruh: interest_list (limit=${limit})`);
     const result  = await unruhClient.callTool({
       name: 'interest_list',
       arguments: { limit, include_standing: false },
     });
     const payload = parseToolText(result, {});
-    return Array.isArray(payload.live) ? payload.live : [];
+    const live    = Array.isArray(payload.live) ? payload.live : [];
+    console.log(`[thalamus] ← unruh: interest_list — ${live.length} live interests`);
+    return live;
   } catch (err) {
     console.error('[thalamus] listLiveInterests failed:', err?.message ?? err);
     return [];
@@ -500,12 +505,15 @@ export async function listLiveInterests({ limit = 20 } = {}) {
 export async function bumpInterest({ topic, delta, source = 'manual' }) {
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
+    console.log(`[thalamus] → unruh: interest_record/bump (topic="${topic}", delta=${delta})`);
     const r = await unruhClient.callTool({
       name: 'interest_record',
       arguments: { topic, delta, source },
     });
+    console.log('[thalamus] ← unruh: interest_record/bump — ok');
     return parseToolText(r, { ok: true });
   } catch (err) {
+    console.error('[thalamus] bumpInterest failed:', err?.message ?? err);
     return { ok: false, error: err?.message ?? String(err) };
   }
 }
@@ -514,12 +522,15 @@ export async function bumpInterest({ topic, delta, source = 'manual' }) {
 export async function demoteStanding({ id }) {
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
+    console.log(`[thalamus] → unruh: interest_demote_standing (id=${id})`);
     const r = await unruhClient.callTool({
       name: 'interest_demote_standing',
       arguments: { id },
     });
+    console.log('[thalamus] ← unruh: interest_demote_standing — ok');
     return parseToolText(r, { ok: true });
   } catch (err) {
+    console.error('[thalamus] demoteStanding failed:', err?.message ?? err);
     return { ok: false, error: err?.message ?? String(err) };
   }
 }
@@ -537,12 +548,15 @@ export async function setStandingInterest({ topic, weight = 1.0, value_ref }) {
     const args = { topic };
     if (Number.isFinite(weight)) args.weight = weight;
     if (value_ref) args.value_ref = value_ref;
+    console.log(`[thalamus] → unruh: interest_set_standing (topic="${topic}", weight=${weight})`);
     const r = await unruhClient.callTool({
       name: 'interest_set_standing',
       arguments: args,
     });
+    console.log('[thalamus] ← unruh: interest_set_standing — ok');
     return parseToolText(r, { ok: true });
   } catch (err) {
+    console.error('[thalamus] setStandingInterest failed:', err?.message ?? err);
     return { ok: false, error: err?.message ?? String(err) };
   }
 }
@@ -552,10 +566,12 @@ export async function setStandingInterest({ topic, weight = 1.0, value_ref }) {
 export async function getScheduleWindow({ from_ts, to_ts, limit = 200 } = {}) {
   if (!unruhClient) return { ok: false, error: 'unruh not connected', nodes: [], edges: [] };
   try {
+    console.log(`[thalamus] → unruh: schedule_get_window (limit=${limit})`);
     const r = await unruhClient.callTool({
       name: 'schedule_get_window',
       arguments: { from_ts, to_ts, limit, include_open_tasks: true },
     });
+    console.log('[thalamus] ← unruh: schedule_get_window — ok');
     return parseToolText(r, { ok: false, nodes: [], edges: [] });
   } catch (err) {
     return { ok: false, error: err?.message ?? String(err), nodes: [], edges: [] };
@@ -678,6 +694,30 @@ export async function listInterests({ limit = 50 } = {}) {
     };
   } catch (err) {
     return { live: [], standing: [], ok: false, error: err?.message ?? String(err) };
+  }
+}
+
+/**
+ * List all bookmark nodes with their M8 surfacing metadata.
+ * Used by the temporal editor UI to display bookmark tracking state.
+ *
+ * @param {{ limit?: number }} [opts]
+ * @returns {Promise<{ bookmarks: any[], ok: boolean, error?: string }>}
+ */
+export async function listBookmarks({ limit = 100 } = {}) {
+  if (!unruhClient) return { bookmarks: [], ok: false, error: 'unruh not connected' };
+  try {
+    const result  = await unruhClient.callTool({
+      name: 'interest_list_bookmarks',
+      arguments: { limit },
+    });
+    const payload = parseToolText(result, {});
+    return {
+      bookmarks: Array.isArray(payload.bookmarks) ? payload.bookmarks : [],
+      ok:        true,
+    };
+  } catch (err) {
+    return { bookmarks: [], ok: false, error: err?.message ?? String(err) };
   }
 }
 
@@ -871,12 +911,23 @@ function identitySection(files, order) {
  *   staticOnly — fetch only the identity layer (persona), skipping
  *                memory / graph / temporal. Used by the handoff
  *                summariser so its note is in voice without the bloat.
+ *   lastUserMessageAt — ISO-8601 timestamp of the most recent user
+ *                message BEFORE this turn. Used for idle-mode detection
+ *                (M8): if the user has been quiet longer than
+ *                IDLE_THRESHOLD_MS, temporal_context is called with
+ *                mode='idle' so due bookmarks are surfaced. Pass null
+ *                (or omit) to skip idle detection.
+ *
+ * Returns { static, dynamic, surfacedBookmarks } where surfacedBookmarks
+ * is the list of bookmark objects from temporal_context (non-empty only
+ * in idle mode). server.js uses this list after the LLM response to call
+ * reportSurfacingOutcomes() with the actual response text.
  *
  * @param {string} userMessage
- * @returns {Promise<{ static: string, dynamic: string }>}
+ * @returns {Promise<{ static: string, dynamic: string, surfacedBookmarks: any[] }>}
  */
-export async function enrich(userMessage, { liveTurn = false, staticOnly = false } = {}) {
-  const EMPTY = { static: '', dynamic: '' };
+export async function enrich(userMessage, { liveTurn = false, staticOnly = false, lastUserMessageAt = null } = {}) {
+  const EMPTY = { static: '', dynamic: '', surfacedBookmarks: [] };
   if (!mcpClient && !unruhClient) return EMPTY;
 
   try {
@@ -891,6 +942,8 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // one of them must not prevent the others from being injected.
     // Promise.allSettled never rejects. Unruh is queried alongside
     // entity-core; either or both may be absent and the rest still works.
+    if (mcpClient) console.log(`[thalamus] → entity-core: identity_get_all${staticOnly ? '' : ', memory_search, graph_node_search'}`);
+    if (unruhClient && !staticOnly) console.log('[thalamus] → unruh: temporal_context');
     const entityCorePromises = mcpClient ? [
       mcpClient.callTool({ name: 'identity_get_all', arguments: {} }),
       staticOnly ? Promise.reject(new Error('skipped (staticOnly)'))
@@ -912,9 +965,19 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // the background — Promise.race doesn't cancel — but it can no longer
     // delay the response. If timeouts become common, that's a signal for
     // the next milestone to add real cancellation or a query budget.
+    //
+    // M8 idle-mode: if lastUserMessageAt is set and the user has been quiet
+    // longer than IDLE_THRESHOLD_MS, pass mode='idle' so Unruh returns due
+    // bookmarks alongside the standard interests block.
+    const nowTs = new Date().toISOString();
+    const isIdle = !staticOnly
+      && lastUserMessageAt != null
+      && (Date.now() - new Date(lastUserMessageAt).getTime()) >= IDLE_THRESHOLD_MS;
+    if (isIdle) console.log(`[thalamus] idle mode active (last user msg: ${lastUserMessageAt})`);
+    const unruhArgs = { now: nowTs, ...(isIdle ? { mode: 'idle' } : {}) };
     const unruhPromise = (unruhClient && !staticOnly)
       ? Promise.race([
-          unruhClient.callTool({ name: 'temporal_context', arguments: { now: new Date().toISOString() } }),
+          unruhClient.callTool({ name: 'temporal_context', arguments: unruhArgs }),
           new Promise((_, reject) => setTimeout(
             () => reject(new Error(`temporal_context timed out after ${UNRUH_CALL_TIMEOUT_MS}ms`)),
             UNRUH_CALL_TIMEOUT_MS,
@@ -927,10 +990,16 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       unruhPromise,
     ]);
 
-    if (idSettled.status       === 'rejected' && mcpClient)                console.error('[thalamus] identity_get_all failed:', idSettled.reason?.message ?? idSettled.reason);
-    if (memSettled.status      === 'rejected' && mcpClient   && !staticOnly) console.error('[thalamus] memory_search failed:',    memSettled.reason?.message ?? memSettled.reason);
-    if (graphSettled.status    === 'rejected' && mcpClient   && !staticOnly) console.error('[thalamus] graph_node_search failed:', graphSettled.reason?.message ?? graphSettled.reason);
-    if (temporalSettled.status === 'rejected' && unruhClient && !staticOnly) console.error('[thalamus] temporal_context failed:',  temporalSettled.reason?.message ?? temporalSettled.reason);
+    if (idSettled.status       === 'fulfilled') console.log('[thalamus] ← entity-core: identity_get_all — ok');
+    else if (mcpClient)                         console.error('[thalamus] identity_get_all failed:', idSettled.reason?.message ?? idSettled.reason);
+    if (!staticOnly) {
+      if (memSettled.status      === 'fulfilled') console.log('[thalamus] ← entity-core: memory_search — ok');
+      else if (mcpClient)                        console.error('[thalamus] memory_search failed:', memSettled.reason?.message ?? memSettled.reason);
+      if (graphSettled.status    === 'fulfilled') console.log('[thalamus] ← entity-core: graph_node_search — ok');
+      else if (mcpClient)                        console.error('[thalamus] graph_node_search failed:', graphSettled.reason?.message ?? graphSettled.reason);
+      if (temporalSettled.status === 'fulfilled') console.log('[thalamus] ← unruh: temporal_context — ok');
+      else if (unruhClient)                      console.error('[thalamus] temporal_context failed:', temporalSettled.reason?.message ?? temporalSettled.reason);
+    }
 
     const idResult       = idSettled.status       === 'fulfilled' ? idSettled.value       : null;
     const memResult      = memSettled.status      === 'fulfilled' ? memSettled.value      : null;
@@ -979,14 +1048,17 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
 
     if (graphNodes.length > 0) {
       // Traverse 1 hop from top-3 nodes; ignore individual failures
+      const traversalNodes = graphNodes.slice(0, 3);
+      console.log(`[thalamus] → entity-core: graph_subgraph ×${traversalNodes.length}`);
       const traversals = await Promise.allSettled(
-        graphNodes.slice(0, 3).map(n =>
+        traversalNodes.map(n =>
           mcpClient.callTool({
             name: 'graph_subgraph',
             arguments: { nodeId: n.id, depth: 1 },
           })
         )
       );
+      console.log(`[thalamus] ← entity-core: graph_subgraph (${traversals.filter(r => r.status === 'fulfilled').length}/${traversalNodes.length} ok)`);
 
       const nodeLabels = new Map(graphNodes.map(n => [n.id, n.label]));
       const nodeDescs  = new Map(graphNodes.map(n => [n.id, n.description ?? '']));
@@ -1124,7 +1196,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     const staticSections = [];
     if (baseContent)   staticSections.push(baseContent);
     if (selfContent)   staticSections.push(`---\nMy self files (from identity/self/ directory):\n\n${selfContent}`);
-    if (userContent)   staticSections.push(`---\nUser files (from identity/user/ directory):\n\n${userContent}`);
+    if (userContent)   staticSections.push(`---\nFiles on my human (from identity/user/ directory):\n\n${userContent}`);
     if (relContent)    staticSections.push(`---\nRelationship files (from identity/relationship/ directory):\n\n${relContent}`);
     if (custContent)   staticSections.push(`---\nCustom files (from identity/custom/ directory):\n\n${custContent}`);
 
@@ -1172,14 +1244,62 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       console.log(`[thalamus] enrich() static=${staticBlock.length}ch dynamic=${dynamicBlock.length}ch`);
     }
 
-    return { static: staticBlock, dynamic: dynamicBlock };
+    // M8: surface the bookmark list so server.js can call
+    // reportSurfacingOutcomes() after the response comes back.
+    const surfacedBookmarks = Array.isArray(temporalPayload?.bookmarks)
+      ? temporalPayload.bookmarks
+      : [];
+    if (surfacedBookmarks.length > 0) {
+      console.log(`[thalamus] idle mode: surfacing ${surfacedBookmarks.length} bookmark(s): ${surfacedBookmarks.map(b => b.label).join(', ')}`);
+    }
+
+    return { static: staticBlock, dynamic: dynamicBlock, surfacedBookmarks };
   } catch (err) {
     console.error('[thalamus] enrich failed:', err.message);
-    return { static: '', dynamic: '' };
+    return { static: '', dynamic: '', surfacedBookmarks: [] };
   }
 }
 
 // ── Write operations ──────────────────────────────────────────────────────────
+
+/**
+ * Report whether the user engaged with bookmarks surfaced during idle mode
+ * (M8). Called by server.js after the LLM response is complete: it scans
+ * the response text for each bookmark's topic label and records 'engaged'
+ * if the model mentioned it, 'ignored' otherwise.
+ *
+ * Fire-and-forget: surfacing outcome is valuable signal but not critical
+ * path. A failure here just means the adaptive interval isn't updated for
+ * this turn — the bookmark will resurface normally on the next idle cycle.
+ *
+ * @param {{ responseText: string, bookmarks: any[] }} args
+ */
+export async function reportSurfacingOutcomes({ responseText, bookmarks }) {
+  if (!unruhClient || !Array.isArray(bookmarks) || bookmarks.length === 0) return;
+  if (typeof responseText !== 'string' || !responseText) return;
+  const now = new Date().toISOString();
+  const lowerResponse = responseText.toLowerCase();
+  for (const bm of bookmarks) {
+    if (!bm?.id) continue;
+    // Engagement signal: did the response text mention the topic label or
+    // the bookmark's own label? A false positive (model coincidentally used
+    // the word) is acceptable — it still means the topic was contextually
+    // relevant. A false negative is also fine — the bookmark resurfaces
+    // sooner (ignored path decreases the interval).
+    const topicMatch = bm.topic_label && lowerResponse.includes(bm.topic_label.toLowerCase());
+    const labelMatch = bm.label && lowerResponse.includes(bm.label.toLowerCase());
+    const outcome    = (topicMatch || labelMatch) ? 'engaged' : 'ignored';
+    console.log(`[thalamus] surfacing outcome for bookmark "${bm.label}" (topic: "${bm.topic_label ?? '?'}"): ${outcome}`);
+    try {
+      await unruhClient.callTool({
+        name: 'interest_report_surfacing_outcome',
+        arguments: { bookmark_id: bm.id, outcome, now },
+      });
+    } catch (err) {
+      console.error('[thalamus] interest_report_surfacing_outcome failed:', err?.message ?? err);
+    }
+  }
+}
 
 /**
  * Create a new memory entry in entity-core.
@@ -1255,7 +1375,10 @@ const PROTO_INSTANCE_ID = 'proto-familiar';
 
 async function callTool(name, args = {}) {
   if (!mcpClient) throw new Error('entity-core not connected');
+  const t0 = Date.now();
+  console.log(`[thalamus] → entity-core: ${name}`);
   const result = await mcpClient.callTool({ name, arguments: args });
+  console.log(`[thalamus] ← entity-core: ${name} (${Date.now() - t0}ms)`);
   return parseToolText(result, {});
 }
 

@@ -393,19 +393,44 @@ def current_phase(
     *,
     at: str | None = None,
 ) -> dict[str, Any] | None:
-    """Return the phase node containing `at` (default now), or None.
+    """Return the phase node whose time-of-day range contains `at`
+    (default now), or None.
 
-    Phases are open-ended on the right edge by convention (when_ts
-    <= at < end_ts) so two back-to-back phases don't double-match
-    at the boundary instant.
+    Phases are daily-recurring by design: only the HH:MM:SS portion
+    of the stored timestamps is compared against `at`, so a phase
+    added on any past date remains active at that time of day every
+    day until manually resolved.
+
+    Two cases handled:
+      • Normal phase  (start < end, e.g. 09:00–17:00): active when
+        start ≤ current_time < end.
+      • Overnight phase (end < start, e.g. 23:00–06:00): active when
+        current_time ≥ start OR current_time < end.
+
+    Open-ended on the right edge (when = end_time boundary, the NEXT
+    phase wins) so back-to-back phases don't double-match.
+
+    Resolved phases are excluded so a deliberately cancelled phase
+    stops recurring.
     """
     at = at or now_iso()
     row = conn.execute(
         """SELECT * FROM nodes
             WHERE layer = 'schedule' AND type = 'phase'
-              AND when_ts <= ? AND ? < end_ts
+              AND resolution IS NULL
+              AND (
+                -- Normal phase: start time < end time (same calendar day)
+                (strftime('%H:%M:%S', when_ts) < strftime('%H:%M:%S', end_ts)
+                 AND strftime('%H:%M:%S', when_ts) <= strftime('%H:%M:%S', ?)
+                 AND strftime('%H:%M:%S', ?) < strftime('%H:%M:%S', end_ts))
+                OR
+                -- Overnight phase: end time < start time (wraps midnight)
+                (strftime('%H:%M:%S', when_ts) >= strftime('%H:%M:%S', end_ts)
+                 AND (strftime('%H:%M:%S', ?) >= strftime('%H:%M:%S', when_ts)
+                      OR strftime('%H:%M:%S', ?) < strftime('%H:%M:%S', end_ts)))
+              )
             ORDER BY when_ts DESC
             LIMIT 1""",
-        (at, at),
+        (at, at, at, at),
     ).fetchone()
     return _node_row_to_dict(row) if row else None

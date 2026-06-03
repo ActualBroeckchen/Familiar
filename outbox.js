@@ -76,7 +76,7 @@ async function writeAll(tomesDir, items) {
  * of creating a duplicate. Important so a flaky reminders tick that
  * fires twice doesn't spam the user with the same banner.
  */
-export async function enqueueOutbox({ kind, originId, title, body = '', ts, tomesDir = DEFAULT_TOMES_DIR }) {
+export async function enqueueOutbox({ kind, originId, title, body = '', ts, meta, tomesDir = DEFAULT_TOMES_DIR }) {
   if (!kind || typeof kind !== 'string') throw new Error('kind is required');
   if (!title || typeof title !== 'string') throw new Error('title is required');
   return await withLock(async () => {
@@ -86,7 +86,9 @@ export async function enqueueOutbox({ kind, originId, title, body = '', ts, tome
       if (dup) return { id: dup.id, deduped: true };
     }
     const id = randomUUID();
+    // Spread meta first so core fields (id, kind, acknowledged, etc.) always win.
     const item = {
+      ...(meta && typeof meta === 'object' ? meta : {}),
       id,
       kind,
       originId:     originId ?? null,
@@ -126,5 +128,22 @@ export async function clearAcknowledged({ tomesDir = DEFAULT_TOMES_DIR } = {}) {
     const kept  = items.filter(i => !i.acknowledged);
     await writeAll(tomesDir, kept);
     return { ok: true, removed: items.length - kept.length };
+  });
+}
+
+/**
+ * Merge additional fields into an existing outbox item (by id).
+ * Used by the triage loop to mark pendingContact.delivered = true
+ * once a deferred trusted-contact delivery fires.
+ */
+export async function updateOutboxMeta({ id, meta, tomesDir = DEFAULT_TOMES_DIR }) {
+  if (!id || typeof meta !== 'object' || meta === null) return { ok: false, error: 'id and meta object required' };
+  return await withLock(async () => {
+    const items = await readAll(tomesDir);
+    const item  = items.find(i => i.id === id);
+    if (!item) return { ok: false, found: false };
+    Object.assign(item, meta);
+    await writeAll(tomesDir, items);
+    return { ok: true, found: true };
   });
 }

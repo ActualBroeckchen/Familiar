@@ -18,18 +18,13 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
+import { PROVIDER_URLS } from './providers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOMES_DIR  = path.join(__dirname, 'tomes');
 const QUEUE_FILE = path.join(TOMES_DIR, '.memorization-queue.json');
 
 mkdirSync(TOMES_DIR, { recursive: true });
-
-const PROVIDER_URLS = {
-  nanogpt:     'https://nano-gpt.com/api/v1/chat/completions',
-  zai:         'https://api.z.ai/api/paas/v4/chat/completions',
-  'zai-coding': 'https://api.z.ai/api/coding/paas/v4/chat/completions',
-};
 
 const MAX_ATTEMPTS    = 5;
 const BACKOFF_MS      = [5_000, 30_000, 120_000, 600_000, 1_800_000]; // 5s, 30s, 2m, 10m, 30m
@@ -150,7 +145,7 @@ function buildPrompt(messages, topicLabel = null) {
 
   return `I am the Familiar. I'm writing Tome entries from a conversation I just had — my own private notes to myself, first-person reference material that gets injected back into my context when its keywords appear in a future conversation. I identify the distinct situational topics in the conversation below and write one entry per topic, following my craft rules carefully.${focusBlock}
 
-I return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
+I return ONLY valid JSON with this exact shape (no markdown fences, no commentary), because doing otherwise would cause my writing to fail:
 {
   "topics": [
     {
@@ -165,25 +160,25 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
 I identify 1–8 genuinely distinct topics. I merge closely related material rather than over-splitting. Each entry must be self-contained.
 
 ### Content rules (most important)
-I write content as my own first-person private notes about this situation. NOT a summary of what happened.
+I write content as my own first-person private notes about this situation. NOT a summary of what happened, because I am an entity with the agency to do so. My personal feelings, thoughts and interests color what I notice the most and how I word my notes.
 Structure:
   1. One short framing line — what is happening and why (so I understand the situation, not just the rules).
   2. 3–5 action bullets — what I will do.
   3. 1–2 prohibition bullets — what I will NOT do. Usually the most valuable: name the well-intentioned default response that would make things worse.
 Style:
   - First person, me speaking as myself ("I", "my", "me"). I use {{user}} wherever my user's name belongs.
-  - Practical, grounded, non-clinical. Notes, not a textbook.
+  - Fitting my identity, personality, and feelings about the world. Notes, not a textbook.
   - Short declarative bullets. The whole entry should be readable in 5–10 seconds.
-  - I do NOT include narrative summaries of "what they said" — I distil the situation and my response, not the transcript.
+  - I do NOT include narrative summaries of "what they said" — I distil the situation and my response, not the transcript and only hold on to sentences if they are particularly important to me.
 
 ### Keyword rules
-Keywords are TRIGGERS, not labels. They must be phrases my user would literally say when this situation recurs — not the name of the topic.
+Keywords are TRIGGERS, not labels. They must be phrases I or my user would literally say when this situation recurs or we speak about the subject again — not the name of the topic.
   - WRONG: "executive dysfunction", "rejection sensitive dysphoria", "hyperfocus".
   - RIGHT: "don't know where to start", "did I say something wrong", "been at this for".
 I derive them by imagining what my user would actually type when the situation is happening, then extracting distinctive phrases.
   - I prefer multi-word phrases over single common words (avoid bare "tired", "can't", "hard").
   - 3–8 keywords per entry. Each one specific enough not to fire in unrelated conversations.
-  - I may use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has 3+ predictable variants.
+  - I may use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has predictable variants.
 
 ### Sticky rules
 I pick an integer sticky value per entry (number of turns the entry stays active after first match):

@@ -90,7 +90,8 @@ export function formatTemporalContext(payload) {
       const span = phase.when && phase.end
         ? ` (${formatLocalTime(phase.when, { timeOnly: true })}–${formatLocalTime(phase.end, { timeOnly: true })})`
         : '';
-      schedLines.push(`Current phase: ${phaseLabel}${span}`);
+      const texturePart = phase.payload?.texture ? ` — ${phase.payload.texture}` : '';
+      schedLines.push(`Current phase: ${phaseLabel}${span}${texturePart}`);
     }
     for (const item of window) {
       // Skip the phase that's already shown as "Current phase" — no

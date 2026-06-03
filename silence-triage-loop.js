@@ -107,6 +107,11 @@ export async function runOneTriageTick({
     title:    'a thought from me',
     body:     decision.message,
     ts:       new Date(now()).toISOString(),
+    // decision.meta carries pendingContact + contactDeadlineTs when the
+    // LLM also requested a trusted-contact escalation. Stored on the item
+    // so the triage loop can fire the deferred delivery once the deadline
+    // passes without the user having acknowledged.
+    ...(decision.meta && typeof decision.meta === 'object' ? { meta: decision.meta } : {}),
   });
 
   return {

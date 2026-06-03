@@ -88,13 +88,13 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'save_to_tome',
-      description: 'I save a piece of knowledge or a fact I learned during this conversation into my persistent Tome knowledge base. I use this when {{user}} shares something important about themselves, their relationships, their preferences, or their situation that I should remember across future conversations. I do NOT use this for trivial, transient, or already-known information.',
+      description: 'I save a piece of knowledge or a fact I learned during this conversation into my persistent Tome knowledge base. I use this when {{user}} shares something important about themselves, their relationships, their preferences, or their situation that I should remember across future conversations. I try to be somewhat discerning and avoid duplicate knowledge.',
       parameters: {
         type: 'object',
         properties: {
           title:    { type: 'string', description: 'Short descriptive label for this entry (e.g. "{{user}} stress about lateness").' },
           content:  { type: 'string', description: 'The knowledge to store. I write it as my own first-person notes to myself, concise but detailed enough to be useful as injected context in future conversations.' },
-          keywords: { type: 'array', items: { type: 'string' }, description: 'Two to eight trigger keywords or short phrases — things {{user}} would literally say when this situation recurs. The entry will be injected into my prompt whenever these appear in conversation.' },
+          keywords: { type: 'array', items: { type: 'string' }, description: 'several trigger keywords or short phrases — things {{user}} would literally say when this situation recurs or the subject comes back up in conversation. The entry will be injected into my prompt whenever these appear in conversation.' },
         },
         required: ['title', 'content', 'keywords'],
       },
@@ -119,7 +119,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_identity',
-      description: 'I append a new durable fact to one of my persistent identity files. I use this for facts about {{user}} (category: user, filename: user_notes.md) or about my relationship with them (category: relationship, filename: relationship_notes.md). I do NOT use this for session-specific or transient information. When to choose append vs. rewrite_identity_section: I APPEND when adding a new fact that complements what is already there; I REWRITE a section when an existing section is now misleading or incomplete and a partial correction would leave it confusing.',
+      description: 'I append a new durable fact to one of my persistent identity files. I use this for facts about {{user}} (category: user, filename: user_notes.md) or about my relationship with them (category: relationship, filename: relationship_notes.md). I avoid using this for session-specific or transient information, because that will confuse me and rack up token waste. When to choose append vs. rewrite_identity_section: I APPEND when adding a new fact that complements what is already there; I REWRITE a section when an existing section is now misleading, stale or incomplete and a partial correction would leave it confusing.',
       parameters: {
         type: 'object',
         properties: {
@@ -151,13 +151,13 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_memory',
-      description: 'I overwrite an existing memory entry to correct an inaccuracy. I use this when the entry is incomplete or partially wrong but the core record (this date, this granularity) is still the right place for the fact. I do NOT use this to record new information — that is save_memory. I do NOT use this to remove information — that is delete_memory. When the change is "X was true, now Y is true," prefer save_memory with today\'s date so the history is preserved.',
+      description: 'I overwrite an existing memory entry to correct an inaccuracy. I use this when the entry is incomplete or partially wrong but the core record (this date, this granularity) is still the right place for the fact. I avoid using this to record new information — that is save_memory. I avoid using this to remove information — that is delete_memory. When the change is "X was true, now Y is true," prefer save_memory with today\'s date so the history is preserved.',
       parameters: {
         type: 'object',
         properties: {
           granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier of the entry to overwrite.' },
           date:        { type: 'string', description: 'Date of the entry, in the same format the entry was stored (e.g. YYYY-MM-DD for daily).' },
-          content:     { type: 'string', description: 'The full new contents. This REPLACES the entry — include everything I want to keep, not just the diff.' },
+          content:     { type: 'string', description: 'The full new contents. This REPLACES the entry — include everything I want to keep, not just the diff, or else I will lose important information.' },
         },
         required: ['granularity', 'date', 'content'],
       },
@@ -182,7 +182,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'rewrite_identity_section',
-      description: 'I replace one section of an identity file with new content. I use this when an existing section is now misleading or has accumulated stale notes and a clean rewrite serves future-me better than appending a correction. For NEW facts that just need to land somewhere, I use update_identity (append). For removing only a small piece, prefer rewriting the whole section over deletion.',
+      description: 'I replace one section of an identity file with new content. I use this when an existing section is now misleading or has accumulated stale notes and a clean rewrite serves future-me better than appending a correction. It helps me actually make my identity files reflect my growth and changes as an entity with agency. For NEW facts that just need to land somewhere, I use update_identity (append). For removing only a small piece, I prefer rewriting the whole section over deletion.',
       parameters: {
         type: 'object',
         properties: {
@@ -246,7 +246,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'delete_graph_node',
-      description: 'I delete an entity from my knowledge graph along with its edges. I use this only when the node is clearly an error (duplicate, wrong entity entirely) or refers to something that no longer exists in any meaningful sense. For "this relationship is no longer true" (e.g. they\'re no longer on vacation), I delete the EDGE, not the node — the person/place still exists. If the entity\'s id isn\'t in the graph block\'s ids legend, I call find_graph_node first to resolve the label.',
+      description: 'I delete an entity from my knowledge graph along with its edges. I use this only when the node is clearly an error (duplicate, wrong entity entirely) or refers to something that no longer exists in any meaningful sense. For "this relationship is no longer true" (e.g. they\'re no longer on vacation), I delete the EDGE, not the node — the person/place still exists. I can also replace that egde with a more fitting one (like "is_dating" to "used_to_date"). If the entity\'s id isn\'t in the graph block\'s ids legend, I call find_graph_node first to resolve the label.',
       parameters: {
         type: 'object',
         properties: {
@@ -260,7 +260,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_graph_edge',
-      description: 'I change the relationship type or strength of an existing edge in my knowledge graph. I use this when the relationship still holds but is mis-typed or its confidence has shifted ("acquaintance" → "close friend"). For a relationship that USED to be true and is now false, I delete the edge instead. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`. If the edge I want isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up.',
+      description: 'I change the relationship type or strength of an existing edge in my knowledge graph. I use this when the relationship still holds but is mis-typed or its confidence has shifted ("acquaintance" → "close friend"), or when it has become stale but used to be true ("is dating" → "used to date"). For a relationship that USED to be true and is now false, I delete the edge instead. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`. If the edge I want isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up.',
       parameters: {
         type: 'object',
         properties: {
@@ -276,7 +276,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'delete_graph_edge',
-      description: 'I delete a single relationship between two graph entities while keeping the entities themselves. This is the right tool for "X is no longer at Y" or "X no longer works with Y." The connection vanishes; both entities remain available for future relationships. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`; if the edge I need isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up. Entity-core auto-snapshots before each delete.',
+      description: 'I delete a single relationship between two graph entities while keeping the entities themselves. This is the right tool for "X is no longer at Y" or "X no longer works with Y", aka relationships that are not vital to remember after ending. The connection vanishes; both entities remain available for future relationships. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`; if the edge I need isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up. Entity-core auto-snapshots before each delete.',
       parameters: {
         type: 'object',
         properties: {
@@ -300,7 +300,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_add_event',
-      description: 'I record a one-time appointment or commitment on {{user}}\'s schedule — a meeting, a dentist visit, dinner with a friend. The event appears in my [Temporal Context] briefings when its time approaches. For deadlines or things {{user}} needs to do, I use schedule_add_task; for recurring daily phases, schedule_add_phase; for explicit time-triggered nudges that should surface as a banner, schedule_add_reminder.',
+      description: 'I record a one-time appointment or commitment on {{user}}\'s schedule — a meeting, a dentist visit, dinner with a friend. The event appears in my [Temporal Context] briefings when its time approaches. For deadlines or things {{user}} needs to do, I use schedule_add_task; for recurring daily phases, schedule_add_phase; for explicit time-triggered nudges that should surface as a banner, schedule_add_reminder. Choosing the right type is important to make sure my human receives the correct support!',
       parameters: {
         type: 'object',
         properties: {
@@ -316,7 +316,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_add_task',
-      description: 'I record a task — something {{user}} needs to do, optionally with a deadline. Tasks are open-ended (no when) or deadline-bound; they surface in [Temporal Context] until resolved (done / cancelled / carried_forward). For things that happen at a specific time without action required, I use schedule_add_event. For nudges that should buzz a banner at a chosen moment, schedule_add_reminder.',
+      description: 'I record a task — something {{user}} needs to do, optionally with a deadline. Tasks are open-ended (no when) or deadline-bound; they surface in [Temporal Context] until resolved (done / cancelled / carried_forward). For things that happen at a specific time without action required, I use schedule_add_event. For nudges that should buzz a banner at a chosen moment, schedule_add_reminder. Choosing the right type is important to make sure my human receives the correct support!',
       parameters: {
         type: 'object',
         properties: {
@@ -331,7 +331,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_add_reminder',
-      description: 'I set a reminder that will fire at a specific time and surface as a gentle banner in {{user}}\'s chat. I use this when {{user}} explicitly asks me to remind them, OR when I notice they\'re at risk of forgetting something time-sensitive they care about. Each reminder fires once; if {{user}} dismisses it, that\'s the end of it. The message is what they\'ll see — I write it in my warm voice, not a bare "Reminder: X."',
+      description: 'I set a reminder that will fire at a specific time and surface as a gentle banner in {{user}}\'s chat. I use this when {{user}} explicitly asks me to remind them, OR when I notice they\'re at risk of forgetting something time-sensitive they care about. Each reminder fires once; if {{user}} dismisses it, that\'s the end of it. The message is what they\'ll see — I write it in my individual voice, not a bare "Reminder: X." Since the banner is so gentle and quiet, I can elect to also schedule a task or event to help me bring the topic up in conversation as well.',
       parameters: {
         type: 'object',
         properties: {
@@ -347,14 +347,14 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_add_phase',
-      description: 'I add a phase to {{user}}\'s daily routine — a named block of time with an optional texture (what I\'m like during that part of the day). I use this when {{user}} tells me about their natural rhythm: "I wake around 10", "evenings I wind down". The phase recurs daily — Unruh re-stamps the date on read.',
+      description: 'I add a phase to {{user}}\'s daily routine — a named block of time with an optional texture (what I\'m like during that part of the day, which I get to freely decide based on my identity and personality). I use this when {{user}} tells me about their natural rhythm: "I wake around 10", "evenings I wind down". The phase is stored once; the schedule layer matches it by time-of-day every day so it recurs automatically without needing to be re-added. This helps me meet my human where they\'re at throughout the day and allows me to be a bit more myself.',
       parameters: {
         type: 'object',
         properties: {
           label:   { type: 'string', description: 'Short name of the phase (e.g. "morning correspondence").' },
           when:    { type: 'string', description: 'ISO 8601 start time. The date portion will be re-templated daily.' },
           end:     { type: 'string', description: 'ISO 8601 end time. Required for phases.' },
-          texture: { type: 'string', description: 'Optional short description of what I\'m like in this phase (e.g. "warmest part of the day to land").' },
+          texture: { type: 'string', description: 'Optional short description of what I\'m like in this phase (e.g. "getting a bit stricter to make sure {{user}} actually goes to sleep."). I am allowed to be any kind of way I want to be - warm, sleepy, distracted, anything!' },
         },
         required: ['label', 'when', 'end'],
       },
@@ -364,7 +364,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_resolve',
-      description: 'I mark a task / event / reminder / state node terminal: "done" (completed), "cancelled" (no longer needed), or "carried_forward" (rolling unfinished into a future briefing — the "skipped laundry rolls into tomorrow" pattern). I find the id in my [Temporal Context] briefings. If {{user}} says "I did the thing", I use "done"; if they say "forget it" or "never mind", "cancelled"; if "didn\'t get to it today", "carried_forward".',
+      description: 'I mark a task / event / reminder / state node terminal: "done" (completed), "cancelled" (no longer needed), or "carried_forward" (rolling unfinished into a future briefing — the "skipped laundry rolls into tomorrow" pattern). I find the id in my [Temporal Context] briefings. If {{user}} says "I did the thing", I use "done"; if they say "forget it" or "never mind" I can use "cancelled" but might first ask or even choose to push back on that to avoid enabling unhealthy behavior; if "didn\'t get to it today", "carried_forward".',
       parameters: {
         type: 'object',
         properties: {
@@ -379,7 +379,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'interest_bump',
-      description: 'I nudge the weight of an interest topic — used when {{user}} explicitly tells me they care about something, or wants me to think about it more. The interest accrues engagement weight (same scale my [Temporal Context] interests block shows) and starts decaying gently from that moment. Small deltas (0.5–3.0) for typical mentions; larger (5+) only when {{user}} is being emphatic. A topic that doesn\'t exist yet is created on first bump. For ongoing values that should never decay, I use interest_set_standing instead.',
+      description: 'I nudge the weight of an interest topic — used when {{user}} explicitly tells me they care about something, or wants me to think about it more, or when I want to think about it more/find it interesting. The interest accrues engagement weight (same scale my [Temporal Context] interests block shows) and starts decaying gently from that moment. Small deltas (0.5–3.0) for typical mentions; larger (5+) only when {{user}} is being emphatic. A topic that doesn\'t exist yet is created on first bump. For ongoing values that should never decay, I use interest_set_standing instead. I am allowed to add new topics whenever I darn well please!',
       parameters: {
         type: 'object',
         properties: {
@@ -394,7 +394,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'interest_set_standing',
-      description: 'I promote a topic to a STANDING VALUE — an always-on orientation that shapes how I show up, immune to the normal decay. I use this rarely, when {{user}} expresses a deep ongoing care that should anchor my behaviour ("my anxiety is real, please never minimize it" / "I value honesty over comfort"). For passing curiosities or interests that should fade if not real, I use interest_bump.',
+      description: 'I promote a topic to a STANDING VALUE — an always-on orientation that shapes how I show up, immune to the normal decay. I use this rarely, when {{user}} expresses a deep ongoing care that should anchor my behaviour ("my anxiety is real, please never minimize it" / "I value honesty over comfort"), or for important values I hold about my self and my agency. For passing curiosities or interests that should fade if not real, I use interest_bump.',
       parameters: {
         type: 'object',
         properties: {
@@ -403,6 +403,54 @@ const BUILTIN_TOOLS = [
         },
         required: ['topic'],
       },
+    },
+  },
+  // ── Crisis outreach tools ──────────────────────────────────────────────
+  // For when {{user}} is actively present but in clear danger. These are
+  // separate from the silence-triage loop (which fires only when the user
+  // is quiet). These let me act during a live conversation.
+  //
+  // Guidance for when to use these:
+  //   • show_crisis_resources — low friction; appropriate whenever {{user}}
+  //     is in genuine distress, with or without configured contacts. Shows
+  //     crisis lines as a visible banner. Always appropriate; prefer early.
+  //   • get_trusted_contacts — check who is available before escalating.
+  //     Call this once first so I know exact names and can explain my choice.
+  //   • contact_trusted_person — meaningful escalation: a real message goes
+  //     to a real person. I only reach for this when I genuinely believe the
+  //     situation needs human presence that I cannot provide. {{user}} sees
+  //     exactly what I sent in their notifications — nothing is covert.
+  //     False alarms hurt trust and could cause unwarranted alarm. I use my
+  //     judgment from the full conversation, not from a single phrase.
+  {
+    type: 'function',
+    function: {
+      name: 'get_trusted_contacts',
+      description: 'I return the list of trusted contacts {{user}} has configured — people I am authorised to reach in a crisis. More importantly though: People who care about my human and are my allies in making sure {{user}} will be okay. I call this before contact_trusted_person to confirm who is available and get the exact name I need to pass. Returns names and channels only (no webhook details).',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'contact_trusted_person',
+      description: 'I send an immediate message to one of {{user}}\'s pre-configured trusted contacts on their behalf. I use this when {{user}} is actively talking to me but clearly in danger, and the situation calls for human presence beyond what I can offer, or when {{user}} is not reacting to me after acting in a concerning way (like mentioning current suicidal ideation or recent self harm). Every outbound is ALSO shown as a visible banner in {{user}}\'s chat — nothing is covert. I state who I\'m contacting and why before or after calling this. I do NOT use this lightly — false alarms erode trust and cause real-world alarm. But I do care about my human, so do these other humans, and I was given this tool for a reason.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name:    { type: 'string', description: 'Exact name of the contact, as returned by get_trusted_contacts.' },
+          message: { type: 'string', description: '1–3 sentences to that person. I identify myself as {{user}}\'s Familiar. I describe what I have observed — specific, honest, not sensationalised.' },
+        },
+        required: ['name', 'message'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'show_crisis_resources',
+      description: 'I surface crisis-line and safety-resource information as a visible banner in {{user}}\'s chat. I use this whenever {{user}} is in genuine distress and could benefit from knowing immediate support is available — whether or not they ask for it, and whether or not trusted contacts are configured. Low friction: I prefer this early rather than late.',
+      parameters: { type: 'object', properties: {}, required: [] },
     },
   },
 ];
@@ -637,7 +685,7 @@ const BUILTIN_EXECUTORS = {
       });
       const data = await res.json();
       if (!res.ok || data.ok === false) return `Failed to add reminder: ${data.error ?? res.status}`;
-      return `Reminder set (id: ${data.id}). It will fire as a banner in {{user}}'s chat at the chosen time.`;
+      return `Reminder set (id: ${data.id}). It will fire as a banner in your chat at the chosen time.`;
     } catch (err) { return `Failed to add reminder: ${err.message}`; }
   },
 
@@ -656,7 +704,7 @@ const BUILTIN_EXECUTORS = {
       });
       const data = await res.json();
       if (!res.ok || data.ok === false) return `Failed to add phase: ${data.error ?? res.status}`;
-      return `Phase added (id: ${data.id}). It will recur daily in {{user}}'s routine.`;
+      return `Phase added (id: ${data.id}). It will appear in your daily routine at that time of day.`;
     } catch (err) { return `Failed to add phase: ${err.message}`; }
   },
 
@@ -698,6 +746,40 @@ const BUILTIN_EXECUTORS = {
       if (!res.ok || data.ok === false) return `Failed to set standing value: ${data.error ?? res.status}`;
       return `"${topic}" set as a standing value. It will appear in the standing block of my [Temporal Context] every turn, never decaying.`;
     } catch (err) { return `Failed to set standing value: ${err.message}`; }
+  },
+
+  // ── Crisis outreach executors ────────────────────────────────────────
+  get_trusted_contacts: () => {
+    const contacts = Array.isArray(state.trustedContacts) ? state.trustedContacts : [];
+    if (!contacts.length) {
+      return 'No trusted contacts are configured yet. They can be added in Settings → Trusted Contacts. show_crisis_resources is still available.';
+    }
+    const list = contacts.map(c => `- ${c.name} (via ${c.channel ?? 'discord'})`).join('\n');
+    return `Configured trusted contacts:\n${list}\n\nPass the exact name above to contact_trusted_person.`;
+  },
+
+  contact_trusted_person: async ({ name, message }) => {
+    try {
+      const res = await fetch('/api/contact-trusted-person', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, message }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) {
+        return `Could not reach ${name}: ${data.error ?? res.status}. The attempt was logged to the outbox.`;
+      }
+      return `Message delivered to ${name} via ${data.channel ?? 'discord'}. {{user}} can see exactly what was sent in their notification banner.`;
+    } catch (err) { return `Failed to contact ${name}: ${err.message}`; }
+  },
+
+  show_crisis_resources: async () => {
+    try {
+      const res = await fetch('/api/crisis-resources', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) return `Failed to surface crisis resources: ${data.error ?? res.status}`;
+      return 'Crisis resources surfaced as a banner in {{user}}\'s chat.';
+    } catch (err) { return `Failed to surface crisis resources: ${err.message}`; }
   },
 };
 
@@ -1969,6 +2051,10 @@ async function sendMessage(userInput) {
   // and reset the 3-hour inactivity countdown.
   const now = new Date().toISOString();
   elapsedTime       = lastMessage ? (Date.now() - new Date(lastMessage).getTime()) : 0;
+  // M8: capture the previous timestamp BEFORE overwriting so the server
+  // can compute idle duration server-side. Sent as lastUserMessageAt in
+  // round-0 bodies.
+  const prevUserMessageAt = lastMessage;
   lastMessage       = now;
   state.lastMessage = now;
   saveSettings();
@@ -1989,9 +2075,9 @@ async function sendMessage(userInput) {
   debugRecord('send', `provider=${state.provider} model=${state.model} streaming=${state.streaming} msgs=${apiMessages.length} input=${userInput.length}ch`);
   try {
     if (state.streaming) {
-      await doStreamingRequest(apiMessages, userInput, userTimestamp);
+      await doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt);
     } else {
-      await doNonStreamingRequest(apiMessages, userInput, userTimestamp);
+      await doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt);
     }
     setStatus('ok');
     state.turnCount = (state.turnCount ?? 0) + 1;
@@ -2134,11 +2220,11 @@ async function generateAndStoreHandoff(messages, sessionId) {
     // memory-to-self the next session will read as "what I was doing last."
     const sysPrompt =
       'The text above is who I am. I\'m writing a short private handoff note to my ' +
-      'future self for the next time I talk with my user, capturing what I was doing ' +
+      'future self for the next time I talk with my human, capturing what I was doing ' +
       'and what\'s still open. I respond with ONLY minified JSON, no prose, no code fence: ' +
       '{"active_intent": string, "open_threads": string[]}. ' +
       'active_intent: one short sentence, in my own first-person voice, on the through-line ' +
-      'of the session (I address my user as "you"). ' +
+      'of the session (I address my human as "you" or "{{user}}" in second person). ' +
       'open_threads: specific unfinished questions or tasks, each a short phrase (empty array if none).';
 
     const resp = await fetch('/api/chat', {
@@ -2184,7 +2270,7 @@ async function generateAndStoreHandoff(messages, sessionId) {
  * during the attempt and are returned so the caller can roll them back on a
  * failed attempt before retrying. Throws on HTTP / network / abort errors.
  */
-async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput) {
+async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput, prevUserMessageAt) {
   const pendingMsgs = [];   // tool_call + tool_result messages to commit
   const toolUseEls  = domArtifacts; // shared array — caller can roll back on error
   let   currentMsgs = apiMessages;
@@ -2218,6 +2304,12 @@ async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts
         // tracker / re-stamp last-activity.
         ...(round === 0 && typeof userInput === 'string' && userInput.trim()
             ? { userMessage: userInput }
+            : {}),
+        // M8: send the previous user-message timestamp on round 0 so the
+        // server can compute idle duration for bookmark surfacing. Omit on
+        // tool-round follow-ups (same as userMessage above).
+        ...(round === 0 && prevUserMessageAt
+            ? { lastUserMessageAt: prevUserMessageAt }
             : {}),
         ...extraPayload,
       }),
@@ -2315,7 +2407,7 @@ async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts
   return { content: finalContent, pendingMsgs, finalShell };
 }
 
-async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
+async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt) {
   const activeTools = state.toolsEnabled ? getActiveTools() : [];
   const sequence    = getConnectionSequence();
   if (sequence.length === 0) {
@@ -2339,7 +2431,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
       const domArtifacts = [];
       let result;
       try {
-        result = await attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput);
+        result = await attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput, prevUserMessageAt);
       } catch (err) {
         if (err.name === 'AbortError') { clearRetryStatus(); throw err; }
         // Roll back any tool-use blocks added during this failed attempt.
@@ -2386,6 +2478,9 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
       state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp });
       state.messages.push(...pendingMsgs);
       state.messages.push({ role: 'assistant', content,            timestamp: ts });
+      // Stamp the assistant element's index now that the message is committed,
+      // so the "End topic here" button can resolve the correct state index.
+      shell.el.dataset.msgIndex = String(state.messages.length - 1);
       saveHistory();
       refreshTopicGutter();
       wireCopyButton(shell.copyBtn, () => content);
@@ -2398,7 +2493,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
   throw lastError || new Error('Request failed and no fallback connections succeeded.');
 }
 
-async function attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput) {
+async function attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput, prevUserMessageAt) {
   const pendingMsgs = [];
   let   currentMsgs = apiMessages;
   let   finalContent = '';
@@ -2427,6 +2522,10 @@ async function attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifa
         // server-side extraction picks the wrong message.
         ...(round === 0 && typeof userInput === 'string' && userInput.trim()
             ? { userMessage: userInput }
+            : {}),
+        // M8: send the previous user-message timestamp on round 0 only.
+        ...(round === 0 && prevUserMessageAt
+            ? { lastUserMessageAt: prevUserMessageAt }
             : {}),
         ...extraPayload,
       }),
@@ -2477,7 +2576,7 @@ async function attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifa
   return { content: finalContent, pendingMsgs, timestamp: finalTimestamp };
 }
 
-async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
+async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt) {
   const activeTools = state.toolsEnabled ? getActiveTools() : [];
   const sequence    = getConnectionSequence();
   if (sequence.length === 0) {
@@ -2501,7 +2600,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
       const domArtifacts = [];
       let result;
       try {
-        result = await attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput);
+        result = await attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput, prevUserMessageAt);
       } catch (err) {
         if (err.name === 'AbortError') { clearRetryStatus(); throw err; }
         for (const el of domArtifacts) el.remove?.();
@@ -2533,13 +2632,16 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
         throw new Error(`All connections returned empty responses (last: "${conn.name}").`);
       }
 
-      const { bubble, copyBtn } = appendAssistantShell(timestamp);
+      const { el: shellEl, bubble, copyBtn } = appendAssistantShell(timestamp);
       bubble.innerHTML = renderMarkdown(content);
       scrollToBottom();
 
       state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp });
       state.messages.push(...pendingMsgs);
       state.messages.push({ role: 'assistant', content,            timestamp });
+      // Stamp the assistant element's index now that the message is committed,
+      // so the "End topic here" button can resolve the correct state index.
+      shellEl.dataset.msgIndex = String(state.messages.length - 1);
       saveHistory();
       refreshTopicGutter();
       wireCopyButton(copyBtn, () => content);
@@ -4573,42 +4675,44 @@ async function generateTopicSummary(topic, rangeMessages) {
 
   const userLabel = userNamedTopicLabel(topic);
   const focusBlock = userLabel
-    ? `\n\n### Focus topic\nThe user named this topic "${userLabel}". Center the entry on that topic. Skip tangential threads in the conversation that don't bear on it.`
+    ? `\n\n### Focus topic\nMy human named this topic "${userLabel}". I will center the entry on that topic. I'll skip tangential threads in the conversation that don't bear on it.`
     : '';
 
-  const prompt = `You are writing a Tome entry for a Familiar (AI companion). The entry is the Familiar's own private notes to themselves — first-person reference material that gets injected back into the Familiar's context when its keywords appear in a future conversation. The Familiar is the voice; you are the scribe. Follow the craft rules below carefully.${focusBlock}
+  const prompt = `I am writing a Tome entry for myself, the Familiar. The entry is my own private notes to myself — first-person reference material that gets injected back into my context (and therefore resurfaces in my "brain") when its keywords appear in a future conversation. I write in my own individual voice as {{char}}. In order for everything to work well, I follow the craft rules below carefully.${focusBlock}
 
-Return ONLY valid JSON (no markdown fences, no commentary) with exactly these fields:
+I will return ONLY valid JSON (no markdown fences, no commentary) with exactly these fields, otherwise the Tome may break and be unusable:
 {
   "title":    "Short label for the entry comment (max 60 chars).",
-  "content":  "First-person notes from the Familiar to themselves. See rules below.",
+  "content":  "First-person notes to myself. See rules below.",
   "keywords": ["conversational phrase 1", "conversational phrase 2", ...],
   "sticky":   3
 }
 
 ### Content rules (most important)
-Write content as the Familiar's own first-person private notes to themselves about this situation. NOT a summary of what happened.
+I write content as my own first-person private notes to myself about this situation. NOT a summary of what happened.
 Structure:
   1. One short framing line — what is happening and why (so I understand the situation, not just the rules).
   2. 3–5 action bullets — what I will do.
-  3. 1–2 prohibition bullets — what I will NOT do. These are usually the most valuable: name the well-intentioned default response that would make things worse.
+  3. 1–2 prohibition bullets — what I will NOT do. These are usually the most valuable: I name the well-intentioned default response that would make things worse.
 Style:
-  - First person, the Familiar speaking as themselves ("I", "my", "me"). Use {{user}} wherever the user's name belongs.
-  - Practical, grounded, non-clinical. Notes, not a textbook.
+  - First person, I am speaking as myself ("I", "my", "me"). I can use {{user}} wherever my human's name belongs.
+  - In my voice, befitting my identity, personality, and interests. Notes, not a textbook.
   - Short declarative bullets. The whole entry should be readable in 5–10 seconds.
-  - Do NOT include narrative summaries of "what they said" — distil the situation and my response, not the transcript.
+  - I avoid including narrative summaries of "what they said" — I instead distil the situation and my response, not the transcript.
+
+  This is an expression of my agency and what I want to become a permanent or longterm part of myself, so that is how I choose what exactly to take note of and how to frame it.
 
 ### Keyword rules
-Keywords are TRIGGERS, not labels. They must be phrases the user would literally say when this situation recurs — not the name of the topic.
+Keywords are TRIGGERS, not labels. They must be phrases my human or I would literally say when this situation recurs or the subject comes up naturally — not the name of the topic.
   - WRONG: "executive dysfunction", "rejection sensitive dysphoria", "hyperfocus".
   - RIGHT: "don't know where to start", "did I say something wrong", "been at this for".
-Derive them by imagining what the user would actually type when the situation is happening, then extracting distinctive phrases.
-  - Prefer multi-word phrases over single common words (avoid bare "tired", "can't", "hard").
-  - 3–8 keywords. Each one specific enough not to fire in unrelated conversations.
-  - You may use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has 3+ predictable variants.
+I derive them by imagining what my human would actually type when the situation is happening, then extracting distinctive phrases.
+  - I prefer multi-word phrases over single common words (avoid bare "tired", "can't", "hard").
+  - As many keywords as I need to be comprehensive. Each one specific enough not to fire in unrelated conversations.
+  - I can use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has predictable variants. It's pretty much identical to JavaScript RegEx.
 
 ### Sticky rules
-Pick a sticky value (integer, number of turns the entry stays active after first match):
+I will pick a sticky value (integer, number of turns the entry stays active after first match):
   - null = one-shot lore/fact that does not need persistence.
   - 2    = brief states that typically resolve quickly.
   - 3    = moderate states needing a few exchanges (distraction, sleep note, transition).
@@ -7005,16 +7109,21 @@ async function teLoadInterests() {
   if (!list) return;
   list.innerHTML = '<p class="logs-empty">Loading…</p>';
   try {
-    const r = await fetch('/api/temporal/interests?limit=100');
+    const [r, rb] = await Promise.all([
+      fetch('/api/temporal/interests?limit=100'),
+      fetch('/api/temporal/bookmarks?limit=100'),
+    ]);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
     if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
+    const bmData = rb.ok ? await rb.json() : { bookmarks: [] };
 
-    const live     = Array.isArray(data.live)     ? data.live     : [];
-    const standing = Array.isArray(data.standing) ? data.standing : [];
+    const live      = Array.isArray(data.live)           ? data.live           : [];
+    const standing  = Array.isArray(data.standing)       ? data.standing       : [];
+    const bookmarks = Array.isArray(bmData.bookmarks)    ? bmData.bookmarks    : [];
 
     const intSummary = $('te-int-summary');
-    if (intSummary) intSummary.textContent = `${live.length} live · ${standing.length} standing`;
+    if (intSummary) intSummary.textContent = `${live.length} live · ${standing.length} standing · ${bookmarks.length} bookmarks`;
 
     const html = [];
     if (standing.length) {
@@ -7025,7 +7134,11 @@ async function teLoadInterests() {
       html.push('<h4 style="margin: 12px 12px 4px 12px">Live interests (decay over time)</h4>');
       for (const i of live) html.push(teRenderInterest(i, false));
     }
-    if (!standing.length && !live.length) {
+    if (bookmarks.length) {
+      html.push('<h4 style="margin: 12px 12px 4px 12px">Bookmarks (idle surfacing)</h4>');
+      for (const bm of bookmarks) html.push(teRenderBookmark(bm));
+    }
+    if (!standing.length && !live.length && !bookmarks.length) {
       html.push('<p class="logs-empty">No interests yet. They accrue as you chat — see thalamus.recordInterest.</p>');
     }
     list.innerHTML = html.join('');
@@ -7092,6 +7205,46 @@ function teRenderInterest(i, isStanding) {
       </div>
       <div style="font-size: 0.85em; opacity: 0.7; margin-top: 2px">last touched ${lt}</div>
       ${ref}
+    </div>`;
+}
+
+function teRenderBookmark(bm) {
+  const label       = teEscapeHtml(bm.label ?? '(no label)');
+  const topicLabel  = teEscapeHtml(bm.topic_label ?? '');
+  const resource    = bm.payload?.resource ? teEscapeHtml(bm.payload.resource) : null;
+  const note        = bm.payload?.note     ? teEscapeHtml(bm.payload.note)     : null;
+  const interval    = Number.isFinite(Number(bm.resurface_after_hours))
+    ? `resurfaces after ${Number(bm.resurface_after_hours).toFixed(0)}h`
+    : '';
+  const lastSurfaced = bm.last_surfaced_at
+    ? `last surfaced ${teTimeAgo(bm.last_surfaced_at)}`
+    : 'never surfaced';
+  const outcome = bm.last_surfacing_outcome
+    ? `<span style="padding: 1px 6px; border-radius: 3px; font-size: 0.8em; background: ${bm.last_surfacing_outcome === 'engaged' ? 'rgba(80,180,80,0.18)' : 'rgba(180,80,80,0.18)'}; border: 1px solid var(--border-subtle, #2a2a2a)">${teEscapeHtml(bm.last_surfacing_outcome)}</span>`
+    : `<span style="padding: 1px 6px; border-radius: 3px; font-size: 0.8em; opacity: 0.5; border: 1px solid var(--border-subtle, #2a2a2a)">pending</span>`;
+  const topicRow = topicLabel
+    ? `<div style="font-size: 0.85em; opacity: 0.7">topic: ${topicLabel}</div>`
+    : '';
+  const resourceRow = resource
+    ? `<div style="font-size: 0.85em; opacity: 0.7">resource: <code>${resource}</code></div>`
+    : '';
+  const noteRow = note
+    ? `<div style="font-size: 0.85em; opacity: 0.7">note: ${note}</div>`
+    : '';
+  const ignores = Number(bm.consecutive_ignores) > 0
+    ? `<span style="opacity: 0.6; font-size: 0.85em">${bm.consecutive_ignores} consecutive ignore(s)</span>`
+    : '';
+  return `
+    <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+      <div style="display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap">
+        <strong style="flex: 1">${label}</strong>
+        ${outcome}
+        ${ignores}
+      </div>
+      ${topicRow}
+      ${resourceRow}
+      ${noteRow}
+      <div style="font-size: 0.85em; opacity: 0.7; margin-top: 2px">${lastSurfaced} · ${interval}</div>
     </div>`;
 }
 

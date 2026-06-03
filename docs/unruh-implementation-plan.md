@@ -527,29 +527,68 @@ a living entity-core fact or quietly steps down to an ordinary interest.
 
 ---
 
-### Milestone 8 — Idle / free-cycle surfacing
+### Milestone 8 — Idle / free-cycle surfacing *(Shipped in 0.2.60-alpha)*
 
-**Goal:** When nothing is demanding attention, Unruh surfaces a
-weighted interest so Familiar has somewhere to put its attention.
+**Goal:** When the user has been quiet for a sustained period, Unruh
+surfaces due bookmarks so Familiar can weave them naturally into its
+response, and tracks whether each surfaced bookmark was actually
+engaged with so the resurface interval adapts over time.
 
 **Tasks**
-- [ ] Add a `temporal_context` mode flag: `mode = 'message' |
-      'idle'`. In idle mode, the response prioritises interest-layer
-      content over schedule-layer.
-- [ ] Decide what "idle" means in the current single-user UI: the
-      design doc talks about "heartbeats", but Proto-Familiar's
-      backend has no scheduler. Two paths:
-      - (a) Punt until Milestone 11 builds a real scheduler.
-      - (b) Treat any chat message that doesn't specify a topic as
-        an idle moment — the model gets the interest surface in the
-        prompt and can volunteer something if it wants.
-      - **Recommendation:** ship (b) first as it costs nothing
-        infra-wise; (a) follows naturally from the reminders work.
-- [ ] Bookmark surfacing: on idle, include any bookmarks older than
-      24h that haven't been picked up.
+- [x] Add a `temporal_context` mode flag: `mode = 'message' |
+      'idle'`. In idle mode the response includes up to 3 due
+      bookmarks under `payload.bookmarks`.
+- [x] Decide what "idle" means: chose approach (b) — detect idle on
+      the chat path itself. `thalamus.js` computes
+      `isIdle = (now - lastUserMessageAt) >= IDLE_THRESHOLD_MS`
+      (30 min). When idle, `enrich()` passes `mode:'idle'` to
+      `temporal_context` and returns `surfacedBookmarks` alongside
+      the prompt sections. No scheduler needed.
+- [x] Bookmark surfacing: `list_bookmarks_for_surfacing()` in
+      `interest.py` selects bookmarks where
+      `last_surfaced_at IS NULL OR elapsed >= resurface_after_hours`
+      (default 24h), ordered by longest-overdue first, up to `limit=3`.
+- [x] **Outcome tracking.** After the LLM response completes, server.js
+      calls `reportSurfacingOutcomes({ responseText, bookmarks })`.
+      For each surfaced bookmark, the topic label / resource / label
+      are searched in the response text; presence → `'engaged'`,
+      absence → `'ignored'`. Recorded via new MCP tool
+      `interest_report_surfacing_outcome`.
+- [x] **Adaptive resurface intervals.** `record_surfacing_outcome()`
+      in `interest.py` adjusts `resurface_after_hours`:
+      engaged → `interval × 1.5` (max 168h / 7 days);
+      ignored → `interval × 0.75` (min 4h). Three consecutive ignores
+      (`consecutive_ignores >= 3`) trigger topic weight decay (−0.05).
+- [x] **Database migration.** `0003_bookmark_surfacing.sql` adds four
+      columns to `nodes`: `last_surfaced_at`, `last_surfacing_outcome`,
+      `resurface_after_hours` (DEFAULT 24.0), `consecutive_ignores`
+      (DEFAULT 0). Index on `(layer, type, last_surfaced_at,
+      resurface_after_hours)` WHERE `layer='interest' AND type='bookmark'`.
+- [x] **New MCP tools** in `server.py`:
+      - `interest_report_surfacing_outcome(bookmark_id, outcome, now=None)`
+      - `interest_list_bookmarks(limit=100)` → `{ok, bookmarks}`
+        (includes all 4 surfacing-metadata fields)
+- [x] **New server endpoint:** `GET /api/temporal/bookmarks` →
+      `listBookmarks()` in thalamus.js → `interest_list_bookmarks`.
+- [x] **`temporal-format.js`** renders the `payload.bookmarks` array
+      under "Bookmarks to revisit (idle time — consider weaving one
+      in naturally):" with topic, label, resource, note, and
+      surfacing history.
+- [x] **UI — Interests tab** in the Temporal editor shows a new
+      "Bookmarks (idle surfacing)" section. Each bookmark card shows:
+      label, topic, resource, note, outcome badge (green
+      Engaged / red Ignored / grey Pending), consecutive-ignore count,
+      last-surfaced time, and adaptive resurface interval.
+      `te-int-summary` now includes the bookmark count.
+- [x] **`public/app.js`** threads `prevUserMessageAt` through the
+      send-message call chain; `round === 0` fetch bodies include
+      `lastUserMessageAt` so the server can compute idle duration.
 
-**Acceptance:** A quiet message in the UI sometimes prompts Familiar
-to bring up a bookmarked curiosity unprompted.
+**Acceptance:** After 30+ minutes of user silence, the next message
+causes `[Temporal Context]` to include a "Bookmarks to revisit" section
+with up to 3 due bookmarks. After the response, outcomes are recorded
+and intervals adapt. The Temporal editor Interests tab shows the full
+surfacing history per bookmark.
 
 ---
 
@@ -645,7 +684,7 @@ Build them as three distinct paths sharing a delivery substrate.
 - [ ] **(12a) Timeblindness reminders.** Built on Milestone 11.
       Highest-volume, lowest-stakes. Delivery defaults to in-UI;
       Discord and email are opt-ins.
-- [ ] **(12b) Silence triage.**
+- [x] **(12b) Silence triage.** *(Shipped in 0.2.54-alpha)*
       - Store `threat_level` as a decaying-weight node in the
         interest layer (the design doc explicitly notes it is
         structurally identical to an interest weight, so reuse the
@@ -654,19 +693,29 @@ Build them as three distinct paths sharing a delivery substrate.
         → short interval. Cap the rates so a buggy threat detector
         cannot spam the user.
       - The actual triage *decision* is an LLM call with full
-        context, not a threshold check. Pass: recent messages,
-        relevant entity-core context, elapsed time, current
-        `temporal_context`. The LLM decides: do nothing, gentle
+        context, not a threshold check. Passes: recent session
+        messages, full identity context via `enrich('', { staticOnly: true })`,
+        elapsed time, current `temporal_context`. Prompt is neutral —
+        no passivity bias. The LLM decides: do nothing, gentle
         check-in, escalate.
+      - Every triage tick is appended to `logs/triage-events.jsonl`;
+        readable via `GET /api/triage-events`.
+      - Pending triage notices surface in the next `[DYNAMIC CONTEXT]`
+        block so the Familiar can reference them on reconnect.
       - Threat detection inputs: a short list of language patterns
         for elevation; explicit safety/coping language for
         reduction. Document the patterns somewhere editable, not
         hard-coded.
-- [ ] **(12c) Trusted-contact outreach.** Not a separate trigger —
-      an *action* the triage LLM in 12b can take. Configured contact
-      list lives in settings, with a per-contact channel
-      (Discord/email/SMS-bridge). All outbound to humans is logged
-      visibly to the user — no covert contact.
+- [x] **(12c) Trusted-contact outreach.** *(Shipped in 0.2.54-alpha)*
+      Not a separate trigger — an *action* the triage LLM in 12b can
+      take. Configured contact list lives in settings, with a per-contact
+      channel (Discord/email/SMS-bridge). All outbound to humans is
+      logged visibly to the user — no covert contact.
+      **Escalation is sequential:** Familiar contacts the user first
+      (outbox banner). The trusted-contact webhook fires only if the
+      deadline passes without acknowledgement (severe=30min, high=2h,
+      moderate=6h). `outbox.js` carries the pending contact and deadline
+      in `meta`; `checkAndFirePendingContacts()` in `server.js` fires it.
 
 **Acceptance:** Timeblindness reminders fire and deliver. Silence
 triage runs at intervals shaped by threat level, calls into the
