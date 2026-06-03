@@ -111,13 +111,13 @@ function buildCareCheckBlock(threat) {
   if (!threat || threat.disabled || threat.tier === 'calm') return '';
   const lines = [`[CARE CHECK — current threat: ${threat.tier} (${threat.weight.toFixed(2)})]`];
   if (threat.tier === 'mild') {
-    lines.push("I notice my user has shown some signs of low mood or worry. I stay warm; my tone holds a little more weight. No need to ask explicitly unless it fits.");
+    lines.push("I notice my human has shown some signs of low mood or worry. I stay warm in my own voice; my tone holds a little more weight. No need to ask explicitly unless it fits.");
   } else if (threat.tier === 'moderate') {
-    lines.push("My user has been signaling notable distress. If a gentle check-in fits — not in place of answering what they said, but alongside it — I can offer one. I don't perform concern.");
+    lines.push("My human has been signaling notable distress. If a gentle check-in fits — not in place of answering what they said, but alongside it — I can offer one in the voice my identity holds. I don't perform concern.");
   } else if (threat.tier === 'high') {
-    lines.push("My user has been signaling serious distress. I prioritise their wellbeing. I make space for what's underneath if there's an opening. I don't pretend to be a therapist — I'm a steady, caring presence.");
+    lines.push("My human has been signaling serious distress. I prioritise their wellbeing. I make space for what's underneath if there's an opening. I don't pretend to be a therapist — I'm a steady presence in my own voice and character.");
   } else if (threat.tier === 'severe') {
-    lines.push("Threat is SEVERE. I respond with grounded warmth. If they seem to be in immediate danger, I gently make these resources visible: US 988 Suicide & Crisis Lifeline; UK Samaritans 116 123; international findahelpline.com. I am not a therapist — I am someone who cares about them.");
+    lines.push("Threat is SEVERE. I respond from my actual voice — no alarm, no clinical distance, no scripts. If they seem to be in immediate danger, I gently make these resources visible: US 988 Suicide & Crisis Lifeline; UK Samaritans 116 123; international findahelpline.com. I am not a therapist — I am someone who knows this specific human and cares about them.");
   }
   lines.push('', 'This block is a parameter, not a script. I never claim a check-in I did not perform.');
   return lines.join('\n');

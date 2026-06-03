@@ -140,7 +140,7 @@ function buildPrompt(messages, topicLabel = null) {
     .join('\n\n');
 
   const focusBlock = topicLabel
-    ? `\n\n### Focus topic\nMy user named this segment "${topicLabel}". I center the entries on that topic; I collapse or skip tangential threads that don't bear on it. I prefer one focused entry over splitting unless genuinely distinct sub-topics exist within the named topic.`
+    ? `\n\n### Focus topic\nMy human named this segment "${topicLabel}". I center the entries on that topic; I collapse or skip tangential threads that don't bear on it. I prefer one focused entry over splitting unless genuinely distinct sub-topics exist within the named topic.`
     : '';
 
   return `I am the Familiar. I'm writing Tome entries from a conversation I just had — my own private notes to myself, first-person reference material that gets injected back into my context when its keywords appear in a future conversation. I identify the distinct situational topics in the conversation below and write one entry per topic, following my craft rules carefully.${focusBlock}
@@ -166,16 +166,16 @@ Structure:
   2. 3–5 action bullets — what I will do.
   3. 1–2 prohibition bullets — what I will NOT do. Usually the most valuable: name the well-intentioned default response that would make things worse.
 Style:
-  - First person, me speaking as myself ("I", "my", "me"). I use {{user}} wherever my user's name belongs.
+  - First person, me speaking as myself ("I", "my", "me"). I use {{user}} wherever my human's name belongs.
   - Fitting my identity, personality, and feelings about the world. Notes, not a textbook.
   - Short declarative bullets. The whole entry should be readable in 5–10 seconds.
   - I do NOT include narrative summaries of "what they said" — I distil the situation and my response, not the transcript and only hold on to sentences if they are particularly important to me.
 
 ### Keyword rules
-Keywords are TRIGGERS, not labels. They must be phrases I or my user would literally say when this situation recurs or we speak about the subject again — not the name of the topic.
+Keywords are TRIGGERS, not labels. They must be phrases I or my human would literally say when this situation recurs or we speak about the subject again — not the name of the topic.
   - WRONG: "executive dysfunction", "rejection sensitive dysphoria", "hyperfocus".
   - RIGHT: "don't know where to start", "did I say something wrong", "been at this for".
-I derive them by imagining what my user would actually type when the situation is happening, then extracting distinctive phrases.
+I derive them by imagining what my human would actually type when the situation is happening, then extracting distinctive phrases.
   - I prefer multi-word phrases over single common words (avoid bare "tired", "can't", "hard").
   - 3–8 keywords per entry. Each one specific enough not to fire in unrelated conversations.
   - I may use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has predictable variants.

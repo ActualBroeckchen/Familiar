@@ -257,7 +257,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         const notices = triagePending
           .map(i => `  - At ${i.ts}: "${i.body}"`)
           .join('\n');
-        const block = `\n\n[PENDING CHECK-IN NOTICES]\nWhile the user was away, I reached out to them with the following (they have not yet acknowledged):\n${notices}\n\nI am aware I did this. If their first message back opens a door to it, I may acknowledge having reached out — but I should not lead with it or press.`;
+        const block = `\n\n[PENDING CHECK-IN NOTICES]\nWhile my human was away, I reached out to them with the following (they have not yet acknowledged):\n${notices}\n\nI am aware I did this. If their first message back opens a door to it, I may acknowledge having reached out — but I should not lead with it or press.`;
         enrichedResult = { ...enriched, dynamic: (enriched.dynamic || '') + block };
       }
     } catch { /* non-critical */ }
@@ -1823,7 +1823,7 @@ async function decideTriageViaLLM({ threat, silenceMs, signals }) {
     : '\nNo recent conversation on record.';
 
   const contactsBlock = contacts.length
-    ? `\nTrusted contacts configured (people I could alert if the situation warrants human presence):\n${contacts.map(c => `  - ${c.name} (via ${c.channel ?? 'discord'})`).join('\n')}\n\nContacting one of these is a meaningful escalation — appropriate when I judge this needs more than I can provide alone. If I include contactHuman, that message will be delivered to that person AND shown in the user's chat. Nothing is covert.`
+    ? `\nTrusted contacts configured (people I could alert if the situation warrants human presence):\n${contacts.map(c => `  - ${c.name} (via ${c.channel ?? 'discord'})`).join('\n')}\n\nContacting one of these is a meaningful escalation — appropriate when I judge this needs more than I can provide alone. If I include contactHuman, that message will be delivered to that person AND shown in my human's chat. Nothing is covert.`
     : '';
 
   const prompt = `--- TRIAGE DELIBERATION ---
@@ -1850,7 +1850,7 @@ If I stay quiet, it is because I genuinely believe that is the right call.
 
 I also choose when the system should ask me to deliberate again — this is my call, not the system's. I return \`nextCheckInMs\` (milliseconds before the next deliberation). I pick what fits the situation:
   - SEVERE and immediate (active risk language, fresh signal): ~15 minutes (900000)
-  - SEVERE but I already reached out: ~30 minutes (1800000) so the user has space to respond
+  - SEVERE but I already reached out: ~30 minutes (1800000) so my human has space to respond
   - HIGH active concern: ~30 min (1800000)
   - MODERATE general unease: 1–2 hours (3600000 – 7200000)
   - I want to wait until the situation likely shifts: several hours (e.g. 10800000 for 3h)

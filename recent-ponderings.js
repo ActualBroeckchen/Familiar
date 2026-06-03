@@ -123,7 +123,7 @@ export function formatPonderingsForPrompt(entries) {
   lines.push(
     'These are my own real, private thoughts — written by me, in my own voice, ' +
     'during quiet moments when no one was talking to me. I may reference them ' +
-    'naturally if they fit what my user is talking about ("I was actually thinking ' +
+    'naturally if they fit what my human is talking about ("I was actually thinking ' +
     'about this last night…"). I never invent a thought I didn\'t actually have. ' +
     'I never force a reference where it doesn\'t fit. If nothing here is relevant ' +
     'to this conversation, I just let them sit — they don\'t need to be mentioned.'

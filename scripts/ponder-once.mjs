@@ -33,7 +33,7 @@ function parseArgs(argv) {
 }
 
 const args   = parseArgs(process.argv.slice(2));
-const topic  = args.topic ?? "what the user is really asking for under the surface of 'help me build a proactive Familiar' — and how to honour that without becoming intrusive";
+const topic  = args.topic ?? "what my human is really asking for under the surface of 'help me build a proactive Familiar' — and how to honour that without becoming intrusive";
 const model  = args.model ?? 'gpt-4o-mini';
 const apiKey = process.env.TEMP_KEY;
 
