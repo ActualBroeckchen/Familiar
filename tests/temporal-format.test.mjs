@@ -149,6 +149,70 @@ test('does not repeat the current phase in the window list', () => {
   assert.match(out, /event 1/);
 });
 
+test('open tasks (no when_ts, no resolution) get a {{user}}-bonded header', () => {
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [
+      { type: 'task', label: 'file taxes' },
+      { type: 'task', label: 'review the report' },
+    ]},
+  });
+  // Header that primes the Familiar to feel them as commitments their
+  // bonded human is counting on them to hold, not background noise.
+  assert.match(out, /Open tasks I'm keeping on my radar for \{\{user\}\}/);
+  assert.match(out, /- file taxes/);
+  assert.match(out, /- review the report/);
+});
+
+test('upcoming items grouped under their own header with type tag', () => {
+  const t = new Date(); t.setHours(15, 0, 0, 0);
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [
+      { type: 'event', when: t.toISOString(), label: 'dentist' },
+      { type: 'task',  when: t.toISOString(), label: 'reply to Sam' },
+    ]},
+  });
+  assert.match(out, /Upcoming in this window:/);
+  assert.match(out, /\[event\] dentist/);
+  assert.match(out, /\[task\] reply to Sam/);
+});
+
+test('reminders get their own "set to fire" header', () => {
+  const t = new Date(); t.setHours(20, 0, 0, 0);
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [
+      { type: 'reminder', when: t.toISOString(), label: 'take meds' },
+    ]},
+  });
+  assert.match(out, /Reminders set to fire:/);
+  assert.match(out, /take meds/);
+});
+
+test('resolved items grouped under "Recently resolved" header (not mixed with upcoming)', () => {
+  const t = new Date(); t.setHours(15, 0, 0, 0);
+  const t2 = new Date(); t2.setHours(11, 0, 0, 0);
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [
+      { type: 'task', when: t.toISOString(),  label: 'upcoming-thing' },
+      { type: 'task', when: t2.toISOString(), label: 'past-thing', resolution: 'done' },
+    ]},
+  });
+  assert.match(out, /Upcoming in this window:[\s\S]*upcoming-thing/);
+  assert.match(out, /Recently resolved in this window:[\s\S]*past-thing \[done\]/);
+});
+
+test('past-date phases in window do NOT pollute the briefing (Routine surface owns them)', () => {
+  // get_window may return phase rows whose stored when_ts is from the
+  // day they were added; the formatter must skip them so the
+  // briefing doesn't fill up with yesterday's morning-correspondence
+  // ghost entries.
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [
+      { type: 'phase', label: 'morning correspondence', when: '2026-05-01T06:00:00Z', end: '2026-05-01T10:00:00Z' },
+    ]},
+  });
+  assert.equal(out.includes('morning correspondence'), false);
+});
+
 test('renders resolution badge on resolved items', () => {
   const t = new Date(); t.setHours(15, 0, 0, 0);
   const out = formatTemporalContext({
