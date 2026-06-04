@@ -201,6 +201,35 @@ def schedule_resolve(id: str, resolution: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def schedule_resolve_occurrence(id: str, occurrence_date: str, resolution: str) -> dict[str, Any]:
+    """Mark a single occurrence of a recurring schedule node resolved.
+
+    For recurring nodes (weekly cleaning, monthly bill, yearly
+    birthday) this resolves THIS specific occurrence without killing
+    the series — payload.resolutions[occurrence_date] = resolution.
+    The JS-side expander hides resolved occurrences from the temporal
+    context window. Next occurrence still surfaces normally.
+
+    Args:
+        id: anchor node id (the original recurring node).
+        occurrence_date: 'YYYY-MM-DD' local-TZ date of the specific
+            occurrence being resolved.
+        resolution: 'done' | 'cancelled' | 'carried_forward'.
+
+    Returns: {ok: True, updated: <bool>}. Raises if the node has no
+    recurrence rule (use schedule_resolve for one-time entries).
+    """
+    try:
+        with get_conn() as conn:
+            updated = sched.resolve_occurrence(
+                conn, id=id, occurrence_date=occurrence_date, resolution=resolution,
+            )
+        return {"ok": True, "updated": updated}
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
 def schedule_update_node(
     id: str,
     label: str | None = None,

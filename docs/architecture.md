@@ -441,7 +441,14 @@ enrich()  ─► temporal_context  (Unruh)  → schedule.window (anchor-in-windo
                        formatTemporalContext()  (temporal-format.js)
 ```
 
-Recurring anchors are dropped from the merged window if they'd otherwise appear (avoids both "the anchor stamped months ago" AND "today's occurrence" rendering). Per-occurrence resolution isn't tracked yet — resolution on the anchor cancels the whole series; the Familiar can use `schedule_resolve` to end recurrence entirely. Future work: per-occurrence dismissal so "this week's cleaning got done" doesn't affect next week.
+Recurring anchors are dropped from the merged window if they'd otherwise appear (avoids both "the anchor stamped months ago" AND "today's occurrence" rendering).
+
+**Per-occurrence resolution.** `payload.resolutions` is a map `{ "YYYY-MM-DD": "done"|"cancelled"|"carried_forward" }` keyed by local-TZ date. The expander filters out any occurrence whose date is in the map. Writers:
+- `schedule_resolve_occurrence` MCP tool / `schedule_resolve` BUILTIN_TOOL with `occurrence_date` arg
+- HTTP `POST /api/temporal/schedule/:id/resolve_occurrence`
+- Temporal-editor "✓ done" / "✕ cancel" buttons auto-route to the per-occurrence endpoint when the item is an expanded occurrence (carries `__occurrence_of`).
+
+The anchor's own `resolution` column still works — it cancels the WHOLE series rather than one occurrence. Use `schedule_resolve` without `occurrence_date` to end recurrence entirely.
 
 UI: the temporal-editor schedule-create form has a **Repeats** dropdown with the common presets. The Familiar's `schedule_add_*` BUILTIN_TOOLS accept a `recurrence` object so the model can set arbitrary rules — including the "last Friday" pattern — directly from chat.
 

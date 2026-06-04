@@ -122,6 +122,19 @@ function nthWeekdayOfMonth(year, month, weekday, pos) {
  */
 const MAX_OCCURRENCES = 50;
 
+/**
+ * Format a millisecond timestamp as a local-TZ YYYY-MM-DD key — the
+ * same shape per-occurrence resolutions are stored under in
+ * payload.resolutions (a map of { 'YYYY-MM-DD': 'done'|'cancelled'|... }).
+ * Local-TZ matters: a resolution recorded on "2026-06-04" in the
+ * user's timezone shouldn't disappear when the server interprets it
+ * against UTC and decides the actual occurrence is on Jun 3 or Jun 5.
+ */
+export function localDateKey(ms) {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 export function expandOccurrences(node, fromMs, toMs) {
   const rec = node?.payload?.recurrence;
   if (!rec || typeof rec !== 'object') return [];
@@ -145,6 +158,14 @@ export function expandOccurrences(node, fromMs, toMs) {
     return true;
   };
 
+  // Per-occurrence resolutions live on the same payload as the
+  // recurrence rule. Marking THIS Sunday's cleaning done doesn't kill
+  // next Sunday — we just skip resolved occurrence-dates when
+  // expanding. Map keys are local-TZ YYYY-MM-DD; values are the
+  // resolution status ('done' | 'cancelled' | 'carried_forward').
+  const resolutions = (node.payload && node.payload.resolutions) || {};
+  const isResolved = (ms) => Object.prototype.hasOwnProperty.call(resolutions, localDateKey(ms));
+
   const freq = String(rec.freq || '').toLowerCase();
 
   if (freq === 'daily') {
@@ -159,7 +180,7 @@ export function expandOccurrences(node, fromMs, toMs) {
       if (out.length >= MAX_OCCURRENCES) break;
       cur = addDays(cur, interval);
     }
-    return out;
+    return out.filter(ms => !isResolved(ms));
   }
 
   if (freq === 'weekly') {
@@ -173,7 +194,7 @@ export function expandOccurrences(node, fromMs, toMs) {
       if (out.length >= MAX_OCCURRENCES) break;
       cur = addDays(cur, step);
     }
-    return out;
+    return out.filter(ms => !isResolved(ms));
   }
 
   if (freq === 'monthly') {
@@ -202,7 +223,7 @@ export function expandOccurrences(node, fromMs, toMs) {
       monthIdx++;
       if (monthIdx > 600) break; // 50 years of months — overflow guard
     }
-    return out;
+    return out.filter(ms => !isResolved(ms));
   }
 
   if (freq === 'yearly') {
@@ -215,7 +236,7 @@ export function expandOccurrences(node, fromMs, toMs) {
       yearIdx++;
       if (yearIdx > 200) break;
     }
-    return out;
+    return out.filter(ms => !isResolved(ms));
   }
 
   return [];

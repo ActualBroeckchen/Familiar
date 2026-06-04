@@ -28,7 +28,7 @@ import {
   recordInterest, recordHandoff, listLiveInterests, listInterests,
   bumpInterest, demoteStanding, setStandingInterest,
   getScheduleWindow, addScheduleNode, updateScheduleNode,
-  resolveScheduleNode, deleteScheduleNode, listPhases,
+  resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode, listPhases, listRecurring,
   getHandoff, markHandoffConsumed,
   getDueReminders, getRemindersHealth,
   shutdownUnruh, shutdownEntityCore,
@@ -49,6 +49,7 @@ import { listOutbox, acknowledgeOutbox, clearAcknowledged, enqueueOutbox, update
 import { startSilenceTriageLoop, stopSilenceTriageLoop, TRIAGE_SILENCE_THRESHOLD_MS } from './silence-triage-loop.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
 import { buildTimeAnchorBlock } from './relative-time.js';
+import { expandWindow } from './recurrence.js';
 import {
   enqueueMemorization,
   listJobs as listMemorizationJobs,
@@ -1542,8 +1543,34 @@ app.get('/api/temporal/schedule', async (req, res) => {
   const from_ts = req.query.from || undefined;
   const to_ts   = req.query.to   || undefined;
   const limit   = Number.isFinite(+req.query.limit) ? +req.query.limit : 200;
-  try { res.json(await getScheduleWindow({ from_ts, to_ts, limit })); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  try {
+    // Standard window — picks up anchor-in-window items only.
+    const win = await getScheduleWindow({ from_ts, to_ts, limit });
+    const nodes = Array.isArray(win) ? win : (Array.isArray(win?.nodes) ? win.nodes : []);
+
+    // Also fetch recurring anchors (their stored when_ts is often
+    // months in the past) and expand them within the requested
+    // window. Drop anchor IDs that would have shown up in the raw
+    // window so we don't render both "the anchor from 6mo ago" AND
+    // "today's occurrence."
+    const fromMs = from_ts ? new Date(from_ts).getTime() : Date.now() - 24 * 3600_000;
+    const toMs   = to_ts   ? new Date(to_ts).getTime()   : Date.now() + 7 * 24 * 3600_000;
+    let recurNodes = [];
+    try {
+      const recurResp = await listRecurring();
+      recurNodes = Array.isArray(recurResp?.nodes) ? recurResp.nodes : [];
+    } catch { /* tolerate Unruh hiccup */ }
+
+    if (recurNodes.length > 0) {
+      const anchorIds = new Set(recurNodes.map(n => n.id));
+      const expanded = expandWindow(recurNodes, fromMs, toMs);
+      const filtered = nodes.filter(n => !anchorIds.has(n?.id));
+      const mergedNodes = [...filtered, ...expanded];
+      res.json({ ...(typeof win === 'object' && !Array.isArray(win) ? win : {}), nodes: mergedNodes });
+      return;
+    }
+    res.json(win);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/temporal/schedule', async (req, res) => {
@@ -1564,6 +1591,18 @@ app.post('/api/temporal/schedule/:id/resolve', async (req, res) => {
   const { resolution } = req.body ?? {};
   if (!resolution || typeof resolution !== 'string') return badRequest(res, 'resolution (string) is required');
   try { res.json(await resolveScheduleNode({ id: req.params.id, resolution })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Per-occurrence resolve — for recurring nodes, marks ONE occurrence
+// done/cancelled/carried_forward without killing the rest of the
+// series. The expander reads payload.resolutions and skips the
+// resolved dates.
+app.post('/api/temporal/schedule/:id/resolve_occurrence', async (req, res) => {
+  const { occurrence_date, resolution } = req.body ?? {};
+  if (!occurrence_date || typeof occurrence_date !== 'string') return badRequest(res, 'occurrence_date (YYYY-MM-DD) is required');
+  if (!resolution || typeof resolution !== 'string') return badRequest(res, 'resolution (string) is required');
+  try { res.json(await resolveScheduleOccurrence({ id: req.params.id, occurrence_date, resolution })); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 

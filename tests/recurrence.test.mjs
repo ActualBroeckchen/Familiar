@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { expandOccurrences, expandWindow } from '../recurrence.js';
+import { expandOccurrences, expandWindow, localDateKey } from '../recurrence.js';
 
 // All test anchors use local-TZ Date construction so the tests are
 // deterministic regardless of where the runner lives — recurrence
@@ -215,3 +215,68 @@ test('expandWindow: recurring nodes are expanded into per-occurrence items', () 
 });
 
 const DAY = 24 * 3600 * 1000;
+
+// ── Per-occurrence resolutions ─────────────────────────────────────
+
+test('per-occurrence resolution: marked-done occurrence is filtered out', () => {
+  // Weekly Monday anchor; mark Jun 8 (the second Monday) done.
+  // Expansion should produce Jun 1, 15, 22 — not Jun 8.
+  const anchor = new Date(2026, 5, 1, 9, 0).toISOString();
+  const node = {
+    when: anchor,
+    payload: {
+      recurrence: { freq: 'weekly' },
+      resolutions: { '2026-06-08': 'done' },
+    },
+  };
+  const fromMs = new Date(2026, 5, 1).getTime();
+  const toMs   = new Date(2026, 5, 22, 23, 59).getTime();
+  const occs = expandOccurrences(node, fromMs, toMs);
+  assert.equal(occs.length, 3);
+  const dates = occs.map(ms => localDateKey(ms));
+  assert.ok(!dates.includes('2026-06-08'), 'Jun 8 should be filtered out');
+  assert.ok(dates.includes('2026-06-01'));
+  assert.ok(dates.includes('2026-06-15'));
+  assert.ok(dates.includes('2026-06-22'));
+});
+
+test('per-occurrence resolution: multiple resolutions all filtered', () => {
+  const anchor = new Date(2026, 5, 1).toISOString();
+  const node = {
+    when: anchor,
+    payload: {
+      recurrence: { freq: 'daily' },
+      resolutions: {
+        '2026-06-02': 'done',
+        '2026-06-04': 'cancelled',
+        '2026-06-06': 'carried_forward',
+      },
+    },
+  };
+  const fromMs = new Date(2026, 5, 1).getTime();
+  const toMs   = new Date(2026, 5, 7, 23, 59).getTime();
+  const occs = expandOccurrences(node, fromMs, toMs);
+  // Days 1..7 = 7 - 3 resolved = 4 remaining
+  assert.equal(occs.length, 4);
+  const dates = occs.map(ms => localDateKey(ms));
+  assert.ok(!dates.includes('2026-06-02'));
+  assert.ok(!dates.includes('2026-06-04'));
+  assert.ok(!dates.includes('2026-06-06'));
+});
+
+test('per-occurrence resolution: empty resolutions object → no filter', () => {
+  const anchor = new Date(2026, 5, 1).toISOString();
+  const node = {
+    when: anchor,
+    payload: { recurrence: { freq: 'daily' }, resolutions: {} },
+  };
+  const fromMs = new Date(2026, 5, 1).getTime();
+  const toMs   = new Date(2026, 5, 3, 23, 59).getTime();
+  const occs = expandOccurrences(node, fromMs, toMs);
+  assert.equal(occs.length, 3);
+});
+
+test('localDateKey: stable YYYY-MM-DD in local TZ', () => {
+  const ms = new Date(2026, 5, 4, 9, 30).getTime();
+  assert.equal(localDateKey(ms), '2026-06-04');
+});

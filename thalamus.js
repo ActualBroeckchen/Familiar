@@ -754,6 +754,24 @@ export async function resolveScheduleNode({ id, resolution }) {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+/**
+ * Resolve a single occurrence of a recurring node. Writes into the
+ * anchor's payload.resolutions map (keyed by local-TZ YYYY-MM-DD); the
+ * series stays alive. The JS-side expander filters resolved
+ * occurrence-dates out of the temporal-context window.
+ */
+export async function resolveScheduleOccurrence({ id, occurrence_date, resolution }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_resolve_occurrence',
+      arguments: { id, occurrence_date, resolution },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
 export async function deleteScheduleNode({ id }) {
   await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
