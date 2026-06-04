@@ -18,7 +18,13 @@ REM install.bat; it does `git pull` for you.
 setlocal EnableExtensions
 set "SCRIPT_DIR=%~dp0"
 set "DEST=%SCRIPT_DIR:~0,-1%"
-set "REPO_ZIP=https://github.com/ScarletPrinceEury/Proto-Familiar/archive/refs/heads/main.zip"
+REM BRANCH defaults to `main`. Override to test a feature branch BEFORE
+REM it lands on main:
+REM   set BRANCH=claude/implement-unruh-mechanism-NTpoc
+REM   update.bat
+REM GitHub's archive endpoint accepts branch names with slashes verbatim.
+if "%BRANCH%"=="" set "BRANCH=main"
+set "REPO_ZIP=https://github.com/ScarletPrinceEury/Proto-Familiar/archive/refs/heads/%BRANCH%.zip"
 
 REM A git checkout should update via install.bat's git pull, not an overlay.
 if exist "%DEST%\.git" (
@@ -29,6 +35,10 @@ if exist "%DEST%\.git" (
 
 set "TMP=%TEMP%\pf_update_%RANDOM%%RANDOM%"
 mkdir "%TMP%" 2>nul
+
+if not "%BRANCH%"=="main" (
+  echo Updating from branch "%BRANCH%" ^(non-default - set BRANCH=main to switch back^).
+)
 
 echo Downloading the latest Proto-Familiar...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Invoke-WebRequest -UseBasicParsing -Uri '%REPO_ZIP%' -OutFile '%TMP%\pf.zip' } catch { exit 1 }"
@@ -48,7 +58,16 @@ if errorlevel 1 (
   exit /b 1
 )
 
-set "SRC=%TMP%\x\Proto-Familiar-main"
+REM Find the extracted top-level folder rather than hardcoding the name,
+REM so a repo/branch rename doesn't silently break the updater.
+set "SRC="
+for /d %%D in ("%TMP%\x\Proto-Familiar-*") do set "SRC=%%D"
+if not defined SRC (
+  echo [ERROR] Unexpected archive layout - aborting without changing anything.
+  rmdir /s /q "%TMP%" 2>nul
+  pause
+  exit /b 1
+)
 if not exist "%SRC%\package.json" (
   echo [ERROR] Unexpected archive layout - aborting without changing anything.
   rmdir /s /q "%TMP%" 2>nul
@@ -76,6 +95,13 @@ if errorlevel 8 (
 rmdir /s /q "%TMP%" 2>nul
 
 echo Running install.bat for dependencies + database migrations...
+REM Tell install.bat it's running under the updater so it doesn't print
+REM the "not a git checkout - use update.bat" warning back at us.
+set "PF_FROM_UPDATER=1"
 call "%DEST%\install.bat"
 
+echo.
+echo === Update complete. Restart Proto-Familiar to use the new version. ===
+echo.
+pause
 endlocal

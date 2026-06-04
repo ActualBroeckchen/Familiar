@@ -45,7 +45,7 @@ else
 fi
 # The release lives at https://github.com/PsycherosAI/Psycheros/releases/tag/<tag>
 ENTITY_CORE_REPO="https://github.com/PsycherosAI/Psycheros.git"
-ENTITY_CORE_TAG="entity-core-v0.2.2"
+ENTITY_CORE_TAG="entity-core-v0.3.2"
 BACKUP_ROOT="$SCRIPT_DIR/.pf-backups"
 
 say() { printf '\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -123,9 +123,10 @@ if [ "$MODE" = "update" ]; then
     if ! ( cd "$SCRIPT_DIR" && git pull --ff-only ); then
       warn "git pull --ff-only failed (local changes, non-default branch, or no network). Continuing with current checkout — your work tree is unchanged."
     fi
-  elif [ ! -d "$SCRIPT_DIR/.git" ]; then
+  elif [ ! -d "$SCRIPT_DIR/.git" ] && [ "$PF_FROM_UPDATER" != "1" ]; then
     # No .git means this is a downloaded ZIP, not a clone — the installer
     # can't pull updates, so point the user at the one-click updater.
+    # Skipped when update.sh is the caller (it just did the update).
     warn "This folder is NOT a git checkout — it looks like a downloaded ZIP."
     warn "  install.sh can't pull updates here. To update, run ./update.sh —"
     warn "  it downloads the latest version and applies it, keeping your data."

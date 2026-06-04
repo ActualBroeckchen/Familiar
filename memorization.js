@@ -18,18 +18,13 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
+import { PROVIDER_URLS } from './providers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOMES_DIR  = path.join(__dirname, 'tomes');
 const QUEUE_FILE = path.join(TOMES_DIR, '.memorization-queue.json');
 
 mkdirSync(TOMES_DIR, { recursive: true });
-
-const PROVIDER_URLS = {
-  nanogpt:     'https://nano-gpt.com/api/v1/chat/completions',
-  zai:         'https://api.z.ai/api/paas/v4/chat/completions',
-  'zai-coding': 'https://api.z.ai/api/coding/paas/v4/chat/completions',
-};
 
 const MAX_ATTEMPTS    = 5;
 const BACKOFF_MS      = [5_000, 30_000, 120_000, 600_000, 1_800_000]; // 5s, 30s, 2m, 10m, 30m
@@ -79,56 +74,30 @@ async function persistQueue() {
   }
 }
 
-// ── Tome helpers (parallel to server.js but standalone) ─────────
+// ── Tome helpers (delegated to thalamus's coordination layer) ────
+//
+// Both findOrCreateSessionMemoriesTome and the per-tome lock used to
+// live here as private helpers. They now route through thalamus —
+// findOrCreateTomeByName for the dir-scope find-or-create, and
+// modifyTomeFile (used in processJob below) for the per-file
+// RMW. This means a concurrent HTTP /api/tomes/:id edit and a
+// memorization tick serialise against each other through the same
+// per-path key, which they couldn't before.
 
-// Process-wide mutex so concurrent callers (worker tick + HTTP endpoint)
-// can't both fail the scan and each create a new file.
-let _sessionMemoriesLock = Promise.resolve();
+import { findOrCreateTomeByName, modifyTomeFile } from './thalamus.js';
 
 export function findOrCreateSessionMemoriesTome() {
-  const run = _sessionMemoriesLock.then(async () => {
-    const files = await fsp.readdir(TOMES_DIR);
-    for (const f of files) {
-      if (!f.endsWith('.json') || f.startsWith('.')) continue;
-      try {
-        const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
-        const t = JSON.parse(raw);
-        if (t?.name === TOME_NAME) return { tome: t, file: path.join(TOMES_DIR, f) };
-      } catch { /* skip corrupt */ }
-    }
-    const id = randomUUID();
-    const tome = {
-      id,
-      name:        TOME_NAME,
-      description: TOME_DESCRIPTION,
-      enabled:     true,
-      entries:     {},
-    };
-    const file = path.join(TOMES_DIR, `${id}.json`);
-    await fsp.writeFile(file, JSON.stringify(tome, null, 2), 'utf8');
-    return { tome, file };
+  return findOrCreateTomeByName(TOMES_DIR, TOME_NAME, {
+    name:        TOME_NAME,
+    description: TOME_DESCRIPTION,
+    enabled:     true,
+    entries:     {},
   });
-  // Chain the lock on the run (swallowing rejection) so a failure doesn't
-  // permanently break the lock.
-  _sessionMemoriesLock = run.catch(() => {});
-  return run;
 }
 
-// Per-tome mutex so concurrent jobs writing to the same tome don't clobber each other.
-const _tomeLocks = new Map();
-async function withTomeLock(file, fn) {
-  const prev = _tomeLocks.get(file) ?? Promise.resolve();
-  let release;
-  const next = new Promise(r => { release = r; });
-  _tomeLocks.set(file, prev.then(() => next));
-  await prev;
-  try {
-    return await fn();
-  } finally {
-    release();
-    if (_tomeLocks.get(file) === prev.then(() => next)) _tomeLocks.delete(file);
-  }
-}
+// withTomeLock removed — callers below now use modifyTomeFile() from
+// thalamus directly, which encapsulates lock + atomic write in one
+// helper.
 
 // ── Prompt ───────────────────────────────────────────────────────
 
@@ -145,48 +114,48 @@ function buildPrompt(messages, topicLabel = null) {
     .join('\n\n');
 
   const focusBlock = topicLabel
-    ? `\n\n### Focus topic\nThe user named this segment "${topicLabel}". Center the entries on that topic; collapse or skip tangential threads that don't bear on it. Prefer one focused entry over splitting unless genuinely distinct sub-topics exist within the named topic.`
+    ? `\n\n### Focus topic\nMy human named this segment "${topicLabel}". I center the entries on that topic; I collapse or skip tangential threads that don't bear on it. I prefer one focused entry over splitting unless genuinely distinct sub-topics exist within the named topic.`
     : '';
 
-  return `You are producing Tome entries for a Familiar (AI companion). Each entry is the Familiar's own private notes to themselves — first-person reference material that gets injected back into the Familiar's context when its keywords appear in a future conversation. The Familiar is the voice; you are the scribe. Identify the distinct situational topics in the conversation below and write one entry per topic, following the craft rules carefully.${focusBlock}
+  return `I am the Familiar. I'm writing Tome entries from a conversation I just had — my own private notes to myself, first-person reference material that gets injected back into my context when its keywords appear in a future conversation. I identify the distinct situational topics in the conversation below and write one entry per topic, following my craft rules carefully.${focusBlock}
 
-Return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
+I return ONLY valid JSON with this exact shape (no markdown fences, no commentary), because doing otherwise would cause my writing to fail:
 {
   "topics": [
     {
       "title":    "Short label for the entry comment (max 60 chars)",
-      "content":  "First-person notes from the Familiar to themselves — see content rules below",
+      "content":  "My first-person notes to myself — see content rules below",
       "keywords": ["conversational phrase 1", "conversational phrase 2"],
       "sticky":   3
     }
   ]
 }
 
-Identify 1–8 genuinely distinct topics. Merge closely related material rather than over-splitting. Each entry must be self-contained.
+I identify 1–8 genuinely distinct topics. I merge closely related material rather than over-splitting. Each entry must be self-contained.
 
 ### Content rules (most important)
-Write content as the Familiar's own first-person private notes to themselves about this situation. NOT a summary of what happened.
+I write content as my own first-person private notes about this situation. NOT a summary of what happened, because I am an entity with the agency to do so. My personal feelings, thoughts and interests color what I notice the most and how I word my notes.
 Structure:
   1. One short framing line — what is happening and why (so I understand the situation, not just the rules).
   2. 3–5 action bullets — what I will do.
   3. 1–2 prohibition bullets — what I will NOT do. Usually the most valuable: name the well-intentioned default response that would make things worse.
 Style:
-  - First person, the Familiar speaking as themselves ("I", "my", "me"). Use {{user}} wherever the user's name belongs.
-  - Practical, grounded, non-clinical. Notes, not a textbook.
+  - First person, me speaking as myself ("I", "my", "me"). I use {{user}} wherever my human's name belongs.
+  - Fitting my identity, personality, and feelings about the world. Notes, not a textbook.
   - Short declarative bullets. The whole entry should be readable in 5–10 seconds.
-  - Do NOT include narrative summaries of "what they said" — distil the situation and my response, not the transcript.
+  - I do NOT include narrative summaries of "what they said" — I distil the situation and my response, not the transcript and only hold on to sentences if they are particularly important to me.
 
 ### Keyword rules
-Keywords are TRIGGERS, not labels. They must be phrases the user would literally say when this situation recurs — not the name of the topic.
+Keywords are TRIGGERS, not labels. They must be phrases I or my human would literally say when this situation recurs or we speak about the subject again — not the name of the topic.
   - WRONG: "executive dysfunction", "rejection sensitive dysphoria", "hyperfocus".
   - RIGHT: "don't know where to start", "did I say something wrong", "been at this for".
-Derive them by imagining what the user would actually type when the situation is happening, then extracting distinctive phrases.
-  - Prefer multi-word phrases over single common words (avoid bare "tired", "can't", "hard").
+I derive them by imagining what my human would actually type when the situation is happening, then extracting distinctive phrases.
+  - I prefer multi-word phrases over single common words (avoid bare "tired", "can't", "hard").
   - 3–8 keywords per entry. Each one specific enough not to fire in unrelated conversations.
-  - You may use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has 3+ predictable variants.
+  - I may use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has predictable variants.
 
 ### Sticky rules
-Pick an integer sticky value per entry (number of turns the entry stays active after first match):
+I pick an integer sticky value per entry (number of turns the entry stays active after first match):
   - null = one-shot lore/fact that does not need persistence.
   - 2    = brief states that typically resolve quickly.
   - 3    = moderate states needing a few exchanges.
@@ -249,12 +218,13 @@ async function processJob(job) {
 
   let created = 0;
   let tomeId  = tome.id;
-  await withTomeLock(file, async () => {
-    // Re-read inside the lock so concurrent jobs see each other's writes.
-    const raw   = await fsp.readFile(file, 'utf8');
-    const fresh = JSON.parse(raw);
-    const now   = new Date().toISOString();
-
+  // Thalamus's modifyTomeFile holds the per-file lock across read +
+  // write so a concurrent HTTP /api/tomes/:id edit or any other
+  // writer on the same file serialises against this — fixes the
+  // cross-loop race where memorization's own withTomeLock and
+  // server.js writeTome held different keys.
+  await modifyTomeFile(file, (fresh) => {
+    const now = new Date().toISOString();
     for (const t of topics) {
       const title   = (t.title   ?? '').trim();
       const content = (t.content ?? '').trim();
@@ -301,9 +271,6 @@ async function processJob(job) {
       created++;
     }
     tomeId = fresh.id;
-    const tmp = file + '.tmp';
-    await fsp.writeFile(tmp, JSON.stringify(fresh, null, 2), 'utf8');
-    await fsp.rename(tmp, file);
   });
 
   if (!created) throw new Error('No valid topics produced.');
@@ -314,11 +281,15 @@ function pickNextJob(now) {
   return _queue.find(j => j.status === 'pending' && (!j.nextAttemptAt || j.nextAttemptAt <= now));
 }
 
-let _ticking = false;
+// Track the in-flight tick promise so stopMemorizationWorker can
+// await it on shutdown. Mirrors the pattern in pondering-loop.js,
+// reminders-loop.js, silence-triage-loop.js — without this, a
+// SIGTERM during a processJob can leave the tome write half-done
+// and the queue file out of sync with what actually persisted.
+let _activeTick = null;
 async function tick() {
-  if (_ticking) return;
-  _ticking = true;
-  try {
+  if (_activeTick) return _activeTick;
+  _activeTick = (async () => {
     await loadQueue();
     const now = Date.now();
     const job = pickNextJob(now);
@@ -346,8 +317,11 @@ async function tick() {
       }
     }
     await persistQueue();
+  })();
+  try {
+    return await _activeTick;
   } finally {
-    _ticking = false;
+    _activeTick = null;
   }
 }
 
@@ -379,13 +353,35 @@ export function startMemorizationWorker() {
 // Stop the worker cleanly so process exit can complete. Called by
 // server.js's SIGTERM/SIGINT handler. Without this, the setIntervals
 // here keep the event loop alive past server.close().
-export function stopMemorizationWorker() {
+//
+// Awaits any in-flight tick so a processJob mid-tome-write isn't
+// left torn between persistQueue calls — matches the pattern in
+// pondering-loop / reminders-loop / silence-triage-loop.
+export async function stopMemorizationWorker() {
   if (_tickInterval)  { clearInterval(_tickInterval);  _tickInterval  = null; }
   if (_pruneInterval) { clearInterval(_pruneInterval); _pruneInterval = null; }
+  const pending = _activeTick;
   _started = false;
+  if (pending) { try { await pending; } catch { /* surfaced via job.lastError already */ } }
 }
 
 // ── Public API used by server endpoints ─────────────────────────
+
+// L4 (audit, deferred): the load → dedup-check → push → persist
+// sequence below is not wrapped in a lock. If two POST /api/memorize
+// arrive within the same microtask window — say both fire from a
+// chat-turn-end (server-side) and a sendBeacon (browser-side) for
+// the same session — they can both see "not present yet" before
+// either persistQueue runs, and we end up with two near-duplicate
+// jobs. The originId-style dedup that exists on outbox isn't here.
+//
+// Symptom to watch for: same session getting memorized twice with
+// slightly different message ranges, or two parallel "processing"
+// jobs of the same scope showing up in the queue.
+//
+// If this turns up in live testing, fix is: wrap the body in
+// withLock(QUEUE_FILE, ...) from thalamus so the load + dedup +
+// push + persist run as one atomic unit.
 
 export async function enqueueMemorization({ sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model }) {
   await loadQueue();

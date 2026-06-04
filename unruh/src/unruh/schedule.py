@@ -38,11 +38,11 @@ from .db import new_id, now_iso
 # means updating the migration's comment + this set + (probably) the
 # formatter; the DB itself is schema-permissive on these columns. ──
 
-SCHEDULE_NODE_TYPES = {"event", "task", "phase", "state"}
+SCHEDULE_NODE_TYPES = {"event", "task", "phase", "state", "reminder"}
 SCHEDULE_EDGE_KINDS = {
     "causes", "requires", "depends_on", "blocks", "during", "carries_forward",
 }
-RESOLUTIONS = {"done", "cancelled", "carried_forward"}
+RESOLUTIONS = {"done", "cancelled", "carried_forward", "fired"}
 
 DEFAULT_WINDOW_HOURS = 24
 
@@ -69,7 +69,7 @@ def add_node(
         raise ValueError(f"unknown schedule node type {type!r}; expected one of {sorted(SCHEDULE_NODE_TYPES)}")
     if not label or not label.strip():
         raise ValueError("label is required and must be non-empty")
-    if type in {"event", "phase", "state"} and not when:
+    if type in {"event", "phase", "state", "reminder"} and not when:
         raise ValueError(f"node type {type!r} requires a 'when' timestamp")
     if type == "phase" and not end:
         raise ValueError("phase nodes require an 'end' timestamp")
@@ -124,6 +124,11 @@ def resolve(
 
     Returns True if the row was updated, False if no node with that
     id exists (caller can decide whether to treat that as an error).
+
+    For recurring nodes this resolves the WHOLE SERIES (the anchor's
+    own resolution column). To resolve a single occurrence of a
+    recurring node, use resolve_occurrence() instead — it writes into
+    payload.resolutions and leaves the series alive.
     """
     if resolution not in RESOLUTIONS:
         raise ValueError(f"unknown resolution {resolution!r}; expected one of {sorted(RESOLUTIONS)}")
@@ -132,6 +137,199 @@ def resolve(
         (resolution, now_iso(), id),
     )
     return cur.rowcount > 0
+
+
+def resolve_occurrence(
+    conn: sqlite3.Connection,
+    *,
+    id: str,
+    occurrence_date: str,
+    resolution: str,
+) -> bool:
+    """Mark a single occurrence of a recurring node resolved.
+
+    Writes into payload.resolutions (a map of {YYYY-MM-DD: resolution})
+    instead of touching the node's own `resolution` column. The
+    JS-side expander (recurrence.js) filters resolved
+    occurrence-dates out when generating the temporal-context window,
+    so "this Sunday's cleaning got done" hides this Sunday without
+    affecting next Sunday.
+
+    Raises ValueError if the node doesn't carry a recurrence rule
+    (per-occurrence resolution is meaningless for one-time entries —
+    use resolve() for those). Returns True if the write succeeded,
+    False if the node id wasn't found.
+    """
+    if resolution not in RESOLUTIONS:
+        raise ValueError(f"unknown resolution {resolution!r}; expected one of {sorted(RESOLUTIONS)}")
+    if not occurrence_date or not isinstance(occurrence_date, str):
+        raise ValueError("occurrence_date is required (YYYY-MM-DD)")
+    row = conn.execute(
+        "SELECT payload_json FROM nodes WHERE id = ? AND layer = 'schedule'",
+        (id,),
+    ).fetchone()
+    if row is None:
+        return False
+    payload = json.loads(row["payload_json"] or "{}")
+    if not payload.get("recurrence"):
+        raise ValueError(
+            f"node {id} has no recurrence rule; use resolve() for one-time nodes"
+        )
+    resolutions = payload.get("resolutions") or {}
+    if not isinstance(resolutions, dict):
+        resolutions = {}
+    resolutions[occurrence_date] = resolution
+    payload["resolutions"] = resolutions
+    conn.execute(
+        "UPDATE nodes SET payload_json = ?, updated_at = ? WHERE id = ?",
+        (json.dumps(payload), now_iso(), id),
+    )
+    return True
+
+
+def update_node(
+    conn: sqlite3.Connection,
+    *,
+    id: str,
+    label: str | None = None,
+    when: str | None = None,
+    end: str | None = None,
+    payload: dict | None = None,
+) -> bool:
+    """Patch a schedule-layer node in place. Any field passed as None
+    is left unchanged; pass an empty string to clear (when/end can be
+    nulled this way). payload, when given, REPLACES the existing JSON
+    payload — partial-merge is left to the caller because the M9 UI
+    surface only edits whole payloads anyway.
+
+    Returns True if a row was updated, False if no node matched.
+    """
+    sets: list[str] = []
+    args: list[Any] = []
+    if label is not None:
+        if not label.strip():
+            raise ValueError("label cannot be cleared (use delete_node if you want to remove the node)")
+        sets.append("label = ?")
+        args.append(label.strip())
+    if when is not None:
+        sets.append("when_ts = ?")
+        args.append(when or None)
+    if end is not None:
+        sets.append("end_ts = ?")
+        args.append(end or None)
+    if payload is not None:
+        sets.append("payload_json = ?")
+        args.append(json.dumps(payload))
+    if not sets:
+        return False
+    sets.append("updated_at = ?")
+    args.append(now_iso())
+    args.append(id)
+    cur = conn.execute(
+        f"UPDATE nodes SET {', '.join(sets)} WHERE id = ? AND layer = 'schedule'",
+        args,
+    )
+    return cur.rowcount > 0
+
+
+def delete_node(conn: sqlite3.Connection, *, id: str) -> bool:
+    """Permanently remove a schedule-layer node and any edges that
+    referenced it (via ON DELETE CASCADE on the edges table).
+
+    Returns True if a row was deleted, False if no node matched. The
+    layer guard ensures we never accidentally delete an interest-layer
+    node by id — those have their own demote/reset semantics.
+    """
+    cur = conn.execute(
+        "DELETE FROM nodes WHERE id = ? AND layer = 'schedule'",
+        (id,),
+    )
+    return cur.rowcount > 0
+
+
+# ── Reminders (M11) ────────────────────────────────────────────────────
+
+
+def get_due_reminders(
+    conn: sqlite3.Connection,
+    *,
+    now: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Return reminder nodes whose when_ts has arrived and that have
+    not yet been resolved (fired / cancelled / done).
+
+    `now` is an ISO-8601 UTC string; if omitted, the current wall
+    clock is used. Returning a list (not a generator) keeps the MCP
+    JSON shape simple.
+
+    Pure read — does NOT mark anything fired. Callers do that with
+    schedule.resolve(id, 'fired') after delivery succeeds, so a
+    crash mid-delivery leaves the reminder fireable next tick rather
+    than dropping it silently.
+    """
+    now = now or now_iso()
+    rows = conn.execute(
+        """SELECT * FROM nodes
+            WHERE layer = 'schedule'
+              AND type  = 'reminder'
+              AND resolution IS NULL
+              AND when_ts IS NOT NULL
+              AND when_ts <= ?
+            ORDER BY when_ts ASC
+            LIMIT ?""",
+        (now, limit),
+    ).fetchall()
+    return [_node_row_to_dict(row) for row in rows]
+
+
+def reminders_health(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Quick observability surface for the reminders scheduler.
+
+    Reports:
+      - total reminders in the DB
+      - pending (resolution IS NULL)
+      - overdue (resolution IS NULL AND when_ts <= now): if this
+        number grows monotonically, the scheduler is stuck.
+      - next_fires_at: when the next pending reminder will fire,
+        or None.
+      - last_fired: ISO of the most-recently-fired reminder (a sanity
+        check that something actually ran recently).
+
+    The Node-side scheduler calls this on every tick and logs a
+    warning if `overdue` keeps growing across ticks. Surfacing
+    silent-failure was the explicit design-doc concern for M11.
+    """
+    now = now_iso()
+    totals = conn.execute(
+        """SELECT
+              COUNT(*) AS total,
+              SUM(CASE WHEN resolution IS NULL                          THEN 1 ELSE 0 END) AS pending,
+              SUM(CASE WHEN resolution IS NULL AND when_ts <= ?         THEN 1 ELSE 0 END) AS overdue
+            FROM nodes
+           WHERE layer = 'schedule' AND type = 'reminder'""",
+        (now,),
+    ).fetchone()
+    next_row = conn.execute(
+        """SELECT when_ts FROM nodes
+            WHERE layer = 'schedule' AND type = 'reminder'
+              AND resolution IS NULL AND when_ts IS NOT NULL
+            ORDER BY when_ts ASC LIMIT 1""",
+    ).fetchone()
+    last_row = conn.execute(
+        """SELECT updated_at FROM nodes
+            WHERE layer = 'schedule' AND type = 'reminder'
+              AND resolution = 'fired'
+            ORDER BY updated_at DESC LIMIT 1""",
+    ).fetchone()
+    return {
+        "total":          int(totals["total"]   or 0),
+        "pending":        int(totals["pending"] or 0),
+        "overdue":        int(totals["overdue"] or 0),
+        "next_fires_at":  next_row["when_ts"]    if next_row else None,
+        "last_fired":     last_row["updated_at"] if last_row else None,
+        "now":            now,
+    }
 
 
 # ── Reads ──────────────────────────────────────────────────────────────
@@ -243,24 +441,108 @@ def get_window(
     return {"nodes": nodes, "edges": edges, "from": from_ts, "to": to_ts}
 
 
+def list_phases(
+    conn: sqlite3.Connection,
+    *,
+    include_resolved: bool = False,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Return every phase node, regardless of stored date.
+
+    Phases recur daily by design — `current_phase()` already matches
+    on time-of-day only — but `get_window()` honours the calendar
+    date in `when_ts` / `end_ts`, so the day after I add a phase
+    its row falls outside any reasonable window. Callers that want
+    the routine surface (the M9 Routine tab, briefing layers
+    rendering "today's rhythm") should use this instead.
+
+    Resolved phases excluded by default so a cancelled phase stops
+    showing up; pass include_resolved=True to surface them too.
+    """
+    sql = (
+        "SELECT * FROM nodes WHERE layer = 'schedule' AND type = 'phase'"
+        + ("" if include_resolved else " AND resolution IS NULL")
+        + " ORDER BY when_ts ASC LIMIT ?"
+    )
+    rows = conn.execute(sql, (limit,)).fetchall()
+    return [_node_row_to_dict(r) for r in rows]
+
+
+def list_recurring(
+    conn: sqlite3.Connection,
+    *,
+    include_resolved: bool = False,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Return every schedule node whose payload carries a `recurrence`
+    rule, regardless of stored when_ts.
+
+    Recurring nodes anchor on their FIRST occurrence — the rest are
+    computed at read-time by the JS-side expander in recurrence.js.
+    `get_window` only catches nodes whose stored when_ts falls inside
+    the window, which means a "weekly cleaning" anchored months ago
+    is invisible to it. Callers assembling the temporal context (or
+    Routine surface) should pull recurring nodes through here and
+    let the expander generate the relevant occurrences.
+
+    Resolved nodes excluded by default; the resolution on a recurring
+    anchor applies to the whole rule (i.e. cancelling the series).
+    Per-occurrence resolution isn't tracked yet — pass
+    include_resolved=True if surfacing them anyway is useful.
+    """
+    sql = (
+        "SELECT * FROM nodes WHERE layer = 'schedule'"
+        + " AND json_extract(payload_json, '$.recurrence') IS NOT NULL"
+        + ("" if include_resolved else " AND resolution IS NULL")
+        + " ORDER BY when_ts ASC LIMIT ?"
+    )
+    rows = conn.execute(sql, (limit,)).fetchall()
+    return [_node_row_to_dict(r) for r in rows]
+
+
 def current_phase(
     conn: sqlite3.Connection,
     *,
     at: str | None = None,
 ) -> dict[str, Any] | None:
-    """Return the phase node containing `at` (default now), or None.
+    """Return the phase node whose time-of-day range contains `at`
+    (default now), or None.
 
-    Phases are open-ended on the right edge by convention (when_ts
-    <= at < end_ts) so two back-to-back phases don't double-match
-    at the boundary instant.
+    Phases are daily-recurring by design: only the HH:MM:SS portion
+    of the stored timestamps is compared against `at`, so a phase
+    added on any past date remains active at that time of day every
+    day until manually resolved.
+
+    Two cases handled:
+      • Normal phase  (start < end, e.g. 09:00–17:00): active when
+        start ≤ current_time < end.
+      • Overnight phase (end < start, e.g. 23:00–06:00): active when
+        current_time ≥ start OR current_time < end.
+
+    Open-ended on the right edge (when = end_time boundary, the NEXT
+    phase wins) so back-to-back phases don't double-match.
+
+    Resolved phases are excluded so a deliberately cancelled phase
+    stops recurring.
     """
     at = at or now_iso()
     row = conn.execute(
         """SELECT * FROM nodes
             WHERE layer = 'schedule' AND type = 'phase'
-              AND when_ts <= ? AND ? < end_ts
+              AND resolution IS NULL
+              AND (
+                -- Normal phase: start time < end time (same calendar day)
+                (strftime('%H:%M:%S', when_ts) < strftime('%H:%M:%S', end_ts)
+                 AND strftime('%H:%M:%S', when_ts) <= strftime('%H:%M:%S', ?)
+                 AND strftime('%H:%M:%S', ?) < strftime('%H:%M:%S', end_ts))
+                OR
+                -- Overnight phase: end time < start time (wraps midnight)
+                (strftime('%H:%M:%S', when_ts) >= strftime('%H:%M:%S', end_ts)
+                 AND (strftime('%H:%M:%S', ?) >= strftime('%H:%M:%S', when_ts)
+                      OR strftime('%H:%M:%S', ?) < strftime('%H:%M:%S', end_ts)))
+              )
             ORDER BY when_ts DESC
             LIMIT 1""",
-        (at, at),
+        (at, at, at, at),
     ).fetchone()
     return _node_row_to_dict(row) if row else None
