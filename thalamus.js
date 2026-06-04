@@ -1054,7 +1054,7 @@ function wrapFile(filename, content, promptLabel) {
 // import here for enrich()'s internal use; everything else imports
 // from temporal-format.js directly.
 import { formatTemporalContext } from './temporal-format.js';
-import { relativeDay } from './relative-time.js';
+import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
 import { resolveEntityCoreRef, identityHasContent } from './entity-ref.js';
 import { getRecentPonderings, formatPonderingsForPrompt } from './recent-ponderings.js';
 import { getThreat, tierForThreat } from './threat-tracker.js';
@@ -1570,13 +1570,33 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       }
     }
 
-    // Time anchor moved out of the dynamic block (it now lives at the
-    // very end of the prompt, after the post-history prompt — server.js
-    // appends it via buildTimeAnchorBlock from relative-time.js after
-    // the depth-inject step. That keeps the freshest-needed values
-    // ("now", "last message N min ago") nearest the model's attention.
+    // ── Time anchor ────────────────────────────────────────────────
+    // Always-present "Now" block at the head of dynamic content so the
+    // Familiar re-orients in time at every turn. Includes the absolute
+    // wall-clock for sentry reasoning AND a relative phrasing of when
+    // my human last sent a message (when lastUserMessageAt is known).
+    // The relative phrasing recomputes per turn — that's the whole
+    // point: a memory from yesterday morning reads as "yesterday"
+    // today and "two days ago" tomorrow, without anyone re-writing it.
+    let timeAnchorBlock = '';
+    try {
+      const nowMs = Date.now();
+      const lines = [
+        `Now: ${clockTime(nowMs)} on ${dayAndDate(nowMs)}.`,
+      ];
+      if (lastUserMessageAt) {
+        const lastMs = new Date(lastUserMessageAt).getTime();
+        if (Number.isFinite(lastMs)) {
+          lines.push(`My human last sent a message ${relativeTime(lastMs, nowMs)}.`);
+        }
+      }
+      timeAnchorBlock = `[Now]\n${lines.join('\n')}`;
+    } catch (err) {
+      console.error('[thalamus] time anchor assembly failed:', err?.message ?? err);
+    }
 
     const dynamicSections = [];
+    if (timeAnchorBlock)        dynamicSections.push(timeAnchorBlock);
     if (memLines)               dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
     if (graphLines)             dynamicSections.push(`Relevant Knowledge from Graph:\n${graphLines}`);
     if (ponderingsBlock)        dynamicSections.push(ponderingsBlock);
@@ -1592,6 +1612,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // content this turn. If something stops contributing without an
     // error log alongside, that's the trail.
     const presence = [
+      timeAnchorBlock   ? 'time'      : null,
       baseContent       ? 'base'      : null,
       selfContent       ? 'self'      : null,
       userContent       ? 'user'      : null,

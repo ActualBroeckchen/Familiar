@@ -376,22 +376,13 @@ doesn't sit in front of it.
 The depth defaults to 4 (`thalamusDynamicDepth`, 1–50, server-synced).
 
 Within `dynamic`, the order is deliberate:
-1. **RAG memories** — direct retrieval relevance, weight-bearing facts. Each result's date is rendered through `relativeDay()` so "from yesterday" appears alongside the granularity tag.
-2. **Graph excerpt** — entity-relationship context
-3. **Recent ponderings** — the Familiar's own quiet thoughts (honesty loop). Each entry's `created_at` is rendered via `relativeTime()`.
-4. **`[CARE CHECK]`** — only present when threat tier ≠ calm; carries identity-anchored guidance per tier
-5. **`[Temporal Context]`** — handoff + today's rhythm + schedule window + interests. Every timed item (upcoming / reminders / resolved) is rendered through `relativeTime()` so the Familiar reads "tomorrow at 10am" / "in 30 minutes" rather than ISO timestamps.
-6. **`[Surface candidates]`** — open schedule items that survived the hard gates (threat tier, routine phase, dedup window), packaged with consequence priors + person-model excerpt so the Familiar can decide in voice whether to mention any. See "Surface pipeline" below.
-
-After the dynamic block is depth-injected, server.js appends one final system message — the **`[Now]` block** — as the absolute last entry in the prompt, after the chat history and after any post-history prompt. It carries the two freshest values the Familiar needs for care reasoning at response time:
-
-```
-[Now]
-Now: 2:30pm on Thursday, June 4.
-My human last sent a message 12 minutes ago.
-```
-
-Position matters: these values are RIGHT NEXT to the model's response slot, at maximum salience. Recomputed every turn against `Date.now()` so the phrasing tracks the present.
+1. **`[Now]`** — wall-clock + weekday + date + relative phrasing of "my human last sent a message" (see "Time perception" below). Always first so every other block reads against a consistent present.
+2. **RAG memories** — direct retrieval relevance, weight-bearing facts. Each result's date is rendered through `relativeDay()` so "from yesterday" appears alongside the granularity tag.
+3. **Graph excerpt** — entity-relationship context
+4. **Recent ponderings** — the Familiar's own quiet thoughts (honesty loop). Each entry's `created_at` is rendered via `relativeTime()`.
+5. **`[CARE CHECK]`** — only present when threat tier ≠ calm; carries identity-anchored guidance per tier
+6. **`[Temporal Context]`** — handoff + today's rhythm + schedule window + interests. Every timed item (upcoming / reminders / resolved) is rendered through `relativeTime()` so the Familiar reads "tomorrow at 10am" / "in 30 minutes" rather than ISO timestamps.
+7. **`[Surface candidates]`** — open schedule items that survived the hard gates (threat tier, routine phase, dedup window), packaged with consequence priors + person-model excerpt so the Familiar can decide in voice whether to mention any. See "Surface pipeline" below.
 
 ## Time perception (the `relative-time` layer)
 
@@ -401,13 +392,14 @@ Surfaces using `relativeTime()` / `relativeDay()`:
 
 | Surface | Where | What it gets |
 |---|---|---|
-| `[Now]` block | server.js (appended after depth-inject, before send) | "Now: 2pm on Thursday, June 4. My human last sent a message 12 minutes ago." |
+| `[Now]` block | thalamus.js enrich() | "Now: 2pm on Thursday, June 4. My human last sent a message 12 minutes ago." |
 | RAG memories | thalamus.js enrich() | "(from daily/2026-06-03, **yesterday**, 87% relevant)" |
 | Ponderings block | recent-ponderings.js | "— **this morning at 9am** · 'On honesty'" |
 | Schedule items | temporal-format.js | "**tomorrow at 10am** — [event] dentist appointment" |
 | Handoff | temporal-format.js | "Last session (**ended last Tuesday at 9pm**):" |
+| Chat-turn messages | public/app.js buildApiMessages | "[14:30] hi" (every user + assistant message in history) |
 
-Individual chat messages are NOT stamped — the [Now] block carries the per-turn time anchor, which is enough for the Familiar's care reasoning. Stamping each message's content directly (a previous iteration) caused the timestamps to leak into the Familiar's responses and into memorization-generated tome entries; the [Now]-only approach keeps the content stream clean.
+The chat-turn message stamps use a compact `[HH:MM]` tag rather than full relative phrasing — the relative anchor is in the `[Now]` block, so each message just needs a marker the Familiar can correlate.
 
 ## Surface pipeline (the consumer side of personalization)
 

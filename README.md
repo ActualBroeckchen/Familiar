@@ -2,6 +2,15 @@
 I've decided to make this public while I work on it so others can access the research.
 
 ---
+## What is Familiar?
+
+Down the line, Familiar is intended to be an agentic harness allowing primarily neurodivergent people to get everyday assistance from an AI entity. The aim is to help people break out of anxiety spirals, executive dysfunction, anhedonia and similar situations, as well as connect them to their human support system when they need it. The concept is inspired by the folkloric Familiars, spirits that aided their humans not as servile assistants, nor dominated them and their attention, but functioned as mentors, guides and companions to grant access to the wider world and hidden talents. The bond is intended to be platonic.
+
+Currently this project is **Proto-Familiar**, an early prototype to help me, a very ADHD'd and depressed human, build the *actual* Familiar later. It's a proof of concept and Minimum Viable Product. I am always deeply thankful for testers!
+
+**DISCLAIMER:** Familiar and Proto-Familiar purposely build a pack-bond with the human user. Therefore, they are **NOT** suitable for anyone with disorders that can cause hallucinations, delusions or other states of unreality!!!
+
+If you want to join the efforts and follow the development closely, you can join my [Discord Server](https://discord.gg/ajKBCWGaE) for the project.
 
 ## Proto-Familiar — Chat Frontend
 
