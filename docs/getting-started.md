@@ -112,11 +112,13 @@ Independent of the chat path: the connection you designate as entity-core's sour
 
 ## Updating an existing install
 
-Re-run the same installer you used for the first install:
+**If you installed by `git clone`:** re-run the same installer you used for the first install:
 
 - **Windows:** double-click `Proto-Familiar.vbs` (the launcher re-runs the installer if needed) or run `install.bat` directly.
 - **macOS:** double-click `Proto-Familiar.command`, or `./install.sh` from a terminal.
 - **Linux:** `./install.sh`.
+
+**If you installed by downloading the ZIP** (folder named `Proto-Familiar-main`, no `.git` inside): the installer can't `git pull`, so use the **one-click updater** instead — double-click **`update.bat`** (Windows) / **`update.command`** (macOS) or run **`./update.sh`** (Linux). It downloads the latest version from GitHub, lays it over your folder (your settings, memories, tomes, logs, and entity-core data are preserved — they aren't in the download), and then runs the installer for dependencies + migrations. No git knowledge required. The installer also tells you which path you're on — it prints `Branch:` (or "not a git checkout") and `Version:` when it finishes.
 
 The installer detects the existing install via the `node_modules/` directory and switches to **update mode**. The flow:
 

@@ -1,0 +1,190 @@
+/**
+ * Autonomous pondering loop — step 4a of the caring spine.
+ *
+ * The Familiar wakes on its own cadence (governed by current interest
+ * weights), picks one interest with weight-proportional sampling, and
+ * ponders it. No human invocation required. The result is a real,
+ * timestamped tome entry — same honesty rule as steps 1-3 ́.
+ *
+ * Architecture:
+ *
+ *   runOneTick({...})            ← pure, fully injectable: takes
+ *                                    getInterests + runPonder + clock
+ *                                    + rng + cadence formula and
+ *                                    returns {acted, reason, ...}.
+ *                                    The whole behavioural surface.
+ *                                    All tests target this directly.
+ *
+ *   startPonderingLoop({...})    ← thin singleton wrapper: setInterval
+ *   stopPonderingLoop()            on top of runOneTick, mirrors
+ *                                    memorization.js's lifecycle so
+ *                                    server.js can boot/shutdown it
+ *                                    the same way.
+ *
+ * Safety:
+ *   - Reentrancy guard: one tick at a time. Slow LLM calls don't pile up.
+ *   - stopPonderingLoop() awaits any in-flight tick, so demos / shutdown
+ *     don't strand a running ponder.
+ *   - Errors in the tick don't kill the loop; they go to onError and
+ *     the next tick tries again.
+ *   - No eligible interests → quietly sleeps. Never invents a topic.
+ */
+
+import { pickInterest }            from './interest-picker.js';
+import { computeRequiredInterval } from './pondering-cadence.js';
+
+const DEFAULT_TICK_MS = 60_000; // poll once per minute by default
+
+/**
+ * Run a single tick. Pure-ish — all I/O comes through injected callbacks
+ * so tests can drive every branch deterministically.
+ *
+ * Return shape: { acted: boolean, ... }
+ *   acted:false carries `reason`:
+ *     - 'no_interests'     — interest layer empty
+ *     - 'no_eligible_pick' — entries present but none eligible (zero weight, etc.)
+ *     - 'too_soon'         — cooldown not yet elapsed
+ *   acted:true carries:
+ *     - picked  — the interest object that won the weighted draw
+ *     - result  — whatever runPonder() returned (typically ponderOnce's result)
+ */
+export async function runOneTick({
+  getInterests,
+  runPonder,
+  getThreat        = async () => 0,
+  isEnabled        = async () => true,
+  getIntervalScale = async () => 1,
+  computeInterval  = computeRequiredInterval,
+  rng              = Math.random,
+  now              = Date.now,
+  lastPonderAt     = 0,
+  // Slice 2: reflection-mode hooks. Optional — when both are
+  // provided, the loop checks shouldReflectNow() right before the
+  // interest pick; on true, it dispatches runPonder() with the
+  // reflection payload instead of the weighted interest pick.
+  // Same LLM call, different question being asked.
+  shouldReflect    = null,    // async () => boolean
+  getReflectionInput = null,  // async () => { mode:'reflection', outcomes, existingNotes }
+}) {
+  if (typeof getInterests !== 'function') throw new Error('getInterests is required');
+  if (typeof runPonder    !== 'function') throw new Error('runPonder is required');
+
+  // Short-circuit if user has toggled the loop off or the system isn't
+  // configured to ponder (no primary connection, no key, etc.). Cheap
+  // — the gate is checked before any other I/O — so a disabled loop
+  // costs almost nothing per tick.
+  if (!(await isEnabled())) {
+    return { acted: false, reason: 'disabled', at: now() };
+  }
+
+  // Fetch interests + threat + scale in parallel — all cheap, all feed
+  // the cadence decision, and we want one consistent moment-in-time
+  // view for this tick.
+  const [interests, threatLevel, scale] = await Promise.all([
+    getInterests(),
+    getThreat(),
+    getIntervalScale(),
+  ]);
+
+  if (!Array.isArray(interests) || interests.length === 0) {
+    return { acted: false, reason: 'no_interests', threatLevel, scale, at: now() };
+  }
+
+  const topWeight = Math.max(0, ...interests.map(i => Number(i?.weight) || 0));
+  const required  = computeInterval(topWeight, Number(threatLevel) || 0, { scale: Number(scale) || 1 });
+  const since     = now() - lastPonderAt;
+  if (since < required) {
+    return { acted: false, reason: 'too_soon', sinceMs: since, requiredMs: required, topWeight, threatLevel, scale, at: now() };
+  }
+
+  // Reflection mode check — runs before the weighted interest pick.
+  // If enough tagged surface outcomes have accumulated since the
+  // last reflection, this tick reflects instead of pondering an
+  // interest. Same LLM call, different topic shape.
+  if (typeof shouldReflect === 'function' && typeof getReflectionInput === 'function') {
+    let reflect = false;
+    try { reflect = !!(await shouldReflect()); }
+    catch (err) { /* if the check fails, just fall through to interest pondering */ }
+    if (reflect) {
+      const input = await getReflectionInput();
+      const result = await runPonder(input, { mode: 'reflection' });
+      return { acted: true, mode: 'reflection', result, at: now(), threatLevel, scale, requiredMs: required };
+    }
+  }
+
+  const picked = pickInterest(interests, { rng });
+  if (!picked) {
+    return { acted: false, reason: 'no_eligible_pick', threatLevel, scale, at: now() };
+  }
+
+  const result = await runPonder(picked.label, picked);
+  return { acted: true, mode: 'pondering', picked, result, at: now(), topWeight, threatLevel, scale, requiredMs: required };
+}
+
+// ── Singleton lifecycle ───────────────────────────────────────────
+
+let _started     = false;
+let _interval    = null;
+let _activeTick  = null;
+let _lastPonderAt = 0;
+
+/**
+ * Start the loop. Wraps runOneTick with a setInterval at `tickMs`
+ * cadence (default 60 s). The actual ponder cadence is set by
+ * `computeInterval(topWeight)` — the tick is just how often we
+ * ask "is it time yet?"
+ *
+ * Required: getInterests, runPonder.
+ * Optional callbacks: onTick(result), onError(err).
+ *
+ * Returns { stop: stopPonderingLoop } for ergonomic teardown.
+ */
+export function startPonderingLoop({
+  tickMs   = DEFAULT_TICK_MS,
+  onTick   = () => {},
+  onError  = () => {},
+  immediate = true,    // run one tick on start so demos don't wait a full tickMs
+  ...tickConfig
+}) {
+  if (_started) throw new Error('pondering loop already running');
+  _started      = true;
+  _lastPonderAt = 0;
+
+  const fire = async () => {
+    if (_activeTick) return;
+    _activeTick = (async () => {
+      try {
+        const r = await runOneTick({ ...tickConfig, lastPonderAt: _lastPonderAt });
+        if (r.acted) _lastPonderAt = r.at;
+        try { onTick(r); } catch (err) { onError(err); }
+      } catch (err) {
+        try { onError(err); } catch { /* swallow */ }
+      } finally {
+        _activeTick = null;
+      }
+    })();
+    return _activeTick;
+  };
+
+  _interval = setInterval(() => { fire(); }, tickMs);
+  _interval.unref?.();
+
+  if (immediate) fire();
+
+  return { stop: stopPonderingLoop };
+}
+
+/**
+ * Stop the loop. Awaits any in-flight tick so the caller can be
+ * sure no ponder is mid-flight when we return.
+ */
+export async function stopPonderingLoop() {
+  if (!_started) return;
+  if (_interval) { clearInterval(_interval); _interval = null; }
+  const pending = _activeTick;
+  _started      = false;
+  _lastPonderAt = 0;
+  if (pending) { try { await pending; } catch { /* surfaced through onError already */ } }
+}
+
+export function isRunning() { return _started; }

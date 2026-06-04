@@ -33,22 +33,19 @@ $parentDir   = Split-Path -Parent $projectRoot
 $entityCoreDirNew    = Join-Path $parentDir "entity-core"
 $entityCoreDirLegacy = Join-Path $parentDir "entity-core-alpha"
 if (Test-Path $entityCoreDirNew) {
-    $entityCoreDir    = $entityCoreDirNew
-    $entityCoreDirRel = "entity-core"
+    $entityCoreDir = $entityCoreDirNew
 } elseif (Test-Path $entityCoreDirLegacy) {
-    $entityCoreDir    = $entityCoreDirLegacy
-    $entityCoreDirRel = "entity-core-alpha"
+    $entityCoreDir = $entityCoreDirLegacy
 } else {
-    $entityCoreDir    = $entityCoreDirNew
-    $entityCoreDirRel = "entity-core"
+    $entityCoreDir = $entityCoreDirNew
 }
 # Release page: https://github.com/PsycherosAI/Psycheros/releases/tag/<tag>
 $entityCoreRepo = "https://github.com/PsycherosAI/Psycheros.git"
-$entityCoreTag  = "entity-core-v0.2.2"
+$entityCoreTag  = "entity-core-v0.3.2"
 $backupRoot    = Join-Path $projectRoot ".pf-backups"
 
 function Have($cmd) { [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
-function Refresh-Path {
+function Update-EnvPath {
     $env:Path = `
         [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + `
         [System.Environment]::GetEnvironmentVariable("Path","User")
@@ -113,6 +110,13 @@ if ($updateMode -and (Test-Path (Join-Path $projectRoot ".git")) -and (Have "git
         & git pull --ff-only
         if ($LASTEXITCODE -ne 0) { Warn "git pull --ff-only failed. Work tree is unchanged." }
     } finally { Pop-Location }
+} elseif ($updateMode -and -not (Test-Path (Join-Path $projectRoot ".git")) -and ($env:PF_FROM_UPDATER -ne '1')) {
+    # No .git — this is a downloaded ZIP, not a clone. The installer can't
+    # pull updates here, so the user would silently stay on this version.
+    Warn "This folder is NOT a git checkout - it looks like a downloaded ZIP."
+    Warn "  This installer can't pull updates here. To update, double-click"
+    Warn "  update.bat - it downloads the latest version and applies it, keeping your data."
+    Warn "  (Or reinstall with: git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git)"
 }
 
 $haveWinget = Have "winget"
@@ -132,7 +136,7 @@ function Install-Via-Browser($name, $url, $probeCmd) {
     Write-Host ""
     Write-Host "Download the installer, run it, accept the defaults, then come back."
     Read-Host "Press Enter once $name is installed (or Ctrl-C to abort)"
-    Refresh-Path
+    Update-EnvPath
     if (-not (Have $probeCmd)) {
         Warn "$name still isn't on PATH. You may need to open a new terminal and re-run this script."
     }
@@ -150,7 +154,7 @@ if (-not (Have "node")) {
         if ($LASTEXITCODE -ne 0) {
             Warn "winget Node install exited with code $LASTEXITCODE — trying direct download."
             Install-Via-Browser "Node.js LTS" "https://nodejs.org/" "node"
-        } else { Refresh-Path }
+        } else { Update-EnvPath }
     } else {
         Install-Via-Browser "Node.js LTS" "https://nodejs.org/" "node"
     }
@@ -177,7 +181,7 @@ if (-not (Have "deno")) {
         winget install --id DenoLand.Deno --scope user --silent `
             --accept-source-agreements --accept-package-agreements
         if ($LASTEXITCODE -eq 0) {
-            Refresh-Path
+            Update-EnvPath
             $installedViaWinget = (Have "deno")
         } else {
             Warn "winget Deno install exited with code $LASTEXITCODE — trying official installer."
@@ -204,7 +208,7 @@ if (-not (Have "git")) {
         winget install --id Git.Git --scope user --silent `
             --accept-source-agreements --accept-package-agreements
         if ($LASTEXITCODE -eq 0) {
-            Refresh-Path
+            Update-EnvPath
             $installedViaWinget = (Have "git")
         } else {
             Warn "winget Git install exited with code $LASTEXITCODE — trying direct download."
@@ -282,7 +286,7 @@ Step "Checking uv..."
 $uvDefaultPath = Join-Path $env:USERPROFILE ".local\bin\uv.exe"
 if (Test-Path $uvDefaultPath) {
     # Prime PATH so subsequent `uv sync` and Have "uv" see it without
-    # a shell restart (symmetric to what Refresh-Path does for winget).
+    # a shell restart (symmetric to what Update-EnvPath does for winget).
     $env:PATH = (Join-Path $env:USERPROFILE ".local\bin") + ";" + $env:PATH
 }
 if (-not (Have "uv")) {
@@ -291,7 +295,7 @@ if (-not (Have "uv")) {
         try {
             winget install --id astral-sh.uv --scope user --silent `
                 --accept-source-agreements --accept-package-agreements
-            Refresh-Path
+            Update-EnvPath
         } catch { Warn "winget uv install failed - trying Astral's official installer..." }
     }
     if (-not (Have "uv")) {
@@ -388,6 +392,15 @@ if ($updateMode) {
     if ($anythingBackedUp) { Write-Host "Pre-update backup: $backupDir" -ForegroundColor Green }
 } else {
     Write-Host "Install complete." -ForegroundColor Green
+}
+# Show version + branch so it's verifiable here, and a wrong-branch
+# checkout (e.g. a ZIP of main missing newer work) is obvious.
+Write-Host "Version: Proto-Familiar v$pfVersion" -ForegroundColor Green
+if ((Test-Path (Join-Path $projectRoot ".git")) -and (Have "git")) {
+    $pfBranch = (& git -C $projectRoot rev-parse --abbrev-ref HEAD 2>$null)
+    if ($pfBranch) { Write-Host "Branch:  $pfBranch" -ForegroundColor Green }
+} else {
+    Write-Host "Branch:  (not a git checkout - downloaded ZIP; update with update.bat)" -ForegroundColor Yellow
 }
 Write-Host "Launch any time via:"
 Write-Host "  - Desktop shortcut: Proto-Familiar"

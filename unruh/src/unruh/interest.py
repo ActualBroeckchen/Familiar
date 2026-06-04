@@ -379,7 +379,33 @@ def _node_row_to_dict(row: sqlite3.Row, *, eff_weight: float, tier: str) -> dict
     }
     payload = json.loads(row["payload_json"] or "{}")
     if payload: out["payload"] = payload
+    # Surface value_ref at top level too — the M7 standing-value bridge
+    # in thalamus reads it directly without digging into payload.
+    if payload.get("value_ref"): out["value_ref"] = payload["value_ref"]
     return out
+
+
+def demote_standing(conn: sqlite3.Connection, *, id: str) -> dict[str, Any]:
+    """Demote a standing value to a live interest (M7). Called when the
+    entity-core fact it anchored has disappeared — we demote rather than
+    drop, so the topic survives as a normal (decaying) interest instead
+    of vanishing.
+
+    Refreshes last_touched to now so it surfaces once at full weight and
+    then decays from here, rather than instantly aging out. Keeps the
+    (now-stale) value_ref in payload for provenance. No-op (demoted=0)
+    if the id is unknown or isn't currently a standing value.
+
+    Returns {ok, demoted}.
+    """
+    ts = now_iso()
+    cur = conn.execute(
+        """UPDATE nodes
+              SET type = 'live_interest', last_touched = ?, updated_at = ?
+            WHERE id = ? AND layer = 'interest' AND type = 'standing_value'""",
+        (ts, ts, id),
+    )
+    return {"ok": True, "demoted": cur.rowcount}
 
 
 def list_interests(

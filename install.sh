@@ -45,7 +45,7 @@ else
 fi
 # The release lives at https://github.com/PsycherosAI/Psycheros/releases/tag/<tag>
 ENTITY_CORE_REPO="https://github.com/PsycherosAI/Psycheros.git"
-ENTITY_CORE_TAG="entity-core-v0.2.2"
+ENTITY_CORE_TAG="entity-core-v0.3.2"
 BACKUP_ROOT="$SCRIPT_DIR/.pf-backups"
 
 say() { printf '\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -117,10 +117,20 @@ if [ "$MODE" = "update" ]; then
 fi
 
 # --- Pull latest Proto-Familiar (update mode only) -----------------------
-if [ "$MODE" = "update" ] && [ -d "$SCRIPT_DIR/.git" ] && command -v git >/dev/null 2>&1; then
-  say "Pulling latest Proto-Familiar (git pull --ff-only)..."
-  if ! ( cd "$SCRIPT_DIR" && git pull --ff-only ); then
-    warn "git pull --ff-only failed (local changes, non-default branch, or no network). Continuing with current checkout — your work tree is unchanged."
+if [ "$MODE" = "update" ]; then
+  if [ -d "$SCRIPT_DIR/.git" ] && command -v git >/dev/null 2>&1; then
+    say "Pulling latest Proto-Familiar (git pull --ff-only)..."
+    if ! ( cd "$SCRIPT_DIR" && git pull --ff-only ); then
+      warn "git pull --ff-only failed (local changes, non-default branch, or no network). Continuing with current checkout — your work tree is unchanged."
+    fi
+  elif [ ! -d "$SCRIPT_DIR/.git" ] && [ "$PF_FROM_UPDATER" != "1" ]; then
+    # No .git means this is a downloaded ZIP, not a clone — the installer
+    # can't pull updates, so point the user at the one-click updater.
+    # Skipped when update.sh is the caller (it just did the update).
+    warn "This folder is NOT a git checkout — it looks like a downloaded ZIP."
+    warn "  install.sh can't pull updates here. To update, run ./update.sh —"
+    warn "  it downloads the latest version and applies it, keeping your data."
+    warn "  (Or reinstall with: git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git)"
   fi
 fi
 
@@ -276,6 +286,11 @@ elif [ -f "$SCRIPT_DIR/unruh/pyproject.toml" ]; then
   warn "Skipping Unruh dep sync (uv not available). Temporal context will be disabled until uv is installed."
 fi
 
+# Make the shell launchers + updaters executable — a ZIP extractor or a
+# restored backup can drop the bit, which would break ./update.sh and the
+# macOS double-click path.
+chmod +x "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.command 2>/dev/null || true
+
 # --- Platform-specific launcher polish (idempotent, runs in both modes) -
 # Previously gated on install mode only, which silently skipped desktop-
 # entry creation on update mode — fine when the entry already existed,
@@ -322,6 +337,15 @@ if [ "$MODE" = "update" ]; then
   fi
 else
   say "Install complete."
+fi
+# Show version + branch so it's verifiable here, and so a wrong-branch
+# checkout (e.g. a ZIP of main missing newer work) is obvious.
+say "Version: Proto-Familiar v$PF_VERSION"
+if [ -d "$SCRIPT_DIR/.git" ] && command -v git >/dev/null 2>&1; then
+  PF_BRANCH="$( cd "$SCRIPT_DIR" && git rev-parse --abbrev-ref HEAD 2>/dev/null )"
+  [ -n "$PF_BRANCH" ] && say "Branch:  $PF_BRANCH"
+else
+  say "Branch:  (not a git checkout — downloaded ZIP; update with ./update.sh)"
 fi
 echo
 echo "  Launch:"

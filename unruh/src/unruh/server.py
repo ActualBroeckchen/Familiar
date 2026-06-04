@@ -15,6 +15,7 @@ Tools exposed (stable contract — Thalamus depends on these shapes):
     interest_record       — bump engagement weight for a topic
     interest_bookmark     — save a resource against a topic
     interest_set_standing — promote a topic to an always-on standing value
+    interest_demote_standing — demote a standing value to a live interest
     interest_list         — list interests by effective (decayed) weight
 
   Session handoff (M6):
@@ -94,6 +95,14 @@ def schedule_add_node(
             event/state (open-ended).
         payload: arbitrary extras stored as JSON (notes, source,
             categorisation that doesn't fit the four columns).
+            Conventional keys used by Proto-Familiar's surface pipeline:
+              - stakes_tier: 'external_obligation' | 'personal_wellbeing'
+                | 'purely_optional' — what kind of cost lapsing carries.
+                Drives surface-pressure: external bypasses quiet-hours
+                and dedup; personal_wellbeing decays gently.
+              - consequence_model: free-text note on what specifically
+                happens if this task lapses (e.g. "loses UC payment").
+              - message: reminder banner body (reminders only).
 
     Returns: {ok: True, id: '<new-id>'} on success, or the
     standard error shape on validation failure.
@@ -189,6 +198,147 @@ def schedule_resolve(id: str, resolution: str) -> dict[str, Any]:
         return {"ok": True, "updated": updated}
     except ValueError as e:
         return _err(str(e))
+
+
+@mcp.tool()
+def schedule_resolve_occurrence(id: str, occurrence_date: str, resolution: str) -> dict[str, Any]:
+    """Mark a single occurrence of a recurring schedule node resolved.
+
+    For recurring nodes (weekly cleaning, monthly bill, yearly
+    birthday) this resolves THIS specific occurrence without killing
+    the series — payload.resolutions[occurrence_date] = resolution.
+    The JS-side expander hides resolved occurrences from the temporal
+    context window. Next occurrence still surfaces normally.
+
+    Args:
+        id: anchor node id (the original recurring node).
+        occurrence_date: 'YYYY-MM-DD' local-TZ date of the specific
+            occurrence being resolved.
+        resolution: 'done' | 'cancelled' | 'carried_forward'.
+
+    Returns: {ok: True, updated: <bool>}. Raises if the node has no
+    recurrence rule (use schedule_resolve for one-time entries).
+    """
+    try:
+        with get_conn() as conn:
+            updated = sched.resolve_occurrence(
+                conn, id=id, occurrence_date=occurrence_date, resolution=resolution,
+            )
+        return {"ok": True, "updated": updated}
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def schedule_update_node(
+    id: str,
+    label: str | None = None,
+    when: str | None = None,
+    end: str | None = None,
+    payload: dict | None = None,
+) -> dict[str, Any]:
+    """Patch a schedule-layer node in place.
+
+    Args:
+        id: node id to update.
+        label: new label (non-empty). Omit / None to leave unchanged.
+        when: new ISO-8601 UTC start. Pass "" (empty string) to clear.
+        end: new ISO-8601 UTC end. Pass "" to clear.
+        payload: new payload dict — REPLACES the existing payload.
+
+    Returns: {ok: True, updated: <bool>}.
+    """
+    try:
+        with get_conn() as conn:
+            updated = sched.update_node(
+                conn, id=id, label=label, when=when, end=end, payload=payload,
+            )
+        return {"ok": True, "updated": updated}
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def schedule_delete_node(id: str) -> dict[str, Any]:
+    """Permanently remove a schedule-layer node (and its edges).
+
+    Returns: {ok: True, deleted: <bool>}. Interest-layer nodes are
+    never affected — use interest_demote_standing for those.
+    """
+    with get_conn() as conn:
+        deleted = sched.delete_node(conn, id=id)
+    return {"ok": True, "deleted": deleted}
+
+
+@mcp.tool()
+def schedule_list_recurring(include_resolved: bool = False, limit: int = 200) -> dict[str, Any]:
+    """List every schedule node whose payload carries a `recurrence`
+    rule, regardless of stored when_ts.
+
+    Recurring nodes anchor on their first occurrence — the rest are
+    computed at read-time by the JS-side expander in recurrence.js.
+    schedule_get_window only catches nodes whose stored when_ts falls
+    inside the window, so this surfaces the anchors the JS side needs
+    to expand for "today's rhythm" / "upcoming this week" rendering.
+
+    Returns: {ok: True, nodes: [...]}.
+    """
+    with get_conn() as conn:
+        nodes = sched.list_recurring(conn, include_resolved=include_resolved, limit=limit)
+    return {"ok": True, "nodes": nodes}
+
+
+@mcp.tool()
+def schedule_list_phases(include_resolved: bool = False, limit: int = 200) -> dict[str, Any]:
+    """List every phase node regardless of stored date.
+
+    Phases recur daily by design (current_phase matches on time-of-day
+    only), but schedule_get_window filters by calendar date — so the
+    day after a phase is added, it falls outside any reasonable window.
+    The Routine UI and any briefing layer rendering "today's rhythm"
+    should use this instead.
+
+    Returns: {ok: True, phases: [...]}.
+    """
+    with get_conn() as conn:
+        phases = sched.list_phases(conn, include_resolved=include_resolved, limit=limit)
+    return {"ok": True, "phases": phases}
+
+
+# ── Reminders (M11) ────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def reminders_due(now: str | None = None, limit: int = 50) -> dict[str, Any]:
+    """List reminders whose fire time has arrived and that have not
+    been resolved (fired / cancelled / done).
+
+    Pure read — does NOT mark anything fired. The Node-side scheduler
+    marks them via schedule_resolve(id, 'fired') AFTER delivery
+    succeeds, so a crash mid-delivery leaves them fireable next tick.
+
+    Args:
+        now: ISO-8601 UTC timestamp. Default = current wall clock.
+        limit: max reminders to return. Default 50.
+
+    Returns: {ok: True, reminders: [...]}
+    """
+    with get_conn() as conn:
+        due = sched.get_due_reminders(conn, now=now, limit=limit)
+    return {"ok": True, "reminders": due}
+
+
+@mcp.tool()
+def reminders_health() -> dict[str, Any]:
+    """Quick observability surface for the reminders scheduler.
+
+    Returns total / pending / overdue counts, next fires_at, and the
+    most-recent fire timestamp. Surfacing silent-failure was the
+    explicit M11 design concern; if `overdue` grows monotonically
+    across ticks, something is wrong with the Node-side scheduler.
+    """
+    with get_conn() as conn:
+        return {"ok": True, **sched.reminders_health(conn)}
 
 
 # ── Interest layer (M4) ───────────────────────────────────────────────
@@ -294,6 +444,21 @@ def interest_set_standing(
 
 
 @mcp.tool()
+def interest_demote_standing(id: str) -> dict[str, Any]:
+    """Demote a standing value to a live interest (M7 bridge).
+
+    Thalamus calls this when the entity-core fact a standing value
+    anchored (via its value_ref) has disappeared — we demote rather
+    than drop, so the topic lives on as a decaying interest. Idempotent;
+    a no-op (demoted=0) if the id isn't a current standing value.
+
+    Returns: {ok, demoted}.
+    """
+    with get_conn() as conn:
+        return interests.demote_standing(conn, id=id)
+
+
+@mcp.tool()
 def interest_list(
     limit: int = 20,
     min_weight: float = 0.01,
@@ -318,6 +483,25 @@ def interest_list(
             conn, limit=limit, min_weight=min_weight,
             include_standing=include_standing,
         )
+
+
+@mcp.tool()
+def interest_list_bookmarks(limit: int = 100) -> dict[str, Any]:
+    """List all bookmark nodes with their surfacing metadata.
+
+    Returns the full bookmark list suitable for display in the temporal
+    editor UI, including the M8 surfacing-tracking fields:
+    last_surfaced_at, last_surfacing_outcome, resurface_after_hours,
+    and consecutive_ignores.
+
+    Args:
+        limit: maximum number of bookmarks to return.
+
+    Returns: {ok: True, bookmarks: [...]}.
+    """
+    with get_conn() as conn:
+        bms = interests.list_bookmarks(conn, limit=limit)
+        return {"ok": True, "bookmarks": bms}
 
 
 # ── Session handoff (M6) ──────────────────────────────────────────────
@@ -398,6 +582,12 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
     with get_conn() as conn:
         phase = sched.current_phase(conn, at=now)
         window = sched.get_window(conn, from_ts=None, to_ts=None, limit=50)
+        # Full routine — every live phase, date-independent. The
+        # Familiar needs the day's shape, not just "which phase right
+        # now." current_phase still rides along separately so the
+        # formatter can mark "← I am here." Excluding resolved phases
+        # so a deliberately cancelled phase actually stops appearing.
+        routine = sched.list_phases(conn, include_resolved=False, limit=50)
         # Interest layer surfacing: top weighted live interests plus
         # all standing values. Limited to keep the prompt cheap —
         # the design's "kilobytes-scale" budget assumes ~10 items
@@ -412,6 +602,7 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
     return {
         "ts": now or _now_iso(),
         "schedule":  schedule_block,
+        "routine":   routine,
         "interests": {
             "standing": interest_block["standing"],
             "live":     interest_block["live"],

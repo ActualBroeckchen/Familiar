@@ -226,11 +226,11 @@ This matters because false positives in threat detection should be recoverable. 
 
 **Triage inputs:**
 - Recent conversation — emotional tone, what was happening when silence began
-- Entity-core — user's known patterns, vulnerabilities, history
+- Entity-core — user's known patterns, vulnerabilities, history (the Familiar's full identity context)
 - Elapsed time since last user message
 - Unruh — the expected shape of this moment (is silence normal right now? is something scheduled soon?)
 
-Together these give Familiar a rich enough picture to distinguish "probably just busy" from "this warrants a gentle check-in" from "this needs escalation."
+Together these give Familiar a rich enough picture to distinguish "probably just busy" from "this warrants a gentle check-in" from "this needs escalation." The triage prompt is deliberately neutral — there is no built-in bias toward waiting; the LLM's judgment on the full context determines the outcome.
 
 **Threat level mechanics:**
 - Rises on detection of language associated with crisis states
@@ -243,6 +243,8 @@ Together these give Familiar a rich enough picture to distinguish "probably just
 An action available to the triage decision — not a separate automatic trigger. When the LLM's triage judgment determines that the situation exceeds what Familiar can address alone, it can reach out to a designated trusted contact (roommate, friend, family member) via a configured channel.
 
 This is the highest-stakes, lowest-frequency category. It should never fire automatically without passing through triage judgment. The decision to escalate to a human is always a considered one, not a threshold crossing.
+
+**Escalation is sequential, not simultaneous.** When the LLM decides to involve a trusted contact, Familiar contacts the user first (outbox banner). The trusted-contact webhook fires only if the deadline passes without the user acknowledging the check-in — severe=30min, high=2h, moderate=6h. The identical message is always mirrored into the outbox so there is no covert contact.
 
 ---
 

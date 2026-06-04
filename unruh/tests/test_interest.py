@@ -258,6 +258,45 @@ class TestSetStanding:
         row = conn.execute("SELECT type FROM nodes WHERE id = ?", (rec["id"],)).fetchone()
         assert row["type"] == "standing_value"
 
+    def test_value_ref_surfaced_top_level_in_list(self, conn):
+        interests.set_standing(conn, topic="caring",
+                               value_ref="entity-core:self/my_wants.md#caring")
+        sv = interests.list_interests(conn)["standing"][0]
+        assert sv["value_ref"] == "entity-core:self/my_wants.md#caring"
+
+
+# ── demote_standing() (M7 bridge) ───────────────────────────────────
+
+
+class TestDemoteStanding:
+    def test_demotes_to_live_interest(self, conn):
+        r = interests.set_standing(conn, topic="anchored value",
+                                   value_ref="entity-core:self/my_wants.md#x", weight=1.0)
+        out = interests.demote_standing(conn, id=r["id"])
+        assert out["demoted"] == 1
+        row = conn.execute("SELECT type FROM nodes WHERE id = ?", (r["id"],)).fetchone()
+        assert row["type"] == "live_interest"
+
+    def test_demoted_value_survives_in_live_list_not_standing(self, conn):
+        r = interests.set_standing(conn, topic="was standing",
+                                   value_ref="entity-core:self/x.md#y", weight=1.0)
+        interests.demote_standing(conn, id=r["id"])
+        out = interests.list_interests(conn)
+        assert all(s["label"] != "was standing" for s in out["standing"])
+        assert any(l["label"] == "was standing" for l in out["live"])
+
+    def test_idempotent_and_noop_on_non_standing(self, conn):
+        r = interests.set_standing(conn, topic="v", value_ref="entity-core:self/x.md")
+        assert interests.demote_standing(conn, id=r["id"])["demoted"] == 1
+        # Already demoted -> 0.
+        assert interests.demote_standing(conn, id=r["id"])["demoted"] == 0
+        # A plain interest is not a standing value -> 0.
+        rec = interests.record(conn, topic="plain", delta=0.2)
+        assert interests.demote_standing(conn, id=rec["id"])["demoted"] == 0
+
+    def test_unknown_id_is_noop(self, conn):
+        assert interests.demote_standing(conn, id="nope")["demoted"] == 0
+
 
 # ── list_interests() ────────────────────────────────────────────────
 

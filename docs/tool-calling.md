@@ -14,7 +14,7 @@ The **Enable tool use** checkbox in the sidebar **Tools** section controls wheth
 
 ## Built-in Tools
 
-Fourteen tools are always available when tool use is enabled. The first five are read/append tools; the next two are read-only lookups for resolving graph names to ids; the bottom seven are the editing surface for correcting stale entity-core state. Every destructive tool (delete / rewrite / replace) auto-snapshots entity-core before the call — recovery is one click in the **Snapshots** tab of the Knowledge editor.
+Seventeen tools are always available when tool use is enabled. The first five are read/append tools; the next two are read-only lookups for resolving graph names to ids; the next seven are the editing surface for correcting stale entity-core state; the last three are crisis outreach tools for when the Familiar needs to help a user who is in danger during a live conversation. Every destructive tool (delete / rewrite / replace) auto-snapshots entity-core before the call — recovery is one click in the **Snapshots** tab of the Knowledge editor.
 
 | Tool | Description | Returns |
 |---|---|---|
@@ -32,6 +32,9 @@ Fourteen tools are always available when tool use is enabled. The first five are
 | `delete_graph_node` | Delete an entity AND all its edges. Only when the node is an error (duplicate, wrong entity); for "no longer related" use `delete_graph_edge` instead | Status string + snapshot note |
 | `update_graph_edge` | Change a relationship's type or weight when it still holds but is mis-typed (e.g. "acquaintance" → "close friend") | Status string |
 | `delete_graph_edge` | Remove one relationship between two entities while keeping the entities themselves. The right tool for "X is no longer at Y" / "X no longer works with Y" | Status string + snapshot note |
+| `get_trusted_contacts` | Return the names and channels of any trusted contacts configured in Settings. Call this before `contact_trusted_person` to confirm who is available and get the exact name to pass. | Plain-text list, or a note that none are configured |
+| `contact_trusted_person` | Immediately send a message to one of the user's trusted contacts (Discord webhook). Intended for live conversations where the user is actively present but in genuine danger. Every outbound is also shown as a visible outbox banner — nothing is covert. | Confirmation string, or an error string on failure |
+| `show_crisis_resources` | Surface an outbox banner containing international crisis-line and safety-resource links. Low friction — call early rather than late. No contacts required. | Confirmation string |
 
 ### Graph ids in the prompt
 
@@ -176,6 +179,31 @@ Auto-snapshots, then calls `graph_edge_update`. For a relationship that USED to 
 | `id` | string | Yes | Edge id |
 
 Auto-snapshots, then calls `graph_edge_delete`. Both endpoint nodes remain.
+
+---
+
+### Crisis Outreach Tools
+
+These three tools let the Familiar act during a live conversation when the user is actively present but clearly in danger. They are distinct from the **silence-triage loop**, which fires only when the user is quiet. The Familiar is expected to use judgment — these tools come with weighted guidance in their descriptions to make false alarms costly to reach for.
+
+The suggested sequence is: **`show_crisis_resources`** first (no prerequisites, always appropriate), then **`get_trusted_contacts`** to see who is available, then **`contact_trusted_person`** only when the Familiar genuinely believes human presence is needed.
+
+#### `get_trusted_contacts`
+
+No parameters. Reads `state.trustedContacts` directly from the synced settings — no server round-trip. Returns names and channels only; webhook URLs are never exposed to the model.
+
+#### `contact_trusted_person`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | Yes | Exact name of the contact, as returned by `get_trusted_contacts` |
+| `message` | string | Yes | 1–3 sentences to that person. Identify yourself as the user's Familiar; describe what you've observed. Specific, honest, not sensationalised. |
+
+Calls `POST /api/contact-trusted-person`. Delivery is **immediate** (unlike the silence-triage's deferred escalation path). On success or failure, an `outbound_alert` banner is enqueued to the user's outbox — the user always sees exactly what was sent.
+
+#### `show_crisis_resources`
+
+No parameters. Calls `POST /api/crisis-resources`, which enqueues a `crisis_resources` outbox banner containing links to international hotlines (988/Crisis Text Line/Samaritans/Lifeline AU/findahelpline.com). Deduplicated to one banner per hour so repeated calls during a single conversation don't flood the queue.
 
 ---
 

@@ -238,6 +238,103 @@ Deletes the session log file for the given UUID.
 
 ---
 
+### `GET /api/triage-events`
+
+Returns the full history of silence-triage decisions, newest first. Each entry is one tick of the 5-minute triage loop, regardless of whether the Familiar acted. Stored as newline-delimited JSON at `logs/triage-events.jsonl`; returns an empty array when the file doesn't exist yet.
+
+This is the audit trail for debugging the silence-triage system — you can see every decision the LLM made (or every reason it was skipped), how long the silence was at the time, and what the threat tier was.
+
+**Response:**
+
+```json
+[
+  {
+    "threat":    { "tier": "high", "weight": 4.2 },
+    "silenceMs": 3840000,
+    "reason":    "llm_said_wait",
+    "decision":  { "action": "wait", "message": null },
+    "acted":     false,
+    "at":        "2026-06-01T03:14:00.000Z",
+    "loggedAt":  "2026-06-01T03:14:01.123Z"
+  },
+  {
+    "threat":    { "tier": "high", "weight": 4.2 },
+    "silenceMs": 4140000,
+    "reason":    "reached_out",
+    "decision":  { "action": "reach_out", "message": "Hey, I've been thinking about you…" },
+    "acted":     true,
+    "at":        "2026-06-01T03:19:00.000Z",
+    "loggedAt":  "2026-06-01T03:19:01.456Z"
+  }
+]
+```
+
+**`reason` values:**
+
+| Value | Meaning |
+|---|---|
+| `low_threat` | Threat tier is calm or mild — triage doesn't run at those tiers |
+| `no_activity` | No user activity recorded yet this session |
+| `too_recent` | Silence hasn't crossed the tier's threshold yet |
+| `reached_out` | Rate-limiter: the Familiar already reached out recently |
+| `llm_said_wait` | LLM deliberated and chose not to reach out this tick |
+| `acted` / (empty `reason` with `acted: true`) | The Familiar reached out |
+
+**`decision`** is `null` for ticks where the LLM wasn't called (low_threat / no_activity / too_recent / reached_out). For LLM-driven ticks it contains at minimum `{ action: "wait" | "reach_out", message }`. When the LLM proposed a deferred trusted-contact escalation, `decision.meta.pendingContact` holds `{ name, message, channel }` and `decision.meta.contactDeadlineTs` is the UNIX ms deadline.
+
+---
+
+## Crisis Outreach (Live Conversation)
+
+These two endpoints back the crisis outreach tools — invoked by the Familiar during an active conversation when the user is present but in danger. They are distinct from the silence-triage loop (which fires only when the user is quiet).
+
+### `POST /api/contact-trusted-person`
+
+Immediately delivers a message to one of the user's configured trusted contacts. Unlike the silence-triage deferred escalation path, delivery is not conditional on the user's acknowledgement — it is intended for situations where the Familiar has judged, during a live exchange, that human presence is needed now.
+
+Every delivery (and every failed attempt) is also written to the outbox as an `outbound_alert` banner so the user can see exactly what was sent.
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | Yes | Exact name of the contact, matching one entry in `settings.json → trustedContacts` |
+| `message` | string | Yes | The message to send. Delivered as-is. |
+
+**Response:**
+
+```json
+{ "ok": true, "channel": "discord" }
+```
+
+On error (contact not found, webhook delivery failure):
+
+```json
+{ "ok": false, "channel": "discord", "error": "discord 400: …" }
+```
+
+Even on delivery failure the attempt is recorded in the outbox.
+
+---
+
+### `POST /api/crisis-resources`
+
+Enqueues a `crisis_resources` outbox banner containing international crisis-line and safety-resource links. The banner appears in the user's chat the next time the outbox is polled.
+
+Deduplicated by a 1-hour bucket key — repeated calls within the same hour return the existing item's id without creating a duplicate.
+
+**Request body:** none required.
+
+**Response:**
+
+```json
+{ "ok": true, "id": "<uuid>", "deduped": false }
+```
+
+`deduped: true` means an identical unacknowledged banner was already in the queue; `id` is the existing item's id.
+
+---
+
 ## Tomes
 
 Tomes are stored as individual JSON files in the `tomes/` directory. Each Tome is independently addressable and can be enabled or disabled. The activation engine aggregates entries from all enabled Tomes.

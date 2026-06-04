@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="description" content="Proto-Familiar — lightweight LLM chat frontend">
   <title>Proto-Familiar</title>
+  <!-- Ese ne Tekrema — "the teeth and the tongue" — Adinkra symbol of
+       friendship and interdependence. The bond at the heart of what
+       this software is. -->
+  <link rel="icon" type="image/png" href="FamSymbol06.png">
+  <link rel="apple-touch-icon" href="FamSymbol06.png">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -115,6 +120,18 @@
             <input type="checkbox" id="handoff-toggle" checked>
           </div>
           <div class="field-hint">When on, the end of a session runs a short summary (cheapest connection) so the next session resumes mid-thought via the temporal context. One small extra generation per session boundary — turn off to save it.</div>
+
+          <div class="field-row">
+            <label for="pondering-toggle">Autonomous pondering</label>
+            <input type="checkbox" id="pondering-toggle" checked>
+          </div>
+          <div class="field-hint">When on, your Familiar thinks on its own during idle periods — picking topics from accrued interest weights and writing real entries to its Ponderings tome (which it can later reference in chat). Cadence is conservative (30 min – 6 hr depending on tier) and only runs when interests have been accrued; fresh installs stay silent. Off skips the whole thing.</div>
+
+          <div class="field">
+            <label for="pondering-scale">Pondering interval scale</label>
+            <input type="number" id="pondering-scale" value="1" min="1" max="10" step="0.5">
+            <div class="field-hint">Multiplies the base ponder interval. 1× = default cadence (30 min – 6 hr). 2× doubles every interval (1 hr – 12 hr). Use this to dial token cost down without disabling entirely. Only stretches, never speeds up.</div>
+          </div>
         </div>
 
         <!-- Saved Connections & Fallbacks -->
@@ -316,6 +333,38 @@
           </div>
         </div>
 
+        <!-- Trusted contacts (M12c — silence-triage outreach) -->
+        <div class="sidebar-section collapsible collapsed" id="section-contacts">
+          <button class="section-label collapse-toggle" aria-expanded="false" aria-controls="content-contacts">
+            Trusted contacts
+            <span class="chevron">▾</span>
+          </button>
+          <div class="section-content" id="content-contacts">
+            <p class="field-hint">People your Familiar may reach out to <em>about you</em> when threat is severe and you've been quiet a long time. The Familiar can only contact someone listed here — and every outbound also lands in your chat outbox so you can see exactly what was sent. Leave empty to disable outreach entirely.</p>
+            <div id="contacts-list" style="margin-top: 8px"></div>
+            <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap">
+              <input type="text" id="contact-name"    placeholder="Name (e.g. Sam)" style="flex: 1; min-width: 8em">
+              <input type="text" id="contact-webhook" placeholder="Discord webhook URL" style="flex: 2; min-width: 14em">
+              <button id="contact-add" class="btn-secondary">+ Add</button>
+            </div>
+            <p class="field-hint" style="margin-top: 6px"><strong>How to make a Discord webhook:</strong> on the contact's side, in their Discord server's channel settings → Integrations → Webhooks → New Webhook → Copy URL. Paste it here.</p>
+          </div>
+        </div>
+
+        <!-- Temporal editor (Unruh) -->
+        <div class="sidebar-section collapsible collapsed" id="section-temporal">
+          <button class="section-label collapse-toggle" aria-expanded="false" aria-controls="content-temporal">
+            Temporal (Unruh)
+            <span class="chevron">▾</span>
+          </button>
+          <div class="section-content" id="content-temporal">
+            <p class="field-hint">Inspect what Unruh is tracking — current interest weights, threat-detection state &amp; audit history, and the Familiar's autonomous ponderings.</p>
+            <div class="action-row" style="margin-top:4px">
+              <button id="temporal-btn" class="btn-secondary">🕰 Open Temporal editor</button>
+            </div>
+          </div>
+        </div>
+
         <div class="sidebar-footer">
           <span id="version-badge" class="version-badge" title="Server version (from package.json)">Proto-Familiar …</span>
         </div>
@@ -324,6 +373,9 @@
 
       <!-- ── Chat pane ──────────────────────────────────────── -->
       <main class="chat-pane" id="chat-pane">
+
+        <!-- Outbox banners (M11/M12 — reminders + silence triage deliveries) -->
+        <div id="outbox-banners" class="outbox-banners" aria-live="polite"></div>
 
         <div class="messages-scroller" id="messages-scroller">
           <div class="messages-with-gutter">
@@ -655,7 +707,7 @@
         <button class="icon-btn modal-close" id="manual-memorize-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
-        <p class="field-hint" id="manual-memorize-hint">
+        <p class="field-hint">
           Click <strong>▷ Topic start</strong> on a message to begin a topic, then <strong>□ Topic end</strong> on a later message to close it.
           A Tome entry will be generated for each closed topic and saved to <strong>Session Memories</strong>.
         </p>
@@ -839,6 +891,175 @@
       <div class="modal-footer">
         <button class="btn-ghost" id="lore-editor-cancel">Cancel</button>
         <button class="btn-send" id="lore-editor-save">Save Entry</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Temporal editor modal (Unruh + threat + ponderings) — M9 -->
+  <div class="modal-backdrop hidden" id="temporal-modal" role="dialog" aria-modal="true" aria-labelledby="temporal-modal-title">
+    <div class="modal modal-wide modal-resizable" id="temporal-modal-inner">
+      <div class="modal-header">
+        <h2 class="modal-title" id="temporal-modal-title">Temporal editor — Unruh inspection</h2>
+        <button class="icon-btn modal-close" id="temporal-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="ke-tabs" role="tablist">
+        <button class="ke-tab ke-tab-active" data-temporal-tab="interests"  role="tab">Interests</button>
+        <button class="ke-tab"               data-temporal-tab="threat"     role="tab">Threat</button>
+        <button class="ke-tab"               data-temporal-tab="ponderings" role="tab">Ponderings</button>
+        <button class="ke-tab"               data-temporal-tab="schedule"   role="tab">Schedule</button>
+        <button class="ke-tab"               data-temporal-tab="routine"    role="tab">Routine</button>
+        <button class="ke-tab"               data-temporal-tab="handoff"    role="tab">Handoff</button>
+      </div>
+      <div class="modal-body ke-body">
+
+        <!-- INTERESTS PANE -->
+        <div class="ke-pane ke-pane-active" id="te-pane-interests">
+          <div class="ke-toolbar">
+            <button id="te-int-refresh" class="btn-ghost">Refresh</button>
+            <span id="te-int-summary" class="field-hint" style="margin-left:auto"></span>
+          </div>
+          <div class="ke-list" id="te-int-list" style="height: calc(100% - 40px); overflow:auto"></div>
+        </div>
+
+        <!-- THREAT PANE -->
+        <div class="ke-pane" id="te-pane-threat">
+          <div class="ke-toolbar">
+            <button id="te-threat-refresh" class="btn-ghost">Refresh</button>
+            <button id="te-threat-reset"   class="btn-secondary" style="margin-left:auto">Reset to calm</button>
+          </div>
+          <div id="te-threat-summary" style="padding: 8px 12px"></div>
+          <div style="padding: 0 12px"><h4 style="margin: 12px 0 6px 0">Audit history (newest first)</h4></div>
+          <div class="ke-list" id="te-threat-history" style="height: calc(100% - 160px); overflow:auto"></div>
+        </div>
+
+        <!-- PONDERINGS PANE -->
+        <div class="ke-pane" id="te-pane-ponderings">
+          <div class="ke-toolbar">
+            <button id="te-pond-refresh" class="btn-ghost">Refresh</button>
+            <label>Show
+              <select id="te-pond-limit">
+                <option value="10">10 most recent</option>
+                <option value="25" selected>25 most recent</option>
+                <option value="100">100 most recent</option>
+              </select>
+            </label>
+            <span id="te-pond-summary" class="field-hint" style="margin-left:auto"></span>
+          </div>
+          <div class="ke-list" id="te-pond-list" style="height: calc(100% - 40px); overflow:auto"></div>
+        </div>
+
+        <!-- SCHEDULE PANE -->
+        <div class="ke-pane" id="te-pane-schedule">
+          <div class="ke-toolbar">
+            <button id="te-sched-refresh" class="btn-ghost">Refresh</button>
+            <label id="te-sched-hours-label">Window (hours)
+              <input type="number" id="te-sched-hours" value="48" min="1" max="720" step="1" style="width: 5em">
+            </label>
+            <button id="te-sched-add" class="btn-secondary" style="margin-left:auto">+ Add event / task</button>
+            <div class="ke-view-toggle" role="tablist" aria-label="Schedule view mode">
+              <button id="te-sched-view-list"     class="ke-view-btn ke-view-active" data-sched-view="list"     role="tab" aria-selected="true">List</button>
+              <button id="te-sched-view-calendar" class="ke-view-btn"                data-sched-view="calendar" role="tab" aria-selected="false">Calendar</button>
+            </div>
+          </div>
+          <div id="te-sched-form" style="display:none; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+            <div style="display: flex; gap: 8px; flex-wrap: wrap">
+              <label>Type
+                <select id="te-sched-type">
+                  <option value="event">event</option>
+                  <option value="task">task</option>
+                  <option value="state">state</option>
+                  <option value="reminder">reminder (fires when "when" arrives)</option>
+                </select>
+              </label>
+              <label style="flex: 1; min-width: 12em">Label
+                <input type="text" id="te-sched-label" placeholder="e.g. dentist appointment">
+              </label>
+              <label>When (your local time; blank for open task)
+                <input type="datetime-local" id="te-sched-when">
+              </label>
+              <label>End (optional)
+                <input type="datetime-local" id="te-sched-end">
+              </label>
+              <label title="What kind of cost lapsing this carries. External = real-world clock (paperwork, deadlines, appointments). Wellbeing = personal/reversible decay. Optional = only matters if you care.">Stakes
+                <select id="te-sched-stakes">
+                  <option value="">(auto-infer from label)</option>
+                  <option value="external_obligation">external — real-world clock</option>
+                  <option value="personal_wellbeing">wellbeing — personal/reversible</option>
+                  <option value="purely_optional">optional — only if I care</option>
+                </select>
+              </label>
+              <label title="How often this repeats. Daily / weekly / monthly / yearly anchor on the day-of-week / day-of-month / month-and-day of the 'When' timestamp. 'Last Friday' picks the last Friday of every month.">Repeats
+                <select id="te-sched-repeat">
+                  <option value="">never (one-time)</option>
+                  <option value="daily">daily</option>
+                  <option value="weekly">weekly (same weekday)</option>
+                  <option value="monthly">monthly (same day-of-month)</option>
+                  <option value="yearly">yearly (same date)</option>
+                  <option value="monthly_last_fri">monthly — last Friday</option>
+                  <option value="monthly_last_sun">monthly — last Sunday</option>
+                </select>
+              </label>
+            </div>
+            <div style="margin-top: 8px; display: flex; gap: 8px; justify-content: flex-end">
+              <button id="te-sched-form-cancel" class="btn-ghost">Cancel</button>
+              <button id="te-sched-form-save"   class="btn-send">Create</button>
+            </div>
+          </div>
+          <div class="ke-list" id="te-sched-list" style="height: calc(100% - 80px); overflow:auto"></div>
+          <div class="te-cal hidden" id="te-sched-calendar">
+            <div class="te-cal-header">
+              <button id="te-cal-prev"  class="btn-ghost" aria-label="Previous month">‹</button>
+              <button id="te-cal-today" class="btn-ghost">Today</button>
+              <button id="te-cal-next"  class="btn-ghost" aria-label="Next month">›</button>
+              <span id="te-cal-title" class="te-cal-title"></span>
+              <span id="te-cal-status" class="field-hint" style="margin-left:auto"></span>
+            </div>
+            <div class="te-cal-grid" id="te-cal-grid">
+              <!-- weekday header row + 6 weeks rendered in JS -->
+            </div>
+          </div>
+        </div>
+
+        <!-- ROUTINE PANE -->
+        <div class="ke-pane" id="te-pane-routine">
+          <div class="ke-toolbar">
+            <button id="te-routine-refresh" class="btn-ghost">Refresh</button>
+            <button id="te-routine-add"     class="btn-secondary">+ Add phase</button>
+            <span   id="te-routine-summary" class="field-hint" style="margin-left:auto; margin-right:8px"></span>
+            <button id="te-routine-chat"    class="btn-secondary" title="Inserts a starter prompt into the chat so the Familiar can walk you through your rhythm. The Familiar talks to you about what feels natural; you come back here to record the phases.">💬 Help me figure out my rhythm</button>
+          </div>
+          <div id="te-routine-form" style="display:none; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+            <div style="display: flex; gap: 8px; flex-wrap: wrap">
+              <label style="flex: 2; min-width: 12em">Label
+                <input type="text" id="te-routine-label" placeholder="e.g. morning correspondence">
+              </label>
+              <label>Start (your local time)
+                <input type="time" id="te-routine-start">
+              </label>
+              <label>End (your local time)
+                <input type="time" id="te-routine-end">
+              </label>
+            </div>
+            <label style="display:block; margin-top: 6px">Texture (optional — what is the Familiar like in this phase?)
+              <input type="text" id="te-routine-texture" placeholder="e.g. warmest part of the day to land">
+            </label>
+            <div style="margin-top: 8px; display: flex; gap: 8px; justify-content: flex-end">
+              <button id="te-routine-form-cancel" class="btn-ghost">Cancel</button>
+              <button id="te-routine-form-save"   class="btn-send">Create</button>
+            </div>
+          </div>
+          <div class="ke-list" id="te-routine-list" style="height: calc(100% - 80px); overflow:auto"></div>
+        </div>
+
+        <!-- HANDOFF PANE -->
+        <div class="ke-pane" id="te-pane-handoff">
+          <div class="ke-toolbar">
+            <button id="te-handoff-refresh" class="btn-ghost">Refresh</button>
+            <span id="te-handoff-summary" class="field-hint" style="margin-left:auto"></span>
+          </div>
+          <div class="ke-list" id="te-handoff-list" style="height: calc(100% - 40px); overflow:auto"></div>
+        </div>
+
       </div>
     </div>
   </div>

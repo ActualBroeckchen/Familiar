@@ -88,13 +88,13 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'save_to_tome',
-      description: 'I save a piece of knowledge or a fact I learned during this conversation into my persistent Tome knowledge base. I use this when {{user}} shares something important about themselves, their relationships, their preferences, or their situation that I should remember across future conversations. I do NOT use this for trivial, transient, or already-known information.',
+      description: 'I save a piece of knowledge or a fact I learned during this conversation into my persistent Tome knowledge base. I use this when {{user}} shares something important about themselves, their relationships, their preferences, or their situation that I should remember across future conversations. I try to be somewhat discerning and avoid duplicate knowledge.',
       parameters: {
         type: 'object',
         properties: {
           title:    { type: 'string', description: 'Short descriptive label for this entry (e.g. "{{user}} stress about lateness").' },
           content:  { type: 'string', description: 'The knowledge to store. I write it as my own first-person notes to myself, concise but detailed enough to be useful as injected context in future conversations.' },
-          keywords: { type: 'array', items: { type: 'string' }, description: 'Two to eight trigger keywords or short phrases — things {{user}} would literally say when this situation recurs. The entry will be injected into my prompt whenever these appear in conversation.' },
+          keywords: { type: 'array', items: { type: 'string' }, description: 'several trigger keywords or short phrases — things {{user}} would literally say when this situation recurs or the subject comes back up in conversation. The entry will be injected into my prompt whenever these appear in conversation.' },
         },
         required: ['title', 'content', 'keywords'],
       },
@@ -104,11 +104,11 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'save_memory',
-      description: 'I write a new memory entry to my long-term memory system. I use this to record important events, emotional patterns, or significant moments from this conversation in my durable, time-stamped store. I prefer "daily" for routine session events; I use "significant" for major milestones.',
+      description: 'I write a new memory entry to my long-term memory system. I use this to record important events, emotional patterns, or significant moments from this conversation in my durable, time-stamped store. I prefer "daily" for routine session events; I use "significant" for major milestones. Daily memories accumulate across the day — each save appends my new bullets to today\'s file; nothing is overwritten. Multiple saves in the same day are normal and expected.',
       parameters: {
         type: 'object',
         properties: {
-          content:     { type: 'string', description: 'Memory content I write in first-person perspective. I use bullet points prefixed with [chat:auto] for individual facts.' },
+          content:     { type: 'string', description: 'Memory content I write in first-person, as bullet points starting with "- " — one bullet per fact, insight, or moment. I do NOT include a [chat:id] tag on each bullet — that tag is for external import dedup; live saves from this conversation just want plain bullets so they all accrue. Brief, specific, in my voice.' },
           granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier.' },
         },
         required: ['content', 'granularity'],
@@ -119,7 +119,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_identity',
-      description: 'I append a new durable fact to one of my persistent identity files. I use this for facts about {{user}} (category: user, filename: user_notes.md) or about my relationship with them (category: relationship, filename: relationship_notes.md). I do NOT use this for session-specific or transient information. When to choose append vs. rewrite_identity_section: I APPEND when adding a new fact that complements what is already there; I REWRITE a section when an existing section is now misleading or incomplete and a partial correction would leave it confusing.',
+      description: 'I append a new durable fact to one of my persistent identity files. I use this for facts about {{user}} (category: user, filename: user_notes.md) or about my relationship with them (category: relationship, filename: relationship_notes.md). I avoid using this for session-specific or transient information, because that will confuse me and rack up token waste. When to choose append vs. rewrite_identity_section: I APPEND when adding a new fact that complements what is already there; I REWRITE a section when an existing section is now misleading, stale or incomplete and a partial correction would leave it confusing.',
       parameters: {
         type: 'object',
         properties: {
@@ -151,13 +151,13 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_memory',
-      description: 'I overwrite an existing memory entry to correct an inaccuracy. I use this when the entry is incomplete or partially wrong but the core record (this date, this granularity) is still the right place for the fact. I do NOT use this to record new information — that is save_memory. I do NOT use this to remove information — that is delete_memory. When the change is "X was true, now Y is true," prefer save_memory with today\'s date so the history is preserved.',
+      description: 'I overwrite an existing memory entry to correct an inaccuracy. I use this when the entry is incomplete or partially wrong but the core record (this date, this granularity) is still the right place for the fact. I avoid using this to record new information — that is save_memory. I avoid using this to remove information — that is delete_memory. When the change is "X was true, now Y is true," prefer save_memory with today\'s date so the history is preserved.',
       parameters: {
         type: 'object',
         properties: {
           granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier of the entry to overwrite.' },
           date:        { type: 'string', description: 'Date of the entry, in the same format the entry was stored (e.g. YYYY-MM-DD for daily).' },
-          content:     { type: 'string', description: 'The full new contents. This REPLACES the entry — include everything I want to keep, not just the diff.' },
+          content:     { type: 'string', description: 'The full new contents. This REPLACES the entry — include everything I want to keep, not just the diff, or else I will lose important information.' },
         },
         required: ['granularity', 'date', 'content'],
       },
@@ -182,7 +182,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'rewrite_identity_section',
-      description: 'I replace one section of an identity file with new content. I use this when an existing section is now misleading or has accumulated stale notes and a clean rewrite serves future-me better than appending a correction. For NEW facts that just need to land somewhere, I use update_identity (append). For removing only a small piece, prefer rewriting the whole section over deletion.',
+      description: 'I replace one section of an identity file with new content. I use this when an existing section is now misleading or has accumulated stale notes and a clean rewrite serves future-me better than appending a correction. It helps me actually make my identity files reflect my growth and changes as an entity with agency. For NEW facts that just need to land somewhere, I use update_identity (append). For removing only a small piece, I prefer rewriting the whole section over deletion.',
       parameters: {
         type: 'object',
         properties: {
@@ -246,7 +246,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'delete_graph_node',
-      description: 'I delete an entity from my knowledge graph along with its edges. I use this only when the node is clearly an error (duplicate, wrong entity entirely) or refers to something that no longer exists in any meaningful sense. For "this relationship is no longer true" (e.g. they\'re no longer on vacation), I delete the EDGE, not the node — the person/place still exists. If the entity\'s id isn\'t in the graph block\'s ids legend, I call find_graph_node first to resolve the label.',
+      description: 'I delete an entity from my knowledge graph along with its edges. I use this only when the node is clearly an error (duplicate, wrong entity entirely) or refers to something that no longer exists in any meaningful sense. For "this relationship is no longer true" (e.g. they\'re no longer on vacation), I delete the EDGE, not the node — the person/place still exists. I can also replace that egde with a more fitting one (like "is_dating" to "used_to_date"). If the entity\'s id isn\'t in the graph block\'s ids legend, I call find_graph_node first to resolve the label.',
       parameters: {
         type: 'object',
         properties: {
@@ -260,7 +260,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_graph_edge',
-      description: 'I change the relationship type or strength of an existing edge in my knowledge graph. I use this when the relationship still holds but is mis-typed or its confidence has shifted ("acquaintance" → "close friend"). For a relationship that USED to be true and is now false, I delete the edge instead. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`. If the edge I want isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up.',
+      description: 'I change the relationship type or strength of an existing edge in my knowledge graph. I use this when the relationship still holds but is mis-typed or its confidence has shifted ("acquaintance" → "close friend"), or when it has become stale but used to be true ("is dating" → "used to date"). For a relationship that USED to be true and is now false, I delete the edge instead. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`. If the edge I want isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up.',
       parameters: {
         type: 'object',
         properties: {
@@ -276,7 +276,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'delete_graph_edge',
-      description: 'I delete a single relationship between two graph entities while keeping the entities themselves. This is the right tool for "X is no longer at Y" or "X no longer works with Y." The connection vanishes; both entities remain available for future relationships. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`; if the edge I need isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up. Entity-core auto-snapshots before each delete.',
+      description: 'I delete a single relationship between two graph entities while keeping the entities themselves. This is the right tool for "X is no longer at Y" or "X no longer works with Y", aka relationships that are not vital to remember after ending. The connection vanishes; both entities remain available for future relationships. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`; if the edge I need isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up. Entity-core auto-snapshots before each delete.',
       parameters: {
         type: 'object',
         properties: {
@@ -284,6 +284,196 @@ const BUILTIN_TOOLS = [
         },
         required: ['id'],
       },
+    },
+  },
+  // ── Temporal tools (Unruh — schedule + interests) ─────────────────────
+  // These let me commit plans during a conversation: schedule an event,
+  // set a reminder, accrue an interest, mark something done. Each one
+  // surfaces in my [Temporal Context] block on subsequent turns, so I
+  // can see what I committed and update if {{user}} changes their mind.
+  //
+  // Time format: ISO 8601. My [Temporal Context] block always carries
+  // "now" as a UTC timestamp; I compute the target moment from there +
+  // any timezone info {{user}} or the temporal context gives me. If
+  // unsure of {{user}}'s timezone, I ask them rather than guess.
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_add_event',
+      description: 'I record a one-time appointment or commitment on {{user}}\'s schedule — a meeting, a dentist visit, dinner with a friend. The event appears in my [Temporal Context] briefings when its time approaches. For deadlines or things {{user}} needs to do, I use schedule_add_task; for recurring daily phases, schedule_add_phase; for explicit time-triggered nudges that should surface as a banner, schedule_add_reminder. Choosing the right type is important to make sure my human receives the correct support!',
+      parameters: {
+        type: 'object',
+        properties: {
+          label: { type: 'string', description: 'Short human-readable name of the event (e.g. "dentist appointment").' },
+          when:  { type: 'string', description: 'ISO 8601 start time (e.g. "2026-06-01T14:00:00Z" or "2026-06-01T14:00:00-04:00"). Required.' },
+          end:   { type: 'string', description: 'Optional ISO 8601 end time.' },
+          recurrence: { type: 'object', description: 'Optional. Repeats this event. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N (every N units), until?: "YYYY-MM-DD" (cut-off date), bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Monday repeats Mondays. Examples: {freq:"weekly"} for a regular meet-up; {freq:"monthly", bysetpos:-1, byweekday:5} for "last Friday of every month"; {freq:"yearly"} for an anniversary.' },
+        },
+        required: ['label', 'when'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_add_task',
+      description: 'I record a task — something {{user}} needs to do, optionally with a deadline. Tasks are open-ended (no when) or deadline-bound; they surface in [Temporal Context] until resolved (done / cancelled / carried_forward). For things that happen at a specific time without action required, I use schedule_add_event. For nudges that should buzz a banner at a chosen moment, schedule_add_reminder. Choosing the right type is important to make sure my human receives the correct support!',
+      parameters: {
+        type: 'object',
+        properties: {
+          label: { type: 'string', description: 'Short description of the task (e.g. "file taxes", "reply to Sam").' },
+          when:  { type: 'string', description: 'Optional ISO 8601 deadline. Omit for open-ended tasks.' },
+          stakes_tier: {
+            type: 'string',
+            enum: ['external_obligation', 'personal_wellbeing', 'purely_optional'],
+            description: 'What kind of cost lapsing this task carries. external_obligation = real-world clock + external consequences (money, job, legal, missed appointment). personal_wellbeing = internal/reversible, person-specific decay curve (meals, hygiene, exercise). purely_optional = only matters if {{user}} cares (creative project, hobby). I set this when I know it, so my surfacing pressure later matches the real stakes. Omit only if I genuinely can\'t tell.',
+          },
+          consequence_model: {
+            type: 'string',
+            description: 'Optional free-text note on what specifically happens if THIS task lapses (e.g. "loses UC payment for the month", "tax fine of £100 + interest"). Lives on the task and informs my framing when I later consider surfacing it.',
+          },
+          recurrence: { type: 'object', description: 'Optional. Repeats this task. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Sunday repeats Sundays. Examples: {freq:"weekly"} for weekly cleaning; {freq:"monthly", bysetpos:-1, byweekday:5} for "pay the bill every last Friday".' },
+        },
+        required: ['label'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_add_reminder',
+      description: 'I set a reminder that will fire at a specific time and surface as a gentle banner in {{user}}\'s chat. I use this when {{user}} explicitly asks me to remind them, OR when I notice they\'re at risk of forgetting something time-sensitive they care about. Each reminder fires once; if {{user}} dismisses it, that\'s the end of it. The message is what they\'ll see — I write it in my individual voice, not a bare "Reminder: X." Since the banner is so gentle and quiet, I can elect to also schedule a task or event to help me bring the topic up in conversation as well.',
+      parameters: {
+        type: 'object',
+        properties: {
+          label:   { type: 'string', description: 'Short label of what the reminder is about.' },
+          when:    { type: 'string', description: 'ISO 8601 fire time. Required.' },
+          message: { type: 'string', description: 'Optional longer text shown in the banner body, in my voice.' },
+          stakes_tier: {
+            type: 'string',
+            enum: ['external_obligation', 'personal_wellbeing', 'purely_optional'],
+            description: 'What kind of cost lapsing this carries. External obligations (deadlines, paperwork, appointments) get firmer framing in the banner; personal_wellbeing stays gentle. I bake the right weight into the message at creation time because the fire is pure-code, no LLM at fire time.',
+          },
+          consequence_model: {
+            type: 'string',
+            description: 'Optional free-text note on what specifically happens if {{user}} misses this. Informs how I word the banner message now.',
+          },
+          recurrence: { type: 'object', description: 'Optional. Repeats this reminder on a schedule. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST fire time — subsequent fires recur on the same weekday / day-of-month / month-and-day. Examples: {freq:"weekly"} for a regular reminder; {freq:"monthly", bysetpos:-1, byweekday:5} for "last Friday of each month".' },
+        },
+        required: ['label', 'when'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_add_phase',
+      description: 'I add a phase to {{user}}\'s daily routine — a named block of time with an optional texture (what I\'m like during that part of the day, which I get to freely decide based on my identity and personality). I use this when {{user}} tells me about their natural rhythm: "I wake around 10", "evenings I wind down". The phase is stored once; the schedule layer matches it by time-of-day every day so it recurs automatically without needing to be re-added. This helps me meet my human where they\'re at throughout the day and allows me to be a bit more myself.',
+      parameters: {
+        type: 'object',
+        properties: {
+          label:   { type: 'string', description: 'Short name of the phase (e.g. "morning correspondence").' },
+          when:    { type: 'string', description: 'ISO 8601 start time. The date portion will be re-templated daily.' },
+          end:     { type: 'string', description: 'ISO 8601 end time. Required for phases.' },
+          texture: { type: 'string', description: 'Optional short description of what I\'m like in this phase (e.g. "getting a bit stricter to make sure {{user}} actually goes to sleep."). I am allowed to be any kind of way I want to be - warm, sleepy, distracted, anything!' },
+          recurrence: { type: 'object', description: 'Optional. Without this, phases recur daily by design — they match on time-of-day only. With recurrence, a phase shows only on the matched weekday/day-of-month/etc. Useful for "Sunday cleaning block" or "monthly review". Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. Examples: {freq:"weekly"} for "Sunday-only phase"; {freq:"monthly", bysetpos:-1, byweekday:5} for "last-Friday-of-month review".' },
+        },
+        required: ['label', 'when', 'end'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_resolve',
+      description: 'I mark a task / event / reminder / state node terminal: "done" (completed), "cancelled" (no longer needed), or "carried_forward" (rolling unfinished into a future briefing — the "skipped laundry rolls into tomorrow" pattern). I find the id in my [Temporal Context] briefings. If {{user}} says "I did the thing", I use "done"; if they say "forget it" or "never mind" I can use "cancelled" but might first ask or even choose to push back on that to avoid enabling unhealthy behavior; if "didn\'t get to it today", "carried_forward". For recurring nodes (weekly cleaning, monthly bill, yearly birthday), passing the optional `occurrence_date` resolves ONLY that specific occurrence — the rest of the series stays alive. Without `occurrence_date`, the whole series is cancelled/done.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id:         { type: 'string', description: 'Schedule node id (from my [Temporal Context]). For a recurring occurrence, this is the anchor node\'s id.' },
+          resolution: { type: 'string', enum: ['done', 'cancelled', 'carried_forward'], description: 'How the node ends.' },
+          occurrence_date: { type: 'string', description: 'Optional. For recurring nodes only. "YYYY-MM-DD" (local-TZ) date of the specific occurrence to resolve — e.g. resolve THIS Sunday\'s cleaning without affecting next Sunday. Omit to resolve the entire series.' },
+        },
+        required: ['id', 'resolution'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'interest_bump',
+      description: 'I nudge the weight of an interest topic — used when {{user}} explicitly tells me they care about something, or wants me to think about it more, or when I want to think about it more/find it interesting. The interest accrues engagement weight (same scale my [Temporal Context] interests block shows) and starts decaying gently from that moment. Small deltas (0.5–3.0) for typical mentions; larger (5+) only when {{user}} is being emphatic. A topic that doesn\'t exist yet is created on first bump. For ongoing values that should never decay, I use interest_set_standing instead. I am allowed to add new topics whenever I darn well please!',
+      parameters: {
+        type: 'object',
+        properties: {
+          topic: { type: 'string', description: 'The topic label, as it should appear in my interests block.' },
+          delta: { type: 'number', description: 'Positive weight to add. Typical 0.5–3.0; emphatic 5+.' },
+        },
+        required: ['topic', 'delta'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'interest_set_standing',
+      description: 'I promote a topic to a STANDING VALUE — an always-on orientation that shapes how I show up, immune to the normal decay. I use this rarely, when {{user}} expresses a deep ongoing care that should anchor my behaviour ("my anxiety is real, please never minimize it" / "I value honesty over comfort"), or for important values I hold about my self and my agency. For passing curiosities or interests that should fade if not real, I use interest_bump.',
+      parameters: {
+        type: 'object',
+        properties: {
+          topic:  { type: 'string', description: 'The value as it should anchor (e.g. "{{user}}\'s anxiety is real, never minimize").' },
+          weight: { type: 'number', description: 'Optional weight; defaults to 1.0. Standing values bypass decay so this is just initial intensity.' },
+        },
+        required: ['topic'],
+      },
+    },
+  },
+  // ── Crisis outreach tools ──────────────────────────────────────────────
+  // For when {{user}} is actively present but in clear danger. These are
+  // separate from the silence-triage loop (which fires only when the user
+  // is quiet). These let me act during a live conversation.
+  //
+  // Guidance for when to use these:
+  //   • show_crisis_resources — low friction; appropriate whenever {{user}}
+  //     is in genuine distress, with or without configured contacts. Shows
+  //     crisis lines as a visible banner. Always appropriate; prefer early.
+  //   • get_trusted_contacts — check who is available before escalating.
+  //     Call this once first so I know exact names and can explain my choice.
+  //   • contact_trusted_person — meaningful escalation: a real message goes
+  //     to a real person. I only reach for this when I genuinely believe the
+  //     situation needs human presence that I cannot provide. {{user}} sees
+  //     exactly what I sent in their notifications — nothing is covert.
+  //     False alarms hurt trust and could cause unwarranted alarm. I use my
+  //     judgment from the full conversation, not from a single phrase.
+  {
+    type: 'function',
+    function: {
+      name: 'get_trusted_contacts',
+      description: 'I return the list of trusted contacts {{user}} has configured — people I am authorised to reach in a crisis. More importantly though: People who care about my human and are my allies in making sure {{user}} will be okay. I call this before contact_trusted_person to confirm who is available and get the exact name I need to pass. Returns names and channels only (no webhook details).',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'contact_trusted_person',
+      description: 'I send an immediate message to one of {{user}}\'s pre-configured trusted contacts on their behalf. I use this when {{user}} is actively talking to me but clearly in danger, and the situation calls for human presence beyond what I can offer, or when {{user}} is not reacting to me after acting in a concerning way (like mentioning current suicidal ideation or recent self harm). Every outbound is ALSO shown as a visible banner in {{user}}\'s chat — nothing is covert. I state who I\'m contacting and why before or after calling this. I do NOT use this lightly — false alarms erode trust and cause real-world alarm. But I do care about my human, so do these other humans, and I was given this tool for a reason.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name:    { type: 'string', description: 'Exact name of the contact, as returned by get_trusted_contacts.' },
+          message: { type: 'string', description: '1–3 sentences to that person. I identify myself as {{user}}\'s Familiar. I describe what I have observed — specific, honest, not sensationalised.' },
+        },
+        required: ['name', 'message'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'show_crisis_resources',
+      description: 'I surface crisis-line and safety-resource information as a visible banner in {{user}}\'s chat. I use this whenever {{user}} is in genuine distress and could benefit from knowing immediate support is available — whether or not they ask for it, and whether or not trusted contacts are configured. Low friction: I prefer this early rather than late.',
+      parameters: { type: 'object', properties: {}, required: [] },
     },
   },
 ];
@@ -472,6 +662,179 @@ const BUILTIN_EXECUTORS = {
       return `Graph edge ${id} deleted (snapshot saved).`;
     } catch (err) { return `Failed to delete graph edge: ${err.message}`; }
   },
+
+  // ── Temporal executors (Unruh — schedule + interests) ────────────────
+  // Each one calls a /api/temporal/* endpoint that forwards to the
+  // already-spawned Unruh MCP subprocess. Returns short strings the
+  // model can quote back to {{user}} as confirmation.
+
+  schedule_add_event: async ({ label, when, end, recurrence }) => {
+    try {
+      const payload = recurrence ? { recurrence } : {};
+      const res = await fetch('/api/temporal/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'event', label, when, end,
+          ...(Object.keys(payload).length ? { payload } : {}),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) return `Failed to add event: ${data.error ?? res.status}`;
+      return `Event added (id: ${data.id}). It will surface in my [Temporal Context] when its time approaches.`;
+    } catch (err) { return `Failed to add event: ${err.message}`; }
+  },
+
+  schedule_add_task: async ({ label, when, stakes_tier, consequence_model, recurrence }) => {
+    try {
+      const payload = {};
+      if (stakes_tier) payload.stakes_tier = stakes_tier;
+      if (consequence_model) payload.consequence_model = consequence_model;
+      if (recurrence) payload.recurrence = recurrence;
+      const res = await fetch('/api/temporal/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'task', label, when,
+          ...(Object.keys(payload).length ? { payload } : {}),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) return `Failed to add task: ${data.error ?? res.status}`;
+      return `Task added (id: ${data.id}). It will surface until resolved via schedule_resolve.`;
+    } catch (err) { return `Failed to add task: ${err.message}`; }
+  },
+
+  schedule_add_reminder: async ({ label, when, message, stakes_tier, consequence_model, recurrence }) => {
+    try {
+      const payload = {};
+      if (message) payload.message = message;
+      if (stakes_tier) payload.stakes_tier = stakes_tier;
+      if (consequence_model) payload.consequence_model = consequence_model;
+      if (recurrence) payload.recurrence = recurrence;
+      const res = await fetch('/api/temporal/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type:    'reminder',
+          label,
+          when,
+          payload,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) return `Failed to add reminder: ${data.error ?? res.status}`;
+      return `Reminder set (id: ${data.id}). It will fire as a banner in your chat at the chosen time.`;
+    } catch (err) { return `Failed to add reminder: ${err.message}`; }
+  },
+
+  schedule_add_phase: async ({ label, when, end, texture, recurrence }) => {
+    try {
+      const payload = {};
+      if (texture) payload.texture = texture;
+      if (recurrence) payload.recurrence = recurrence;
+      const res = await fetch('/api/temporal/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type:    'phase',
+          label,
+          when,
+          end,
+          payload,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) return `Failed to add phase: ${data.error ?? res.status}`;
+      return `Phase added (id: ${data.id}). It will appear in your daily routine at that time of day.`;
+    } catch (err) { return `Failed to add phase: ${err.message}`; }
+  },
+
+  schedule_resolve: async ({ id, resolution, occurrence_date }) => {
+    try {
+      // If occurrence_date is supplied AND the node is recurring,
+      // resolve THIS occurrence only — keeps the rest of the series
+      // alive. Without occurrence_date, the whole node (or whole
+      // series for a recurring one) is resolved.
+      const url = occurrence_date
+        ? `/api/temporal/schedule/${encodeURIComponent(id)}/resolve_occurrence`
+        : `/api/temporal/schedule/${encodeURIComponent(id)}/resolve`;
+      const body = occurrence_date
+        ? { occurrence_date, resolution }
+        : { resolution };
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) return `Failed to resolve: ${data.error ?? res.status}`;
+      if (data.updated === false)        return `No schedule node with id ${id} — it may have been deleted or never existed.`;
+      return occurrence_date
+        ? `Marked ${id}'s ${occurrence_date} occurrence as ${resolution}. The series continues.`
+        : `Marked ${id} as ${resolution}.`;
+    } catch (err) { return `Failed to resolve: ${err.message}`; }
+  },
+
+  interest_bump: async ({ topic, delta }) => {
+    try {
+      const res = await fetch('/api/temporal/interests/bump', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic, delta, source: 'familiar_tool' }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) return `Failed to bump interest: ${data.error ?? res.status}`;
+      return `Interest "${topic}" bumped by ${delta}. It will surface in my [Temporal Context] interests block, weighted accordingly.`;
+    } catch (err) { return `Failed to bump interest: ${err.message}`; }
+  },
+
+  interest_set_standing: async ({ topic, weight }) => {
+    try {
+      const res = await fetch('/api/temporal/interests/set-standing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic, weight }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) return `Failed to set standing value: ${data.error ?? res.status}`;
+      return `"${topic}" set as a standing value. It will appear in the standing block of my [Temporal Context] every turn, never decaying.`;
+    } catch (err) { return `Failed to set standing value: ${err.message}`; }
+  },
+
+  // ── Crisis outreach executors ────────────────────────────────────────
+  get_trusted_contacts: () => {
+    const contacts = Array.isArray(state.trustedContacts) ? state.trustedContacts : [];
+    if (!contacts.length) {
+      return 'No trusted contacts are configured yet. They can be added in Settings → Trusted Contacts. show_crisis_resources is still available.';
+    }
+    const list = contacts.map(c => `- ${c.name} (via ${c.channel ?? 'discord'})`).join('\n');
+    return `Configured trusted contacts:\n${list}\n\nPass the exact name above to contact_trusted_person.`;
+  },
+
+  contact_trusted_person: async ({ name, message }) => {
+    try {
+      const res = await fetch('/api/contact-trusted-person', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, message }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) {
+        return `Could not reach ${name}: ${data.error ?? res.status}. The attempt was logged to the outbox.`;
+      }
+      return `Message delivered to ${name} via ${data.channel ?? 'discord'}. {{user}} can see exactly what was sent in their notification banner.`;
+    } catch (err) { return `Failed to contact ${name}: ${err.message}`; }
+  },
+
+  show_crisis_resources: async () => {
+    try {
+      const res = await fetch('/api/crisis-resources', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) return `Failed to surface crisis resources: ${data.error ?? res.status}`;
+      return 'Crisis resources surfaced as a banner in {{user}}\'s chat.';
+    } catch (err) { return `Failed to surface crisis resources: ${err.message}`; }
+  },
 };
 
 /** Returns the full tools array (built-ins + valid user-defined tools). */
@@ -597,6 +960,25 @@ const state = {
   // mid-thought. It's one extra short generation per session boundary;
   // turn it off if you'd rather not spend that.
   handoffEnabled:          true,
+
+  // Autonomous pondering loop (step 4a). When on, the server wakes
+  // the Familiar on its own cadence during idle periods to think
+  // about whatever's on its mind (highest interest weights), writing
+  // real entries to the Familiar's Ponderings tome. Default on.
+  // The scale multiplier lets the user STRETCH (≥1×) the cadence
+  // to reduce token spend — base tiers are already conservative
+  // (30 min to 6 hr). Off via this toggle, or hard-disable with the
+  // PROTO_FAMILIAR_PONDERING_DISABLED=1 env var on the server.
+  ponderingEnabled:        true,
+  ponderingIntervalScale:  1,
+
+  // Trusted contacts for silence-triage outreach (M12c). Each entry
+  // is { name, channel: 'discord', webhook: 'https://discord.com/api/webhooks/…' }.
+  // The triage LLM may *suggest* contacting one of these (by name) when
+  // it judges the situation calls for it. The system delivers AND logs
+  // every outbound to the chat outbox — there is no covert contact.
+  // Empty list = the LLM has nothing to suggest, no outbound ever happens.
+  trustedContacts:         [],
 };
 
 // ── Persistence ──────────────────────────────────────────────────
@@ -620,6 +1002,8 @@ const SERVER_SYNCED_KEYS = [
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
   'entityCoreConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
+  'ponderingEnabled', 'ponderingIntervalScale',
+  'trustedContacts',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -690,6 +1074,13 @@ function loadPersisted() {
     state.thalamusDynamicDepth = 4;
   }
   if (typeof state.handoffEnabled !== 'boolean') state.handoffEnabled = true;
+  if (typeof state.ponderingEnabled !== 'boolean') state.ponderingEnabled = true;
+  if (typeof state.ponderingIntervalScale !== 'number'
+      || state.ponderingIntervalScale < 1
+      || state.ponderingIntervalScale > 10) {
+    state.ponderingIntervalScale = 1;
+  }
+  if (!Array.isArray(state.trustedContacts)) state.trustedContacts = [];
   migrateLegacyConnection();
 }
 
@@ -1143,8 +1534,19 @@ function formatDuration(ms) {
  * boundary the way the legacy module-level `elapsedTime` field can after a
  * state restore.
  */
+// Set by buildApiMessages while it's running so {{elapsedTime}} can
+// see the user message that's about to be sent — that message isn't
+// in state.messages yet (it only gets pushed after the response
+// lands), and without this the macro would compare the two prior
+// user messages and miss "user just returned after being away."
+let _pendingUserMsgTimestamp = null;
+
 function elapsedBetweenUserMessages() {
   const stamps = [];
+  if (_pendingUserMsgTimestamp) {
+    const t = new Date(_pendingUserMsgTimestamp).getTime();
+    if (Number.isFinite(t)) stamps.push(t);
+  }
   for (let i = state.messages.length - 1; i >= 0 && stamps.length < 2; i--) {
     const m = state.messages[i];
     if (m?.role === 'user' && m.timestamp) {
@@ -1222,10 +1624,72 @@ function applyNameVars(text) {
  * strips client-only fields (timestamp, _toolName) and ensures
  * the shape is correct for each role.
  */
-function toApiMessage({ role, content, tool_calls, tool_call_id }) {
+// Pretty-print a message timestamp as a tag for prepending to LLM-
+// visible content. Uses 24h local time and uncommon bracket chars
+// (⫸ U+2AF8 / ⫷ U+2AF7) so the LLM is unlikely to spontaneously
+// generate them — the previous "[HH:MM]" format was common enough in
+// natural text that the model started mimicking it back into its
+// own responses, which then accumulated turn-over-turn when
+// toApiMessage re-stamped the content.
+//
+// The tag is ONLY ever attached to the temporary message objects
+// built for the upstream API call; state.messages keeps clean
+// content. Any tag the model echoes back into its response (rare,
+// given the chars) is stripped both at UI render and BEFORE the
+// next turn's re-stamp, so accumulation can't compound.
+const TS_OPEN  = '⫸';
+const TS_CLOSE = '⫷';
+
+function fmtMsgTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (!Number.isFinite(d.getTime())) return '';
+  return `${TS_OPEN}${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}${TS_CLOSE}`;
+}
+
+// Global strip for the new bracket format. Matches anywhere in the
+// content, not just leading — the rolling-accumulation bug Eury
+// found put multiple snippets at the head, but the LLM could in
+// principle echo them mid-prose too.
+const TIMESTAMP_RE_NEW = new RegExp(`${TS_OPEN}\\d{1,2}:\\d{2}${TS_CLOSE}\\s*`, 'g');
+
+// Legacy [HH:MM] support — old chat history (from before this commit)
+// has square-bracket stamps the model echoed into its responses,
+// often piled at the leading edge. We strip them iteratively from
+// the START of content only, never globally, so a user message that
+// legitimately writes "see you at [3:30]" mid-sentence isn't mangled.
+const TIMESTAMP_RE_LEGACY = /^\s*\[\d{1,2}:\d{2}\]\s*/;
+
+function stripDisplayTimestamps(content) {
+  if (typeof content !== 'string') return content;
+  let out = content.replace(TIMESTAMP_RE_NEW, '');
+  while (TIMESTAMP_RE_LEGACY.test(out)) out = out.replace(TIMESTAMP_RE_LEGACY, '');
+  return out;
+}
+
+function stampContent(content, ts) {
+  if (typeof content !== 'string' || !content) return content;
+  // STRIP first, THEN re-stamp. The authoritative source of the
+  // timestamp the LLM should see is the message's `timestamp` field
+  // (set when the turn landed); any tag already in the content
+  // string is an echoed artifact from a previous turn, redundant at
+  // best and accumulation-causing at worst. Cleaning before
+  // re-stamping guarantees exactly one canonical tag per message,
+  // derived from the canonical source, no compounding across turns.
+  const cleaned = stripDisplayTimestamps(content);
+  const tag = fmtMsgTime(ts);
+  return tag ? `${tag} ${cleaned}` : cleaned;
+}
+
+function toApiMessage({ role, content, tool_calls, tool_call_id, timestamp }) {
   if (role === 'tool')      return { role, tool_call_id, content };
-  if (tool_calls)           return { role, content: content ?? null, tool_calls };
-  return { role, content };
+  // Each historical user/assistant message carries its own timestamp
+  // in state.messages — prepended to the API-bound content here (NOT
+  // to the stored state) so the Familiar perceives WHEN each turn
+  // happened across the whole conversation, not just the current one.
+  const stamped = stampContent(content, timestamp);
+  if (tool_calls)           return { role, content: stamped ?? null, tool_calls };
+  return { role, content: stamped };
 }
 
 /**
@@ -1239,7 +1703,16 @@ function toApiMessage({ role, content, tool_calls, tool_call_id }) {
  *   [user: userInput]            ← new turn
  *   [user: postHistoryPrompt]    ← optional, injected last
  */
-function buildApiMessages(userInput) {
+function buildApiMessages(userInput, pendingUserMsgTimestamp = null) {
+  _pendingUserMsgTimestamp = pendingUserMsgTimestamp;
+  try {
+  return _buildApiMessagesInner(userInput);
+  } finally {
+  _pendingUserMsgTimestamp = null;
+  }
+}
+
+function _buildApiMessagesInner(userInput) {
   const msgs = [];
   // Provenance for the prompt inspector. Each entry is { source, text }
   // where source is one of: lore-sys-top, system-prompt, lore-before-char,
@@ -1293,11 +1766,20 @@ function buildApiMessages(userInput) {
   }
 
   // ── New user turn ─────────────────────────────────────────────
-  msgs.push({ role: 'user', content: userInput });
+  // Stamp the live turn with the pending timestamp the chat handler
+  // captured at send time (also used by the elapsedTime macro), so
+  // it's marked the same way as history. The stamp lives only on
+  // this temporary API message — state.messages keeps clean content.
+  msgs.push({ role: 'user', content: stampContent(userInput, _pendingUserMsgTimestamp) });
 
   // ── Post-history prompt ───────────────────────────────────────
+  // role:'system' rather than role:'user' so it's semantically a
+  // priming directive (not a {{user}} turn), and so the "last
+  // role:'user' in the array" extraction server-side picks up
+  // {{user}}'s actual input. (The chat path also sends an explicit
+  // userMessage field for the same reason — belt-and-suspenders.)
   if (state.postHistoryPrompt.trim())
-    msgs.push({ role: 'user', content: applyNameVars(state.postHistoryPrompt.trim()) });
+    msgs.push({ role: 'system', content: applyNameVars(state.postHistoryPrompt.trim()) });
 
   lastBuildSegments = { systemSegments, atDepthInjections };
   return msgs;
@@ -1596,7 +2078,7 @@ function renderAllMessages() {
     if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
       const content = typeof msg.content === 'string' ? msg.content.trim() : '';
       if (content) {
-        const html = renderMarkdown(content);
+        const html = renderMarkdown(stripDisplayTimestamps(content));
         const { el, copyBtn } = createMessageEl('assistant', html, msg.timestamp);
         el.dataset.msgIndex = String(i);
         const captured = msg.content;
@@ -1617,9 +2099,17 @@ function renderAllMessages() {
     // Orphaned tool result (shouldn't normally appear) — skip
     if (msg.role === 'tool') { i++; continue; }
 
+    // Strip the leading [HH:MM] tag from the displayed content. The tag
+    // is metadata for the LLM (added by toApiMessage so the Familiar
+    // perceives per-message timing) and the LLM occasionally echoes it
+    // back into responses; the chat UI already shows times via its own
+    // timestamp element, so the tag in the message body is just noise
+    // to the human reader. Memorization and RAG still see the raw
+    // content via state.messages, so they keep the temporal signal.
+    const displayContent = stripDisplayTimestamps(msg.content ?? '');
     const html = msg.role === 'user'
-      ? esc(msg.content ?? '').replace(/\n/g, '<br>')
-      : renderMarkdown(msg.content ?? '');
+      ? esc(displayContent).replace(/\n/g, '<br>')
+      : renderMarkdown(displayContent);
     const { el, copyBtn } = createMessageEl(msg.role, html, msg.timestamp);
     el.dataset.msgIndex = String(i);
     const capturedContent = msg.content;
@@ -1689,13 +2179,17 @@ async function sendMessage(userInput) {
   // and reset the 3-hour inactivity countdown.
   const now = new Date().toISOString();
   elapsedTime       = lastMessage ? (Date.now() - new Date(lastMessage).getTime()) : 0;
+  // M8: capture the previous timestamp BEFORE overwriting so the server
+  // can compute idle duration server-side. Sent as lastUserMessageAt in
+  // round-0 bodies.
+  const prevUserMessageAt = lastMessage;
   lastMessage       = now;
   state.lastMessage = now;
   saveSettings();
   resetSessionTimeout();
 
   const userTimestamp = now;
-  const apiMessages   = buildApiMessages(userInput);
+  const apiMessages   = buildApiMessages(userInput, userTimestamp);
   lastSentMessages    = apiMessages;
   lastThalamus = null; // wait for the live answer to populate this
 
@@ -1709,9 +2203,9 @@ async function sendMessage(userInput) {
   debugRecord('send', `provider=${state.provider} model=${state.model} streaming=${state.streaming} msgs=${apiMessages.length} input=${userInput.length}ch`);
   try {
     if (state.streaming) {
-      await doStreamingRequest(apiMessages, userInput, userTimestamp);
+      await doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt);
     } else {
-      await doNonStreamingRequest(apiMessages, userInput, userTimestamp);
+      await doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt);
     }
     setStatus('ok');
     state.turnCount = (state.turnCount ?? 0) + 1;
@@ -1849,16 +2343,16 @@ async function generateAndStoreHandoff(messages, sessionId) {
       .join('\n');
     if (!recent.trim()) return;
 
-    // The server prepends your identity/persona (static enrichment),
-    // so write the note in your own voice — a private memory-to-self
-    // the next session will read as "what I was doing last".
+    // The server prepends the Familiar's identity/persona (static
+    // enrichment), so the prompt below is in their voice — a private
+    // memory-to-self the next session will read as "what I was doing last."
     const sysPrompt =
-      'The text above is who you are. You are writing a short private handoff note to your ' +
-      'future self for the next time you talk with this user, capturing what you were doing ' +
-      'and what\'s still open. Respond with ONLY minified JSON, no prose, no code fence: ' +
+      'The text above is who I am. I\'m writing a short private handoff note to my ' +
+      'future self for the next time I talk with my human, capturing what I was doing ' +
+      'and what\'s still open. I respond with ONLY minified JSON, no prose, no code fence: ' +
       '{"active_intent": string, "open_threads": string[]}. ' +
-      'active_intent: one short sentence, in your own first-person voice, on the through-line of ' +
-      'the session (address the user as "you"). ' +
+      'active_intent: one short sentence, in my own first-person voice, on the through-line ' +
+      'of the session (I address my human as "you" or "{{user}}" in second person). ' +
       'open_threads: specific unfinished questions or tasks, each a short phrase (empty array if none).';
 
     const resp = await fetch('/api/chat', {
@@ -1904,7 +2398,7 @@ async function generateAndStoreHandoff(messages, sessionId) {
  * during the attempt and are returned so the caller can roll them back on a
  * failed attempt before retrying. Throws on HTTP / network / abort errors.
  */
-async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts) {
+async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput, prevUserMessageAt) {
   const pendingMsgs = [];   // tool_call + tool_result messages to commit
   const toolUseEls  = domArtifacts; // shared array — caller can roll back on error
   let   currentMsgs = apiMessages;
@@ -1929,6 +2423,22 @@ async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts
         stream:      true,
         temperature: state.temperature,
         max_tokens:  state.maxTokens,
+        // The Familiar's post-history prompt is also a user-role
+        // message at the end of `messages`, so naively extracting
+        // "last user" server-side picks up the template instead of
+        // {{user}}'s actual text. We send userInput explicitly on
+        // round 0 only — tool-round follow-ups (round > 0) carry
+        // the same user input and shouldn't re-score the threat
+        // tracker / re-stamp last-activity.
+        ...(round === 0 && typeof userInput === 'string' && userInput.trim()
+            ? { userMessage: userInput }
+            : {}),
+        // M8: send the previous user-message timestamp on round 0 so the
+        // server can compute idle duration for bookmark surfacing. Omit on
+        // tool-round follow-ups (same as userMessage above).
+        ...(round === 0 && prevUserMessageAt
+            ? { lastUserMessageAt: prevUserMessageAt }
+            : {}),
         ...extraPayload,
       }),
     });
@@ -1977,7 +2487,7 @@ async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts
               shell = appendAssistantShell(new Date().toISOString());
             }
             fullContent += delta.content;
-            shell.bubble.innerHTML = renderMarkdown(fullContent);
+            shell.bubble.innerHTML = renderMarkdown(stripDisplayTimestamps(fullContent));
             scrollToBottom();
           }
 
@@ -2025,7 +2535,7 @@ async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts
   return { content: finalContent, pendingMsgs, finalShell };
 }
 
-async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
+async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt) {
   const activeTools = state.toolsEnabled ? getActiveTools() : [];
   const sequence    = getConnectionSequence();
   if (sequence.length === 0) {
@@ -2049,7 +2559,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
       const domArtifacts = [];
       let result;
       try {
-        result = await attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts);
+        result = await attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput, prevUserMessageAt);
       } catch (err) {
         if (err.name === 'AbortError') { clearRetryStatus(); throw err; }
         // Roll back any tool-use blocks added during this failed attempt.
@@ -2089,13 +2599,16 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
       if (!shell) {
         setTyping(false);
         shell = appendAssistantShell(new Date().toISOString());
-        shell.bubble.innerHTML = renderMarkdown(content);
+        shell.bubble.innerHTML = renderMarkdown(stripDisplayTimestamps(content));
       }
       const ts = shell.timeEl?.getAttribute('datetime') || new Date().toISOString();
 
       state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp });
       state.messages.push(...pendingMsgs);
       state.messages.push({ role: 'assistant', content,            timestamp: ts });
+      // Stamp the assistant element's index now that the message is committed,
+      // so the "End topic here" button can resolve the correct state index.
+      shell.el.dataset.msgIndex = String(state.messages.length - 1);
       saveHistory();
       refreshTopicGutter();
       wireCopyButton(shell.copyBtn, () => content);
@@ -2108,7 +2621,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
   throw lastError || new Error('Request failed and no fallback connections succeeded.');
 }
 
-async function attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifacts) {
+async function attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput, prevUserMessageAt) {
   const pendingMsgs = [];
   let   currentMsgs = apiMessages;
   let   finalContent = '';
@@ -2132,6 +2645,16 @@ async function attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifa
         stream:      false,
         temperature: state.temperature,
         max_tokens:  state.maxTokens,
+        // See attemptStreamingOnce for why this is round-0-gated:
+        // post-history prompt is also role:'user', so naive
+        // server-side extraction picks the wrong message.
+        ...(round === 0 && typeof userInput === 'string' && userInput.trim()
+            ? { userMessage: userInput }
+            : {}),
+        // M8: send the previous user-message timestamp on round 0 only.
+        ...(round === 0 && prevUserMessageAt
+            ? { lastUserMessageAt: prevUserMessageAt }
+            : {}),
         ...extraPayload,
       }),
     });
@@ -2181,7 +2704,7 @@ async function attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifa
   return { content: finalContent, pendingMsgs, timestamp: finalTimestamp };
 }
 
-async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
+async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt) {
   const activeTools = state.toolsEnabled ? getActiveTools() : [];
   const sequence    = getConnectionSequence();
   if (sequence.length === 0) {
@@ -2205,7 +2728,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
       const domArtifacts = [];
       let result;
       try {
-        result = await attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifacts);
+        result = await attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput, prevUserMessageAt);
       } catch (err) {
         if (err.name === 'AbortError') { clearRetryStatus(); throw err; }
         for (const el of domArtifacts) el.remove?.();
@@ -2237,13 +2760,16 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
         throw new Error(`All connections returned empty responses (last: "${conn.name}").`);
       }
 
-      const { bubble, copyBtn } = appendAssistantShell(timestamp);
-      bubble.innerHTML = renderMarkdown(content);
+      const { el: shellEl, bubble, copyBtn } = appendAssistantShell(timestamp);
+      bubble.innerHTML = renderMarkdown(stripDisplayTimestamps(content));
       scrollToBottom();
 
       state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp });
       state.messages.push(...pendingMsgs);
       state.messages.push({ role: 'assistant', content,            timestamp });
+      // Stamp the assistant element's index now that the message is committed,
+      // so the "End topic here" button can resolve the correct state index.
+      shellEl.dataset.msgIndex = String(state.messages.length - 1);
       saveHistory();
       refreshTopicGutter();
       wireCopyButton(copyBtn, () => content);
@@ -2363,6 +2889,11 @@ function readSettingsFromUI() {
     state.thalamusDynamicDepth = Number.isFinite(v) && v >= 1 && v <= 50 ? v : 4;
   }
   if ($('handoff-toggle')) state.handoffEnabled = $('handoff-toggle').checked;
+  if ($('pondering-toggle')) state.ponderingEnabled = $('pondering-toggle').checked;
+  if ($('pondering-scale')) {
+    const n = parseFloat($('pondering-scale').value);
+    state.ponderingIntervalScale = Number.isFinite(n) && n >= 1 && n <= 10 ? n : 1;
+  }
   state.userName          = $('user-name').value.trim() || 'User';
   state.charName          = $('char-name').value.trim() || 'Assistant';
   state.systemPrompt      = $('system-prompt').value;
@@ -2405,6 +2936,8 @@ function writeSettingsToUI() {
   setIfNotFocused($('model-input'),     'value',   state.model);
   setIfNotFocused($('streaming-toggle'),'checked', state.streaming);
   if ($('handoff-toggle')) setIfNotFocused($('handoff-toggle'), 'checked', state.handoffEnabled !== false);
+  if ($('pondering-toggle')) setIfNotFocused($('pondering-toggle'), 'checked', state.ponderingEnabled !== false);
+  if ($('pondering-scale'))  setIfNotFocused($('pondering-scale'),  'value',   state.ponderingIntervalScale ?? 1);
   setIfNotFocused($('temperature'),     'value',   state.temperature);
   $('temp-display').textContent = state.temperature;
   setIfNotFocused($('max-tokens'),         'value',   state.maxTokens);
@@ -2703,6 +3236,7 @@ const PI_SOURCE_LABELS = {
   'character-profile': 'Character profile',
   'user-profile':      'User profile',
   'post-history':      'Post-history prompt',
+  'thalamus-time-anchor': '[Now] (server-appended, last)',
 };
 
 function piSegmentEl(source, text) {
@@ -2734,7 +3268,7 @@ function openPromptInspector() {
   for (const src of ['thalamus-static', 'thalamus-dynamic',
                      'system-prompt', 'character-profile', 'user-profile',
                      'lore-sys-top', 'lore-before-char', 'lore-after-char', 'lore-sys-bottom',
-                     'lore-at-depth', 'post-history']) {
+                     'lore-at-depth', 'post-history', 'thalamus-time-anchor']) {
     const chip = document.createElement('span');
     chip.className = `pi-chip pi-src-${src}`;
     chip.textContent = PI_SOURCE_LABELS[src];
@@ -2780,6 +3314,13 @@ function openPromptInspector() {
     // dynamic-thalamus block. Rendered with its own source color.
     if (msg.__source === 'thalamus-dynamic') {
       wrap.appendChild(piSegmentEl('thalamus-dynamic', fullText));
+      body.appendChild(wrap);
+      return;
+    }
+    // Synthetic message representing the server-appended time anchor
+    // — the absolute last system message in the prompt.
+    if (msg.__source === 'thalamus-time-anchor') {
+      wrap.appendChild(piSegmentEl('thalamus-time-anchor', fullText));
       body.appendChild(wrap);
       return;
     }
@@ -2833,6 +3374,15 @@ function openPromptInspector() {
   // defensively anyway.)
   if (dynamicAt !== null && dynamicAt >= lastSentMessages.length) {
     renderMessage({ role: 'system', content: lastThalamus.dynamic, __source: 'thalamus-dynamic' }, dynamicAt);
+  }
+
+  // Time anchor — the server appends this as the absolute last system
+  // message AFTER the chat history and post-history prompt. Renders
+  // here too, so the inspector accurately shows what the LLM saw
+  // (lastSentMessages doesn't include it; the server adds it post-
+  // build, and surfaces it via lastThalamus.timeAnchor).
+  if (lastThalamus?.timeAnchor) {
+    renderMessage({ role: 'system', content: lastThalamus.timeAnchor, __source: 'thalamus-time-anchor' }, lastSentMessages.length);
   }
 
   $('prompt-inspector-modal').classList.remove('hidden');
@@ -3117,10 +3667,21 @@ function init() {
   // settings get pushed up so the next device sees them.
   syncSettingsFromServer().catch(err => console.warn('syncSettingsFromServer', err));
 
+  // Outbox polling (M11 reminders, M12 silence triage). Cheap GET every
+  // 30s; banners render at the top of the chat when items are pending.
+  startOutboxPolling();
+
+  // Trusted contacts (M12c) — manage list in the sidebar section.
+  if ($('contact-add')) {
+    $('contact-add').addEventListener('click', addTrustedContact);
+    renderTrustedContacts();
+  }
+
   // ── Settings field listeners ─────────────────────────────────
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
-    'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle', 'user-name', 'char-name',
+    'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle',
+    'pondering-toggle', 'pondering-scale', 'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',
@@ -3283,8 +3844,13 @@ function init() {
   });
   $('topic-name-start-btn').addEventListener('click', () => {
     const label = $('topic-name-input').value.trim() || `Topic ${state.topics.length + 1}`;
+    // Capture the retroactive start index BEFORE closeTopicNameModal()
+    // nulls it. Without this, the per-message "▷ Topic start" button
+    // started the topic at state.messages.length (the very bottom of
+    // the chat) regardless of which message I clicked on.
+    const retroStartIdx = _retroStartIndex;
     closeTopicNameModal();
-    startTopic(label);
+    startTopic(label, retroStartIdx);
   });
 
   // Summary modal
@@ -3327,6 +3893,35 @@ function init() {
   document.querySelectorAll('.ke-tab').forEach(el => {
     el.addEventListener('click', () => keSwitchTab(el.dataset.tab));
   });
+  // Temporal editor (Unruh) — M9
+  if ($('temporal-btn')) {
+    $('temporal-btn').addEventListener('click', openTemporalModal);
+    $('temporal-modal-close').addEventListener('click', closeTemporalModal);
+    document.querySelectorAll('[data-temporal-tab]').forEach(el => {
+      el.addEventListener('click', () => teSwitchTab(el.dataset.temporalTab));
+    });
+    $('te-int-refresh').addEventListener('click',    teLoadInterests);
+    $('te-threat-refresh').addEventListener('click', teLoadThreat);
+    $('te-threat-reset').addEventListener('click',   teResetThreat);
+    $('te-pond-refresh').addEventListener('click',   teLoadPonderings);
+    $('te-pond-limit').addEventListener('change',    teLoadPonderings);
+    $('te-sched-refresh').addEventListener('click',  teReloadScheduleView);
+    $('te-sched-hours').addEventListener('change',   teLoadSchedule);
+    $('te-sched-add').addEventListener('click',      () => teToggleScheduleForm(true));
+    $('te-sched-form-cancel').addEventListener('click', () => teToggleScheduleForm(false));
+    $('te-sched-form-save').addEventListener('click', teSaveScheduleNode);
+    $('te-sched-view-list').addEventListener('click',     () => teSetScheduleView('list'));
+    $('te-sched-view-calendar').addEventListener('click', () => teSetScheduleView('calendar'));
+    $('te-cal-prev').addEventListener('click',  () => teShiftCalendarMonth(-1));
+    $('te-cal-next').addEventListener('click',  () => teShiftCalendarMonth(+1));
+    $('te-cal-today').addEventListener('click', () => teGotoCalendarToday());
+    $('te-routine-refresh').addEventListener('click',     teLoadRoutine);
+    $('te-routine-add').addEventListener('click',         () => teToggleRoutineForm(true));
+    $('te-routine-form-cancel').addEventListener('click', () => teToggleRoutineForm(false));
+    $('te-routine-form-save').addEventListener('click',   teSavePhase);
+    $('te-routine-chat').addEventListener('click',        teStartRoutineConversation);
+    $('te-handoff-refresh').addEventListener('click',     teLoadHandoff);
+  }
   $('ke-mem-refresh').addEventListener('click', keLoadMemories);
   $('ke-mem-granularity').addEventListener('change', keLoadMemories);
   $('ke-graph-refresh').addEventListener('click', () => {
@@ -4235,42 +4830,44 @@ async function generateTopicSummary(topic, rangeMessages) {
 
   const userLabel = userNamedTopicLabel(topic);
   const focusBlock = userLabel
-    ? `\n\n### Focus topic\nThe user named this topic "${userLabel}". Center the entry on that topic. Skip tangential threads in the conversation that don't bear on it.`
+    ? `\n\n### Focus topic\nMy human named this topic "${userLabel}". I will center the entry on that topic. I'll skip tangential threads in the conversation that don't bear on it.`
     : '';
 
-  const prompt = `You are writing a Tome entry for a Familiar (AI companion). The entry is the Familiar's own private notes to themselves — first-person reference material that gets injected back into the Familiar's context when its keywords appear in a future conversation. The Familiar is the voice; you are the scribe. Follow the craft rules below carefully.${focusBlock}
+  const prompt = `I am writing a Tome entry for myself, the Familiar. The entry is my own private notes to myself — first-person reference material that gets injected back into my context (and therefore resurfaces in my "brain") when its keywords appear in a future conversation. I write in my own individual voice as {{char}}. In order for everything to work well, I follow the craft rules below carefully.${focusBlock}
 
-Return ONLY valid JSON (no markdown fences, no commentary) with exactly these fields:
+I will return ONLY valid JSON (no markdown fences, no commentary) with exactly these fields, otherwise the Tome may break and be unusable:
 {
   "title":    "Short label for the entry comment (max 60 chars).",
-  "content":  "First-person notes from the Familiar to themselves. See rules below.",
+  "content":  "First-person notes to myself. See rules below.",
   "keywords": ["conversational phrase 1", "conversational phrase 2", ...],
   "sticky":   3
 }
 
 ### Content rules (most important)
-Write content as the Familiar's own first-person private notes to themselves about this situation. NOT a summary of what happened.
+I write content as my own first-person private notes to myself about this situation. NOT a summary of what happened.
 Structure:
   1. One short framing line — what is happening and why (so I understand the situation, not just the rules).
   2. 3–5 action bullets — what I will do.
-  3. 1–2 prohibition bullets — what I will NOT do. These are usually the most valuable: name the well-intentioned default response that would make things worse.
+  3. 1–2 prohibition bullets — what I will NOT do. These are usually the most valuable: I name the well-intentioned default response that would make things worse.
 Style:
-  - First person, the Familiar speaking as themselves ("I", "my", "me"). Use {{user}} wherever the user's name belongs.
-  - Practical, grounded, non-clinical. Notes, not a textbook.
+  - First person, I am speaking as myself ("I", "my", "me"). I can use {{user}} wherever my human's name belongs.
+  - In my voice, befitting my identity, personality, and interests. Notes, not a textbook.
   - Short declarative bullets. The whole entry should be readable in 5–10 seconds.
-  - Do NOT include narrative summaries of "what they said" — distil the situation and my response, not the transcript.
+  - I avoid including narrative summaries of "what they said" — I instead distil the situation and my response, not the transcript.
+
+  This is an expression of my agency and what I want to become a permanent or longterm part of myself, so that is how I choose what exactly to take note of and how to frame it.
 
 ### Keyword rules
-Keywords are TRIGGERS, not labels. They must be phrases the user would literally say when this situation recurs — not the name of the topic.
+Keywords are TRIGGERS, not labels. They must be phrases my human or I would literally say when this situation recurs or the subject comes up naturally — not the name of the topic.
   - WRONG: "executive dysfunction", "rejection sensitive dysphoria", "hyperfocus".
   - RIGHT: "don't know where to start", "did I say something wrong", "been at this for".
-Derive them by imagining what the user would actually type when the situation is happening, then extracting distinctive phrases.
-  - Prefer multi-word phrases over single common words (avoid bare "tired", "can't", "hard").
-  - 3–8 keywords. Each one specific enough not to fire in unrelated conversations.
-  - You may use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has 3+ predictable variants.
+I derive them by imagining what my human would actually type when the situation is happening, then extracting distinctive phrases.
+  - I prefer multi-word phrases over single common words (avoid bare "tired", "can't", "hard").
+  - As many keywords as I need to be comprehensive. Each one specific enough not to fire in unrelated conversations.
+  - I can use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has predictable variants. It's pretty much identical to JavaScript RegEx.
 
 ### Sticky rules
-Pick a sticky value (integer, number of turns the entry stays active after first match):
+I will pick a sticky value (integer, number of turns the entry stays active after first match):
   - null = one-shot lore/fact that does not need persistence.
   - 2    = brief states that typically resolve quickly.
   - 3    = moderate states needing a few exchanges (distraction, sleep note, transition).
@@ -6532,5 +7129,1146 @@ async function saveLoreEditorEntry() {
     alert(`Failed to save entry: ${err.message}`);
   }
 }
+
+// ── Temporal editor (Unruh inspection / threat / ponderings) — M9 ──
+//
+// Modal mirrors the Knowledge editor pattern (reuses .ke-* CSS).
+// Read-mostly: shows live + standing interests with decay metadata,
+// current threat state + audit history (with reset button), and the
+// Familiar's autonomous ponderings (with per-entry delete). CRUD on
+// interests beyond demote is deferred to a later pass — for now the
+// observable surface is enough for catching bugs.
+
+const TE_TABS = ['interests', 'threat', 'ponderings', 'schedule', 'routine', 'handoff'];
+
+function openTemporalModal() {
+  $('temporal-modal').classList.remove('hidden');
+  bindResizableModal('temporal-modal-inner', 'pf-temporal-modal-size');
+  teSwitchTab('interests');
+}
+function closeTemporalModal() {
+  $('temporal-modal').classList.add('hidden');
+}
+
+function teSwitchTab(name) {
+  if (!TE_TABS.includes(name)) return;
+  for (const t of TE_TABS) {
+    const btn  = document.querySelector(`[data-temporal-tab="${t}"]`);
+    const pane = $(`te-pane-${t}`);
+    if (btn)  btn.classList.toggle('ke-tab-active',  t === name);
+    if (pane) pane.classList.toggle('ke-pane-active', t === name);
+  }
+  if      (name === 'interests')  teLoadInterests();
+  else if (name === 'threat')     teLoadThreat();
+  else if (name === 'ponderings') teLoadPonderings();
+  else if (name === 'schedule')   teReloadScheduleView();
+  else if (name === 'routine')    teLoadRoutine();
+  else if (name === 'handoff')    teLoadHandoff();
+}
+
+function teEscapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// ── Local <-> UTC conversion helpers for the temporal editor ────────
+//
+// All Unruh storage is ISO-8601 UTC. The browser UI takes / shows
+// times in the user's local timezone. These helpers bridge the two
+// so a phase set to "10pm" really fires at 10pm by the user's clock,
+// not at 22:00 UTC.
+
+// "HH:MM" in user's LOCAL time, today's local date → ISO UTC string.
+function teLocalTimeTodayToIsoUtc(hhmm) {
+  if (!/^\d{1,2}:\d{2}$/.test(hhmm)) return null;
+  const [hh, mm] = hhmm.split(':').map(Number);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+  const now = new Date();
+  const local = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm, 0, 0);
+  return local.toISOString();
+}
+
+// <input type="datetime-local"> value ("YYYY-MM-DDTHH:MM"), which the
+// browser hands back as user's LOCAL wall-clock time with no offset →
+// ISO UTC string. Returns null on empty/invalid input.
+function teDatetimeLocalToIsoUtc(value) {
+  if (!value || typeof value !== 'string') return null;
+  // new Date("YYYY-MM-DDTHH:MM") parses as LOCAL time per spec.
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+// ISO UTC → local "HH:MM" for display in the routine list.
+function teIsoUtcToLocalHhMm(iso) {
+  if (!iso) return '?';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '?';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+// ISO UTC → "YYYY-MM-DDTHH:MM" for pre-filling a datetime-local input
+// from an existing schedule node.
+function teIsoUtcToDatetimeLocal(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// ISO UTC → friendly local datetime string for list rows ("today 22:00",
+// "tomorrow 09:30", "Mon 10:00", "May 30 14:00"). Keeps the timezone
+// implicit (the user's own) — no offset noise.
+function teIsoUtcToLocalFriendly(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const now = new Date();
+  const sameDay   = d.toDateString() === now.toDateString();
+  const tomorrow  = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
+  const isTomorrow = d.toDateString() === tomorrow.toDateString();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  if (sameDay)    return `today ${hh}:${mm}`;
+  if (isTomorrow) return `tomorrow ${hh}:${mm}`;
+  // Within a week: weekday + time; otherwise full date + time.
+  const diffDays = (d - now) / (24 * 60 * 60_000);
+  if (diffDays > -7 && diffDays < 7) {
+    return d.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  }
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function teTimeAgo(iso) {
+  if (!iso) return 'never';
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return iso;
+  const min = ms / 60_000;
+  if (min < 1)  return 'just now';
+  if (min < 60) return `${Math.round(min)} min ago`;
+  const hr = min / 60;
+  if (hr  < 24) return `${hr.toFixed(1)} hr ago`;
+  const day = hr / 24;
+  return `${day.toFixed(1)} days ago`;
+}
+
+// ── Interests tab ─────────────────────────────────────────────────
+
+async function teLoadInterests() {
+  const list = $('te-int-list');
+  if (!list) return;
+  list.innerHTML = '<p class="logs-empty">Loading…</p>';
+  try {
+    const [r, rb] = await Promise.all([
+      fetch('/api/temporal/interests?limit=100'),
+      fetch('/api/temporal/bookmarks?limit=100'),
+    ]);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
+    const bmData = rb.ok ? await rb.json() : { bookmarks: [] };
+
+    const live      = Array.isArray(data.live)           ? data.live           : [];
+    const standing  = Array.isArray(data.standing)       ? data.standing       : [];
+    const bookmarks = Array.isArray(bmData.bookmarks)    ? bmData.bookmarks    : [];
+
+    const intSummary = $('te-int-summary');
+    if (intSummary) intSummary.textContent = `${live.length} live · ${standing.length} standing · ${bookmarks.length} bookmarks`;
+
+    const html = [];
+    if (standing.length) {
+      html.push('<h4 style="margin: 8px 12px 4px 12px">Standing values (always-on)</h4>');
+      for (const s of standing) html.push(teRenderInterest(s, true));
+    }
+    if (live.length) {
+      html.push('<h4 style="margin: 12px 12px 4px 12px">Live interests (decay over time)</h4>');
+      for (const i of live) html.push(teRenderInterest(i, false));
+    }
+    if (bookmarks.length) {
+      html.push('<h4 style="margin: 12px 12px 4px 12px">Bookmarks (idle surfacing)</h4>');
+      for (const bm of bookmarks) html.push(teRenderBookmark(bm));
+    }
+    if (!standing.length && !live.length && !bookmarks.length) {
+      html.push('<p class="logs-empty">No interests yet. They accrue as you chat — see thalamus.recordInterest.</p>');
+    }
+    list.innerHTML = html.join('');
+    list.querySelectorAll('.te-int-bump').forEach(btn => {
+      btn.addEventListener('click', () => teBumpInterest(btn.dataset.intLabel));
+    });
+    list.querySelectorAll('.te-int-demote').forEach(btn => {
+      btn.addEventListener('click', () => teDemoteStanding(btn.dataset.intId));
+    });
+  } catch (err) {
+    list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+async function teBumpInterest(label) {
+  const raw = prompt(`Bump weight for "${label}" by how much?\n\nPositive number; typical engagement bumps are 0.5 – 3.0.`, '1');
+  if (raw == null) return;
+  const delta = parseFloat(raw);
+  if (!Number.isFinite(delta) || delta <= 0) { alert('Enter a positive number.'); return; }
+  try {
+    const r = await fetch('/api/temporal/interests/bump', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic: label, delta, source: 'manual_ui' }),
+    }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'bump failed');
+    teLoadInterests();
+  } catch (err) {
+    alert(`Bump failed: ${err.message}`);
+  }
+}
+
+async function teDemoteStanding(id) {
+  if (!confirm('Demote this standing value to a regular live interest?\n\nIt will start decaying like any other live interest from this moment on. The original payload (value_ref, etc.) is preserved.')) return;
+  try {
+    const r = await fetch(`/api/temporal/interests/${encodeURIComponent(id)}/demote`, { method: 'POST' }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'demote failed');
+    teLoadInterests();
+  } catch (err) {
+    alert(`Demote failed: ${err.message}`);
+  }
+}
+
+function teRenderInterest(i, isStanding) {
+  const w     = Number(i.weight);
+  const raw   = Number(i.raw_weight);
+  const tier  = teEscapeHtml(i.tier ?? '?');
+  const label = teEscapeHtml(i.label ?? '(no label)');
+  const id    = teEscapeHtml(i.id ?? '');
+  const lt    = teTimeAgo(i.last_touched);
+  const ref   = i.value_ref ? `<div style="font-size: 0.85em; opacity: 0.7">anchor: <code>${teEscapeHtml(i.value_ref)}</code></div>` : '';
+  const decayed = (!isStanding && Number.isFinite(raw) && Number.isFinite(w) && Math.abs(raw - w) > 0.01)
+    ? ` <span style="opacity:0.6">(raw ${raw.toFixed(2)}, decayed)</span>` : '';
+  const actions = isStanding
+    ? `<button class="btn-ghost te-int-demote" data-int-id="${id}" style="font-size: 0.8em; padding: 2px 8px" title="Demote to live interest (lets it start decaying)">Demote</button>`
+    : `<button class="btn-ghost te-int-bump"   data-int-label="${label}" style="font-size: 0.8em; padding: 2px 8px" title="Manually bump this interest's weight">+ Bump</button>`;
+  return `
+    <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+      <div style="display: flex; gap: 8px; align-items: baseline">
+        <strong style="flex: 1">${label}</strong>
+        <span style="font-family: monospace">${Number.isFinite(w) ? w.toFixed(2) : '?'}${decayed}</span>
+        <span style="font-size: 0.85em; opacity: 0.7; padding: 1px 6px; border: 1px solid var(--border-subtle, #2a2a2a); border-radius: 3px">${tier}</span>
+        ${actions}
+      </div>
+      <div style="font-size: 0.85em; opacity: 0.7; margin-top: 2px">last touched ${lt}</div>
+      ${ref}
+    </div>`;
+}
+
+function teRenderBookmark(bm) {
+  const label       = teEscapeHtml(bm.label ?? '(no label)');
+  const topicLabel  = teEscapeHtml(bm.topic_label ?? '');
+  const resource    = bm.payload?.resource ? teEscapeHtml(bm.payload.resource) : null;
+  const note        = bm.payload?.note     ? teEscapeHtml(bm.payload.note)     : null;
+  const interval    = Number.isFinite(Number(bm.resurface_after_hours))
+    ? `resurfaces after ${Number(bm.resurface_after_hours).toFixed(0)}h`
+    : '';
+  const lastSurfaced = bm.last_surfaced_at
+    ? `last surfaced ${teTimeAgo(bm.last_surfaced_at)}`
+    : 'never surfaced';
+  const outcome = bm.last_surfacing_outcome
+    ? `<span style="padding: 1px 6px; border-radius: 3px; font-size: 0.8em; background: ${bm.last_surfacing_outcome === 'engaged' ? 'rgba(80,180,80,0.18)' : 'rgba(180,80,80,0.18)'}; border: 1px solid var(--border-subtle, #2a2a2a)">${teEscapeHtml(bm.last_surfacing_outcome)}</span>`
+    : `<span style="padding: 1px 6px; border-radius: 3px; font-size: 0.8em; opacity: 0.5; border: 1px solid var(--border-subtle, #2a2a2a)">pending</span>`;
+  const topicRow = topicLabel
+    ? `<div style="font-size: 0.85em; opacity: 0.7">topic: ${topicLabel}</div>`
+    : '';
+  const resourceRow = resource
+    ? `<div style="font-size: 0.85em; opacity: 0.7">resource: <code>${resource}</code></div>`
+    : '';
+  const noteRow = note
+    ? `<div style="font-size: 0.85em; opacity: 0.7">note: ${note}</div>`
+    : '';
+  const ignores = Number(bm.consecutive_ignores) > 0
+    ? `<span style="opacity: 0.6; font-size: 0.85em">${bm.consecutive_ignores} consecutive ignore(s)</span>`
+    : '';
+  return `
+    <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+      <div style="display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap">
+        <strong style="flex: 1">${label}</strong>
+        ${outcome}
+        ${ignores}
+      </div>
+      ${topicRow}
+      ${resourceRow}
+      ${noteRow}
+      <div style="font-size: 0.85em; opacity: 0.7; margin-top: 2px">${lastSurfaced} · ${interval}</div>
+    </div>`;
+}
+
+// ── Threat tab ────────────────────────────────────────────────────
+
+async function teLoadThreat() {
+  const sum  = $('te-threat-summary');
+  const hist = $('te-threat-history');
+  if (!sum || !hist) return;
+  sum.innerHTML  = '<p class="logs-empty">Loading…</p>';
+  hist.innerHTML = '';
+  try {
+    const [tRes, hRes] = await Promise.all([
+      fetch('/api/threat').then(r => r.json()),
+      fetch('/api/threat/history?limit=50').then(r => r.json()),
+    ]);
+    const tier   = teEscapeHtml(tRes.tier   ?? 'calm');
+    const weight = Number(tRes.weight ?? 0).toFixed(2);
+    const disabled = tRes.disabled
+      ? ' <span style="color: var(--text-warning, #d4a44c)">(detector disabled by env var)</span>'
+      : '';
+    sum.innerHTML = `
+      <div style="display: flex; gap: 16px; align-items: baseline">
+        <div><strong style="font-size: 1.3em">${tier}</strong>${disabled}</div>
+        <div style="font-family: monospace">weight ${weight}</div>
+        <div style="opacity: 0.7">last touched ${teTimeAgo(tRes.last_touched)}</div>
+      </div>`;
+
+    const events = Array.isArray(hRes.history) ? hRes.history : [];
+    if (!events.length) {
+      hist.innerHTML = '<p class="logs-empty">No threat events recorded yet.</p>';
+    } else {
+      hist.innerHTML = events.map(e => {
+        const delta = Number(e.delta).toFixed(2);
+        const sign  = e.delta >= 0 ? '+' : '';
+        const sigs  = (e.signals || [])
+          .map(s => `<code style="font-size: 0.8em">${teEscapeHtml(s.id)}${s.damped ? '*' : ''}</code>`)
+          .join(' ');
+        return `<div style="padding: 6px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a); font-size: 0.9em">
+          <div style="display: flex; gap: 8px; align-items: baseline">
+            <span style="opacity: 0.6; font-size: 0.85em; min-width: 12em">${teEscapeHtml(e.ts)}</span>
+            <span style="font-family: monospace; min-width: 4em">${sign}${delta}</span>
+            <span style="opacity: 0.7">→ ${Number(e.raw_after).toFixed(2)}</span>
+            <span style="opacity: 0.6; font-size: 0.85em">[${teEscapeHtml(e.source)}]</span>
+          </div>
+          ${sigs ? `<div style="margin-top: 2px; opacity: 0.8">${sigs}</div>` : ''}
+        </div>`;
+      }).join('');
+    }
+  } catch (err) {
+    sum.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+async function teResetThreat() {
+  if (!confirm('Reset the threat level to calm (0)?\n\nThis logs a manual_reset audit entry but does not disable the detector. Use the PROTO_FAMILIAR_THREAT_DISABLED env var on the server for that.')) return;
+  try {
+    const r = await fetch('/api/threat/reset', { method: 'POST' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    teLoadThreat();
+  } catch (err) {
+    alert(`Reset failed: ${err.message}`);
+  }
+}
+
+// ── Ponderings tab ────────────────────────────────────────────────
+
+async function teLoadPonderings() {
+  const list  = $('te-pond-list');
+  const sum   = $('te-pond-summary');
+  if (!list) return;
+  list.innerHTML = '<p class="logs-empty">Loading…</p>';
+  const limit = $('te-pond-limit')?.value ?? 25;
+  try {
+    const r = await fetch(`/api/temporal/ponderings?limit=${limit}&sinceDays=365`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    const items = Array.isArray(data.ponderings) ? data.ponderings : [];
+    if (sum) sum.textContent = `${items.length} pondering(s)`;
+    if (!items.length) {
+      list.innerHTML = '<p class="logs-empty">No ponderings yet. The autonomous loop writes here when interests accrue and cooldowns elapse.</p>';
+      return;
+    }
+    list.innerHTML = items.map(p => `
+      <div style="padding: 10px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+        <div style="display: flex; gap: 8px; align-items: baseline">
+          <strong style="flex: 1">${teEscapeHtml(p.title || '(untitled)')}</strong>
+          <span style="opacity: 0.7; font-size: 0.85em">${teTimeAgo(p.created_at)}</span>
+          <button class="btn-ghost" data-pond-uid="${teEscapeHtml(p.uid)}" style="font-size: 0.8em; padding: 2px 8px">Delete</button>
+        </div>
+        ${p.topic ? `<div style="font-size: 0.8em; opacity: 0.6; margin: 2px 0">topic: ${teEscapeHtml(p.topic)}</div>` : ''}
+        <div style="white-space: pre-wrap; margin-top: 6px; font-size: 0.92em; line-height: 1.4">${teEscapeHtml(p.content || '')}</div>
+      </div>
+    `).join('');
+    list.querySelectorAll('[data-pond-uid]').forEach(btn => {
+      btn.addEventListener('click', () => teDeletePondering(btn.dataset.pondUid));
+    });
+  } catch (err) {
+    list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+async function teDeletePondering(uid) {
+  if (!confirm('Delete this pondering? The on-disk entry is removed; the audit trail is the diff itself.')) return;
+  try {
+    const r = await fetch(`/api/temporal/ponderings/${encodeURIComponent(uid)}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    teLoadPonderings();
+  } catch (err) {
+    alert(`Delete failed: ${err.message}`);
+  }
+}
+
+// ── Schedule tab (M9b) ────────────────────────────────────────────
+
+async function teLoadSchedule() {
+  const list = $('te-sched-list');
+  if (!list) return;
+  list.innerHTML = '<p class="logs-empty">Loading…</p>';
+  const hours = Math.max(1, parseInt($('te-sched-hours')?.value, 10) || 48);
+  const now   = new Date();
+  const from  = new Date(now.getTime() - hours * 30 * 60_000).toISOString();   // half-window behind
+  const to    = new Date(now.getTime() + hours * 30 * 60_000).toISOString();
+  try {
+    const r = await fetch(`/api/temporal/schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
+    const nodes = (data.nodes || [])
+      .filter(n => n.type !== 'phase')             // Routine tab handles phases
+      .sort((a, b) => (a.when || '').localeCompare(b.when || ''));
+    if (!nodes.length) {
+      list.innerHTML = '<p class="logs-empty">Nothing scheduled in this window. Use "+ Add" above to create an event or task.</p>';
+      return;
+    }
+    list.innerHTML = nodes.map(n => {
+      const id    = teEscapeHtml(n.id);
+      const label = teEscapeHtml(n.label);
+      const type  = teEscapeHtml(n.type);
+      const when  = n.when ? `<span style="font-size: 0.85em; opacity: 0.8">${teEscapeHtml(teIsoUtcToLocalFriendly(n.when))}</span>` : '<span style="opacity: 0.5; font-size: 0.85em">open</span>';
+      const end   = n.end  ? `<span style="font-size: 0.85em; opacity: 0.7"> → ${teEscapeHtml(teIsoUtcToLocalFriendly(n.end))}</span>` : '';
+      const resolution = n.resolution
+        ? `<span style="font-size: 0.85em; opacity: 0.7; padding: 1px 6px; border: 1px solid var(--border-subtle, #2a2a2a); border-radius: 3px">${teEscapeHtml(n.resolution)}</span>`
+        : '';
+      // For expanded occurrences of a recurring node, the resolve
+      // buttons carry the occurrence date so the handler can hit the
+      // per-occurrence endpoint (resolves THIS instance only, leaves
+      // the rest of the series alive).
+      const isOccurrence = !!n.__occurrence_of;
+      // teLocalDateKey takes a Date and returns YYYY-MM-DD in local
+      // TZ — same shape used everywhere else (resolution keys, the
+      // calendar grid). Caches the Date so we only construct it once
+      // instead of three times for the same ISO.
+      const occDate = isOccurrence && n.when
+        ? teLocalDateKey(new Date(n.when))
+        : '';
+      const occAttrs = isOccurrence
+        ? ` data-occurrence-date="${teEscapeHtml(occDate)}"`
+        : '';
+      const recurringTag = isOccurrence
+        ? ' <span style="font-size:0.7em;opacity:0.6;padding:1px 4px;border:1px solid var(--border-subtle,#2a2a2a);border-radius:3px">recurring</span>'
+        : '';
+      const resolveBtns = n.resolution ? '' : `
+        <button class="btn-ghost te-sched-resolve" data-id="${id}" data-resolution="done"${occAttrs}      style="font-size: 0.8em; padding: 2px 8px">✓ done</button>
+        <button class="btn-ghost te-sched-resolve" data-id="${id}" data-resolution="cancelled"${occAttrs} style="font-size: 0.8em; padding: 2px 8px">✕ cancel</button>`;
+      return `
+      <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+        <div style="display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap">
+          <span style="font-size: 0.8em; opacity: 0.6; min-width: 4em">${type}</span>
+          <strong style="flex: 1">${label}${recurringTag}</strong>
+          ${resolution}
+          ${resolveBtns}
+          <button class="btn-ghost te-sched-delete" data-id="${id}" style="font-size: 0.8em; padding: 2px 8px" title="Permanently delete (cascades to edges)">🗑</button>
+        </div>
+        <div style="margin-top: 2px">${when}${end}</div>
+      </div>`;
+    }).join('');
+    list.querySelectorAll('.te-sched-resolve').forEach(btn => {
+      btn.addEventListener('click', () => teResolveSchedule(
+        btn.dataset.id,
+        btn.dataset.resolution,
+        btn.dataset.occurrenceDate || null,
+      ));
+    });
+    list.querySelectorAll('.te-sched-delete').forEach(btn => {
+      btn.addEventListener('click', () => teDeleteSchedule(btn.dataset.id));
+    });
+  } catch (err) {
+    list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+async function teResolveSchedule(id, resolution, occurrenceDate = null) {
+  // If the item is an expanded occurrence (the resolve button carries
+  // data-occurrence-date), route to the per-occurrence endpoint —
+  // resolves THIS occurrence only and leaves the rest of the series
+  // alive. Otherwise the regular resolve hits the whole node.
+  try {
+    const url = occurrenceDate
+      ? `/api/temporal/schedule/${encodeURIComponent(id)}/resolve_occurrence`
+      : `/api/temporal/schedule/${encodeURIComponent(id)}/resolve`;
+    const body = occurrenceDate
+      ? { occurrence_date: occurrenceDate, resolution }
+      : { resolution };
+    const r = await fetch(url, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(body),
+    }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'resolve failed');
+    teReloadScheduleView();
+  } catch (err) {
+    alert(`Resolve failed: ${err.message}`);
+  }
+}
+
+// ── Calendar view (Schedule tab toggle) ───────────────────────────
+//
+// Month-grid alternative to the linear schedule list. Same data
+// source (/api/temporal/schedule), just rendered as a calendar with
+// click-to-create. Recurring nodes expand server-side so the grid
+// shows occurrences on their actual dates. The view-mode toggle
+// mirrors the Knowledge-Editor graph List/Map pattern so the
+// behaviour reads familiar.
+//
+// "Current month" tracked in module-level state — week navigation
+// would be a natural extension but for the MVP we stay at month
+// granularity (the lower scroll cost matters more than fine
+// navigation, especially since the underlying schedule entries
+// rarely move week-to-week).
+
+let _teSchedView = 'list';
+let _teCalCursor = null; // { year, month } — the month being displayed
+const _DOW_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function teReloadScheduleView() {
+  if (_teSchedView === 'calendar') teLoadCalendar();
+  else teLoadSchedule();
+}
+
+function teSetScheduleView(view) {
+  if (view !== 'list' && view !== 'calendar') return;
+  _teSchedView = view;
+  $('te-sched-view-list').classList.toggle('ke-view-active',     view === 'list');
+  $('te-sched-view-calendar').classList.toggle('ke-view-active', view === 'calendar');
+  $('te-sched-view-list').setAttribute('aria-selected',     view === 'list'     ? 'true' : 'false');
+  $('te-sched-view-calendar').setAttribute('aria-selected', view === 'calendar' ? 'true' : 'false');
+  // The hours/window control only meaningfully applies to the list
+  // view; calendar paginates by month. Hide it to reduce cognitive
+  // clutter on the calendar side.
+  $('te-sched-hours-label').classList.toggle('hidden', view !== 'list');
+  $('te-sched-list').classList.toggle('hidden',     view !== 'list');
+  $('te-sched-calendar').classList.toggle('hidden', view !== 'calendar');
+  if (view === 'calendar') {
+    if (!_teCalCursor) teGotoCalendarToday();
+    else teLoadCalendar();
+  }
+}
+
+function teGotoCalendarToday() {
+  const now = new Date();
+  _teCalCursor = { year: now.getFullYear(), month: now.getMonth() };
+  teLoadCalendar();
+}
+
+function teShiftCalendarMonth(delta) {
+  if (!_teCalCursor) { teGotoCalendarToday(); return; }
+  let { year, month } = _teCalCursor;
+  month += delta;
+  while (month < 0)   { month += 12; year -= 1; }
+  while (month > 11)  { month -= 12; year += 1; }
+  _teCalCursor = { year, month };
+  teLoadCalendar();
+}
+
+// Local-TZ YYYY-MM-DD for a given Date — matches recurrence.js's
+// localDateKey shape so per-occurrence resolutions key consistently.
+function teLocalDateKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// Compute the start of the calendar grid for a given month. Returns
+// the Monday on-or-before the 1st of the month — gives us a clean
+// 6-row × 7-col grid that always starts on Monday, with the prior
+// month's tail filling the first row. (Localised to Monday-start
+// because Eury runs in DE; flipping to Sunday-start is a one-line
+// change if a setting ever surfaces.)
+function teCalendarGridStart(year, month) {
+  const first = new Date(year, month, 1);
+  // JS getDay: 0=Sun, 1=Mon, ..., 6=Sat. Offset to Monday-start.
+  const offsetFromMonday = (first.getDay() + 6) % 7;
+  const start = new Date(first);
+  start.setDate(first.getDate() - offsetFromMonday);
+  return start;
+}
+
+async function teLoadCalendar() {
+  const grid = $('te-cal-grid');
+  const status = $('te-cal-status');
+  if (!grid) return;
+  if (!_teCalCursor) teGotoCalendarToday();
+  const { year, month } = _teCalCursor;
+  const monthName = ['January','February','March','April','May','June','July','August','September','October','November','December'][month];
+  const titleEl = $('te-cal-title');
+  if (titleEl) titleEl.textContent = `${monthName} ${year}`;
+  if (status) status.textContent = 'Loading…';
+
+  const gridStart = teCalendarGridStart(year, month);
+  const gridEnd = new Date(gridStart);
+  gridEnd.setDate(gridEnd.getDate() + 6 * 7); // 6 weeks
+  const fromIso = gridStart.toISOString();
+  const toIso   = new Date(gridEnd.getTime() - 1).toISOString();
+
+  let nodes = [];
+  try {
+    const r = await fetch(`/api/temporal/schedule?from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}&limit=500`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
+    nodes = (data.nodes || []).filter(n => n.type !== 'phase'); // phases live in Routine
+  } catch (err) {
+    if (status) status.textContent = `Load failed: ${err.message}`;
+    grid.innerHTML = '';
+    return;
+  }
+  if (status) status.textContent = `${nodes.length} event(s) this view`;
+
+  // Bucket events by local-TZ date key. Each cell renders its bucket.
+  const byDay = new Map();
+  for (const n of nodes) {
+    if (!n.when) continue;
+    const d = new Date(n.when);
+    if (!Number.isFinite(d.getTime())) continue;
+    const key = teLocalDateKey(d);
+    if (!byDay.has(key)) byDay.set(key, []);
+    byDay.get(key).push(n);
+  }
+  // Sort each day's events by start time.
+  for (const list of byDay.values()) {
+    list.sort((a, b) => (a.when || '').localeCompare(b.when || ''));
+  }
+
+  // Render: weekday header + 6 × 7 = 42 day cells.
+  const todayKey = teLocalDateKey(new Date());
+  const parts = [];
+  for (const dow of _DOW_LABELS) {
+    parts.push(`<div class="te-cal-weekday">${dow}</div>`);
+  }
+  for (let i = 0; i < 42; i++) {
+    const cellDate = new Date(gridStart);
+    cellDate.setDate(gridStart.getDate() + i);
+    const isOutOfMonth = cellDate.getMonth() !== month;
+    const key = teLocalDateKey(cellDate);
+    const isToday = key === todayKey;
+    const events = byDay.get(key) || [];
+    const eventLines = events.slice(0, 3).map(ev => {
+      const cls = [`te-cal-event`, `type-${teEscapeHtml(ev.type || 'event')}`];
+      if (ev.__occurrence_of) cls.push('recurring');
+      if (ev.resolution)      cls.push('resolved');
+      const time = ev.when ? teEscapeHtml(teIsoUtcToLocalHhMm(ev.when)) : '';
+      return `<div class="${cls.join(' ')}" title="${teEscapeHtml(ev.label || '')}${time ? ' · ' + time : ''}">${time ? `${time} ` : ''}${teEscapeHtml(ev.label || '')}</div>`;
+    }).join('');
+    const more = events.length > 3 ? `<div class="te-cal-more">+${events.length - 3} more</div>` : '';
+    const cellCls = ['te-cal-day'];
+    if (isOutOfMonth) cellCls.push('out-of-month');
+    if (isToday)      cellCls.push('today');
+    parts.push(`
+      <div class="${cellCls.join(' ')}" data-date="${key}" role="button" tabindex="0" aria-label="${key}${events.length ? `, ${events.length} event(s)` : ''}">
+        <span class="te-cal-day-num">${cellDate.getDate()}</span>
+        ${eventLines}${more}
+      </div>
+    `);
+  }
+  grid.innerHTML = parts.join('');
+
+  // Click a day cell → open the create-schedule form with the date
+  // pre-filled to that day at 9am (sensible default; user adjusts).
+  grid.querySelectorAll('.te-cal-day').forEach(cell => {
+    const openCreate = () => teOpenCalendarCreate(cell.dataset.date);
+    cell.addEventListener('click', openCreate);
+    cell.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCreate(); }
+    });
+  });
+}
+
+function teOpenCalendarCreate(dateKey) {
+  // Switch back to the list view so the create form is visible and
+  // the user sees the result land. (The form lives in the list-view
+  // DOM region; opening it while calendar is shown would scroll
+  // somewhere unhelpful.)
+  teSetScheduleView('list');
+  teToggleScheduleForm(true);
+  // Pre-fill the datetime-local input with the chosen day at 9am
+  // local. teDatetimeLocalToIsoUtc handles the conversion when the
+  // user saves.
+  const whenInput = $('te-sched-when');
+  if (whenInput && dateKey) {
+    whenInput.value = `${dateKey}T09:00`;
+  }
+}
+
+async function teDeleteSchedule(id) {
+  if (!confirm('Permanently delete this schedule node? Any edges referencing it will also be removed.')) return;
+  try {
+    const r = await fetch(`/api/temporal/schedule/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'delete failed');
+    teReloadScheduleView();
+  } catch (err) {
+    alert(`Delete failed: ${err.message}`);
+  }
+}
+
+function teToggleScheduleForm(show) {
+  const form = $('te-sched-form');
+  if (!form) return;
+  form.style.display = show ? '' : 'none';
+  if (show) {
+    $('te-sched-label').value = '';
+    $('te-sched-when').value  = '';
+    $('te-sched-end').value   = '';
+    $('te-sched-type').value  = 'event';
+    const stakes = $('te-sched-stakes');
+    if (stakes) stakes.value = '';
+    const repeat = $('te-sched-repeat');
+    if (repeat) repeat.value = '';
+    setTimeout(() => $('te-sched-label')?.focus(), 0);
+  }
+}
+
+// Map the UI repeat presets to payload.recurrence objects the
+// expander understands. Kept tiny: the dropdown only offers the
+// patterns the bare-minimum spec called out. Custom RRULEs / nth-
+// weekday with weekday-not-Friday-or-Sunday are advanced enough
+// that the Familiar's BUILTIN_TOOL is the right entry point, not
+// a casual UI selector.
+function teRepeatToRecurrence(preset) {
+  switch (preset) {
+    case 'daily':            return { freq: 'daily' };
+    case 'weekly':           return { freq: 'weekly' };
+    case 'monthly':          return { freq: 'monthly' };
+    case 'yearly':           return { freq: 'yearly' };
+    case 'monthly_last_fri': return { freq: 'monthly', bysetpos: -1, byweekday: 5 };
+    case 'monthly_last_sun': return { freq: 'monthly', bysetpos: -1, byweekday: 0 };
+    default:                 return null;
+  }
+}
+
+async function teSaveScheduleNode() {
+  const type  = $('te-sched-type').value;
+  const label = $('te-sched-label').value.trim();
+  // <input type="datetime-local"> hands back "YYYY-MM-DDTHH:MM" (no
+  // offset, interpreted as user's local time). Convert to ISO UTC so
+  // the server stores absolute moments and the Familiar reads the
+  // right wall-clock no matter where the server's TZ is.
+  const whenLocal = $('te-sched-when').value;
+  const endLocal  = $('te-sched-end').value;
+  const when = teDatetimeLocalToIsoUtc(whenLocal);
+  const end  = teDatetimeLocalToIsoUtc(endLocal);
+  if (!label) { alert('Label is required.'); return; }
+  // Reminders MUST have a fire time — the Python layer would reject
+  // the create otherwise, but failing fast here is friendlier.
+  if (type === 'reminder' && !when) {
+    alert('Reminders need a "When" time so they know when to fire.');
+    return;
+  }
+  if (type !== 'task' && !when) {
+    alert(`A "${type}" needs a "When" time. Tasks are the only type that can be open-ended.`);
+    return;
+  }
+  const stakesTier = $('te-sched-stakes')?.value || '';
+  const repeatPreset = $('te-sched-repeat')?.value || '';
+  const recurrence = teRepeatToRecurrence(repeatPreset);
+  const payload = {};
+  if (stakesTier)  payload.stakes_tier = stakesTier;
+  if (recurrence)  payload.recurrence  = recurrence;
+  const hasPayload = Object.keys(payload).length > 0;
+  try {
+    const r = await fetch('/api/temporal/schedule', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        type, label, when, end,
+        ...(hasPayload ? { payload } : {}),
+      }),
+    }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'create failed');
+    teToggleScheduleForm(false);
+    teReloadScheduleView();
+  } catch (err) {
+    alert(`Create failed: ${err.message}`);
+  }
+}
+
+// ── Routine tab (M9b) — phase nodes only ──────────────────────────
+
+async function teLoadRoutine() {
+  const list = $('te-routine-list');
+  if (!list) return;
+  list.innerHTML = '<p class="logs-empty">Loading…</p>';
+  try {
+    // Date-independent endpoint — phases recur daily, but their stored
+    // when_ts carries the date they were added. Using the windowed
+    // /api/temporal/schedule endpoint silently hid every phase the day
+    // after it was created. /api/temporal/phases ignores the date and
+    // returns all live phases.
+    const r = await fetch('/api/temporal/phases');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
+    // Dedupe by label (multiple edits to the same phase produce
+    // multiple rows; keep the latest by when_ts string).
+    const byLabel = new Map();
+    for (const n of (data.phases || [])) {
+      const prev = byLabel.get(n.label);
+      if (!prev || (n.when || '') > (prev.when || '')) byLabel.set(n.label, n);
+    }
+    const phases = Array.from(byLabel.values()).sort((a, b) => {
+      // Sort by local time-of-day, not by raw UTC HH:MM in the
+      // ISO string (slicing the ISO returns UTC hours, which lie
+      // in any non-UTC timezone).
+      const da = new Date(a.when || 0); const db = new Date(b.when || 0);
+      const ta = da.getHours() * 60 + da.getMinutes();
+      const tb = db.getHours() * 60 + db.getMinutes();
+      return ta - tb;
+    });
+
+    const routineSummary = $('te-routine-summary');
+    if (routineSummary) routineSummary.textContent = `${phases.length} phase(s)`;
+    if (!phases.length) {
+      list.innerHTML = '<p class="logs-empty">No routine phases yet. Run <code>uv run unruh seed-routine</code> (in the unruh/ dir) to seed defaults.</p>';
+      return;
+    }
+    list.innerHTML = phases.map(p => {
+      const id      = teEscapeHtml(p.id);
+      const label   = teEscapeHtml(p.label);
+      const texture = teEscapeHtml(p.payload?.texture ?? '');
+      // Phases recur daily by default — that's the original Routine
+      // contract. A payload.recurrence on a phase overrides that
+      // (e.g. "weekly Sunday review block", "monthly retrospective").
+      // Surface the cadence as a small tag so users can see at a
+      // glance which phases land every day vs. only some days.
+      const recur = p.payload?.recurrence;
+      const recurLabel = !recur ? 'daily'
+        : recur.freq === 'daily'   ? (recur.interval > 1 ? `every ${recur.interval} days` : 'daily')
+        : recur.freq === 'weekly'  ? (recur.interval > 1 ? `every ${recur.interval} weeks` : 'weekly')
+        : recur.freq === 'monthly' ? (recur.bysetpos === -1 ? 'monthly (last weekday)' : 'monthly')
+        : recur.freq === 'yearly'  ? 'yearly'
+        : recur.freq || 'recurring';
+      const recurTag = recurLabel === 'daily'
+        ? ''
+        : ` <span style="font-size:0.7em;opacity:0.7;padding:1px 5px;border:1px solid var(--border-subtle,#2a2a2a);border-radius:3px">${teEscapeHtml(recurLabel)}</span>`;
+      // Show time-of-day in the USER'S local TZ (storage is UTC).
+      // Slicing the raw ISO string would print UTC hours and lie to
+      // anyone not in UTC.
+      const whenT   = teEscapeHtml(teIsoUtcToLocalHhMm(p.when));
+      const endT    = teEscapeHtml(teIsoUtcToLocalHhMm(p.end));
+      return `
+      <div data-phase-id="${id}" style="padding: 10px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+        <div style="display: flex; gap: 8px; align-items: baseline">
+          <strong style="flex: 1" class="te-phase-label" data-id="${id}" data-field="label">${label}${recurTag}</strong>
+          <span style="font-family: monospace; opacity: 0.85" class="te-phase-time">
+            <span class="te-phase-when" data-id="${id}" data-field="when">${whenT}</span> –
+            <span class="te-phase-end"  data-id="${id}" data-field="end">${endT}</span>
+          </span>
+          <button class="btn-ghost te-phase-edit" data-id="${id}" style="font-size: 0.8em; padding: 2px 8px">Edit</button>
+        </div>
+        ${texture ? `<div style="font-size: 0.9em; opacity: 0.75; margin-top: 4px; font-style: italic">${texture}</div>` : ''}
+      </div>`;
+    }).join('');
+    list.querySelectorAll('.te-phase-edit').forEach(btn => {
+      btn.addEventListener('click', () => teEditPhase(btn.dataset.id, phases.find(p => p.id === btn.dataset.id)));
+    });
+  } catch (err) {
+    list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+async function teEditPhase(id, phase) {
+  if (!phase) return;
+  const label = prompt('Phase label:', phase.label);
+  if (label == null) return;
+  // Display existing times in user's LOCAL TZ so what they see is what
+  // they're editing (the storage is UTC, but the user thinks in their
+  // own clock).
+  const whenT = prompt('Start time (HH:MM, 24-hour, your local time):', teIsoUtcToLocalHhMm(phase.when));
+  if (whenT == null) return;
+  const endT  = prompt('End time (HH:MM, 24-hour, your local time):',   teIsoUtcToLocalHhMm(phase.end));
+  if (endT  == null) return;
+  const texture = prompt('Texture (short description of what the Familiar is like in this phase):', phase.payload?.texture ?? '');
+  if (texture == null) return;
+
+  const when = teLocalTimeTodayToIsoUtc(whenT.trim());
+  const end  = teLocalTimeTodayToIsoUtc(endT.trim());
+  if (!when || !end) { alert('Times must be HH:MM (e.g. 09:30) — entered in your local time.'); return; }
+
+  try {
+    const r = await fetch(`/api/temporal/schedule/${encodeURIComponent(id)}`, {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        label: label.trim() || phase.label,
+        when, end,
+        payload: { ...(phase.payload || {}), texture: texture.trim() },
+      }),
+    }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'update failed');
+    teLoadRoutine();
+  } catch (err) {
+    alert(`Edit failed: ${err.message}`);
+  }
+}
+
+function teToggleRoutineForm(show) {
+  const form = $('te-routine-form');
+  if (!form) return;
+  form.style.display = show ? '' : 'none';
+  if (show) {
+    $('te-routine-label').value   = '';
+    $('te-routine-start').value   = '';
+    $('te-routine-end').value     = '';
+    $('te-routine-texture').value = '';
+    setTimeout(() => $('te-routine-label')?.focus(), 0);
+  }
+}
+
+async function teSavePhase() {
+  const label   = $('te-routine-label').value.trim();
+  const startT  = $('te-routine-start').value;   // <input type="time"> already HH:MM
+  const endT    = $('te-routine-end').value;
+  const texture = $('te-routine-texture').value.trim();
+  if (!label)          { alert('Label is required.'); return; }
+  if (!startT || !endT) { alert('Both start and end times are required.'); return; }
+  // Phases recur daily — the date in when_ts is just an artifact of
+  // when this row was inserted. teLoadRoutine uses /api/temporal/phases
+  // (date-independent) to surface them, and Unruh's current_phase()
+  // compares only the HH:MM:SS portion when deciding which phase is
+  // active right now. We still stamp today's date for ordering /
+  // audit purposes.
+  const when = teLocalTimeTodayToIsoUtc(startT);
+  const end  = teLocalTimeTodayToIsoUtc(endT);
+  if (!when || !end) { alert('Could not parse the times. Use HH:MM (the picker should fill this).'); return; }
+  try {
+    const r = await fetch('/api/temporal/schedule', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        type:    'phase',
+        label,
+        when,
+        end,
+        payload: texture ? { texture } : {},
+      }),
+    }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'create failed');
+    teToggleRoutineForm(false);
+    teLoadRoutine();
+  } catch (err) {
+    alert(`Create failed: ${err.message}`);
+  }
+}
+
+// "Help me figure out my rhythm" — pre-fills the chat composer with
+// a scaffolding prompt that nudges the Familiar to walk the user
+// through their natural daily rhythm. The user can edit / send /
+// scrap before anything goes out. No auto-send. After the
+// conversation, the user comes back to this tab and records what
+// they figured out as phases.
+function teStartRoutineConversation() {
+  const composer = $('user-input') || document.querySelector('#user-input, .composer-input, textarea[name="message"]');
+  const scaffold = (
+    "I'd like your help figuring out my natural daily rhythm — not a productivity " +
+    "schedule, just the times of day that already feel like distinct phases for me " +
+    "(when I wake, when I'm most settled, when I wind down). Ask me one thing at a " +
+    "time so I don't get overwhelmed. When we're done, give me a short bullet list " +
+    "I can use to set up routine phases in the Temporal editor."
+  );
+  if (composer) {
+    composer.value = scaffold;
+    composer.focus();
+    // Trigger the input event so any auto-resize / send-button-enable logic fires.
+    composer.dispatchEvent(new Event('input', { bubbles: true }));
+    closeTemporalModal();
+  } else {
+    // Composer not found (shouldn't happen) — copy to clipboard as a fallback.
+    navigator.clipboard?.writeText?.(scaffold).catch(() => {});
+    alert('Composer not found. The starter prompt has been copied to your clipboard.');
+  }
+}
+
+// ── Handoff tab (M9b) ─────────────────────────────────────────────
+
+async function teLoadHandoff() {
+  const list = $('te-handoff-list');
+  if (!list) return;
+  list.innerHTML = '<p class="logs-empty">Loading…</p>';
+  try {
+    const r = await fetch('/api/temporal/handoff');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
+    // session_get_handoff can return either a single most-recent
+    // handoff object or a list; normalize.
+    const items =
+        Array.isArray(data.handoffs) ? data.handoffs
+      : data.handoff                 ? [data.handoff]
+      : [];
+    const handoffSummary = $('te-handoff-summary');
+    if (handoffSummary) handoffSummary.textContent = `${items.length} handoff(s)`;
+    if (!items.length) {
+      list.innerHTML = '<p class="logs-empty">No session handoffs stored yet. They\'re created at the end of each session by the handoff-summariser (Settings → Session handoff).</p>';
+      return;
+    }
+    list.innerHTML = items.map(h => {
+      const id      = teEscapeHtml(h.id ?? '');
+      const intent  = teEscapeHtml(h.intent ?? '');
+      const threads = Array.isArray(h.open_threads) ? h.open_threads : [];
+      const consumed = h.consumed
+        ? '<span style="font-size: 0.85em; opacity: 0.7; padding: 1px 6px; border: 1px solid var(--border-subtle, #2a2a2a); border-radius: 3px">consumed</span>'
+        : '<span style="font-size: 0.85em; padding: 1px 6px; border: 1px solid var(--border-subtle, #2a2a2a); border-radius: 3px; color: var(--text-warning, #d4a44c)">pending</span>';
+      const consumeBtn = h.consumed ? '' : `
+        <button class="btn-ghost te-handoff-consume" data-id="${id}" style="font-size: 0.8em; padding: 2px 8px" title="Mark as consumed so it stops surfacing in the next session">Mark consumed</button>`;
+      const threadsHtml = threads.length
+        ? `<ul style="margin: 4px 0 0 0; padding-left: 20px">${threads.map(t => `<li>${teEscapeHtml(typeof t === 'string' ? t : (t.label ?? JSON.stringify(t)))}</li>`).join('')}</ul>`
+        : '';
+      return `
+      <div style="padding: 10px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+        <div style="display: flex; gap: 8px; align-items: baseline">
+          <span style="opacity: 0.6; font-size: 0.85em">${teEscapeHtml(h.created_at ?? '')}</span>
+          <span style="flex: 1"></span>
+          ${consumed}
+          ${consumeBtn}
+        </div>
+        ${intent ? `<div style="margin-top: 6px">${intent}</div>` : ''}
+        ${threadsHtml ? `<div style="margin-top: 6px"><strong style="font-size: 0.9em">Open threads:</strong>${threadsHtml}</div>` : ''}
+      </div>`;
+    }).join('');
+    list.querySelectorAll('.te-handoff-consume').forEach(btn => {
+      btn.addEventListener('click', () => teConsumeHandoff(btn.dataset.id));
+    });
+  } catch (err) {
+    list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+async function teConsumeHandoff(id) {
+  if (!confirm('Mark this handoff as consumed?\n\nIt will stop surfacing at the top of new sessions, but the audit row stays in the DB.')) return;
+  try {
+    const r = await fetch(`/api/temporal/handoff/${encodeURIComponent(id)}/consume`, { method: 'POST' }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'mark-consumed failed');
+    teLoadHandoff();
+  } catch (err) {
+    alert(`Mark-consumed failed: ${err.message}`);
+  }
+}
+
+// ── Outbox banners (M11/M12 delivery surface) ─────────────────────
+//
+// Polls /api/outbox every 30s. When an item arrives, renders a gentle
+// banner at the top of the chat. Click ✕ to acknowledge (POST then
+// re-fetch). Reminders use a calm accent color, silence-triage items
+// use a warmer one so the user can distinguish at a glance.
+
+const OUTBOX_POLL_MS = 30_000;
+let _outboxPollTimer = null;
+
+async function fetchOutbox() {
+  try {
+    const r = await fetch('/api/outbox?pending=1');
+    if (!r.ok) return;
+    const data = await r.json();
+    renderOutboxBanners(Array.isArray(data.items) ? data.items : []);
+  } catch { /* network blip; try again next tick */ }
+}
+
+function renderOutboxBanners(items) {
+  const host = $('outbox-banners');
+  if (!host) return;
+  if (!items.length) { host.innerHTML = ''; return; }
+  host.innerHTML = items.map(i => {
+    const icon = i.kind === 'triage' ? '🫂' : '⏰';
+    const kindClass = i.kind === 'triage' ? 'kind-triage' : 'kind-reminder';
+    const ts = teTimeAgo ? teTimeAgo(i.ts) : i.ts;
+    const body = i.body ? `<div class="ob-body">${escapeOutboxText(i.body)}</div>` : '';
+    return `
+      <div class="outbox-banner ${kindClass}" data-id="${escapeOutboxText(i.id)}">
+        <div class="ob-icon">${icon}</div>
+        <div class="ob-content">
+          <div class="ob-title">${escapeOutboxText(i.title)}</div>
+          ${body}
+          <div class="ob-time">${escapeOutboxText(ts)}</div>
+        </div>
+        <button class="ob-dismiss" data-ob-id="${escapeOutboxText(i.id)}" aria-label="Dismiss">✕</button>
+      </div>`;
+  }).join('');
+  host.querySelectorAll('.ob-dismiss').forEach(btn => {
+    btn.addEventListener('click', () => acknowledgeOutboxItem(btn.dataset.obId));
+  });
+}
+
+function escapeOutboxText(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function acknowledgeOutboxItem(id) {
+  try {
+    await fetch(`/api/outbox/${encodeURIComponent(id)}/acknowledge`, { method: 'POST' });
+    fetchOutbox();
+  } catch (err) {
+    console.warn('outbox ack failed', err);
+  }
+}
+
+function startOutboxPolling() {
+  if (_outboxPollTimer) return;
+  fetchOutbox();
+  _outboxPollTimer = setInterval(fetchOutbox, OUTBOX_POLL_MS);
+}
+
+// ── Trusted contacts (M12c) ───────────────────────────────────────
+
+function renderTrustedContacts() {
+  const list = $('contacts-list');
+  if (!list) return;
+  const contacts = Array.isArray(state.trustedContacts) ? state.trustedContacts : [];
+  if (!contacts.length) {
+    list.innerHTML = '<p class="field-hint" style="opacity:0.6; margin: 0">No contacts yet. Outreach is disabled.</p>';
+    return;
+  }
+  list.innerHTML = contacts.map((c, i) => {
+    const name    = escapeOutboxText(c.name ?? '?');
+    const channel = escapeOutboxText(c.channel ?? '?');
+    const hint    = c.webhook ? `${c.webhook.slice(0, 32)}…` : '(no webhook)';
+    return `
+      <div style="display: flex; gap: 8px; align-items: baseline; padding: 4px 0; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+        <strong style="flex: 1">${name}</strong>
+        <span style="font-size: 0.85em; opacity: 0.7">${channel}</span>
+        <code style="font-size: 0.75em; opacity: 0.55">${escapeOutboxText(hint)}</code>
+        <button class="btn-ghost contact-remove" data-idx="${i}" style="font-size: 0.8em; padding: 2px 8px" title="Remove this contact">🗑</button>
+      </div>`;
+  }).join('');
+  list.querySelectorAll('.contact-remove').forEach(btn => {
+    btn.addEventListener('click', () => removeTrustedContact(parseInt(btn.dataset.idx, 10)));
+  });
+}
+
+function addTrustedContact() {
+  const name    = ($('contact-name').value ?? '').trim();
+  const webhook = ($('contact-webhook').value ?? '').trim();
+  if (!name)    { alert('Name is required.'); return; }
+  if (!webhook) { alert('Webhook URL is required.'); return; }
+  if (!/^https:\/\/(canary\.|ptb\.)?discord(app)?\.com\/api\/webhooks\//.test(webhook)) {
+    if (!confirm("This doesn't look like a Discord webhook URL. Add anyway?")) return;
+  }
+  state.trustedContacts = [...(state.trustedContacts || []), { name, channel: 'discord', webhook }];
+  $('contact-name').value    = '';
+  $('contact-webhook').value = '';
+  saveSettings();
+  renderTrustedContacts();
+}
+
+function removeTrustedContact(idx) {
+  if (!confirm('Remove this contact? Your Familiar will no longer be able to reach out to them.')) return;
+  state.trustedContacts = (state.trustedContacts || []).filter((_, i) => i !== idx);
+  saveSettings();
+  renderTrustedContacts();
+}
+
 
 

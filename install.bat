@@ -48,7 +48,7 @@ if exist "%ENTITY_CORE_DIR_NEW%" (
 )
 REM Release page: https://github.com/PsycherosAI/Psycheros/releases/tag/<tag>
 set "ENTITY_CORE_REPO=https://github.com/PsycherosAI/Psycheros.git"
-set "ENTITY_CORE_TAG=entity-core-v0.2.2"
+set "ENTITY_CORE_TAG=entity-core-v0.3.2"
 set "BACKUP_ROOT=%SCRIPT_DIR%\.pf-backups"
 
 REM --- Detect mode ---
@@ -67,8 +67,11 @@ REM Defensive copy of at-risk dirs into .pf-backups\<timestamp>\ before
 REM any git op runs. Safety net on top of git's own protections.
 set "ANYTHING_BACKED_UP=0"
 if "!MODE!"=="update" (
-  for /f "tokens=2 delims==" %%T in ('wmic os get LocalDateTime /value ^| find "="') do set "DT=%%T"
-  set "STAMP=!DT:~0,8!T!DT:~8,6!Z"
+  REM Timestamp via PowerShell, not wmic — wmic is removed on Windows 11
+  REM 24H2+ (and was the cause of the "Invalid path" backup errors there).
+  REM Format is filesystem-safe (no colons).
+  for /f %%T in ('powershell -NoProfile -Command "(Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')" 2^>nul') do set "STAMP=%%T"
+  if not defined STAMP set "STAMP=backup"
   set "BACKUP_DIR=%BACKUP_ROOT%\!STAMP!"
   call :backupIfExists      "%SCRIPT_DIR%\tomes" "tomes"
   call :backupIfExists      "%SCRIPT_DIR%\logs"  "logs"
@@ -88,14 +91,26 @@ if "!MODE!"=="update" (
 )
 
 REM --- Pull latest Proto-Familiar (update mode only) ---
-if "!MODE!"=="update" if exist "%SCRIPT_DIR%\.git" (
-  where git >nul 2>nul
-  if not errorlevel 1 (
-    echo Pulling latest Proto-Familiar ^(git pull --ff-only^)...
-    pushd "%SCRIPT_DIR%"
-    git pull --ff-only
-    if errorlevel 1 echo [WARN] git pull --ff-only failed. Work tree is unchanged.
-    popd
+if "!MODE!"=="update" (
+  if exist "%SCRIPT_DIR%\.git" (
+    where git >nul 2>nul
+    if not errorlevel 1 (
+      echo Pulling latest Proto-Familiar ^(git pull --ff-only^)...
+      pushd "%SCRIPT_DIR%"
+      git pull --ff-only
+      if errorlevel 1 echo [WARN] git pull --ff-only failed. Work tree is unchanged.
+      popd
+    )
+  ) else (
+    REM Skip this warning when update.bat is the caller - it just updated us.
+    if not "%PF_FROM_UPDATER%"=="1" (
+      echo [WARN] This folder is NOT a git checkout - it looks like a downloaded ZIP.
+      echo        install.bat cannot pull updates here. To update, double-click
+      echo        update.bat in this folder - it downloads the latest version and
+      echo        applies it, keeping your settings and memories.
+      echo        For git-based updates instead, reinstall with:
+      echo          git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git
+    )
   )
 )
 
@@ -347,11 +362,21 @@ if "!MODE!"=="update" (
 ) else (
   echo === Install complete ===
 )
+echo   Version:   Proto-Familiar v!PF_VERSION!
+REM Show the branch so a wrong-branch checkout (e.g. a ZIP of main that's
+REM missing newer work) is obvious right here, not a mystery later.
+if exist "%SCRIPT_DIR%\.git" (
+  for /f %%b in ('git -C "%SCRIPT_DIR%" rev-parse --abbrev-ref HEAD 2^>nul') do echo   Branch:    %%b
+) else (
+  echo   Branch:    not a git checkout - to update, double-click update.bat
+)
 echo   Start:     start.bat   ^(double-click^)
 echo   Stop:      stop.bat    ^(double-click^)
 echo   Trouble?   see docs\troubleshooting.md
 echo.
-pause
+REM When run by update.bat, let the updater own the final pause so its
+REM "restart Proto-Familiar" message is the last thing on screen.
+if not "%PF_FROM_UPDATER%"=="1" pause
 endlocal
 goto :eof
 

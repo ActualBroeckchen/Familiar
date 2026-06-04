@@ -158,16 +158,51 @@ A sibling Python MCP module (`unruh/`, alpha) adds a `[Temporal Context]` block 
 
 ### Schedule
 
-Events, tasks, phases, and states on a timeline. The block shows the **current phase** (e.g. "morning correspondence") plus an upcoming **window** of events/tasks, rendered in your local timezone as landmarks ("today 14:00 — Chen's appointment") rather than ISO timestamps. Seed a default daily rhythm with `cd unruh && uv run python -m unruh seed-routine`.
+Events, tasks, phases, reminders, and states on a timeline. The block shows the **current phase** (e.g. "morning correspondence") plus an upcoming **window** of events/tasks, rendered in your local timezone as natural phrasing ("tomorrow at 10am — Chen's appointment" / "in 30 minutes — take meds") rather than ISO timestamps. Seed a default daily rhythm with `cd unruh && uv run python -m unruh seed-routine`.
+
+**Recurrence.** Events, tasks, reminders, and phases all accept a `payload.recurrence` rule so a single anchor entry repeats on its own rhythm: daily, weekly, monthly, yearly, every N units (`interval`), with an optional cut-off date (`until`). Six presets in the schedule-add form's **Repeats** dropdown cover the common cases; advanced patterns like "last Friday of every month" or "first Monday" work via `bysetpos` + `byweekday` (the Familiar can set these directly from chat through the `recurrence` arg on `schedule_add_*` BUILTIN_TOOLS). Occurrences expand at read-time so adding "weekly cleaning every Sunday" costs the same as a one-time task. Month-clamp handled: Jan 31 monthly recurrences stay at end-of-month rather than overflowing; Feb 29 yearly recurrences drop to Feb 28 in non-leap years.
+
+**Per-occurrence resolution.** Marking "this week's cleaning done" doesn't kill next week — `payload.resolutions = { "YYYY-MM-DD": "done" }` is keyed by local date, the expander filters resolved occurrences, the rest of the series stays alive. The Schedule tab's ✓ done / ✕ cancel buttons auto-detect occurrences (they carry a recurring tag) and route to the per-occurrence endpoint; the Familiar's `schedule_resolve` BUILTIN_TOOL accepts an optional `occurrence_date` for the same purpose.
+
+**Calendar view.** The Schedule tab has a **List / Calendar** view toggle in its toolbar (mirrors the Knowledge Editor's graph List/Map pattern). Calendar view shows a month grid (Monday-start, 6×7 cells); each day cell renders up to 3 events with type-coded colors and a "+N more" footer for overflow. Today's day-number gets a circle highlight; out-of-month days dim. **Click a day** to open the create-schedule form pre-filled to that date at 9am. Recurring events render on their actual occurrence dates with a `↻` prefix; resolved occurrences strike through. Phases stay in the Routine tab so daily-recurring phases don't clutter the grid.
+
+### Time perception
+
+Every reference to a timestamped event in the Familiar's context gets re-rendered through `relative-time.js` at prompt-assembly time, recomputed per turn against `Date.now()`. A memory written yesterday reads as "yesterday" today and "two days ago" tomorrow without anyone re-writing the memory. Schedule items, RAG memories, ponderings, and the session handoff all flow through this same helper, so the Familiar reads "tomorrow at 10am" / "yesterday at 4pm" / "in 30 minutes" / "this morning at 9am" instead of ISO arithmetic.
+
+After all dynamic context and the chat history (and any post-history prompt), server.js appends a final **`[Now]` block** as the very last system message — the freshest values for care reasoning, immediately before the model's response slot:
+
+```
+[Now]
+Now: 2:30pm on Thursday, June 4.
+Before this, my human last sent a message at 2:18pm, which was 12 minutes ago.
+```
+
+The line names both the absolute clock time of the prior message AND the elapsed interval, so the Familiar can correlate the two without arithmetic (e.g. "at 4pm, which was a day ago" is unambiguously yesterday's 4pm).
 
 ### Interests
 
 Two kinds, both rendered under the temporal block:
 
-- **Standing values** — always-on identity-level orientations (e.g. "caring for the user's wellbeing"). They never decay, so they surface every turn.
+- **Standing values** — always-on identity-level orientations (e.g. "caring for the user's wellbeing"). They never decay, so they surface every turn. A standing value can be **anchored to an entity-core identity fact** (a `value_ref` like `entity-core:self/my_wants.md#Caring for the user`); on each turn Thalamus checks the anchor still exists, and if you've since deleted that fact from the Knowledge editor, the standing value is **demoted to a live interest** (kept, but now subject to decay) rather than silently dropped. This is the structural side of the design's "redundancy is intentional" — a standing value stays standing only while the identity fact it mirrors is alive.
 - **Live interests** — topics the Familiar engages with accrue **weight** automatically: longer replies and topics the conversation keeps returning to bump it (the signal comes from your open [Topic](topics.md) markers). Weight **decays** when a topic goes untouched (≈5-day half-life), so a passing curiosity fades within a couple of weeks while a sustained interest climbs into "active pursuit". Bookmarks are a supplementary explicit signal.
 
 Interests are read-only from the UI today; they accrue from chat and surface in the prompt. Tuning constants (decay rate, accrual scales) are code-level for now.
+
+#### Idle bookmark surfacing
+
+When you've been quiet for **30 minutes or more**, the next message triggers *idle mode*: `[Temporal Context]` includes a "Bookmarks to revisit" section with up to 3 due bookmarks, and the Familiar is invited to weave one in naturally if the moment fits.
+
+After the response completes, the system checks whether each surfaced bookmark's topic or label was actually mentioned in the reply and records the outcome:
+
+| Outcome | Interval adjustment |
+|---|---|
+| **Engaged** — topic appeared in the response | `interval × 1.5` (max 168 h / 7 days) |
+| **Ignored** — topic did not appear | `interval × 0.75` (min 4 h) |
+
+Three consecutive ignores additionally reduce the topic's interest weight by 0.05, letting neglected bookmarks gradually fade without being deleted.
+
+The default resurface interval is **24 hours**. The **Interests tab** in the Temporal editor shows every bookmark with its outcome badge (Engaged / Ignored / Pending), consecutive-ignore count, last-surfaced time, and current adaptive interval.
 
 ### Session handoff
 

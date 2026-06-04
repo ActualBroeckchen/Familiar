@@ -143,6 +143,215 @@ class TestResolve:
             sched.resolve(conn, id=t, resolution="kinda done")
 
 
+# ── Update / delete (M9b) ─────────────────────────────────────────────
+
+
+class TestUpdateNode:
+    def test_update_label(self, conn):
+        t = sched.add_node(conn, type="task", label="old")
+        assert sched.update_node(conn, id=t, label="new")
+        row = conn.execute("SELECT label FROM nodes WHERE id=?", (t,)).fetchone()
+        assert row["label"] == "new"
+
+    def test_update_when_and_end(self, conn):
+        t = sched.add_node(conn, type="task", label="x")
+        assert sched.update_node(conn, id=t, when="2030-01-01T12:00:00+00:00", end="2030-01-01T13:00:00+00:00")
+        row = conn.execute("SELECT when_ts, end_ts FROM nodes WHERE id=?", (t,)).fetchone()
+        assert row["when_ts"] == "2030-01-01T12:00:00+00:00"
+        assert row["end_ts"]  == "2030-01-01T13:00:00+00:00"
+
+    def test_update_clears_when_with_empty_string(self, conn):
+        t = sched.add_node(conn, type="event", label="x", when="2030-01-01T12:00:00+00:00")
+        assert sched.update_node(conn, id=t, when="")
+        row = conn.execute("SELECT when_ts FROM nodes WHERE id=?", (t,)).fetchone()
+        assert row["when_ts"] is None
+
+    def test_update_replaces_payload(self, conn):
+        t = sched.add_node(conn, type="task", label="x", payload={"a": 1, "b": 2})
+        assert sched.update_node(conn, id=t, payload={"c": 3})
+        import json as _json
+        row = conn.execute("SELECT payload_json FROM nodes WHERE id=?", (t,)).fetchone()
+        assert _json.loads(row["payload_json"]) == {"c": 3}
+
+    def test_update_unknown_id_returns_false(self, conn):
+        assert sched.update_node(conn, id="nope", label="x") is False
+
+    def test_update_no_fields_returns_false(self, conn):
+        t = sched.add_node(conn, type="task", label="x")
+        assert sched.update_node(conn, id=t) is False
+
+    def test_update_empty_label_rejected(self, conn):
+        t = sched.add_node(conn, type="task", label="x")
+        with pytest.raises(ValueError, match="label cannot be cleared"):
+            sched.update_node(conn, id=t, label="   ")
+
+    def test_update_does_not_touch_interest_layer_nodes(self, conn):
+        # Manually insert an interest-layer node and confirm update_node ignores it.
+        conn.execute(
+            "INSERT INTO nodes (id, layer, type, label, payload_json, created_at, updated_at) "
+            "VALUES ('iv', 'interest', 'live_interest', 'curiosity', '{}', ?, ?)",
+            (now_iso(), now_iso()),
+        )
+        assert sched.update_node(conn, id="iv", label="hijacked") is False
+        row = conn.execute("SELECT label FROM nodes WHERE id='iv'").fetchone()
+        assert row["label"] == "curiosity"
+
+
+class TestReminders:
+    """M11 — reminders are schedule nodes of type='reminder' with
+    when_ts as the fire time. get_due_reminders returns the pending
+    ones whose fire time has arrived; reminders_health surfaces
+    counts + next/last timestamps so the scheduler can be monitored."""
+
+    def test_reminder_requires_when(self, conn):
+        with pytest.raises(ValueError, match="requires a 'when'"):
+            sched.add_node(conn, type="reminder", label="ping")
+
+    def test_get_due_returns_only_past(self, conn):
+        past   = _iso(datetime.now(timezone.utc) - timedelta(minutes=5))
+        future = _iso(datetime.now(timezone.utc) + timedelta(hours=1))
+        a = sched.add_node(conn, type="reminder", label="now-due",  when=past)
+        b = sched.add_node(conn, type="reminder", label="not-yet",  when=future)
+        due = sched.get_due_reminders(conn)
+        ids = [r["id"] for r in due]
+        assert a     in ids
+        assert b not in ids
+
+    def test_get_due_skips_resolved(self, conn):
+        past = _iso(datetime.now(timezone.utc) - timedelta(minutes=5))
+        a = sched.add_node(conn, type="reminder", label="fired",     when=past)
+        b = sched.add_node(conn, type="reminder", label="cancelled", when=past)
+        c = sched.add_node(conn, type="reminder", label="pending",   when=past)
+        sched.resolve(conn, id=a, resolution="fired")
+        sched.resolve(conn, id=b, resolution="cancelled")
+        due_ids = [r["id"] for r in sched.get_due_reminders(conn)]
+        assert c     in due_ids
+        assert a not in due_ids
+        assert b not in due_ids
+
+    def test_fired_resolution_is_accepted(self, conn):
+        past = _iso(datetime.now(timezone.utc) - timedelta(minutes=1))
+        r = sched.add_node(conn, type="reminder", label="x", when=past)
+        assert sched.resolve(conn, id=r, resolution="fired")
+
+    def test_due_sorted_by_when_ascending(self, conn):
+        t1 = _iso(datetime.now(timezone.utc) - timedelta(minutes=10))
+        t2 = _iso(datetime.now(timezone.utc) - timedelta(minutes=5))
+        t3 = _iso(datetime.now(timezone.utc) - timedelta(minutes=1))
+        # Insert out of order
+        sched.add_node(conn, type="reminder", label="b", when=t2)
+        sched.add_node(conn, type="reminder", label="c", when=t3)
+        sched.add_node(conn, type="reminder", label="a", when=t1)
+        due = sched.get_due_reminders(conn)
+        assert [r["label"] for r in due] == ["a", "b", "c"]
+
+    def test_health_counts(self, conn):
+        past   = _iso(datetime.now(timezone.utc) - timedelta(minutes=5))
+        future = _iso(datetime.now(timezone.utc) + timedelta(hours=1))
+        sched.add_node(conn, type="reminder", label="overdue",  when=past)
+        sched.add_node(conn, type="reminder", label="overdue2", when=past)
+        sched.add_node(conn, type="reminder", label="upcoming", when=future)
+        fired = sched.add_node(conn, type="reminder", label="done", when=past)
+        sched.resolve(conn, id=fired, resolution="fired")
+
+        h = sched.reminders_health(conn)
+        assert h["total"]   == 4
+        assert h["pending"] == 3
+        assert h["overdue"] == 2
+        assert h["next_fires_at"] is not None
+        assert h["last_fired"]    is not None
+
+
+class TestListPhases:
+    """list_phases is date-independent — returns every phase regardless
+    of when_ts. This was added to fix the Routine-tab regression where
+    phases stamped on a previous date disappeared from get_window."""
+
+    def _phase(self, conn, label: str, when: str, end: str):
+        return sched.add_node(conn, type="phase", label=label, when=when, end=end)
+
+    def test_returns_all_phases_regardless_of_date(self, conn):
+        old   = _iso(datetime.now(timezone.utc) - timedelta(days=30))
+        older = _iso(datetime.now(timezone.utc) - timedelta(days=365))
+        oldend   = _iso(datetime.now(timezone.utc) - timedelta(days=30) + timedelta(hours=4))
+        olderend = _iso(datetime.now(timezone.utc) - timedelta(days=365) + timedelta(hours=4))
+        self._phase(conn, "morning",   old, oldend)
+        self._phase(conn, "afternoon", older, olderend)
+        phases = sched.list_phases(conn)
+        labels = sorted(p["label"] for p in phases)
+        assert labels == ["afternoon", "morning"]
+
+    def test_excludes_resolved_by_default(self, conn):
+        a = self._phase(conn, "morning",  _iso(datetime.now(timezone.utc)),
+                                          _iso(datetime.now(timezone.utc) + timedelta(hours=4)))
+        b = self._phase(conn, "evening",  _iso(datetime.now(timezone.utc) + timedelta(hours=8)),
+                                          _iso(datetime.now(timezone.utc) + timedelta(hours=12)))
+        sched.resolve(conn, id=a, resolution="cancelled")
+        phases = sched.list_phases(conn)
+        labels = [p["label"] for p in phases]
+        assert labels == ["evening"]
+        assert b in [p["id"] for p in phases]
+
+    def test_include_resolved_surfaces_them(self, conn):
+        a = self._phase(conn, "morning",  _iso(datetime.now(timezone.utc)),
+                                          _iso(datetime.now(timezone.utc) + timedelta(hours=4)))
+        sched.resolve(conn, id=a, resolution="cancelled")
+        phases = sched.list_phases(conn, include_resolved=True)
+        assert any(p["label"] == "morning" for p in phases)
+
+    def test_does_not_return_other_node_types(self, conn):
+        sched.add_node(conn, type="task", label="laundry")
+        sched.add_node(conn, type="event", label="dentist",
+                       when=_iso(datetime.now(timezone.utc) + timedelta(days=2)))
+        self._phase(conn, "morning",
+                    _iso(datetime.now(timezone.utc)),
+                    _iso(datetime.now(timezone.utc) + timedelta(hours=4)))
+        phases = sched.list_phases(conn)
+        assert all(p["type"] == "phase" for p in phases)
+        assert len(phases) == 1
+
+    def test_does_not_return_interest_layer_nodes(self, conn):
+        # Mimic an interest-layer phase-typed row (shouldn't exist, but
+        # defensively confirm the layer guard.)
+        conn.execute(
+            "INSERT INTO nodes (id, layer, type, label, payload_json, created_at, updated_at) "
+            "VALUES ('iv', 'interest', 'phase', 'never-active', '{}', ?, ?)",
+            (now_iso(), now_iso()),
+        )
+        phases = sched.list_phases(conn)
+        assert phases == []
+
+
+class TestDeleteNode:
+    def test_delete_existing(self, conn):
+        t = sched.add_node(conn, type="task", label="kill me")
+        assert sched.delete_node(conn, id=t)
+        row = conn.execute("SELECT id FROM nodes WHERE id=?", (t,)).fetchone()
+        assert row is None
+
+    def test_delete_cascades_edges(self, conn):
+        a = sched.add_node(conn, type="task", label="a")
+        b = sched.add_node(conn, type="task", label="b")
+        sched.add_edge(conn, src=a, dst=b, kind="causes")
+        assert sched.delete_node(conn, id=a)
+        # Edge should also be gone (ON DELETE CASCADE).
+        rows = conn.execute("SELECT COUNT(*) AS n FROM edges").fetchone()
+        assert rows["n"] == 0
+
+    def test_delete_unknown_id_returns_false(self, conn):
+        assert sched.delete_node(conn, id="nope") is False
+
+    def test_delete_does_not_touch_interest_layer(self, conn):
+        conn.execute(
+            "INSERT INTO nodes (id, layer, type, label, payload_json, created_at, updated_at) "
+            "VALUES ('iv2', 'interest', 'live_interest', 'curiosity', '{}', ?, ?)",
+            (now_iso(), now_iso()),
+        )
+        assert sched.delete_node(conn, id="iv2") is False
+        row = conn.execute("SELECT id FROM nodes WHERE id='iv2'").fetchone()
+        assert row is not None
+
+
 # ── Reads ─────────────────────────────────────────────────────────────
 
 

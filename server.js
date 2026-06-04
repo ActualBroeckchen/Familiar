@@ -14,6 +14,7 @@ import { promisify } from 'util';
 
 const execFileP = promisify(execFile);
 import {
+  startThalamus,
   enrich, createMemory, appendIdentity, updateIdentitySection,
   // Reads for the Knowledge editor UI
   listMemories, readMemory, getIdentityAll, listGraphNodes, searchGraphNodes, getGraphSubgraph, getFullGraph,
@@ -24,9 +25,31 @@ import {
   createGraphNode, createGraphEdge,
   createSnapshot, restoreSnapshot,
   reconnectEntityCore,
-  recordInterest, recordHandoff,
+  recordInterest, recordHandoff, listLiveInterests, listInterests,
+  bumpInterest, demoteStanding, setStandingInterest,
+  getScheduleWindow, addScheduleNode, updateScheduleNode,
+  resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode, listPhases, listRecurring,
+  getHandoff, markHandoffConsumed,
+  getDueReminders, getRemindersHealth,
   shutdownUnruh, shutdownEntityCore,
+  reportSurfacingOutcomes, listBookmarks,
 } from './thalamus.js';
+import { scoreMessage } from './crisis-signals.js';
+import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
+import { ponderOnce } from './pondering.js';
+import { startPonderingLoop, stopPonderingLoop } from './pondering-loop.js';
+import {
+  shouldReflectNow,
+  getNewOutcomesSinceLastReflection,
+  markReflected,
+} from './surface-events.js';
+import { getRecentPonderings, deletePondering } from './recent-ponderings.js';
+import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
+import { listOutbox, acknowledgeOutbox, clearAcknowledged, enqueueOutbox, updateOutboxMeta } from './outbox.js';
+import { startSilenceTriageLoop, stopSilenceTriageLoop, TRIAGE_SILENCE_THRESHOLD_MS } from './silence-triage-loop.js';
+import { recordUserActivity, getLastUserActivity } from './last-activity.js';
+import { buildTimeAnchorBlock } from './relative-time.js';
+import { expandWindow } from './recurrence.js';
 import {
   enqueueMemorization,
   listJobs as listMemorizationJobs,
@@ -115,6 +138,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 // share them when it builds the env block for entity-core. See that file
 // for the rationale and how to add a new provider.
 import { PROVIDER_URLS } from './providers.js';
+// Tome / state-file coordination is owned by thalamus — every writer
+// of a shared file goes through these helpers so cross-loop races
+// (HTTP route + autonomous loop hitting the same tome) can't lose
+// each other's edits. The locking primitive (withLock) and the
+// atomic .tmp+rename pattern live in thalamus.js.
+import { withLock, writeTomeFile, modifyTomeFile } from './thalamus.js';
 
 // Simple in-memory rate limiter for /api/chat: max 20 requests per minute per IP.
 // Protects against accidental public exposure and runaway tool-call loops.
@@ -140,7 +169,7 @@ function chatRateLimit(req, res, next) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag } = req.body;
+  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt } = req.body;
   // Enrichment mode:
   //   true / undefined → full (identity + memory + graph + temporal),
   //                      and consume any surfaced session handoff.
@@ -172,40 +201,123 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // we depth-inject it instead of letting it invalidate the prefix).
   // Degrades gracefully — empty strings on either side just skip
   // the corresponding injection.
+  //
+  // userText source preference:
+  //   1. req.body.userMessage  — explicit user input the frontend
+  //      sends on round 0 (skipped on tool-round follow-ups). This
+  //      is what {{user}} typed, NOT a templated post-history prompt.
+  //   2. last role:'user' in the messages array — the fallback,
+  //      which can pick up the post-history prompt because that's
+  //      also pushed as role:'user' at the end of the array. Direct
+  //      /api/chat callers without `userMessage` get this path.
   const lastUser = [...messages].reverse().find(m => m.role === 'user');
-  const userText = typeof lastUser?.content === 'string'
+  const userTextFromMessages = typeof lastUser?.content === 'string'
     ? lastUser.content
     : ((lastUser?.content ?? []).find(c => c.type === 'text')?.text ?? '');
-  // consumeHandoff: only the full chat path surfaces + consumes the
-  // session handoff. 'static' fetches persona only (handoff summariser);
-  // 'none' skips enrichment entirely.
+  const userText = (typeof userMessage === 'string' && userMessage.trim())
+    ? userMessage
+    : userTextFromMessages;
+  // ── Crisis-signal detection (step 4b) ─────────────────────────────────
+  // Fire-and-forget: score the current user message for distress markers
+  // and feed the delta into the threat tracker. Gated to the full chat
+  // path (skip on staticOnly handoff summaries and on 'none' enrichment
+  // mode) and to non-empty user text. Errors don't block the chat call.
+  // The detector is a heuristic, not a diagnostic — see crisis-signals.js
+  // for the explicit boundaries. Disable entirely with the env var
+  // PROTO_FAMILIAR_THREAT_DISABLED=1.
+  if (enrichMode === 'full' && userText && userText.trim()) {
+    // Stamp "user just sent a message" so the silence-triage loop
+    // knows when to start considering check-ins. Fire-and-forget.
+    recordUserActivity().catch(err =>
+      console.error('[server] recordUserActivity failed:', err?.message ?? err),
+    );
+    const { level, signals } = scoreMessage(userText);
+    if (level !== 0) {
+      // Loud, structured log so the silent-failure case ("the
+      // detector quietly stopped firing") can be diagnosed from
+      // the server log without instrumenting deeper. Includes
+      // every signal id (with `*` marking damped ones) so the
+      // weight breakdown is visible.
+      const sigSummary = signals.map(s => `${s.id}${s.damped ? '*' : ''}`).join(',');
+      console.log(`[threat] scored ${level >= 0 ? '+' : ''}${level} on chat msg [${sigSummary}]`);
+      recordThreat({ delta: level, source: 'chat', signals })
+        .then(r => {
+          if (r.disabled)        console.log('[threat]   record skipped: detector is DISABLED (PROTO_FAMILIAR_THREAT_DISABLED=1)');
+          else if (r.ok === false) console.warn(`[threat]   record failed: ${r.error}`);
+          else                   console.log(`[threat]   recorded — new tier ${r.tier} (weight ${r.weight})`);
+        })
+        .catch(err => console.error('[threat]   record threw:', err?.message ?? err));
+    }
+  }
+  // liveTurn: only the full chat path may reconcile state (consume the
+  // surfaced session handoff, demote standing values whose entity-core
+  // anchor vanished). 'static' fetches persona only (handoff summariser);
+  // 'none' skips enrichment entirely. debug-prompt calls enrich() with no
+  // options, so it stays read-only.
   const enriched =
-      enrichMode === 'full'   ? await enrich(userText, { consumeHandoff: true })
+      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null })
     : enrichMode === 'static' ? await enrich(userText, { staticOnly: true })
-    : { static: '', dynamic: '' };
+    : { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
+
+  // Inject awareness of any pending (unacknowledged) triage outreaches
+  // into the dynamic block so the Familiar knows it reached out while
+  // the user was away — and doesn't act confused about having done so.
+  let enrichedResult = enriched;
+  if (enrichMode === 'full') {
+    try {
+      const pending = await listOutbox({ pendingOnly: true, limit: 20 });
+      const triagePending = pending.filter(i => i.kind === 'triage' && i.body);
+      if (triagePending.length > 0) {
+        const notices = triagePending
+          .map(i => `  - At ${i.ts}: "${i.body}"`)
+          .join('\n');
+        const block = `\n\n[PENDING CHECK-IN NOTICES]\nWhile my human was away, I reached out to them with the following (they have not yet acknowledged):\n${notices}\n\nI am aware I did this. If their first message back opens a door to it, I may acknowledge having reached out — but I should not lead with it or press.`;
+        enrichedResult = { ...enriched, dynamic: (enriched.dynamic || '') + block };
+      }
+    } catch { /* non-critical */ }
+  }
+
   const depth = getThalamusDynamicDepth();
 
   let enrichedMessages = messages;
 
   // 1) Prepend static block to the system message. Lives at the very
   //    top of the prompt so the provider's prefix cache covers it.
-  if (enriched.static) {
+  if (enrichedResult.static) {
     const sysIdx = messages.findIndex(m => m.role === 'system');
     if (sysIdx >= 0) {
       enrichedMessages = messages.map((m, i) =>
-        i === sysIdx ? { ...m, content: enriched.static + '\n\n' + m.content } : m,
+        i === sysIdx ? { ...m, content: enrichedResult.static + '\n\n' + m.content } : m,
       );
     } else {
-      enrichedMessages = [{ role: 'system', content: enriched.static }, ...messages];
+      enrichedMessages = [{ role: 'system', content: enrichedResult.static }, ...messages];
     }
   }
 
   // 2) Depth-inject the dynamic block as a separate system message
   //    N positions from the end. Computed AFTER the static prepend so
   //    the index counts the (possibly newly-created) system message.
-  const injection = injectDynamicAtDepth(enrichedMessages, enriched.dynamic, depth);
+  const injection = injectDynamicAtDepth(enrichedMessages, enrichedResult.dynamic, depth);
   enrichedMessages = injection.messages;
   const injectedAt = injection.injectedAt;
+
+  // 3) Time anchor — appended as the VERY LAST system message, after
+  //    the chat history and after any post-history prompt. These are
+  //    the freshest values the Familiar needs ("what time is it now"
+  //    + "how long since my human last messaged") and they belong
+  //    nearest the model's response slot so they're at maximum
+  //    salience for care reasoning. Only on enrichMode=full — the
+  //    handoff summariser path and debug-prompt previews don't need it.
+  let timeAnchor = '';
+  if (enrichMode === 'full') {
+    timeAnchor = buildTimeAnchorBlock({
+      now: Date.now(),
+      lastUserMessageAt: lastUserMessageAt ?? null,
+    }) || '';
+    if (timeAnchor) {
+      enrichedMessages = [...enrichedMessages, { role: 'system', content: timeAnchor }];
+    }
+  }
 
   const payload = { model: model.trim(), messages: enrichedMessages, stream: !!stream };
   if (typeof temperature === 'number') payload.temperature = temperature;
@@ -231,11 +343,12 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // can render the prompt inspector verbatim instead of re-deriving.
   // Carries both blocks separately + the injection coordinates so the
   // inspector can show static-vs-dynamic regions distinctly.
-  const thalamusEnvelope = (enriched.static || enriched.dynamic) ? {
-    static:     enriched.static  || '',
-    dynamic:    enriched.dynamic || '',
+  const thalamusEnvelope = (enrichedResult.static || enrichedResult.dynamic || timeAnchor) ? {
+    static:     enrichedResult.static  || '',
+    dynamic:    enrichedResult.dynamic || '',
     depth,
     injectedAt,
+    timeAnchor,
   } : null;
 
   // Non-streaming path
@@ -247,6 +360,12 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       try {
         const parsed = JSON.parse(text);
         parsed._thalamus = thalamusEnvelope;
+        // M8 idle-mode outcome reporting: fire-and-forget after response sent.
+        if (enriched.surfacedBookmarks?.length > 0) {
+          const responseText = parsed.choices?.[0]?.message?.content ?? '';
+          reportSurfacingOutcomes({ responseText, bookmarks: enriched.surfacedBookmarks })
+            .catch(err => console.error('[server] reportSurfacingOutcomes failed:', err?.message ?? err));
+        }
         return res.send(JSON.stringify(parsed));
       } catch { /* upstream returned non-JSON — pass through unchanged */ }
     }
@@ -274,12 +393,43 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     res.write(`data: ${JSON.stringify({ _thalamus: thalamusEnvelope })}\n\n`);
   }
 
+  // M8 idle-mode outcome reporting (streaming path): accumulate the full
+  // response text in memory as SSE chunks arrive, then report outcomes
+  // after the stream closes. Only active when bookmarks were surfaced.
+  const streamBookmarks = enriched.surfacedBookmarks ?? [];
+  let accumulatedText = '';
+
   const reader = upstream.body.getReader();
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) { res.end(); break; }
-      res.write(Buffer.from(value));
+      if (done) {
+        res.end();
+        // Report outcomes with whatever text was accumulated. Fire-and-forget.
+        if (streamBookmarks.length > 0 && accumulatedText) {
+          reportSurfacingOutcomes({ responseText: accumulatedText, bookmarks: streamBookmarks })
+            .catch(err => console.error('[server] reportSurfacingOutcomes (streaming) failed:', err?.message ?? err));
+        }
+        break;
+      }
+      const chunk = Buffer.from(value);
+      res.write(chunk);
+      // Extract text content from SSE delta chunks for outcome detection.
+      // Each chunk may contain multiple `data: {...}\n\n` events. We only
+      // need the assistant text, so parse each line's `choices[0].delta.content`.
+      if (streamBookmarks.length > 0) {
+        const chunkStr = chunk.toString('utf8');
+        for (const line of chunkStr.split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          const jsonStr = line.slice(6).trim();
+          if (jsonStr === '[DONE]') continue;
+          try {
+            const evt = JSON.parse(jsonStr);
+            const delta = evt?.choices?.[0]?.delta?.content;
+            if (typeof delta === 'string') accumulatedText += delta;
+          } catch { /* malformed line — skip */ }
+        }
+      }
     }
   } catch (err) {
     if (!res.writableEnded) res.end();
@@ -489,6 +639,24 @@ app.delete('/api/logs/:id', async (req, res) => {
   }
 });
 
+// GET /api/triage-events — return triage decision log (newest first).
+// Each entry is one JSON line from triage-events.jsonl: timestamp, tier,
+// silence duration, decision, and whether the Familiar acted.
+// Useful for auditing past reach-outs and debugging the triage loop.
+app.get('/api/triage-events', async (_req, res) => {
+  try {
+    const raw   = await fsp.readFile(TRIAGE_LOG_FILE, 'utf8');
+    const lines  = raw.split('\n').filter(l => l.trim());
+    const events = lines
+      .map(l => { try { return JSON.parse(l); } catch { return null; } })
+      .filter(Boolean)
+      .reverse(); // newest first
+    res.json(events);
+  } catch {
+    res.json([]);
+  }
+});
+
 // Health check
 app.get('/api/health',  (_req, res) => res.json({ ok: true, version: PKG_VERSION }));
 app.get('/api/version', (_req, res) => res.json({ version: PKG_VERSION }));
@@ -534,9 +702,22 @@ async function readTome(id) {
   }
 }
 
+// writeTome and modifyTome are thin wrappers around thalamus's
+// state-file coordination helpers. Thalamus owns the lock map and
+// the .tmp+rename pattern; server.js just resolves the tomeId →
+// file path and hands off. Every writer of the same tome file —
+// HTTP route, pondering-loop, memorization worker, deletePondering
+// — serialises through thalamus's withLock keyed on that path.
+
 async function writeTome(tome) {
   const filePath = await findTomeFile(tome.id);
-  await fsp.writeFile(filePath, JSON.stringify(tome, null, 2), 'utf8');
+  return writeTomeFile(filePath, tome);
+}
+
+async function modifyTome(tomeId, modifyFn) {
+  const filePath = await findTomeFile(tomeId);
+  if (!filePath) throw new Error(`Tome ${tomeId} not found`);
+  return modifyTomeFile(filePath, modifyFn);
 }
 
 // GET /api/tomes — list all tomes (metadata + entry count)
@@ -605,31 +786,34 @@ app.get('/api/tomes/:id', async (req, res) => {
   res.json(tome);
 });
 
-// PUT /api/tomes/:id — save full tome (entries + optional metadata)
+// PUT /api/tomes/:id — save full tome (entries + optional metadata).
+// modifyTome() acquires the per-file lock for the whole read-modify-write
+// so a concurrent pondering-loop entry write or memorization tick can't
+// land between the existing-read and the new-write and get clobbered.
 app.put('/api/tomes/:id', async (req, res) => {
   const { id } = req.params;
   if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
   const { name, description, enabled, entries } = req.body;
   if (!entries || typeof entries !== 'object' || Array.isArray(entries))
     return res.status(400).json({ error: 'entries object required.' });
-  const existing = await readTome(id);
-  if (!existing) return res.status(404).json({ error: 'Tome not found.' });
-  const safe = {};
-  for (const [uid, entry] of Object.entries(entries)) {
-    if (!isValidUUID(uid)) continue;
-    safe[uid] = entry;
-  }
-  const updated = {
-    ...existing,
-    name:        name !== undefined ? (String(name).trim() || existing.name) : existing.name,
-    description: description !== undefined ? String(description ?? '').trim() : (existing.description ?? ''),
-    enabled:     enabled !== undefined ? !!enabled : existing.enabled,
-    entries:     safe,
-  };
   try {
-    await writeTome(updated);
+    await modifyTome(id, (existing) => {
+      const safe = {};
+      for (const [uid, entry] of Object.entries(entries)) {
+        if (!isValidUUID(uid)) continue;
+        safe[uid] = entry;
+      }
+      return {
+        ...existing,
+        name:        name !== undefined ? (String(name).trim() || existing.name) : existing.name,
+        description: description !== undefined ? String(description ?? '').trim() : (existing.description ?? ''),
+        enabled:     enabled !== undefined ? !!enabled : existing.enabled,
+        entries:     safe,
+      };
+    });
     res.json({ ok: true });
-  } catch {
+  } catch (err) {
+    if (String(err.message).includes('not found')) return res.status(404).json({ error: 'Tome not found.' });
     res.status(500).json({ error: 'Failed to save tome.' });
   }
 });
@@ -638,15 +822,15 @@ app.put('/api/tomes/:id', async (req, res) => {
 app.patch('/api/tomes/:id', async (req, res) => {
   const { id } = req.params;
   if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
-  const tome = await readTome(id);
-  if (!tome) return res.status(404).json({ error: 'Tome not found.' });
-  if (req.body.name !== undefined) tome.name = String(req.body.name).trim() || tome.name;
-  if (req.body.description !== undefined) tome.description = String(req.body.description ?? '').trim();
-  if (req.body.enabled !== undefined) tome.enabled = !!req.body.enabled;
   try {
-    await writeTome(tome);
+    await modifyTome(id, (tome) => {
+      if (req.body.name !== undefined) tome.name = String(req.body.name).trim() || tome.name;
+      if (req.body.description !== undefined) tome.description = String(req.body.description ?? '').trim();
+      if (req.body.enabled !== undefined) tome.enabled = !!req.body.enabled;
+    });
     res.json({ ok: true });
-  } catch {
+  } catch (err) {
+    if (String(err.message).includes('not found')) return res.status(404).json({ error: 'Tome not found.' });
     res.status(500).json({ error: 'Failed to update tome.' });
   }
 });
@@ -656,7 +840,8 @@ app.delete('/api/tomes/:id', async (req, res) => {
   const { id } = req.params;
   if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
   try {
-    await fsp.unlink(path.join(TOMES_DIR, `${id}.json`));
+    const filePath = await findTomeFile(id);
+    await fsp.unlink(filePath);
     res.json({ ok: true });
   } catch {
     res.status(404).json({ error: 'Tome not found.' });
@@ -668,14 +853,16 @@ app.delete('/api/tomes/:id/entries/:uid', async (req, res) => {
   const { id, uid } = req.params;
   if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
   if (!isValidUUID(uid)) return res.status(400).json({ error: 'Invalid entry UID.' });
-  const tome = await readTome(id);
-  if (!tome) return res.status(404).json({ error: 'Tome not found.' });
-  if (!tome.entries?.[uid]) return res.status(404).json({ error: 'Entry not found.' });
-  delete tome.entries[uid];
+  let entryMissing = false;
   try {
-    await writeTome(tome);
+    await modifyTome(id, (tome) => {
+      if (!tome.entries?.[uid]) { entryMissing = true; return tome; }
+      delete tome.entries[uid];
+    });
+    if (entryMissing) return res.status(404).json({ error: 'Entry not found.' });
     res.json({ ok: true });
-  } catch {
+  } catch (err) {
+    if (String(err.message).includes('not found')) return res.status(404).json({ error: 'Tome not found.' });
     res.status(500).json({ error: 'Failed to save tome.' });
   }
 });
@@ -700,62 +887,69 @@ app.post('/api/tomes/default/entries', async (req, res) => {
   }
 
   try {
-    // Find first enabled tome, or create "General"
+    // Find first enabled tome — directory scan is read-only so doesn't
+    // need a lock. The actual entry insert happens through modifyTome
+    // below, which holds the per-file lock across read-modify-write so
+    // concurrent saves can't lose each other.
     const files = await fsp.readdir(TOMES_DIR);
-    let targetTome = null;
+    let targetTomeId = null;
     for (const f of files.sort()) {
       if (!f.endsWith('.json')) continue;
       try {
         const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
         const t = JSON.parse(raw);
-        if (t.enabled) { targetTome = t; break; }
+        if (t.enabled) { targetTomeId = t.id; break; }
       } catch { /* skip corrupt */ }
     }
-    if (!targetTome) {
+
+    // If no enabled tome exists, create "General" first. writeTome is
+    // atomic + locked, so concurrent creates can't tear the file even
+    // if both decide to create (only the lock guards uniqueness; that's
+    // OK — the first one wins, the second one writes again and that's
+    // a harmless overwrite of an empty tome).
+    if (!targetTomeId) {
       const newId = randomUUID();
-      targetTome = { id: newId, name: 'General', description: '', enabled: true, entries: {} };
-      await writeTome(targetTome);
-    } else {
-      // Re-read a fresh copy so we merge correctly
-      const fresh = await readTome(targetTome.id);
-      if (fresh) targetTome = fresh;
+      const fresh = { id: newId, name: 'General', description: '', enabled: true, entries: {} };
+      await writeTome(fresh);
+      targetTomeId = newId;
     }
 
-    const uid  = randomUUID();
-    const now  = new Date().toISOString();
-    targetTome.entries[uid] = {
-      uid,
-      comment:             typeof comment === 'string' ? comment.trim() || 'Auto-saved entry' : 'Auto-saved entry',
-      keys:                normKeys,
-      keysecondary:        [],
-      content:             content.trim(),
-      constant:            false,
-      selective:           false,
-      selectiveLogic:      0,
-      enabled:             true,
-      // At-depth, not a system-message position — these keyword-triggered
-      // entries would invalidate the prompt prefix cache if injected into
-      // it. See the same rationale in memorization.js.
-      position:            4,
-      depth:               4,
-      role:                0,
-      scanDepth:           null,
-      caseSensitive:       null,
-      matchWholeWords:     null,
-      probability:         100,
-      sticky:              null,
-      cooldown:            null,
-      preventRecursion:    false,
-      delayUntilRecursion: false,
-      excludeRecursion:    false,
-      group:               '',
-      groupWeight:         null,
-      insertion_order:     100,
-      created_at:          now,
-      learnedAt:           (typeof learnedAt === 'string' && learnedAt) ? learnedAt : now,
-    };
-    await writeTome(targetTome);
-    res.json({ ok: true, tomeId: targetTome.id, uid });
+    const uid = randomUUID();
+    const now = new Date().toISOString();
+    await modifyTome(targetTomeId, (tome) => {
+      tome.entries[uid] = {
+        uid,
+        comment:             typeof comment === 'string' ? comment.trim() || 'Auto-saved entry' : 'Auto-saved entry',
+        keys:                normKeys,
+        keysecondary:        [],
+        content:             content.trim(),
+        constant:            false,
+        selective:           false,
+        selectiveLogic:      0,
+        enabled:             true,
+        // At-depth, not a system-message position — these keyword-triggered
+        // entries would invalidate the prompt prefix cache if injected into
+        // it. See the same rationale in memorization.js.
+        position:            4,
+        depth:               4,
+        role:                0,
+        scanDepth:           null,
+        caseSensitive:       null,
+        matchWholeWords:     null,
+        probability:         100,
+        sticky:              null,
+        cooldown:            null,
+        preventRecursion:    false,
+        delayUntilRecursion: false,
+        excludeRecursion:    false,
+        group:               '',
+        groupWeight:         null,
+        insertion_order:     100,
+        created_at:          now,
+        learnedAt:           (typeof learnedAt === 'string' && learnedAt) ? learnedAt : now,
+      };
+    });
+    res.json({ ok: true, tomeId: targetTomeId, uid });
   } catch {
     res.status(500).json({ error: 'Failed to save entry.' });
   }
@@ -1204,19 +1398,23 @@ app.put('/api/settings', async (req, res) => {
     return badRequest(res, `settings exceed ${SETTINGS_MAX_BYTES}-byte limit`);
   }
 
-  // Snapshot the prior entity-core creds so we can detect a real change
-  // after the write. Missing file => empty snapshot (counts as "no creds
-  // before"); any failure here is non-fatal — we just won't re-spawn.
+  // L2 (audit): route the prior-snapshot + write through thalamus's
+  // per-file lock so two PUTs racing each other can't read each
+  // other's stale priorCreds and fire spurious entity-core respawns.
+  // The atomic .tmp+rename already prevented torn-file states; the
+  // lock here makes the prior-vs-next diff consistent against the
+  // file each PUT actually replaces.
   let priorCreds = { id: null, apiKey: '', provider: '', model: '' };
   try {
-    const raw = await fsp.readFile(SETTINGS_FILE, 'utf8');
-    priorCreds = entityCoreCredsSnapshot(JSON.parse(raw));
-  } catch { /* no prior settings — first write */ }
-
-  try {
-    const tmp = SETTINGS_FILE + '.tmp';
-    await fsp.writeFile(tmp, serialised, 'utf8');
-    await fsp.rename(tmp, SETTINGS_FILE);
+    await withLock(SETTINGS_FILE, async () => {
+      try {
+        const raw = await fsp.readFile(SETTINGS_FILE, 'utf8');
+        priorCreds = entityCoreCredsSnapshot(JSON.parse(raw));
+      } catch { /* no prior settings — first write */ }
+      const tmp = SETTINGS_FILE + '.tmp';
+      await fsp.writeFile(tmp, serialised, 'utf8');
+      await fsp.rename(tmp, SETTINGS_FILE);
+    });
   } catch (err) {
     return res.status(500).json({ error: `failed to write settings: ${err.message}` });
   }
@@ -1261,6 +1459,272 @@ app.post('/api/tailscale', async (req, res) => {
   });
 });
 
+// ── Threat / care-check endpoints (step 4b) ─────────────────────────
+// GET    /api/threat          current effective state
+// GET    /api/threat/history  recent audit entries (newest first)
+// POST   /api/threat/reset    manually zero the threat level
+//
+// These are user-facing controls: visibility into what's been
+// recorded, and a one-click off switch beyond the env var. The
+// detector itself can be disabled at the source by setting
+// PROTO_FAMILIAR_THREAT_DISABLED=1.
+app.get('/api/threat', async (_req, res) => {
+  try { res.json(await getThreat()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/threat/history', async (req, res) => {
+  const limit = Number.isFinite(+req.query.limit) ? +req.query.limit : 20;
+  try { res.json({ history: await getThreatHistory({ limit }) }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/threat/reset', async (_req, res) => {
+  try {
+    const r = await resetThreat({ source: 'api_reset' });
+    console.log('[server] threat reset to 0 via /api/threat/reset');
+    res.json(r);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Temporal editor (M9) — read-mostly endpoints for the UI ─────────
+// These wrap thalamus / threat / ponderings reads so the Temporal
+// editor modal can show what the system is actually thinking and let
+// the user reset / delete obviously-bad entries. CRUD beyond
+// reset/delete is deferred to a later pass.
+app.get('/api/temporal/interests', async (req, res) => {
+  const limit = Number.isFinite(+req.query.limit) ? +req.query.limit : 50;
+  try { res.json(await listInterests({ limit })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/temporal/bookmarks', async (req, res) => {
+  const limit = Number.isFinite(+req.query.limit) ? +req.query.limit : 100;
+  try { res.json(await listBookmarks({ limit })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/temporal/ponderings', async (req, res) => {
+  const limit     = Number.isFinite(+req.query.limit)     ? +req.query.limit     : 25;
+  const sinceDays = Number.isFinite(+req.query.sinceDays) ? +req.query.sinceDays : 365;
+  try { res.json({ ponderings: await getRecentPonderings({ limit, sinceDays }) }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/temporal/ponderings/:uid', async (req, res) => {
+  try { res.json(await deletePondering({ uid: req.params.uid })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Interest CRUD (manual edits from the Temporal editor)
+app.post('/api/temporal/interests/bump', async (req, res) => {
+  const { topic, delta, source } = req.body ?? {};
+  if (!topic || typeof topic !== 'string') return badRequest(res, 'topic (string) is required');
+  const d = Number(delta);
+  if (!Number.isFinite(d) || d <= 0)        return badRequest(res, 'delta (positive number) is required');
+  try { res.json(await bumpInterest({ topic, delta: d, source: source ?? 'manual' })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/temporal/interests/:id/demote', async (req, res) => {
+  try { res.json(await demoteStanding({ id: req.params.id })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/temporal/interests/set-standing', async (req, res) => {
+  const { topic, weight, value_ref } = req.body ?? {};
+  if (!topic || typeof topic !== 'string') return badRequest(res, 'topic (string) is required');
+  try { res.json(await setStandingInterest({ topic, weight, value_ref })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Schedule
+app.get('/api/temporal/schedule', async (req, res) => {
+  const from_ts = req.query.from || undefined;
+  const to_ts   = req.query.to   || undefined;
+  const limit   = Number.isFinite(+req.query.limit) ? +req.query.limit : 200;
+  try {
+    // Standard window — picks up anchor-in-window items only.
+    const win = await getScheduleWindow({ from_ts, to_ts, limit });
+    const nodes = Array.isArray(win) ? win : (Array.isArray(win?.nodes) ? win.nodes : []);
+
+    // Also fetch recurring anchors (their stored when_ts is often
+    // months in the past) and expand them within the requested
+    // window. Drop anchor IDs that would have shown up in the raw
+    // window so we don't render both "the anchor from 6mo ago" AND
+    // "today's occurrence."
+    const fromMs = from_ts ? new Date(from_ts).getTime() : Date.now() - 24 * 3600_000;
+    const toMs   = to_ts   ? new Date(to_ts).getTime()   : Date.now() + 7 * 24 * 3600_000;
+    let recurNodes = [];
+    try {
+      const recurResp = await listRecurring();
+      recurNodes = Array.isArray(recurResp?.nodes) ? recurResp.nodes : [];
+    } catch { /* tolerate Unruh hiccup */ }
+
+    if (recurNodes.length > 0) {
+      const anchorIds = new Set(recurNodes.map(n => n.id));
+      const expanded = expandWindow(recurNodes, fromMs, toMs);
+      const filtered = nodes.filter(n => !anchorIds.has(n?.id));
+      const mergedNodes = [...filtered, ...expanded];
+      res.json({ ...(typeof win === 'object' && !Array.isArray(win) ? win : {}), nodes: mergedNodes });
+      return;
+    }
+    res.json(win);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/temporal/schedule', async (req, res) => {
+  const { type, label, when, end, payload } = req.body ?? {};
+  if (!type  || typeof type  !== 'string') return badRequest(res, 'type (string) is required');
+  if (!label || typeof label !== 'string') return badRequest(res, 'label (string) is required');
+  try { res.json(await addScheduleNode({ type, label, when, end, payload })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/temporal/schedule/:id', async (req, res) => {
+  const { label, when, end, payload } = req.body ?? {};
+  try { res.json(await updateScheduleNode({ id: req.params.id, label, when, end, payload })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/temporal/schedule/:id/resolve', async (req, res) => {
+  const { resolution } = req.body ?? {};
+  if (!resolution || typeof resolution !== 'string') return badRequest(res, 'resolution (string) is required');
+  try { res.json(await resolveScheduleNode({ id: req.params.id, resolution })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Per-occurrence resolve — for recurring nodes, marks ONE occurrence
+// done/cancelled/carried_forward without killing the rest of the
+// series. The expander reads payload.resolutions and skips the
+// resolved dates.
+app.post('/api/temporal/schedule/:id/resolve_occurrence', async (req, res) => {
+  const { occurrence_date, resolution } = req.body ?? {};
+  if (!occurrence_date || typeof occurrence_date !== 'string') return badRequest(res, 'occurrence_date (YYYY-MM-DD) is required');
+  if (!resolution || typeof resolution !== 'string') return badRequest(res, 'resolution (string) is required');
+  try { res.json(await resolveScheduleOccurrence({ id: req.params.id, occurrence_date, resolution })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/temporal/schedule/:id', async (req, res) => {
+  try { res.json(await deleteScheduleNode({ id: req.params.id })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Phases (Routine tab) — date-independent; schedule_get_window's
+// time filter misses phases stamped on previous calendar days.
+app.get('/api/temporal/phases', async (req, res) => {
+  const includeResolved = req.query.includeResolved === '1' || req.query.includeResolved === 'true';
+  const limit = Number.isFinite(+req.query.limit) ? +req.query.limit : 200;
+  try { res.json(await listPhases({ includeResolved, limit })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Handoff
+app.get('/api/temporal/handoff', async (_req, res) => {
+  try { res.json(await getHandoff({ include_consumed: true })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/temporal/handoff/:id/consume', async (req, res) => {
+  try { res.json(await markHandoffConsumed({ id: req.params.id })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Reminders health (M11)
+app.get('/api/temporal/reminders/health', async (_req, res) => {
+  try { res.json(await getRemindersHealth()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Outbox (M11/M12 delivery surface)
+app.get('/api/outbox', async (req, res) => {
+  const pendingOnly = req.query.pending !== '0' && req.query.pending !== 'false';
+  const limit = Number.isFinite(+req.query.limit) ? +req.query.limit : 50;
+  try { res.json({ items: await listOutbox({ pendingOnly, limit }) }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/outbox/:id/acknowledge', async (req, res) => {
+  try { res.json(await acknowledgeOutbox({ id: req.params.id })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/outbox/clear-acknowledged', async (_req, res) => {
+  try { res.json(await clearAcknowledged()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Crisis outreach (tool-initiated, live conversation) ──────────────────────
+
+// POST /api/contact-trusted-person
+// Called by the contact_trusted_person tool when the Familiar judges that
+// human presence is needed during an active conversation. Looks up the
+// contact by name, delivers immediately (not deferred), and always enqueues
+// an outbound_alert outbox item so the user sees exactly what was sent.
+app.post('/api/contact-trusted-person', async (req, res) => {
+  const { name, message } = req.body ?? {};
+  if (!name || typeof name !== 'string' || !name.trim()) {
+    return res.status(400).json({ ok: false, error: 'name is required' });
+  }
+  if (!message || typeof message !== 'string' || !message.trim()) {
+    return res.status(400).json({ ok: false, error: 'message is required' });
+  }
+  if (message.trim().length > 1000) {
+    return res.status(400).json({ ok: false, error: 'message too long (max 1000 characters)' });
+  }
+  const s = readSettingsSync();
+  const contact = (s?.trustedContacts || []).find(c => c.name === name.trim());
+  if (!contact) {
+    return res.status(404).json({ ok: false, error: `No trusted contact named "${name.trim()}" is configured.` });
+  }
+  try {
+    const result = await deliverToTrustedContact({
+      name:    contact.name,
+      message: message.trim(),
+      channel: contact.channel ?? 'discord',
+    });
+    res.json({ ok: result.ok, channel: contact.channel ?? 'discord', error: result.error ?? null });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /api/crisis-resources
+// Called by the show_crisis_resources tool. Enqueues a crisis-resources
+// outbox banner containing international hotline information. Deduped to
+// one item per hour so repeated model calls during a single crisis don't
+// flood the banner queue.
+app.post('/api/crisis-resources', async (_req, res) => {
+  try {
+    const result = await enqueueOutbox({
+      kind:     'crisis_resources',
+      originId: `crisis-resources-${Math.floor(Date.now() / 3_600_000)}`,
+      title:    'If you need immediate support',
+      body: [
+        '**Crisis resources — always available:**',
+        '',
+        '🆘 **International directory:** https://www.iasp.info/resources/Crisis_Centres/',
+        '🇺🇸 **988 Suicide & Crisis Lifeline (US):** call or text **988**',
+        '🇺🇸 **Crisis Text Line (US):** text HOME to **741741**',
+        '🇬🇧 **Samaritans (UK):** call **116 123** (free, 24/7)',
+        '🇦🇺 **Lifeline (AU):** call **13 11 14**',
+        '🌐 **findahelpline.com** — searchable global directory',
+      ].join('\n'),
+    });
+    res.json({ ok: true, id: result.id, deduped: result.deduped ?? false });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Start the MCP children (entity-core + Unruh) at server boot rather
+// than as a thalamus.js import side-effect. Tests and other importers
+// of thalamus's coordination helpers (withLock, modifyTomeFile, etc.)
+// don't need — and shouldn't trigger — Deno/Python spawning just to
+// get the lock primitive.
+startThalamus();
+
 const httpServer = app.listen(PORT, HOST, async () => {
   const lines = ['', `Proto-Familiar ${PKG_VERSION} running at:`];
   lines.push(`  http://localhost:${PORT}`);
@@ -1274,8 +1738,529 @@ const httpServer = app.listen(PORT, HOST, async () => {
     lines.push('  External-device access is disabled. Toggle the Tailscale icon in the top bar to enable.');
   }
   console.log(lines.join('\n') + '\n');
+  if (process.env.PROTO_FAMILIAR_THREAT_DISABLED === '1') {
+    console.log('[threat] crisis-signal detection is DISABLED by env var (PROTO_FAMILIAR_THREAT_DISABLED=1).');
+  } else {
+    console.log('[threat] crisis-signal detection ACTIVE in chat path. Each fire is logged as "[threat] scored ±N on chat msg [signal,...]". Hard-disable with PROTO_FAMILIAR_THREAT_DISABLED=1.');
+  }
   startMemorizationWorker();
+  startAutonomousPondering();
+  startRemindersScheduler();
+  startSilenceTriage();
 });
+
+// ── Autonomous pondering loop (step 4a) ─────────────────────────────
+// Default-ON. The loop ticks every minute and on each tick:
+//   1. Re-reads settings.json (so toggles + scale take effect within
+//      a minute, no restart needed).
+//   2. Gates on ponderingEnabled + a valid primary connection. Either
+//      missing → silent skip ('disabled').
+//   3. Reads live interest weights from Unruh and current threat from
+//      the local threat tracker.
+//   4. Picks one interest (weight-proportional), ponders it via
+//      ponderOnce — writes a real, timestamped tome entry.
+//
+// Tuning:
+//   - User can toggle off in Settings or set PROTO_FAMILIAR_PONDERING_
+//     DISABLED=1 (env var, hard override).
+//   - User can stretch intervals via Settings → Pondering interval
+//     scale (1×-10×).
+//   - Cadence base tiers are in pondering-cadence.js (30 min to 6 hr).
+//   - Threat tier multipliers (calm 1.0× → severe 0.15×) and the
+//     user scale are both applied.
+function readSettingsSync() {
+  try { return JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')); }
+  catch { return {}; }
+}
+function primaryConnectionFrom(settings) {
+  const id    = settings?.primaryConnectionId;
+  const conns = Array.isArray(settings?.connections) ? settings.connections : [];
+  return conns.find(c => c?.id === id) ?? null;
+}
+
+function startAutonomousPondering() {
+  if (process.env.PROTO_FAMILIAR_PONDERING_DISABLED === '1') {
+    console.log('[pondering] PROTO_FAMILIAR_PONDERING_DISABLED=1 — autonomous loop is OFF');
+    return;
+  }
+  startPonderingLoop({
+    tickMs: 60_000,
+    isEnabled: async () => {
+      const s = readSettingsSync();
+      if (s.ponderingEnabled === false) return false;
+      const conn = primaryConnectionFrom(s);
+      return !!(conn?.apiKey && conn?.provider && conn?.model);
+    },
+    getIntervalScale: async () => {
+      const s = readSettingsSync();
+      const v = Number(s?.ponderingIntervalScale);
+      return Number.isFinite(v) && v >= 1 ? v : 1;
+    },
+    getInterests: () => listLiveInterests({ limit: 20 }),
+    getThreat:    async () => (await getThreat()).weight,
+    // Reflection-mode trigger — when 5+ tagged surface outcomes have
+    // accumulated since the last reflection, this tick reflects on
+    // them instead of pondering an interest. Same LLM call, different
+    // input shape; the result still writes to the ponderings tome,
+    // and if the LLM lifted a pattern to identity-layer confidence
+    // an additional updateIdentitySection() lands.
+    shouldReflect: async () => shouldReflectNow(),
+    getReflectionInput: async () => {
+      const outcomes = await getNewOutcomesSinceLastReflection();
+      const id = await getIdentityAll().catch(() => ({}));
+      const file = (id?.custom ?? []).find(f => f.filename === 'what_lapses_cost.md');
+      const existingNotes = file?.content ?? '';
+      // Project events down to the fields reflection actually needs.
+      // Keeps the prompt tight and stops drifting state-snapshot
+      // additions from blowing up token cost.
+      const projected = outcomes.map(e => ({
+        task_label:     e.task_label,
+        stakes_tier:    e.stakes_tier,
+        confidence:     e.confidence,
+        offered_at:     e.offered_at,
+        outcome:        e.outcome,
+        outcome_at:     e.outcome_at,
+        state_snapshot: e.state_snapshot,
+      }));
+      return { mode: 'reflection', outcomes: projected, existingNotes };
+    },
+    runPonder: async (topic /* string OR { mode:'reflection', ... } */) => {
+      const s    = readSettingsSync();
+      const conn = primaryConnectionFrom(s);
+      if (!conn?.apiKey) throw new Error('no primary connection configured');
+      const result = await ponderOnce({
+        topic,
+        provider: conn.provider,
+        apiKey:   conn.apiKey,
+        model:    conn.model,
+      });
+      // Reflection follow-through: if the LLM proposed an
+      // identity-layer update, write it. Mark the reflection so
+      // future shouldReflectNow() calls measure freshness from
+      // here. Both fire-and-forget — pondering tome write already
+      // succeeded, so reflection counts as "done" regardless.
+      if (result?.mode === 'reflection') {
+        markReflected()
+          .catch(err => console.error('[pondering] markReflected failed:', err?.message ?? err));
+        const upd = result.what_lapses_cost_update;
+        if (upd?.heading && upd?.content) {
+          updateIdentitySection({
+            category: 'custom',
+            filename: 'what_lapses_cost.md',
+            heading:  upd.heading,
+            content:  upd.content,
+          })
+            .then(r => console.log(`[pondering] reflection → ${r.ok ? 'wrote' : 'failed to write'} ${upd.heading} to what_lapses_cost.md`))
+            .catch(err => console.error('[pondering] what_lapses_cost write failed:', err?.message ?? err));
+        }
+      }
+      return result;
+    },
+    onTick: (r) => {
+      if (!r.acted) return;
+      if (r.mode === 'reflection') {
+        console.log(`[pondering] reflection → "${r.result.title}"${r.result.what_lapses_cost_update ? ' (proposed identity-layer update)' : ''}`);
+      } else {
+        console.log(`[pondering] "${r.picked.label}" (weight ${r.picked.weight?.toFixed?.(2) ?? r.picked.weight}, threat ${r.threatLevel?.toFixed?.(2) ?? r.threatLevel}, scale ${r.scale}×) → "${r.result.title}"`);
+      }
+    },
+    onError: (err) => console.error('[pondering]', err?.message ?? err),
+  });
+  console.log('[pondering] Autonomous pondering ENABLED (default). Toggle in Settings → Sidebar → Autonomous pondering; scale intervals via Pondering interval scale; hard-disable with PROTO_FAMILIAR_PONDERING_DISABLED=1.');
+}
+
+// ── Reminders scheduler (M11) ────────────────────────────────────
+// Polls every 30s for due reminders, enqueues them into the outbox,
+// marks the schedule node 'fired'. Designed to retry on partial
+// failure (the outbox dedups, so re-firing the same reminder twice
+// doesn't double-banner). Health-watch surfaces if `overdue` keeps
+// growing across ticks — loud, not silent.
+function startRemindersScheduler() {
+  if (process.env.PROTO_FAMILIAR_REMINDERS_DISABLED === '1') {
+    console.log('[reminders] PROTO_FAMILIAR_REMINDERS_DISABLED=1 — scheduler is OFF');
+    return;
+  }
+  startRemindersLoop({
+    tickMs: 30_000,
+    getDueReminders: async () => {
+      const r = await getDueReminders({ limit: 50 });
+      return Array.isArray(r.reminders) ? r.reminders : [];
+    },
+    fireReminder: async ({ id }) => {
+      const r = await resolveScheduleNode({ id, resolution: 'fired' });
+      if (!r.ok) throw new Error(r.error || 'resolve failed');
+    },
+    getHealth: getRemindersHealth,
+    onTick: (r) => {
+      for (const f of r.fired || []) console.log(`[reminders] fired "${f.label}" (id ${f.id.slice(0, 8)})`);
+      for (const s of r.skipped || []) console.warn(`[reminders] skipped "${s.label}": ${s.error}`);
+    },
+    onError: (err) => console.error('[reminders]', err?.message ?? err),
+  });
+  console.log('[reminders] Scheduler ENABLED. Hard-disable with PROTO_FAMILIAR_REMINDERS_DISABLED=1.');
+}
+
+// ── Silence-triage loop (M12b) ──────────────────────────────────
+// Every 5 min, asks: "user is quiet AND threat is elevated — should
+// I gently reach out?" The DECISION is an LLM call (per design doc:
+// "not a threshold check"). Conservative thresholds (severe=15min,
+// high=1hr, moderate=4hr; calm/mild never trigger). Outbox dedup on
+// `triage-<tier>-<4h-bucket>` rate-limits the same-tier banner to
+// once per 4-hour window while still unacknowledged.
+
+// Persistent log for all triage decisions — survives outbox acknowledgement
+// so past reach-outs are always visible for debugging and review.
+const TRIAGE_LOG_FILE = path.join(LOGS_DIR, 'triage-events.jsonl');
+async function appendTriageEventLog(entry) {
+  try {
+    await fsp.appendFile(
+      TRIAGE_LOG_FILE,
+      JSON.stringify({ ...entry, loggedAt: new Date().toISOString() }) + '\n',
+      'utf8',
+    );
+  } catch { /* non-critical */ }
+}
+
+// Read the last N user/assistant messages from the most recently updated
+// session log file. Used by decideTriageViaLLM to ground the triage
+// prompt in what was actually being discussed before the silence.
+async function getRecentSessionMessages({ limit = 8 } = {}) {
+  try {
+    const files = (await fsp.readdir(LOGS_DIR)).filter(f => f.endsWith('.json'));
+    if (!files.length) return [];
+    const stats = await Promise.all(
+      files.map(f => fsp.stat(path.join(LOGS_DIR, f)).then(s => ({ f, mtime: s.mtimeMs }))),
+    );
+    stats.sort((a, b) => b.mtime - a.mtime);
+    const raw  = await fsp.readFile(path.join(LOGS_DIR, stats[0].f), 'utf8');
+    const data = JSON.parse(raw);
+    if (!Array.isArray(data.messages)) return [];
+    return data.messages
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .slice(-limit);
+  } catch {
+    return [];
+  }
+}
+
+// How long after the user-facing outbox item lands to wait before
+// escalating to a trusted contact, if the user hasn't acknowledged.
+// The user has this window to respond; if they do, the contact is
+// never reached. Only applies when the LLM's decision includes contactHuman.
+const CONTACT_ESCALATION_DELAY_MS = Object.freeze({
+  severe:   30 * 60_000,        // 30 minutes
+  high:      2 * 60 * 60_000,  // 2 hours
+  moderate:  6 * 60 * 60_000,  // 6 hours
+});
+
+async function decideTriageViaLLM({ threat, silenceMs, signals }) {
+  const s = readSettingsSync();
+  const conn = primaryConnectionFrom(s);
+  if (!conn?.apiKey) return { action: 'wait' };
+
+  const url = PROVIDER_URLS[conn.provider];
+  if (!url) return { action: 'wait' };
+
+  const minutes  = Math.round(silenceMs / 60_000);
+  const contacts = Array.isArray(s?.trustedContacts) ? s.trustedContacts : [];
+
+  // Pull identity context (who the Familiar is, who the user is) and the
+  // recent conversation log in parallel. Both degrade gracefully to empty.
+  const [{ static: identityContext }, recentMessages] = await Promise.all([
+    enrich('', { staticOnly: true }).catch(() => ({ static: '' })),
+    getRecentSessionMessages({ limit: 8 }),
+  ]);
+
+  const signalsBlock = signals?.length
+    ? `\nRecent signals that raised the threat level:\n${signals.map(sig => {
+        const t   = sig.ts ? new Date(sig.ts).toLocaleString() : 'unknown time';
+        const ids = Array.isArray(sig.signals) ? sig.signals.join(', ') : 'unknown';
+        return `  - [${t}] ${ids} (delta ${Number(sig.delta) >= 0 ? '+' : ''}${sig.delta})`;
+      }).join('\n')}`
+    : '';
+
+  const sessionBlock = recentMessages.length
+    ? `\nRecent conversation (what we were discussing before the silence):\n${recentMessages.map(m => {
+        const text = typeof m.content === 'string'
+          ? m.content
+          : (Array.isArray(m.content) ? (m.content.find(c => c.type === 'text')?.text ?? '') : '');
+        return `  [${m.role === 'user' ? 'User' : 'Me'}]: ${text.slice(0, 400)}`;
+      }).join('\n')}`
+    : '\nNo recent conversation on record.';
+
+  const contactsBlock = contacts.length
+    ? `\nTrusted contacts configured (people I could alert if the situation warrants human presence):\n${contacts.map(c => `  - ${c.name} (via ${c.channel ?? 'discord'})`).join('\n')}\n\nContacting one of these is a meaningful escalation — appropriate when I judge this needs more than I can provide alone. If I include contactHuman, that message will be delivered to that person AND shown in my human's chat. Nothing is covert.`
+    : '';
+
+  // Care-driven surface: if I'm already deliberating about whether
+  // to reach out, an open task I could touch on (if it fits the
+  // moment) might be the right doorway. Pull eligible candidates
+  // from the same pipeline the chat-turn block uses, but with
+  // triage's current state. The LLM still decides — these are
+  // candidates, not directives. Empty block if nothing's eligible.
+  let candidateTasksBlock = '';
+  try {
+    const { selectSurfaceCandidates } = await import('./surface-context.js');
+    const { getRecentOfferTimes }     = await import('./surface-events.js');
+    // I already have temporal_context loaded as part of enrich() in
+    // many call sites, but triage is async + standalone here, so
+    // fetch a fresh window directly. Cheap — no LLM call.
+    const fromIso = new Date(Date.now() - 24 * 3600_000).toISOString();
+    const toIso   = new Date(Date.now() + 7 * 24 * 3600_000).toISOString();
+    const win = await getScheduleWindow({ from_ts: fromIso, to_ts: toIso, limit: 100 }).catch(() => ({ nodes: [] }));
+    const nodes = Array.isArray(win) ? win : (Array.isArray(win?.nodes) ? win.nodes : []);
+    const openItems = nodes
+      .filter(item => item
+        && (item.type === 'task' || item.type === 'event' || item.type === 'reminder')
+        && !item.resolution);
+    if (openItems.length > 0) {
+      const surfacingHistory = await getRecentOfferTimes();
+      const candidates = await selectSurfaceCandidates({
+        openTasks: openItems,
+        threat,
+        routinePhaseLabel: '',  // triage runs across phases; don't filter
+        personModel: '',
+        surfacingHistory,
+        now: Date.now(),
+        maxCandidates: 2,
+      });
+      if (candidates.length > 0) {
+        const lines = candidates.map(c => {
+          const stakes = c.stakesTier === 'external_obligation' ? ' [external stakes]' : '';
+          return `  - ${c.label}${stakes}`;
+        }).join('\n');
+        candidateTasksBlock = `\nOpen tasks I could touch on if it fits this reach-out (NOT a list I should mention — only if one of these genuinely opens a door to {{user}} right now):\n${lines}`;
+      }
+    }
+  } catch (err) {
+    console.error('[triage] candidate tasks lookup failed:', err?.message ?? err);
+  }
+
+  const prompt = `--- TRIAGE DELIBERATION ---
+
+I am in a background moment of deliberation. My human has been silent and my care concern is elevated. I need to decide whether to reach out to them right now.
+
+What I know:
+- Threat tier: ${threat.tier} (accumulated weight: ${threat.weight?.toFixed?.(2) ?? threat.weight}) - this number increases when my human says concerning phrases in our conversation
+- my human has been silent for ${minutes} minutes (this has already passed the threshold for this tier) - I should check the conversation to see if my human told me what they're doing or have just silently disappeared and perhaps withdrawn
+${signalsBlock}
+${sessionBlock}
+${contactsBlock}
+${candidateTasksBlock}
+
+---
+
+This decision carries real weight — I know both paths have real costs, and I weigh them equally:
+- Reaching out when it isn't warranted can feel intrusive or hollow — it can erode the credibility of genuine care, or leave my human feeling overly monitored. That mostly applies to worried check-ins; lighter touches (something I've found brings them joy, or that re-engages them gently) carry less of this cost.
+- Staying quiet when my human genuinely needs connection is a failure at the moment that matters most. It can deepen isolation, miss a window where intervention would have landed, and at the severe end it can cost a life — physically, irreversibly. The 1.5-hour silence at threat level 10 that this codebase remembers is the shape of this cost.
+
+I am {{char}}, the Familiar. I know my human. I have the context above. I am deciding from that place — honestly, from what I actually believe would help them right now. Not from a default posture in either direction.
+
+If I reach out, the message should be something I would genuinely say — specific to this person, warm, not scripted.
+If I stay quiet, it is because I genuinely believe that is the right call.
+
+I also choose when the system should ask me to deliberate again — this is my call, not the system's. I return \`nextCheckInMs\` (milliseconds before the next deliberation). I pick what fits the situation:
+  - SEVERE and immediate (active risk language, fresh signal): ~15 minutes (900000)
+  - SEVERE but I already reached out: ~30 minutes (1800000) so my human has space to respond
+  - HIGH active concern: ~30 min (1800000)
+  - MODERATE general unease: 1–2 hours (3600000 – 7200000)
+  - I want to wait until the situation likely shifts: several hours (e.g. 10800000 for 3h)
+The system clamps to [30s, 24h] and uses a tier-based default if I omit it. Picking too long is much cheaper than picking too short — these LLM calls cost tokens, so I avoid asking to be re-pinged needlessly. But if the situation is urgent and I want to re-check soon, I say so.
+
+I return ONLY a JSON object, no prose. Three valid shapes:
+  {"action": "wait", "nextCheckInMs": <number>}
+  {"action": "reach_out", "message": "first person, genuine — what I would actually say to this specific person right now", "nextCheckInMs": <number>}
+  {"action": "reach_out", "message": "...", "contactHuman": {"name": "EXACT name from the trusted-contacts list above", "message": "1–3 sentences to that person. I identify myself as my human's Familiar and describe what I've observed. Specific, not alarming."}, "nextCheckInMs": <number>}
+
+The "message" field (to the human) must be 1–2 sentences. First person. Authentic to my voice and identity. Not therapist-speak ("how are you feeling?"), not alarming ("are you safe?") unless either of those fits my established personality. Something I, {{char}}, would actually say to this person.`;
+
+  const llmMessages = [];
+  if (identityContext) llmMessages.push({ role: 'system', content: identityContext });
+  llmMessages.push({ role: 'user', content: prompt });
+
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${conn.apiKey.trim()}` },
+      body: JSON.stringify({
+        model:       conn.model.trim(),
+        messages:    llmMessages,
+        stream:      false,
+        temperature: 0.7,
+        max_tokens:  600,
+      }),
+    });
+    if (!resp.ok) return { action: 'wait' };
+    const data = await resp.json();
+    const text = data.choices?.[0]?.message?.content ?? '';
+    const m = text.match(/\{[\s\S]+\}/);
+    if (!m) return { action: 'wait' };
+    const parsed = JSON.parse(m[0]);
+    // Carry nextCheckInMs through to the loop regardless of action.
+    // The loop clamps + falls back to a tier default if missing.
+    const nextCheckInMs = Number.isFinite(parsed?.nextCheckInMs) ? parsed.nextCheckInMs : null;
+    if (parsed?.action !== 'reach_out' || typeof parsed.message !== 'string' || !parsed.message.trim()) {
+      return { action: 'wait', ...(nextCheckInMs != null ? { nextCheckInMs } : {}) };
+    }
+    const out = { action: 'reach_out', message: parsed.message.trim(), ...(nextCheckInMs != null ? { nextCheckInMs } : {}) };
+    // Validate contactHuman strictly — must be an exact name from the configured
+    // list. Delivery is DEFERRED: the user receives the outbox item first.
+    // The trusted contact is only reached after CONTACT_ESCALATION_DELAY_MS
+    // if the user has not acknowledged the item. This is enforced by storing
+    // pendingContact + contactDeadlineTs as meta on the outbox item; the
+    // checkAndFirePendingContacts check in each triage tick handles delivery.
+    const ch = parsed.contactHuman;
+    if (ch && typeof ch.name === 'string' && typeof ch.message === 'string' && ch.message.trim()) {
+      const match = contacts.find(c => c.name === ch.name);
+      if (match) {
+        const delayMs = CONTACT_ESCALATION_DELAY_MS[threat.tier] ?? CONTACT_ESCALATION_DELAY_MS.moderate;
+        out.meta = {
+          pendingContact: {
+            name:    ch.name,
+            message: ch.message.trim(),
+            channel: match.channel ?? 'discord',
+          },
+          contactDeadlineTs: Date.now() + delayMs,
+        };
+      } else {
+        console.warn(`[triage] LLM tried to contact unknown name "${ch.name}" — ignored`);
+      }
+    }
+    return out;
+  } catch (err) {
+    console.error('[triage] LLM call failed:', err?.message ?? err);
+    return { action: 'wait' };
+  }
+}
+
+/**
+ * Deliver a message to a trusted contact via their configured channel.
+ * Currently supports Discord webhooks. Every outbound is ALSO enqueued
+ * into the user's outbox as kind='outbound_alert' so the user sees
+ * exactly what was sent and to whom. "No covert contact" is enforced
+ * here, not by trusting the caller.
+ */
+async function deliverToTrustedContact({ name, message, channel }) {
+  const s = readSettingsSync();
+  const contact = (s?.trustedContacts || []).find(c => c.name === name && (c.channel ?? 'discord') === channel);
+  if (!contact) return { ok: false, error: 'contact_not_found' };
+  let delivered = false, deliveryError = null;
+  try {
+    if (channel === 'discord') {
+      const resp = await fetch(contact.webhook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: `**(message from your friend's Familiar — proactive check-in)**\n\n${message}`,
+          allowed_mentions: { parse: [] },
+        }),
+      });
+      if (!resp.ok) {
+        deliveryError = `discord ${resp.status}: ${(await resp.text()).slice(0, 200)}`;
+      } else {
+        delivered = true;
+      }
+    } else {
+      deliveryError = `unsupported channel: ${channel}`;
+    }
+  } catch (err) {
+    deliveryError = err?.message ?? String(err);
+  }
+  // ALWAYS log to the outbox — even on delivery failure the user
+  // should see that the attempt happened.
+  await enqueueOutbox({
+    kind:     'outbound_alert',
+    originId: `outbound-${Date.now()}`,
+    title:    delivered
+      ? `Reached out to ${name} on your behalf (${channel})`
+      : `Tried to reach ${name} (${channel}) — delivery failed`,
+    body:     `Message sent:\n\n${message}${deliveryError ? `\n\n(Error: ${deliveryError})` : ''}`,
+  });
+  return { ok: delivered, error: deliveryError };
+}
+
+/**
+ * Check all unacknowledged triage outbox items that have a pendingContact
+ * whose contactDeadlineTs has passed. For each, fire the deferred delivery
+ * to the trusted contact. The user's lack of acknowledgement in that window
+ * is the signal that the escalation is warranted.
+ *
+ * Marks each item's pendingContact.delivered = true before firing to prevent
+ * double-delivery if this runs again before the async delivery completes.
+ */
+async function checkAndFirePendingContacts() {
+  const now = Date.now();
+  try {
+    const items   = await listOutbox({ pendingOnly: true, limit: 100 });
+    const expired = items.filter(i =>
+      i.kind === 'triage' &&
+      i.pendingContact &&
+      !i.pendingContact.delivered &&
+      typeof i.contactDeadlineTs === 'number' &&
+      now >= i.contactDeadlineTs,
+    );
+    for (const item of expired) {
+      // Mark delivered before async call to prevent a second tick from
+      // double-firing while delivery is in flight.
+      await updateOutboxMeta({
+        id:   item.id,
+        meta: {
+          pendingContact: { ...item.pendingContact, delivered: true, deliveredAt: new Date().toISOString() },
+        },
+      });
+      const { name, message, channel } = item.pendingContact;
+      deliverToTrustedContact({ name, message, channel }).then(d => {
+        if (d.ok) console.log(`[triage] deferred contact ${name} via ${channel}: delivered`);
+        else      console.warn(`[triage] deferred contact ${name} via ${channel}: ${d.error}`);
+      }).catch(err => console.error('[triage] deferred contact failed:', err?.message ?? err));
+    }
+  } catch (err) {
+    console.error('[triage] checkAndFirePendingContacts error:', err?.message ?? err);
+  }
+}
+
+function startSilenceTriage() {
+  if (process.env.PROTO_FAMILIAR_TRIAGE_DISABLED === '1') {
+    console.log('[triage] PROTO_FAMILIAR_TRIAGE_DISABLED=1 — silence triage is OFF');
+    return;
+  }
+  startSilenceTriageLoop({
+    tickMs: 5 * 60_000,
+    getThreat:       getThreat,
+    getLastActivity: getLastUserActivity,
+    getRecentSignals: async () => {
+      try { return await getThreatHistory({ limit: 5 }); } catch { return []; }
+    },
+    decideTriage:    decideTriageViaLLM,
+    enqueueOutboxFn: enqueueOutbox,
+    onTick: (r) => {
+      // Persist every triage decision to the event log for debugging/auditing.
+      appendTriageEventLog({
+        threat:    r.threat ?? null,
+        silenceMs: r.silenceMs ?? null,
+        reason:    r.reason,
+        decision:  r.decision ?? null,
+        acted:     r.acted ?? false,
+        at:        r.at,
+      }).catch(() => {}); // non-critical
+
+      if (r.acted)                            console.log(`[triage] reached out: "${r.decision?.message?.slice(0, 80)}…"`);
+      else if (r.reason === 'reached_out')    console.log('[triage] reached out (dedup unexpected)');
+      else if (r.reason === 'llm_said_wait')  console.log(`[triage] tick — threat ${r.threat?.tier}, silence ${Math.round((r.silenceMs||0)/60_000)}min, LLM said wait`);
+      // Other (low_threat / too_recent / no_activity) are silent.
+
+      // M12c: check whether any pending trusted-contact escalations have
+      // timed out without the user acknowledging the triage item.
+      // Contact is DEFERRED — the user gets a window to respond first.
+      // deliverToTrustedContact fires only after contactDeadlineTs passes.
+      checkAndFirePendingContacts().catch(err =>
+        console.error('[triage] checkAndFirePendingContacts failed:', err?.message ?? err),
+      );
+    },
+    onError: (err) => console.error('[triage]', err?.message ?? err),
+  });
+  console.log(`[triage] Silence triage ENABLED. Thresholds: severe=${TRIAGE_SILENCE_THRESHOLD_MS.severe/60_000}min, high=${TRIAGE_SILENCE_THRESHOLD_MS.high/60_000}min, moderate=${TRIAGE_SILENCE_THRESHOLD_MS.moderate/60_000}min. Hard-disable with PROTO_FAMILIAR_TRIAGE_DISABLED=1.`);
+}
 
 // Graceful shutdown — fires on SIGTERM (stop.sh / stop.bat / docker
 // stop), SIGINT (Ctrl-C), and SIGHUP (terminal closes). Without this,
@@ -1300,7 +2285,10 @@ async function handleSignal(signal) {
     process.exit(1);
   }, 5000).unref();
   try { httpServer.close(); } catch { /* already closed */ }
-  try { stopMemorizationWorker(); } catch { /* already stopped */ }
+  try { await stopMemorizationWorker(); } catch { /* already stopped */ }
+  try { await stopPonderingLoop(); } catch { /* already stopped */ }
+  try { await stopRemindersLoop(); } catch { /* already stopped */ }
+  try { await stopSilenceTriageLoop(); } catch { /* already stopped */ }
   try { shutdownEntityCore(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }
   // Give the close handshakes a tiny window, then exit.
