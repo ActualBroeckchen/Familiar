@@ -1598,10 +1598,49 @@ function applyNameVars(text) {
  * strips client-only fields (timestamp, _toolName) and ensures
  * the shape is correct for each role.
  */
-function toApiMessage({ role, content, tool_calls, tool_call_id }) {
+// Pretty-print a message timestamp as a [HH:MM] tag for prepending to
+// LLM-visible content. Uses 24h local time so the Familiar reads them
+// at a glance and the tag stays compact (5 chars + brackets). The tag
+// is ONLY ever attached to the temporary message objects built for
+// the upstream API call; state.messages keeps clean content, and any
+// [HH:MM] the model echoes back is stripped before save (see
+// stripLeadingTimestamp below). So the user never sees these tags in
+// chat — they exist purely for the model's per-turn time perception.
+function fmtMsgTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (!Number.isFinite(d.getTime())) return '';
+  return `[${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}]`;
+}
+
+function stampContent(content, ts) {
+  if (typeof content !== 'string' || !content) return content;
+  const tag = fmtMsgTime(ts);
+  return tag ? `${tag} ${content}` : content;
+}
+
+// Inverse of stampContent: if the model echoed a leading [HH:MM] tag
+// back into its response (mirroring what it saw in history), strip
+// it before we save the message to state.messages. Keeps the chat
+// UI clean, keeps memorization-captured content clean, keeps
+// RAG-indexed assistant text clean. Matches a single leading tag
+// only; tags appearing mid-content are left alone (those are
+// genuine references the model chose to write).
+const TIMESTAMP_PREFIX_RE = /^\s*\[\d{1,2}:\d{2}\]\s*/;
+function stripLeadingTimestamp(content) {
+  if (typeof content !== 'string') return content;
+  return content.replace(TIMESTAMP_PREFIX_RE, '');
+}
+
+function toApiMessage({ role, content, tool_calls, tool_call_id, timestamp }) {
   if (role === 'tool')      return { role, tool_call_id, content };
-  if (tool_calls)           return { role, content: content ?? null, tool_calls };
-  return { role, content };
+  // Each historical user/assistant message carries its own timestamp
+  // in state.messages — prepended to the API-bound content here (NOT
+  // to the stored state) so the Familiar perceives WHEN each turn
+  // happened across the whole conversation, not just the current one.
+  const stamped = stampContent(content, timestamp);
+  if (tool_calls)           return { role, content: stamped ?? null, tool_calls };
+  return { role, content: stamped };
 }
 
 /**
@@ -1678,7 +1717,11 @@ function _buildApiMessagesInner(userInput) {
   }
 
   // ── New user turn ─────────────────────────────────────────────
-  msgs.push({ role: 'user', content: userInput });
+  // Stamp the live turn with the pending timestamp the chat handler
+  // captured at send time (also used by the elapsedTime macro), so
+  // it's marked the same way as history. The stamp lives only on
+  // this temporary API message — state.messages keeps clean content.
+  msgs.push({ role: 'user', content: stampContent(userInput, _pendingUserMsgTimestamp) });
 
   // ── Post-history prompt ───────────────────────────────────────
   // role:'system' rather than role:'user' so it's semantically a
@@ -1986,7 +2029,7 @@ function renderAllMessages() {
     if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
       const content = typeof msg.content === 'string' ? msg.content.trim() : '';
       if (content) {
-        const html = renderMarkdown(content);
+        const html = renderMarkdown(stripLeadingTimestamp(content));
         const { el, copyBtn } = createMessageEl('assistant', html, msg.timestamp);
         el.dataset.msgIndex = String(i);
         const captured = msg.content;
@@ -2007,9 +2050,17 @@ function renderAllMessages() {
     // Orphaned tool result (shouldn't normally appear) — skip
     if (msg.role === 'tool') { i++; continue; }
 
+    // Strip the leading [HH:MM] tag from the displayed content. The tag
+    // is metadata for the LLM (added by toApiMessage so the Familiar
+    // perceives per-message timing) and the LLM occasionally echoes it
+    // back into responses; the chat UI already shows times via its own
+    // timestamp element, so the tag in the message body is just noise
+    // to the human reader. Memorization and RAG still see the raw
+    // content via state.messages, so they keep the temporal signal.
+    const displayContent = stripLeadingTimestamp(msg.content ?? '');
     const html = msg.role === 'user'
-      ? esc(msg.content ?? '').replace(/\n/g, '<br>')
-      : renderMarkdown(msg.content ?? '');
+      ? esc(displayContent).replace(/\n/g, '<br>')
+      : renderMarkdown(displayContent);
     const { el, copyBtn } = createMessageEl(msg.role, html, msg.timestamp);
     el.dataset.msgIndex = String(i);
     const capturedContent = msg.content;
@@ -2387,7 +2438,7 @@ async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts
               shell = appendAssistantShell(new Date().toISOString());
             }
             fullContent += delta.content;
-            shell.bubble.innerHTML = renderMarkdown(fullContent);
+            shell.bubble.innerHTML = renderMarkdown(stripLeadingTimestamp(fullContent));
             scrollToBottom();
           }
 
@@ -2499,7 +2550,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
       if (!shell) {
         setTyping(false);
         shell = appendAssistantShell(new Date().toISOString());
-        shell.bubble.innerHTML = renderMarkdown(content);
+        shell.bubble.innerHTML = renderMarkdown(stripLeadingTimestamp(content));
       }
       const ts = shell.timeEl?.getAttribute('datetime') || new Date().toISOString();
 
@@ -2661,7 +2712,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
       }
 
       const { el: shellEl, bubble, copyBtn } = appendAssistantShell(timestamp);
-      bubble.innerHTML = renderMarkdown(content);
+      bubble.innerHTML = renderMarkdown(stripLeadingTimestamp(content));
       scrollToBottom();
 
       state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp });
