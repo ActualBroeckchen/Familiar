@@ -7549,8 +7549,12 @@ async function teLoadSchedule() {
       // per-occurrence endpoint (resolves THIS instance only, leaves
       // the rest of the series alive).
       const isOccurrence = !!n.__occurrence_of;
+      // teLocalDateKey takes a Date and returns YYYY-MM-DD in local
+      // TZ — same shape used everywhere else (resolution keys, the
+      // calendar grid). Caches the Date so we only construct it once
+      // instead of three times for the same ISO.
       const occDate = isOccurrence && n.when
-        ? new Date(n.when).getFullYear() + '-' + String(new Date(n.when).getMonth() + 1).padStart(2, '0') + '-' + String(new Date(n.when).getDate()).padStart(2, '0')
+        ? teLocalDateKey(new Date(n.when))
         : '';
       const occAttrs = isOccurrence
         ? ` data-occurrence-date="${teEscapeHtml(occDate)}"`
