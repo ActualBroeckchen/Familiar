@@ -202,30 +202,3 @@ export function relativeDay(targetDateStr, now = Date.now()) {
   const targetYear = new Date(t).getFullYear();
   return dayAndDate(t, { withYear: targetYear !== nowYear });
 }
-
-/**
- * Build the [Now] block server.js appends as the very last system
- * message in the prompt — after chat history, after the post-history
- * prompt, immediately before the model's response slot. These are the
- * freshest-needed values for the Familiar's care reasoning: what time
- * it is right now, and how long since the last contact.
- *
- * Returns the block as a plain string. Always includes the "Now" line;
- * the "last message" line is conditional on lastUserMessageAt being a
- * usable timestamp. Errors degrade silently to '' so a clock glitch
- * never corrupts the rest of the prompt.
- */
-export function buildTimeAnchorBlock({ now = Date.now(), lastUserMessageAt = null } = {}) {
-  try {
-    const lines = [`Now: ${clockTime(now)} on ${dayAndDate(now)}.`];
-    if (lastUserMessageAt) {
-      const lastMs = toMs(lastUserMessageAt);
-      if (Number.isFinite(lastMs)) {
-        lines.push(`My human last sent a message ${relativeTime(lastMs, now)}.`);
-      }
-    }
-    return `[Now]\n${lines.join('\n')}`;
-  } catch {
-    return '';
-  }
-}
