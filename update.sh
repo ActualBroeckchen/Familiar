@@ -20,7 +20,7 @@ set -e
 DEST="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 # BRANCH defaults to `main`. Override to test a feature branch BEFORE
 # it lands on main — e.g.:
-#   BRANCH=claude/implement-unruh-mechanism-NTpoc bash update.sh
+#   BRANCH=my-feature-branch bash update.sh
 # GitHub's archive endpoint accepts branch names with slashes verbatim;
 # the extracted top-level folder is still globbed by `Proto-Familiar-*`.
 BRANCH="${BRANCH:-main}"

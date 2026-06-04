@@ -1,17 +1,16 @@
 # Unruh — Implementation Plan
 
 > Companion to `docs/unruh-design.md`. Read that first if you haven't —
-> this plan assumes the design as given and turns it into a sequence of
-> buildable milestones. Each milestone is sized so a single Claude
-> Code session can pick it up cold from this file, do the work, and
-> commit. Keep that property when editing this doc.
+> this plan turned the design into a sequence of buildable milestones.
+> Kept as a historical record of how Unruh was built (the work
+> shipped in 0.3.0-alpha and merged to `main`).
 
-**Branch convention:** development happens on the dedicated `Unruh`
-branch of Proto-Familiar. Merge to `main` via PR once a milestone is
-shippable. The Unruh module itself lives **inside this repo** as a
-subdirectory at `unruh/` — *not* a sibling repo (this differs from
-entity-core, which lives at `../entity-core/`). See Decision 1 below
-for the rationale.
+**Branch convention (historical):** development happened on the
+dedicated `Unruh` branch of Proto-Familiar, merged to `main` via PR
+on Unruh's completion (0.3.0-alpha). The Unruh module itself lives
+**inside this repo** as a subdirectory at `unruh/` — *not* a sibling
+repo (this differs from entity-core, which lives at
+`../entity-core/`). See Decision 1 below for the rationale.
 
 ---
 

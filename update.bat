@@ -20,7 +20,7 @@ set "SCRIPT_DIR=%~dp0"
 set "DEST=%SCRIPT_DIR:~0,-1%"
 REM BRANCH defaults to `main`. Override to test a feature branch BEFORE
 REM it lands on main:
-REM   set BRANCH=claude/implement-unruh-mechanism-NTpoc
+REM   set BRANCH=my-feature-branch
 REM   update.bat
 REM GitHub's archive endpoint accepts branch names with slashes verbatim.
 if "%BRANCH%"=="" set "BRANCH=main"
