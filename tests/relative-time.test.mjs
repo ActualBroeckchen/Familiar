@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { relativeTime, relativeDay, clockTime, dayAndDate } from '../relative-time.js';
+import { relativeTime, relativeDay, clockTime, dayAndDate, buildTimeAnchorBlock } from '../relative-time.js';
 
 // All test fixtures use a fixed "now" so they're deterministic across
 // timezones and clock drift. The relativeTime/relativeDay helpers
@@ -130,4 +130,31 @@ test('relativeDay: bad input → empty string', () => {
 test('dayAndDate: weekday + month + day, no year by default', () => {
   assert.equal(dayAndDate(new Date(2026, 5, 4)), 'Thursday, June 4');
   assert.equal(dayAndDate(new Date(2026, 0, 1), { withYear: true }), 'Thursday, January 1, 2026');
+});
+
+// ── buildTimeAnchorBlock ───────────────────────────────────────────
+
+test('buildTimeAnchorBlock: always includes the [Now] header + clock + weekday/date', () => {
+  const block = buildTimeAnchorBlock({ now: NOW });
+  assert.match(block, /^\[Now\]/);
+  assert.match(block, /Now: 2:30pm on Thursday, June 4\./);
+});
+
+test('buildTimeAnchorBlock: adds last-message line when lastUserMessageAt is set', () => {
+  const block = buildTimeAnchorBlock({
+    now: NOW,
+    lastUserMessageAt: new Date(NOW - 12 * 60_000).toISOString(),
+  });
+  assert.match(block, /My human last sent a message 12 minutes ago\./);
+});
+
+test('buildTimeAnchorBlock: omits last-message line when lastUserMessageAt is null/missing', () => {
+  const block = buildTimeAnchorBlock({ now: NOW });
+  assert.doesNotMatch(block, /last sent a message/);
+});
+
+test('buildTimeAnchorBlock: bad lastUserMessageAt → omitted, no throw', () => {
+  const block = buildTimeAnchorBlock({ now: NOW, lastUserMessageAt: 'not-a-date' });
+  assert.doesNotMatch(block, /last sent a message/);
+  assert.match(block, /\[Now\]/);
 });

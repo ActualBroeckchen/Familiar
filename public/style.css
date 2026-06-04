@@ -2053,6 +2053,9 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
 .pi-src-post-history           { border-left-color: #fab387; }
 .pi-src-post-history .pi-chip  { color: #fab387; background: rgba(250,179,135,0.10); border-color: rgba(250,179,135,0.40); }
 
+.pi-src-thalamus-time-anchor          { border-left-color: #cba6f7; }
+.pi-src-thalamus-time-anchor .pi-chip { color: #cba6f7; background: rgba(203,166,247,0.10); border-color: rgba(203,166,247,0.40); }
+
 .modal-footer {
   display: flex;
   align-items: center;
