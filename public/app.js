@@ -1598,35 +1598,10 @@ function applyNameVars(text) {
  * strips client-only fields (timestamp, _toolName) and ensures
  * the shape is correct for each role.
  */
-// Pretty-print a message timestamp as a [HH:MM] tag for prepending to
-// LLM-visible content. Uses 24h local time so the Familiar reads them
-// at a glance and the tag stays compact (5 chars + brackets).
-function fmtMsgTime(ts) {
-  if (!ts) return '';
-  const d = new Date(ts);
-  if (!Number.isFinite(d.getTime())) return '';
-  return `[${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}]`;
-}
-
-// Prepend `[HH:MM] ` to a content string when a timestamp is known.
-// Tool / assistant content can be null when tool_calls is the payload;
-// the caller preserves the null in those cases.
-function stampContent(content, ts) {
-  if (typeof content !== 'string' || !content) return content;
-  const tag = fmtMsgTime(ts);
-  return tag ? `${tag} ${content}` : content;
-}
-
-function toApiMessage({ role, content, tool_calls, tool_call_id, timestamp }) {
+function toApiMessage({ role, content, tool_calls, tool_call_id }) {
   if (role === 'tool')      return { role, tool_call_id, content };
-  // Each historical user/assistant message carries its own timestamp
-  // in state.messages — prepended here so the Familiar can read WHEN
-  // each turn happened, not just WHAT was said. Without this the
-  // conversation reads as timeless and the Familiar can't perceive
-  // gaps between messages.
-  const stamped = stampContent(content, timestamp);
-  if (tool_calls)           return { role, content: stamped ?? null, tool_calls };
-  return { role, content: stamped };
+  if (tool_calls)           return { role, content: content ?? null, tool_calls };
+  return { role, content };
 }
 
 /**
@@ -1703,10 +1678,7 @@ function _buildApiMessagesInner(userInput) {
   }
 
   // ── New user turn ─────────────────────────────────────────────
-  // Stamp the live turn with the pending timestamp the chat handler
-  // captured at send time (also used by the elapsedTime macro), so
-  // it's marked the same way as history.
-  msgs.push({ role: 'user', content: stampContent(userInput, _pendingUserMsgTimestamp) });
+  msgs.push({ role: 'user', content: userInput });
 
   // ── Post-history prompt ───────────────────────────────────────
   // role:'system' rather than role:'user' so it's semantically a
