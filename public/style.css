@@ -1727,7 +1727,11 @@ button { cursor: pointer; font-family: var(--font); }
 .te-cal-grid {
   flex: 1;
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  /* minmax(0, 1fr) — without the explicit `0` minimum, grid tracks
+     fall back to their content's intrinsic size, which means a long
+     event title in any cell pushes its column wider and squishes the
+     other six. This was the bug Eury caught in the first render. */
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   grid-auto-rows: minmax(0, 1fr);
   gap: 1px;
   background: var(--border-subtle, #2a2a2a);
@@ -1743,17 +1747,26 @@ button { cursor: pointer; font-family: var(--font); }
   letter-spacing: 0.05em;
   opacity: 0.7;
   text-align: center;
+  /* Same shrink-allowed pattern as cells, so a weekday label can't
+     widen its column either. */
+  min-width: 0;
+  overflow: hidden;
 }
 .te-cal-day {
   background: var(--bg, #1e1e1e);
   padding: 4px 6px;
   min-height: 70px;
+  /* min-width: 0 + overflow: hidden so the cell's contents (event
+     chips, day number) clip rather than push the column wider. */
+  min-width: 0;
+  overflow: hidden;
   cursor: pointer;
   display: flex;
   flex-direction: column;
   gap: 2px;
   font-size: 0.85em;
   transition: background 0.1s;
+  box-sizing: border-box;
 }
 .te-cal-day:hover { background: var(--accent-dim, rgba(255,255,255,0.05)); }
 .te-cal-day.out-of-month { opacity: 0.35; }
@@ -1783,6 +1796,13 @@ button { cursor: pointer; font-family: var(--font); }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* Flex children default to min-width: auto (= content's intrinsic
+     size). For white-space: nowrap that's the full text width, which
+     would push the day cell wider regardless of the cell's own
+     min-width:0. Override both ways so the chip can shrink and
+     clip cleanly. */
+  min-width: 0;
+  max-width: 100%;
   cursor: default;
 }
 .te-cal-event.type-task     { border-left-color: #fab387; background: rgba(250,179,135,0.10); }
