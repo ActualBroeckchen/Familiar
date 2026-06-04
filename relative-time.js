@@ -204,6 +204,47 @@ export function relativeDay(targetDateStr, now = Date.now()) {
 }
 
 /**
+ * Pure-duration phrasing — gives just the interval without "ago" /
+ * "in" prefixes and without "at HH:MM" suffix. Used when the caller
+ * has its own template (e.g. "which was {plainInterval} ago"). The
+ * existing relativeTime() bakes "at HH:MM" / "this morning" into the
+ * output, which doesn't slot cleanly into a sentence that ALSO names
+ * the absolute clock time of the event.
+ *
+ * Returns lowercase phrases like:
+ *   "less than a minute" | "a minute" | "12 minutes"
+ *   "about an hour" | "2 hours"
+ *   "a day" | "3 days"
+ *   "a week" | "3 weeks"
+ *   "a month" | "5 months" | "a year"
+ */
+export function plainInterval(target, now = Date.now()) {
+  const t = toMs(target);
+  const n = toMs(now);
+  if (!Number.isFinite(t) || !Number.isFinite(n)) return '';
+  const absDiff = Math.abs(t - n);
+  if (absDiff < MINUTE) return 'less than a minute';
+  if (absDiff < HOUR) {
+    const mins = Math.round(absDiff / MINUTE);
+    return mins === 1 ? 'a minute' : `${mins} minutes`;
+  }
+  if (absDiff < 20 * HOUR) {
+    const hrs = Math.round(absDiff / HOUR);
+    return hrs === 1 ? 'about an hour' : `${hrs} hours`;
+  }
+  const days = Math.round(absDiff / DAY);
+  if (days < 7) return days === 1 ? 'a day' : `${days} days`;
+  if (days < 60) {
+    const weeks = Math.round(days / 7);
+    return weeks === 1 ? 'a week' : `${weeks} weeks`;
+  }
+  const months = Math.round(days / 30);
+  if (months < 12) return months === 1 ? 'a month' : `${months} months`;
+  const years = Math.round(days / 365);
+  return years === 1 ? 'a year' : `${years} years`;
+}
+
+/**
  * Build the [Now] block server.js appends as the very last system
  * message in the prompt — after chat history, after the post-history
  * prompt, immediately before the model's response slot. These are the
@@ -212,8 +253,11 @@ export function relativeDay(targetDateStr, now = Date.now()) {
  *
  * Returns the block as a plain string. Always includes the "Now" line;
  * the "last message" line is conditional on lastUserMessageAt being a
- * usable timestamp. Errors degrade silently to '' so a clock glitch
- * never corrupts the rest of the prompt.
+ * usable timestamp. Names BOTH the absolute clock time of the prior
+ * message AND the elapsed interval — the model can correlate the two
+ * (e.g. "at 4pm, which was a day ago" ≡ yesterday's 4pm) without
+ * doing date arithmetic. Errors degrade silently to '' so a clock
+ * glitch never corrupts the rest of the prompt.
  */
 export function buildTimeAnchorBlock({ now = Date.now(), lastUserMessageAt = null } = {}) {
   try {
@@ -221,7 +265,9 @@ export function buildTimeAnchorBlock({ now = Date.now(), lastUserMessageAt = nul
     if (lastUserMessageAt) {
       const lastMs = toMs(lastUserMessageAt);
       if (Number.isFinite(lastMs)) {
-        lines.push(`My human last sent a message ${relativeTime(lastMs, now)}.`);
+        lines.push(
+          `Before this, my human last sent a message at ${clockTime(lastMs)}, which was ${plainInterval(lastMs, now)} ago.`,
+        );
       }
     }
     return `[Now]\n${lines.join('\n')}`;

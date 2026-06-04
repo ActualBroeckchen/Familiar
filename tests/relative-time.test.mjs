@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { relativeTime, relativeDay, clockTime, dayAndDate, buildTimeAnchorBlock } from '../relative-time.js';
+import { relativeTime, relativeDay, clockTime, dayAndDate, plainInterval, buildTimeAnchorBlock } from '../relative-time.js';
 
 // All test fixtures use a fixed "now" so they're deterministic across
 // timezones and clock drift. The relativeTime/relativeDay helpers
@@ -140,12 +140,13 @@ test('buildTimeAnchorBlock: always includes the [Now] header + clock + weekday/d
   assert.match(block, /Now: 2:30pm on Thursday, June 4\./);
 });
 
-test('buildTimeAnchorBlock: adds last-message line when lastUserMessageAt is set', () => {
+test('buildTimeAnchorBlock: adds last-message line with absolute clock + interval', () => {
+  // NOW = 14:30; subtracting 12 min puts the prior message at 14:18 → "2:18pm".
   const block = buildTimeAnchorBlock({
     now: NOW,
     lastUserMessageAt: new Date(NOW - 12 * 60_000).toISOString(),
   });
-  assert.match(block, /My human last sent a message 12 minutes ago\./);
+  assert.match(block, /Before this, my human last sent a message at 2:18pm, which was 12 minutes ago\./);
 });
 
 test('buildTimeAnchorBlock: omits last-message line when lastUserMessageAt is null/missing', () => {
@@ -157,4 +158,37 @@ test('buildTimeAnchorBlock: bad lastUserMessageAt → omitted, no throw', () => 
   const block = buildTimeAnchorBlock({ now: NOW, lastUserMessageAt: 'not-a-date' });
   assert.doesNotMatch(block, /last sent a message/);
   assert.match(block, /\[Now\]/);
+});
+
+// ── plainInterval ──────────────────────────────────────────────────
+
+test('plainInterval: minutes', () => {
+  assert.equal(plainInterval(NOW - 30 * 1000, NOW), 'less than a minute');
+  assert.equal(plainInterval(NOW - 1 * 60_000, NOW), 'a minute');
+  assert.equal(plainInterval(NOW - 20 * 60_000, NOW), '20 minutes');
+});
+
+test('plainInterval: hours (no "at HH:MM" suffix, no "ago" suffix)', () => {
+  assert.equal(plainInterval(NOW - 1 * 3600_000, NOW), 'about an hour');
+  assert.equal(plainInterval(NOW - 4 * 3600_000, NOW), '4 hours');
+});
+
+test('plainInterval: days', () => {
+  assert.equal(plainInterval(NOW - 1 * 86_400_000, NOW), 'a day');
+  assert.equal(plainInterval(NOW - 3 * 86_400_000, NOW), '3 days');
+});
+
+test('plainInterval: weeks', () => {
+  assert.equal(plainInterval(NOW - 7 * 86_400_000, NOW), 'a week');
+  assert.equal(plainInterval(NOW - 21 * 86_400_000, NOW), '3 weeks');
+});
+
+test('plainInterval: months and years (deep history)', () => {
+  assert.equal(plainInterval(NOW - 60 * 86_400_000, NOW), '2 months');
+  assert.equal(plainInterval(NOW - 365 * 86_400_000, NOW), 'a year');
+});
+
+test('plainInterval: bad input → empty string', () => {
+  assert.equal(plainInterval(null, NOW), '');
+  assert.equal(plainInterval('not-a-date', NOW), '');
 });
