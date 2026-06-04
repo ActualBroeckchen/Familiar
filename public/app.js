@@ -3187,6 +3187,7 @@ const PI_SOURCE_LABELS = {
   'character-profile': 'Character profile',
   'user-profile':      'User profile',
   'post-history':      'Post-history prompt',
+  'thalamus-time-anchor': '[Now] (server-appended, last)',
 };
 
 function piSegmentEl(source, text) {
@@ -3218,7 +3219,7 @@ function openPromptInspector() {
   for (const src of ['thalamus-static', 'thalamus-dynamic',
                      'system-prompt', 'character-profile', 'user-profile',
                      'lore-sys-top', 'lore-before-char', 'lore-after-char', 'lore-sys-bottom',
-                     'lore-at-depth', 'post-history']) {
+                     'lore-at-depth', 'post-history', 'thalamus-time-anchor']) {
     const chip = document.createElement('span');
     chip.className = `pi-chip pi-src-${src}`;
     chip.textContent = PI_SOURCE_LABELS[src];
@@ -3264,6 +3265,13 @@ function openPromptInspector() {
     // dynamic-thalamus block. Rendered with its own source color.
     if (msg.__source === 'thalamus-dynamic') {
       wrap.appendChild(piSegmentEl('thalamus-dynamic', fullText));
+      body.appendChild(wrap);
+      return;
+    }
+    // Synthetic message representing the server-appended time anchor
+    // — the absolute last system message in the prompt.
+    if (msg.__source === 'thalamus-time-anchor') {
+      wrap.appendChild(piSegmentEl('thalamus-time-anchor', fullText));
       body.appendChild(wrap);
       return;
     }
@@ -3317,6 +3325,15 @@ function openPromptInspector() {
   // defensively anyway.)
   if (dynamicAt !== null && dynamicAt >= lastSentMessages.length) {
     renderMessage({ role: 'system', content: lastThalamus.dynamic, __source: 'thalamus-dynamic' }, dynamicAt);
+  }
+
+  // Time anchor — the server appends this as the absolute last system
+  // message AFTER the chat history and post-history prompt. Renders
+  // here too, so the inspector accurately shows what the LLM saw
+  // (lastSentMessages doesn't include it; the server adds it post-
+  // build, and surfaces it via lastThalamus.timeAnchor).
+  if (lastThalamus?.timeAnchor) {
+    renderMessage({ role: 'system', content: lastThalamus.timeAnchor, __source: 'thalamus-time-anchor' }, lastSentMessages.length);
   }
 
   $('prompt-inspector-modal').classList.remove('hidden');

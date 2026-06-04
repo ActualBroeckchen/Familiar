@@ -48,6 +48,7 @@ import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
 import { listOutbox, acknowledgeOutbox, clearAcknowledged, enqueueOutbox, updateOutboxMeta } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, TRIAGE_SILENCE_THRESHOLD_MS } from './silence-triage-loop.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
+import { buildTimeAnchorBlock } from './relative-time.js';
 import {
   enqueueMemorization,
   listJobs as listMemorizationJobs,
@@ -299,6 +300,24 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   enrichedMessages = injection.messages;
   const injectedAt = injection.injectedAt;
 
+  // 3) Time anchor — appended as the VERY LAST system message, after
+  //    the chat history and after any post-history prompt. These are
+  //    the freshest values the Familiar needs ("what time is it now"
+  //    + "how long since my human last messaged") and they belong
+  //    nearest the model's response slot so they're at maximum
+  //    salience for care reasoning. Only on enrichMode=full — the
+  //    handoff summariser path and debug-prompt previews don't need it.
+  let timeAnchor = '';
+  if (enrichMode === 'full') {
+    timeAnchor = buildTimeAnchorBlock({
+      now: Date.now(),
+      lastUserMessageAt: lastUserMessageAt ?? null,
+    }) || '';
+    if (timeAnchor) {
+      enrichedMessages = [...enrichedMessages, { role: 'system', content: timeAnchor }];
+    }
+  }
+
   const payload = { model: model.trim(), messages: enrichedMessages, stream: !!stream };
   if (typeof temperature === 'number') payload.temperature = temperature;
   if (typeof max_tokens === 'number' && max_tokens > 0) payload.max_tokens = max_tokens;
@@ -323,11 +342,12 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // can render the prompt inspector verbatim instead of re-deriving.
   // Carries both blocks separately + the injection coordinates so the
   // inspector can show static-vs-dynamic regions distinctly.
-  const thalamusEnvelope = (enrichedResult.static || enrichedResult.dynamic) ? {
+  const thalamusEnvelope = (enrichedResult.static || enrichedResult.dynamic || timeAnchor) ? {
     static:     enrichedResult.static  || '',
     dynamic:    enrichedResult.dynamic || '',
     depth,
     injectedAt,
+    timeAnchor,
   } : null;
 
   // Non-streaming path
