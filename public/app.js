@@ -132,6 +132,21 @@ const BUILTIN_TOOLS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'acknowledge_deferred_intent',
+      description: 'I call this after I have filed a deferred intent from my free time — one that appeared in the [Deferred intents from my free time] block — using save_to_tome, save_memory, or update_identity. It marks the intent as acted on so it stops appearing in my working context. I call this once per intent, right after the filing tool call.',
+      parameters: {
+        type: 'object',
+        properties: {
+          uid:   { type: 'string', description: 'UUID of the pondering entry that carried the intent (shown in the deferred-intents block).' },
+          index: { type: 'number', description: 'Index of the intent within that entry\'s wants_to_save array (shown in the deferred-intents block).' },
+        },
+        required: ['uid', 'index'],
+      },
+    },
+  },
   // ── Knowledge-editing tools ───────────────────────────────────────────
   // The Familiar can correct stale or wrong information in memory / identity
   // / graph instead of letting it pile up. Each destructive op auto-snapshots
@@ -540,6 +555,22 @@ const BUILTIN_EXECUTORS = {
       return data.ok ? 'Identity file updated.' : `Identity update failed: ${data.error ?? 'unknown error'}`;
     } catch (err) {
       return `Failed to update identity: ${err.message}`;
+    }
+  },
+
+  acknowledge_deferred_intent: async ({ uid, index }) => {
+    try {
+      const res = await fetch('/api/ponderings/intents/acted-on', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ uid, index }),
+      });
+      const data = await res.json();
+      if (!res.ok) return `Failed to acknowledge intent: ${data.error ?? res.status}`;
+      if (data.alreadyDone) return 'Intent was already marked as filed.';
+      return data.ok ? 'Deferred intent marked as filed.' : `Acknowledge failed: ${data.error ?? 'unknown error'}`;
+    } catch (err) {
+      return `Failed to acknowledge intent: ${err.message}`;
     }
   },
 

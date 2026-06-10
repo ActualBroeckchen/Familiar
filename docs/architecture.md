@@ -177,6 +177,7 @@ ack/cancel — see `memorization.js`.
 - `GET /api/temporal/handoff` + `POST .../handoff/:id/consume`
 - `GET /api/temporal/reminders/health` — observability on the loop
 - `GET /api/temporal/ponderings[?limit&sinceDays]` + DELETE
+- `POST /api/ponderings/intents/acted-on` — mark a deferred intent as filed (body: `{ uid, index }`); called by the `acknowledge_deferred_intent` LLM tool
 
 **Threat surface:**
 - `GET /api/threat` — current tier + weight + last_touched + disabled
@@ -242,9 +243,12 @@ entry to "Familiar's Ponderings" (entries are `enabled: false` so they
 don't auto-fire as RAG lore — they're inspectable artifacts).
 
 **`recent-ponderings.js`** — reads the N most recent pondering entries
-within sinceDays and formats them as a prompt-injection block. Used by
-thalamus.enrich() in every chat turn so the Familiar can reference
-their own real recent thoughts.
+within sinceDays and formats them as a prompt-injection block. Also
+owns the deferred-intent consumer (Pillar B): `getUnactedIntents()`
+returns unacted `wants_to_save` entries oldest-first; `markIntentActedOn()`
+flips one `acted_on` flag under the per-file lock after the chat-turn
+Familiar files it; `formatDeferredIntentsBlock()` renders the [Deferred
+intents] block for enrich().
 
 **`pondering-cadence.js`** — pure tiered formula:
 `computeRequiredInterval(topWeight, threatLevel, { scale })`. Tiers:
@@ -382,7 +386,7 @@ doesn't sit in front of it.
 | Block | Contents | Lifetime | Placement |
 |---|---|---|---|
 | `static` | `base_instructions.md` + identity files (self / user / relationship / custom) | Stable across turns in a session | Prepended to the system message at index 0 |
-| `dynamic` | RAG memory matches → knowledge-graph excerpt → recent ponderings → `[CARE CHECK]` (if threat ≠ calm) → `[Temporal Context]` | Re-derived every turn | Inserted as a separate `role: 'system'` message at `max(1, messages.length - depth)` |
+| `dynamic` | RAG memory matches → knowledge-graph excerpt → recent ponderings → deferred intents → `[CARE CHECK]` (if threat ≠ calm) → `[Temporal Context]` | Re-derived every turn | Inserted as a separate `role: 'system'` message at `max(1, messages.length - depth)` |
 
 The depth defaults to 4 (`thalamusDynamicDepth`, 1–50, server-synced).
 
@@ -391,7 +395,8 @@ Within `dynamic`, the order is deliberate:
 2. **RAG memories** — direct retrieval relevance, weight-bearing facts. Each result's date is rendered through `relativeDay()` so "from yesterday" appears alongside the granularity tag.
 3. **Graph excerpt** — entity-relationship context
 4. **Recent ponderings** — the Familiar's own quiet thoughts (honesty loop). Each entry's `created_at` is rendered via `relativeTime()`.
-5. **`[CARE CHECK]`** — only present when threat tier ≠ calm; carries identity-anchored guidance per tier
+5. **Deferred intents** — only on live turns. Up to 5 `wants_to_save` entries the Familiar flagged during free cycles but hasn't acted on yet. Shows the kind (tome/memory/identity), the summary, the routing tool, and the (uid, index) pair for `acknowledge_deferred_intent`. See "Deferred-action pattern" below.
+6. **`[CARE CHECK]`** — only present when threat tier ≠ calm; carries identity-anchored guidance per tier
 6. **`[Temporal Context]`** — handoff + today's rhythm + schedule window + interests. Every timed item (upcoming / reminders / resolved) is rendered through `relativeTime()` so the Familiar reads "tomorrow at 10am" / "in 30 minutes" rather than ISO timestamps.
 7. **`[Surface candidates]`** — open schedule items that survived the hard gates (threat tier, routine phase, dedup window), packaged with consequence priors + person-model excerpt so the Familiar can decide in voice whether to mention any. See "Surface pipeline" below.
 
@@ -574,6 +579,16 @@ Once tagged, an event's `outcome` is immutable — the LLM later reasons about a
 **`what_lapses_cost.md`** lives at `entity-core/custom/what_lapses_cost.md`. The Familiar writes via the reflection loop when patterns emerge. May not exist initially; surface-context assembly is null-tolerant.
 
 Files: `surface-context.js`, `surface-events.js`, `docs/consequence-priors.md`.
+
+## Deferred-action pattern (wants_to_save)
+
+The autonomous pondering loop has no tool access — it's a background process that calls the LLM and writes to a tome, but can't call `save_memory` or `update_identity` during that call. The deferred-action pattern bridges this gap in two pillars:
+
+**Pillar A (pondering-loop side, `pondering.js`):** When the Familiar notices, while pondering, that something fact-shaped wants to be filed, she records a `wants_to_save` intent in the tome entry instead of trying to write it there. Each intent has `kind` (tome/memory/identity), `summary` (what to save), and `acted_on: false`.
+
+**Pillar B (chat-turn side, `recent-ponderings.js` + `thalamus.js`):** At the start of every live chat turn, `getUnactedIntents()` reads up to 5 unacted intents (oldest-first) from the ponderings tome. `enrich()` formats them as a `[Deferred intents from my free time]` block in the dynamic context — one entry per intent with the routing tool (`save_to_tome` / `save_memory` / `update_identity`) and the `(uid, index)` pair. The Familiar files each one at her own discretion during the turn. After each filing, she calls `acknowledge_deferred_intent(uid, index)`, which hits `POST /api/ponderings/intents/acted-on` and flips `acted_on` to `true` under the per-file lock.
+
+The pattern is forward-compatible: any module that produces `wants_to_save` intents (pondering, reflection, future scan candidates) shares the same consumer infrastructure. No new LLM requests; the intents ride the existing chat turn.
 
 `injectDynamicAtDepth(messages, dynamicContent, depth)` in `server.js`
 is a pure helper; `tests/depth-inject.test.mjs` guards the

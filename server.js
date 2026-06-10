@@ -43,7 +43,7 @@ import {
   getNewOutcomesSinceLastReflection,
   markReflected,
 } from './surface-events.js';
-import { getRecentPonderings, deletePondering } from './recent-ponderings.js';
+import { getRecentPonderings, deletePondering, markIntentActedOn } from './recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
 import { listOutbox, acknowledgeOutbox, clearAcknowledged, enqueueOutbox, updateOutboxMeta } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, TRIAGE_SILENCE_THRESHOLD_MS } from './silence-triage-loop.js';
@@ -1548,6 +1548,21 @@ app.get('/api/temporal/ponderings', async (req, res) => {
 
 app.delete('/api/temporal/ponderings/:uid', async (req, res) => {
   try { res.json(await deletePondering({ uid: req.params.uid })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/ponderings/intents/acted-on — mark a deferred intent as filed.
+// Called by the acknowledge_deferred_intent LLM tool after the Familiar
+// has acted on the intent via save_to_tome / save_memory / update_identity,
+// so it stops resurfacing in the deferred-intents block (Pillar B).
+app.post('/api/ponderings/intents/acted-on', async (req, res) => {
+  const { uid, index } = req.body;
+  if (!isValidUUID(uid)) return res.status(400).json({ error: 'uid must be a valid UUID' });
+  const idx = Number(index);
+  if (!Number.isFinite(idx) || !Number.isInteger(idx) || idx < 0) {
+    return res.status(400).json({ error: 'index must be a non-negative integer' });
+  }
+  try { res.json(await markIntentActedOn({ uid, index: idx })); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 

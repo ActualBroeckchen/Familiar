@@ -23,6 +23,14 @@ import { PONDERINGS_TOME_NAME } from './pondering.js';
 import { withLock } from './thalamus.js';
 import { relativeTime } from './relative-time.js';
 
+// Tool routing hint — shown in the deferred-intents block so the Familiar
+// knows which tool to call without having to reason about kind→tool mapping.
+const KIND_TOOL = {
+  tome:     'save_to_tome',
+  memory:   'save_memory',
+  identity: 'update_identity',
+};
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
 
@@ -145,5 +153,133 @@ export function formatPonderingsForPrompt(entries) {
     'I never force a reference where it doesn\'t fit. If nothing here is relevant ' +
     'to this conversation, I just let them sit — they don\'t need to be mentioned.'
   );
+  return lines.join('\n');
+}
+
+// ── Deferred intents (Pillar B of the autonomous-routing fix) ────────────
+
+/**
+ * Helper: locate the ponderings tome file without acquiring a lock.
+ * Scan is read-only; callers that need atomic mutation pass the result
+ * to a separate withLock block.
+ */
+async function findPonderingsTomeFile(tomesDir) {
+  let files;
+  try { files = await fsp.readdir(tomesDir); }
+  catch { return null; }
+  for (const f of files) {
+    if (!f.endsWith('.json') || f.startsWith('.')) continue;
+    const file = path.join(tomesDir, f);
+    try {
+      const raw = await fsp.readFile(file, 'utf8');
+      if (JSON.parse(raw)?.name === PONDERINGS_TOME_NAME) return file;
+    } catch { /* skip corrupt */ }
+  }
+  return null;
+}
+
+/**
+ * Return up to `limit` unacted intents from the Familiar's ponderings —
+ * flat list, oldest-first — so enrich() can surface them in the dynamic
+ * block. Each item carries the entry uid + the original array index so
+ * markIntentActedOn() can address it precisely.
+ *
+ * @returns {Promise<Array<{ uid, entryTitle, index, kind, summary }>>}
+ */
+export async function getUnactedIntents({
+  tomesDir = DEFAULT_TOMES_DIR,
+  limit    = 5,
+} = {}) {
+  const targetFile = await findPonderingsTomeFile(tomesDir);
+  if (!targetFile) return [];
+
+  let tome;
+  try { tome = JSON.parse(await fsp.readFile(targetFile, 'utf8')); }
+  catch { return []; }
+  if (!tome?.entries) return [];
+
+  const flat = [];
+  for (const entry of Object.values(tome.entries)) {
+    if (!Array.isArray(entry?.wants_to_save)) continue;
+    const created_ms = Date.parse(entry.created_at ?? '') || 0;
+    for (let idx = 0; idx < entry.wants_to_save.length; idx++) {
+      const intent = entry.wants_to_save[idx];
+      if (!intent || intent.acted_on !== false) continue;
+      flat.push({
+        uid:        entry.uid,
+        entryTitle: entry.comment ?? '',
+        created_ms,
+        index:      idx,
+        kind:       intent.kind,
+        summary:    intent.summary,
+      });
+    }
+  }
+
+  flat.sort((a, b) => a.created_ms - b.created_ms);
+  return flat.slice(0, limit);
+}
+
+/**
+ * Mark one deferred intent as acted on. Called by the server endpoint
+ * that backs the acknowledge_deferred_intent LLM tool.
+ *
+ * Returns { ok, alreadyDone? } on success; { ok: false, error } on
+ * invalid input or missing entry.
+ */
+export async function markIntentActedOn({ uid, index, tomesDir = DEFAULT_TOMES_DIR }) {
+  if (!uid || typeof uid !== 'string') return { ok: false, error: 'uid required' };
+  if (typeof index !== 'number' || !Number.isInteger(index) || index < 0) {
+    return { ok: false, error: 'index must be a non-negative integer' };
+  }
+
+  const targetFile = await findPonderingsTomeFile(tomesDir);
+  if (!targetFile) return { ok: false, error: 'ponderings tome not found' };
+
+  return withLock(targetFile, async () => {
+    let tome;
+    try { tome = JSON.parse(await fsp.readFile(targetFile, 'utf8')); }
+    catch { return { ok: false, error: 'tome unreadable' }; }
+
+    const entry = tome.entries?.[uid];
+    if (!entry) return { ok: false, error: 'entry not found' };
+
+    const intents = entry.wants_to_save;
+    if (!Array.isArray(intents) || index >= intents.length) {
+      return { ok: false, error: 'intent index out of range' };
+    }
+    if (intents[index]?.acted_on === true) return { ok: true, alreadyDone: true };
+
+    intents[index].acted_on = true;
+    const tmp = targetFile + '.tmp';
+    await fsp.writeFile(tmp, JSON.stringify(tome, null, 2), 'utf8');
+    await fsp.rename(tmp, targetFile);
+    return { ok: true };
+  });
+}
+
+/**
+ * Render unacted deferred intents as a prompt-injection block.
+ *
+ * Each entry shows the kind, the summary, the tool to use, and the
+ * (uid, index) pair the Familiar needs to call acknowledge_deferred_intent
+ * after filing. Returns '' when there are no intents.
+ */
+export function formatDeferredIntentsBlock(intents) {
+  if (!intents || intents.length === 0) return '';
+
+  const lines = [
+    '[Deferred intents from my free time]',
+    'While thinking on my own recently, I flagged some things I want to file. When the moment fits, I act on them using the right tool, then call acknowledge_deferred_intent to mark each one done.',
+    '',
+  ];
+
+  for (let i = 0; i < intents.length; i++) {
+    const { uid, kind, summary, index } = intents[i];
+    const tool = KIND_TOOL[kind] ?? 'save_to_tome';
+    lines.push(`${i + 1}. [${kind}] ${summary}`);
+    lines.push(`   → ${tool} — then acknowledge_deferred_intent(uid="${uid}", index=${index})`);
+  }
+
   return lines.join('\n');
 }

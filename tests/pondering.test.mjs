@@ -12,6 +12,12 @@ import {
   PONDERINGS_TOME_NAME,
 } from '../pondering.js';
 
+import {
+  getUnactedIntents,
+  markIntentActedOn,
+  formatDeferredIntentsBlock,
+} from '../recent-ponderings.js';
+
 function tempTomesDir() {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'ponder-test-'));
   return {
@@ -367,4 +373,165 @@ test('buildPonderPrompt: forbids fact-card output + invites wants_to_save', () =
   assert.match(prompt, /save_to_tome/i);
   // The new schema field is documented.
   assert.match(prompt, /wants_to_save/);
+});
+
+// ── Pillar B: getUnactedIntents / markIntentActedOn /
+//             formatDeferredIntentsBlock ─────────────────────────────────
+
+test('getUnactedIntents: returns [] when ponderings tome absent', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const result = await getUnactedIntents({ tomesDir: dir });
+    assert.deepEqual(result, []);
+  } finally { cleanup(); }
+});
+
+test('getUnactedIntents: returns only acted_on=false intents, oldest-first, up to limit', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    // Two ponderings, each with one intent; older one acted_on already.
+    const r1 = await ponderOnce({
+      topic: 'first topic', provider: 'nanogpt', apiKey: 'k', model: 'm',
+      callLLM: async () => JSON.stringify({
+        title: 'first', content: 'c',
+        wants_to_save: [{ kind: 'identity', summary: 'fact A' }],
+      }),
+      tomesDir: dir,
+    });
+    const r2 = await ponderOnce({
+      topic: 'second topic', provider: 'nanogpt', apiKey: 'k', model: 'm',
+      callLLM: async () => JSON.stringify({
+        title: 'second', content: 'c',
+        wants_to_save: [{ kind: 'memory', summary: 'fact B' }],
+      }),
+      tomesDir: dir,
+    });
+
+    // Mark the first intent as already acted on.
+    await markIntentActedOn({ uid: r1.uid, index: 0, tomesDir: dir });
+
+    const intents = await getUnactedIntents({ tomesDir: dir });
+    assert.equal(intents.length, 1);
+    assert.equal(intents[0].uid,     r2.uid);
+    assert.equal(intents[0].kind,    'memory');
+    assert.equal(intents[0].summary, 'fact B');
+    assert.equal(intents[0].index,   0);
+  } finally { cleanup(); }
+});
+
+test('getUnactedIntents: preserves original array index when earlier intents are already done', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const r = await ponderOnce({
+      topic: 't', provider: 'nanogpt', apiKey: 'k', model: 'm',
+      callLLM: async () => JSON.stringify({
+        title: 'mixed', content: 'c',
+        wants_to_save: [
+          { kind: 'tome',     summary: 'already done' },   // index 0 — will be acted on
+          { kind: 'identity', summary: 'still pending' },  // index 1 — should surface
+        ],
+      }),
+      tomesDir: dir,
+    });
+
+    await markIntentActedOn({ uid: r.uid, index: 0, tomesDir: dir });
+
+    const intents = await getUnactedIntents({ tomesDir: dir });
+    assert.equal(intents.length, 1);
+    assert.equal(intents[0].index,   1, 'must report original index, not re-numbered');
+    assert.equal(intents[0].kind,    'identity');
+    assert.equal(intents[0].summary, 'still pending');
+  } finally { cleanup(); }
+});
+
+test('getUnactedIntents: respects limit', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    for (let i = 0; i < 4; i++) {
+      await ponderOnce({
+        topic: `topic ${i}`, provider: 'nanogpt', apiKey: 'k', model: 'm',
+        callLLM: async () => JSON.stringify({
+          title: `t${i}`, content: 'c',
+          wants_to_save: [{ kind: 'memory', summary: `intent ${i}` }],
+        }),
+        tomesDir: dir,
+      });
+    }
+    const intents = await getUnactedIntents({ tomesDir: dir, limit: 2 });
+    assert.equal(intents.length, 2);
+  } finally { cleanup(); }
+});
+
+test('markIntentActedOn: flips acted_on to true and is idempotent', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const r = await ponderOnce({
+      topic: 't', provider: 'nanogpt', apiKey: 'k', model: 'm',
+      callLLM: async () => JSON.stringify({
+        title: 'x', content: 'c',
+        wants_to_save: [{ kind: 'tome', summary: 'something' }],
+      }),
+      tomesDir: dir,
+    });
+
+    const first = await markIntentActedOn({ uid: r.uid, index: 0, tomesDir: dir });
+    assert.equal(first.ok, true);
+    assert.equal(first.alreadyDone, undefined);
+
+    // Verify the tome was updated.
+    const tome  = JSON.parse(await fsp.readFile(r.tomeFile, 'utf8'));
+    const entry = tome.entries[r.uid];
+    assert.equal(entry.wants_to_save[0].acted_on, true);
+
+    // Idempotent second call.
+    const second = await markIntentActedOn({ uid: r.uid, index: 0, tomesDir: dir });
+    assert.equal(second.ok, true);
+    assert.equal(second.alreadyDone, true);
+  } finally { cleanup(); }
+});
+
+test('markIntentActedOn: returns error on unknown uid or out-of-range index', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const r = await ponderOnce({
+      topic: 't', provider: 'nanogpt', apiKey: 'k', model: 'm',
+      callLLM: async () => JSON.stringify({
+        title: 'x', content: 'c',
+        wants_to_save: [{ kind: 'tome', summary: 'something' }],
+      }),
+      tomesDir: dir,
+    });
+
+    const badUid = await markIntentActedOn({ uid: '00000000-0000-0000-0000-000000000000', index: 0, tomesDir: dir });
+    assert.equal(badUid.ok, false);
+    assert.ok(badUid.error);
+
+    const badIdx = await markIntentActedOn({ uid: r.uid, index: 99, tomesDir: dir });
+    assert.equal(badIdx.ok, false);
+    assert.ok(badIdx.error);
+  } finally { cleanup(); }
+});
+
+test('formatDeferredIntentsBlock: returns empty string with no intents', () => {
+  assert.equal(formatDeferredIntentsBlock([]), '');
+  assert.equal(formatDeferredIntentsBlock(null), '');
+});
+
+test('formatDeferredIntentsBlock: renders routing hints and uid/index for each intent', () => {
+  const block = formatDeferredIntentsBlock([
+    { uid: 'abc', kind: 'identity', summary: 'love language note', index: 0 },
+    { uid: 'def', kind: 'memory',   summary: 'the night of the DnD session', index: 1 },
+    { uid: 'ghi', kind: 'tome',     summary: 'add care-posture note', index: 2 },
+  ]);
+  assert.match(block, /Deferred intents from my free time/);
+  assert.match(block, /\[identity\].*love language note/);
+  assert.match(block, /update_identity/);
+  assert.match(block, /uid="abc".*index=0/);
+  assert.match(block, /\[memory\].*the night of the DnD session/);
+  assert.match(block, /save_memory/);
+  assert.match(block, /uid="def".*index=1/);
+  assert.match(block, /\[tome\].*add care-posture note/);
+  assert.match(block, /save_to_tome/);
+  assert.match(block, /uid="ghi".*index=2/);
+  assert.match(block, /acknowledge_deferred_intent/);
 });
