@@ -403,11 +403,11 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'interest_bump',
-      description: 'I nudge the weight of an interest topic — used when {{user}} explicitly tells me they care about something, or wants me to think about it more, or when I want to think about it more/find it interesting. The interest accrues engagement weight (same scale my [Temporal Context] interests block shows) and starts decaying gently from that moment. Small deltas (0.5–3.0) for typical mentions; larger (5+) only when {{user}} is being emphatic. A topic that doesn\'t exist yet is created on first bump. For ongoing values that should never decay, I use interest_set_standing instead. I am allowed to add new topics whenever I darn well please!',
+      description: 'I nudge the weight of an interest topic — used when {{user}} explicitly tells me they care about something, or wants me to think about it more, or when I want to think about it more/find it interesting. The interest accrues engagement weight (same scale my [Temporal Context] interests block shows) and starts decaying gently from that moment. Small deltas (0.5–3.0) for typical mentions; larger (5+) only when {{user}} is being emphatic. A topic that doesn\'t exist yet is created on first bump. For ongoing values that should never decay, I use interest_set_standing instead. I am allowed to add new topics whenever I darn well please — but I keep the LABEL short and tag-like, because long propositional labels turn ponderings into fact-cards (see topic param).',
       parameters: {
         type: 'object',
         properties: {
-          topic: { type: 'string', description: 'The topic label, as it should appear in my interests block.' },
+          topic: { type: 'string', description: 'Short, tag-like label (1-5 words) for the topic — what I would title a chip or tag with. The pondering loop later picks topics by weight and asks me to journal about them, so the label needs to be something I can think ABOUT, not a fully-formed claim that I would just be repeating back. Good: "ice skating", "the DnD group", "Melian\'s old friend group", "love languages", "my own agency". Bad (these turn ponderings into tome-cards): "Melian\'s love language: frequent \'I love you\'", "Melian\'s insecurity about being loved back", "the night Melian told me about her sister". Specific factual content like the bad examples belongs in save_to_tome / save_memory / update_identity — the interest layer just tracks what I find myself drawn to thinking about, not the content of what I already know.' },
           delta: { type: 'number', description: 'Positive weight to add. Typical 0.5–3.0; emphatic 5+.' },
         },
         required: ['topic', 'delta'],

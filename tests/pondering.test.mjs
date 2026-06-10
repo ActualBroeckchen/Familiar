@@ -257,3 +257,114 @@ test('ponderOnce: reflection mode tolerates a null update', async () => {
     assert.equal(result.what_lapses_cost_update, null);
   } finally { cleanup(); }
 });
+
+// ── wants_to_save deferred-action intents (Pillar A of the
+//    autonomous-routing fix — see pondering.js comment) ─────────────
+
+test('parsePondering: wants_to_save round-trips when valid', () => {
+  const r = parsePondering(JSON.stringify({
+    title: 't', content: 'c',
+    wants_to_save: [
+      { kind: 'tome',     summary: 'add do-not-minimize-anxiety to care tome' },
+      { kind: 'identity', summary: 'Melian says I-love-you frequently' },
+      { kind: 'memory',   summary: 'the night Melian told me about her sister' },
+    ],
+  }));
+  assert.deepEqual(r.wants_to_save, [
+    { kind: 'tome',     summary: 'add do-not-minimize-anxiety to care tome' },
+    { kind: 'identity', summary: 'Melian says I-love-you frequently' },
+    { kind: 'memory',   summary: 'the night Melian told me about her sister' },
+  ]);
+});
+
+test('parsePondering: wants_to_save absent → field omitted (no empty array clutter)', () => {
+  const r = parsePondering(JSON.stringify({ title: 't', content: 'c' }));
+  assert.equal(r.wants_to_save, undefined);
+});
+
+test('parsePondering: wants_to_save drops malformed entries, keeps valid ones', () => {
+  const r = parsePondering(JSON.stringify({
+    title: 't', content: 'c',
+    wants_to_save: [
+      { kind: 'tome',  summary: 'keeper' },
+      { kind: 'BOGUS', summary: 'dropped — bad kind' },
+      { kind: 'memory', summary: '' },          // dropped — empty summary
+      { summary: 'no kind' },                    // dropped — missing kind
+      null,                                      // dropped — not an object
+      { kind: 'IDENTITY', summary: 'normalized to lowercase' },
+    ],
+  }));
+  assert.deepEqual(r.wants_to_save, [
+    { kind: 'tome',     summary: 'keeper' },
+    { kind: 'identity', summary: 'normalized to lowercase' },
+  ]);
+});
+
+test('parsePondering: wants_to_save all-malformed → field omitted entirely', () => {
+  const r = parsePondering(JSON.stringify({
+    title: 't', content: 'c',
+    wants_to_save: [{ kind: 'wrong' }, { summary: 'no kind' }],
+  }));
+  assert.equal(r.wants_to_save, undefined);
+});
+
+test('ponderOnce: persists wants_to_save into the tome entry + returns it', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const result = await ponderOnce({
+      topic: 'Melian\'s love language',
+      provider: 'nanogpt', apiKey: 'k', model: 'm',
+      callLLM: async () => JSON.stringify({
+        title:   'love language thought',
+        content: 'I keep noticing how often Melian says I love you. It feels important.',
+        wants_to_save: [
+          { kind: 'identity', summary: 'Melian: love language is frequent verbal "I love you"' },
+        ],
+      }),
+      tomesDir: dir,
+    });
+    assert.deepEqual(result.wants_to_save, [
+      { kind: 'identity', summary: 'Melian: love language is frequent verbal "I love you"' },
+    ]);
+    // Persisted in the tome entry with acted_on=false so Pillar B can
+    // mark them done without losing the audit trail.
+    const tome  = JSON.parse(await fsp.readFile(result.tomeFile, 'utf8'));
+    const entry = Object.values(tome.entries)[0];
+    assert.deepEqual(entry.wants_to_save, [
+      { kind: 'identity', summary: 'Melian: love language is frequent verbal "I love you"', acted_on: false },
+    ]);
+  } finally { cleanup(); }
+});
+
+test('ponderOnce: no wants_to_save → tome entry has empty array', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const result = await ponderOnce({
+      topic: 'love languages',
+      provider: 'nanogpt', apiKey: 'k', model: 'm',
+      callLLM: async () => JSON.stringify({
+        title: 'plain thought', content: 'just a meandering thought, nothing to file',
+      }),
+      tomesDir: dir,
+    });
+    assert.deepEqual(result.wants_to_save, []);
+    const tome  = JSON.parse(await fsp.readFile(result.tomeFile, 'utf8'));
+    const entry = Object.values(tome.entries)[0];
+    assert.deepEqual(entry.wants_to_save, []);
+  } finally { cleanup(); }
+});
+
+test('buildPonderPrompt: forbids fact-card output + invites wants_to_save', () => {
+  const prompt = buildPonderPrompt('love languages');
+  // The "structured set of notes" permission that invited tome-shaped
+  // output is gone.
+  assert.doesNotMatch(prompt, /structured set of notes/i);
+  // Explicit don't-write-these guidance is present.
+  assert.match(prompt, /do\/don't/i);
+  assert.match(prompt, /factual claims/i);
+  assert.match(prompt, /update_identity/i);
+  assert.match(prompt, /save_memory/i);
+  assert.match(prompt, /save_to_tome/i);
+  // The new schema field is documented.
+  assert.match(prompt, /wants_to_save/);
+});
