@@ -11,6 +11,57 @@ that's useful to paste into a bug report.
 
 ---
 
+## Install failed on Windows (or appears to do nothing)
+
+Every Windows install run appends to `.proto-familiar-install.log` in
+the project root via PowerShell's `Start-Transcript`. Open that file in
+Notepad first — the failing step is usually named explicitly, with the
+underlying error on the line below.
+
+If the log file doesn't exist at all, the installer never got to run.
+The most common cause is **PowerShell scripts being blocked by Group
+Policy** (AppLocker, WDAC, or Constrained Language Mode — common on
+work-issued laptops). The launcher (`Proto-Familiar.vbs`) detects this
+and pops a MessageBox explaining the situation. Workarounds:
+
+- Run `install.bat` from a Command Prompt instead — it does most of
+  what `install.ps1` does without needing PowerShell COM access.
+- Ask IT to allow PowerShell scripts in the Proto-Familiar folder.
+- Install on a personal machine; copy the working install over later.
+
+### "Proto-Familiar is under OneDrive — relocate?"
+
+The installer detected the install folder is being synced by OneDrive.
+OneDrive locks files mid-sync, which breaks `npm install`. New Win11
+installs back up `Documents` and `Desktop` to OneDrive by default, so
+this trips up most users by accident.
+
+Click **Yes** at the prompt — the installer copies the folder to
+`%LOCALAPPDATA%\Proto-Familiar` (outside OneDrive, short path,
+user-writable) and re-launches itself there. The original folder is
+left in place with a `RELOCATED_TO.txt` marker; delete it manually
+once the new install is verified working.
+
+### Pre-flight warnings about unreachable hosts
+
+The installer probes `github.com`, `registry.npmjs.org`, `deno.land`,
+`astral.sh`, and `pypi.org` over TCP 443 before doing anything. Each
+unreachable host adds a line to the final summary MessageBox. The
+usual culprit is a corporate firewall (ZScaler / Netskope / etc.)
+doing TLS interception with an internal CA that the downstream tools
+(Deno, uv) don't trust. Routes to a "ask IT for a proxy bypass" or
+"install Proto-Familiar on a non-corporate machine" path.
+
+### Install log is empty / "logs are empty"
+
+Same diagnostic loop as above: open `.proto-familiar-install.log`. If
+it doesn't exist, PowerShell is blocked — see the AppLocker section
+above. If the log exists but is empty, `Start-Transcript` was blocked
+(some AV configurations strip it). Try `install.bat` instead — it
+captures output via a different mechanism.
+
+---
+
 ## Knowledge editor / graph
 
 ### "Failed to load graph: entity-core not connected"
