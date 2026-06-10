@@ -1772,19 +1772,26 @@ export async function reportSurfacingOutcomes({ responseText, bookmarks }) {
 
 /**
  * Create a new memory entry in entity-core.
- * @param {{ content: string, granularity: string, date?: string, instanceId?: string }} opts
+ *
+ * `slug` is required by entity-core for significant memories — their
+ * storage filename is `YYYY-MM-DD_slug.md`, so without it every save
+ * lands at the same path and entity-core's merge logic destroys
+ * earlier content. The caller (server.js POST /api/entity/memory) is
+ * responsible for ensuring `slug` is set whenever `granularity ===
+ * 'significant'`; we forward whatever it gives us.
+ *
+ * @param {{ content: string, granularity: string, date?: string, slug?: string, instanceId?: string }} opts
  * @returns {Promise<{ ok: boolean, error?: string }>}
  */
-export async function createMemory({ content, granularity = 'daily', date, instanceId = 'proto-familiar' }) {
+export async function createMemory({ content, granularity = 'daily', date, slug, instanceId = 'proto-familiar' }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
   try {
     const today = new Date().toISOString().slice(0, 10);
-    await mcpClient.callTool({
-      name: 'memory_create',
-      arguments: { content, granularity, date: date ?? today, instanceId },
-    });
-    console.log(`[thalamus] createMemory() saved ${granularity} memory`);
+    const args = { content, granularity, date: date ?? today, instanceId };
+    if (slug) args.slug = slug;
+    await mcpClient.callTool({ name: 'memory_create', arguments: args });
+    console.log(`[thalamus] createMemory() saved ${granularity} memory${slug ? ` (slug=${slug})` : ''}`);
     return { ok: true };
   } catch (err) {
     console.error('[thalamus] createMemory failed:', err.message);

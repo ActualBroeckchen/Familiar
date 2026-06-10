@@ -80,10 +80,11 @@ Entries are saved to the first enabled Tome (auto-creates "General" if none exis
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `content` | string | Yes | Memory text in first-person perspective; use `[chat:auto]`-prefixed bullet points |
+| `content` | string | Yes | Memory text in first-person, as bullet points starting with `- `. No `[chat:id]` tags on live saves. |
 | `granularity` | enum | Yes | `daily` \| `weekly` \| `monthly` \| `yearly` \| `significant` |
+| `title` | string | Required for `significant`, ignored otherwise | Short human-readable label (e.g. `"first meeting"`). Used to slug-name the file so each significant memory gets its own `YYYY-MM-DD_slug.md` and does not overwrite previous ones. |
 
-Requires entity-core to be running. Degrades gracefully (returns an error string) if entity-core is unavailable.
+Requires entity-core to be running. Degrades gracefully (returns an error string) if entity-core is unavailable. For `significant`, the server auto-derives a slug from the title (or from `content`'s first line if the title is missing) before forwarding to entity-core.
 
 #### `update_identity`
 

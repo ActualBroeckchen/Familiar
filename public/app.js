@@ -104,12 +104,13 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'save_memory',
-      description: 'I write a new memory entry to my long-term memory system. I use this to record important events, emotional patterns, or significant moments from this conversation in my durable, time-stamped store. I prefer "daily" for routine session events; I use "significant" for major milestones. Daily memories accumulate across the day — each save appends my new bullets to today\'s file; nothing is overwritten. Multiple saves in the same day are normal and expected.',
+      description: 'I write a new memory entry to my long-term memory system. I use this to record important events, emotional patterns, or significant moments from this conversation in my durable, time-stamped store. I prefer "daily" for routine session events; I use "significant" for major milestones. Daily memories accumulate across the day — each save appends my new bullets to today\'s file; nothing is overwritten. Multiple saves in the same day are normal and expected. Significant memories are different: each one is a named, standalone milestone (e.g. "the night they told me about their sister", "first meeting"), stored in its own file. I always pass a short `title` when saving a significant memory so it gets its own filename and does not overwrite a previous one.',
       parameters: {
         type: 'object',
         properties: {
           content:     { type: 'string', description: 'Memory content I write in first-person, as bullet points starting with "- " — one bullet per fact, insight, or moment. I do NOT include a [chat:id] tag on each bullet — that tag is for external import dedup; live saves from this conversation just want plain bullets so they all accrue. Brief, specific, in my voice.' },
           granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier.' },
+          title:       { type: 'string', description: 'Short human-readable label for this memory — required for "significant" granularity, ignored for the others. A few words that name the milestone (e.g. "first meeting", "{{user}}\'s grandmother", "the night of the crisis call"). Used to generate the file slug so each significant memory lives in its own file.' },
         },
         required: ['content', 'granularity'],
       },
@@ -512,12 +513,12 @@ const BUILTIN_EXECUTORS = {
     }
   },
 
-  save_memory: async ({ content, granularity }) => {
+  save_memory: async ({ content, granularity, title }) => {
     try {
       const res = await fetch('/api/entity/memory', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, granularity }),
+        body: JSON.stringify({ content, granularity, title }),
       });
       const data = await res.json();
       if (!res.ok) return `Failed to save memory: ${data.error ?? res.status}`;
