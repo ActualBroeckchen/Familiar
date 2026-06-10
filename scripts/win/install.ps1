@@ -144,7 +144,6 @@ function Fail($msg) {
     if (-not $script:installFailureReason) { $script:installFailureReason = $msg }
     Show-InstallSummary
     try { Stop-Transcript -ErrorAction Stop | Out-Null } catch {}
-    Read-Host "Press Enter to close"
     exit 1
 }
 
@@ -478,9 +477,23 @@ function Install-Via-Browser($name, $url, $probeCmd) {
     Warn "$name auto-install isn't possible without winget."
     Write-Host "Opening the $name download page in your browser..."
     Start-Process $url
-    Write-Host ""
-    Write-Host "Download the installer, run it, accept the defaults, then come back."
-    Read-Host "Press Enter once $name is installed (or Ctrl-C to abort)"
+    # Use a MessageBox so the user gets a visible prompt even if the
+    # PowerShell console isn't in focus after installing the tool.
+    # Read-Host would hang silently when the console is behind other windows.
+    try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        [System.Windows.Forms.MessageBox]::Show(
+            "$name is not installed. The download page just opened in your browser.`r`n`r`nInstall it using the default options, then click OK here to continue.",
+            "Proto-Familiar installer — install $name",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        ) | Out-Null
+    } catch {
+        # Forms unavailable — fall back to console Read-Host.
+        Write-Host ""
+        Write-Host "Download the installer, run it, accept the defaults, then come back here."
+        Read-Host "Press Enter once $name is installed (or Ctrl-C to abort)"
+    }
     Update-EnvPath
     if (-not (Have $probeCmd)) {
         Warn "$name still isn't on PATH. You may need to open a new terminal and re-run this script."

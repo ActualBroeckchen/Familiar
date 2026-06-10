@@ -181,20 +181,17 @@ if errorlevel 1 (
     if errorlevel 1 (
       echo [ERROR] Node.js install ran but node still isn't on PATH.
       echo         Close this window, open a new one, and re-run install.bat.
-      pause
       exit /b 1
     )
   ) else (
     echo [ERROR] Node.js is not installed and winget is unavailable.
     echo         Install Node 18+ from https://nodejs.org/ and re-run install.bat.
-    pause
     exit /b 1
   )
 )
 for /f "tokens=1 delims=." %%v in ('node -p "process.versions.node"') do set NODE_MAJOR=%%v
 if !NODE_MAJOR! LSS 18 (
   echo [ERROR] Node.js !NODE_MAJOR! detected. Proto-Familiar needs Node 18 or newer.
-  pause
   exit /b 1
 )
 for /f %%v in ('node -v') do echo Node.js %%v found.
@@ -250,7 +247,6 @@ call npm install
 if errorlevel 1 (
   popd
   echo [ERROR] npm install failed.
-  pause
   exit /b 1
 )
 popd
@@ -418,9 +414,6 @@ echo   Start:     start.bat   ^(double-click^)
 echo   Stop:      stop.bat    ^(double-click^)
 echo   Trouble?   see docs\troubleshooting.md
 echo.
-REM When run by update.bat, let the updater own the final pause so its
-REM "restart Proto-Familiar" message is the last thing on screen.
-if not "%PF_FROM_UPDATER%"=="1" pause
 endlocal
 goto :eof
 
