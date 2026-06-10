@@ -8188,63 +8188,130 @@ async function teConsumeHandoff(id) {
   }
 }
 
-// ── Outbox banners (M11/M12 delivery surface) ─────────────────────
+// ── Outbox delivery (M11/M12) → inject as chat messages ───────────
 //
-// Polls /api/outbox every 30s. When an item arrives, renders a gentle
-// banner at the top of the chat. Click ✕ to acknowledge (POST then
-// re-fetch). Reminders use a calm accent color, silence-triage items
-// use a warmer one so the user can distinguish at a glance.
+// Reminders + silence-triage reach-outs + outbound-alert receipts arrive
+// here from the server-side outbox. Before 0.3.9-alpha these rendered as
+// banners at the top of the chat — which testers reported as effectively
+// silent: the banner was easy to miss and felt like UI chrome rather than
+// the Familiar speaking. Now they land as ordinary assistant chat
+// messages in the active session: they show up where the user is reading,
+// they persist as part of the session log, and the user can reply to
+// them the same way they'd reply to any other message.
+//
+// Cross-poll de-dup: the server's acknowledge step gates future polls,
+// but a 30-second interval leaves a window where two consecutive polls
+// could see the same un-acked item. _injectedOutboxIds (per-tab) closes
+// that window without depending on ack RTT.
 
 const OUTBOX_POLL_MS = 30_000;
 let _outboxPollTimer = null;
+const _injectedOutboxIds = new Set();
+
+// Turn an outbox item into the text body of an assistant chat message.
+// Triage items always carry a body (the LLM-written reach-out message);
+// reminders may not — when their body is empty the title (event label)
+// is the only thing the user/Familiar provided when creating the
+// reminder, so we render it with a small italic tag so it doesn't look
+// like a context-free fragment.
+function formatOutboxAsMessageContent(item) {
+  const body  = (item.body  ?? '').trim();
+  const title = (item.title ?? '').trim();
+  if (item.kind === 'triage') {
+    return body || (title ? `*(check-in)* ${title}` : '');
+  }
+  if (item.kind === 'outbound_alert') {
+    const head = title ? `*${title}*` : '';
+    if (head && body) return `${head}\n\n${body}`;
+    return head || body;
+  }
+  if (item.kind === 'reminder') {
+    if (body) return body;
+    return title ? `*(reminder)* ${title}` : '';
+  }
+  return body || title || '';
+}
+
+async function injectOutboxAsChatMessage(item) {
+  const content = formatOutboxAsMessageContent(item);
+  if (!content) return;
+
+  const timestamp = item.ts || new Date().toISOString();
+  const { el, bubble, copyBtn } = appendAssistantShell(timestamp);
+  bubble.innerHTML = renderMarkdown(content);
+  scrollToBottom();
+
+  // Persist alongside normal messages so reloading the session shows
+  // the proactive turn in place. proactive + outboxKind are advisory
+  // flags — nothing currently branches on them, but they give styling
+  // / filtering / audit something to anchor on later without re-
+  // querying the outbox.
+  state.messages.push({
+    role:       'assistant',
+    content,
+    timestamp,
+    proactive:  true,
+    outboxKind: item.kind,
+  });
+  el.dataset.msgIndex = String(state.messages.length - 1);
+  saveHistory();
+  saveToServer();
+  refreshTopicGutter?.();
+  wireCopyButton(copyBtn, () => content);
+
+  await acknowledgeOutboxItem(item.id);
+}
 
 async function fetchOutbox() {
   try {
     const r = await fetch('/api/outbox?pending=1');
     if (!r.ok) return;
     const data = await r.json();
-    renderOutboxBanners(Array.isArray(data.items) ? data.items : []);
+    const items = (Array.isArray(data.items) ? data.items : [])
+      .filter(i => i?.id && !_injectedOutboxIds.has(i.id));
+    if (!items.length) return;
+
+    // Oldest-first — chat conventions put the newest at the bottom, so
+    // rendering in chronological order matches what the user expects.
+    items.sort((a, b) => (a.ts || '').localeCompare(b.ts || ''));
+
+    // Cap per-poll injection at a small number so an upgrade from the
+    // banner UI (where unread items could accumulate) doesn't dump a
+    // wall of historical reach-outs into the active session. The
+    // remainder rides the next poll 30s later.
+    const MAX_INJECT_PER_POLL = 5;
+    const batch = items.slice(0, MAX_INJECT_PER_POLL);
+
+    for (const item of batch) {
+      _injectedOutboxIds.add(item.id);
+      try {
+        await injectOutboxAsChatMessage(item);
+      } catch (err) {
+        // Don't re-throw — one bad item must not block the rest. Drop
+        // the id from the de-dup set so a future poll can try again.
+        console.warn('outbox inject failed', item.id, err);
+        _injectedOutboxIds.delete(item.id);
+      }
+    }
   } catch { /* network blip; try again next tick */ }
-}
-
-function renderOutboxBanners(items) {
-  const host = $('outbox-banners');
-  if (!host) return;
-  if (!items.length) { host.innerHTML = ''; return; }
-  host.innerHTML = items.map(i => {
-    const icon = i.kind === 'triage' ? '🫂' : '⏰';
-    const kindClass = i.kind === 'triage' ? 'kind-triage' : 'kind-reminder';
-    const ts = teTimeAgo ? teTimeAgo(i.ts) : i.ts;
-    const body = i.body ? `<div class="ob-body">${escapeOutboxText(i.body)}</div>` : '';
-    return `
-      <div class="outbox-banner ${kindClass}" data-id="${escapeOutboxText(i.id)}">
-        <div class="ob-icon">${icon}</div>
-        <div class="ob-content">
-          <div class="ob-title">${escapeOutboxText(i.title)}</div>
-          ${body}
-          <div class="ob-time">${escapeOutboxText(ts)}</div>
-        </div>
-        <button class="ob-dismiss" data-ob-id="${escapeOutboxText(i.id)}" aria-label="Dismiss">✕</button>
-      </div>`;
-  }).join('');
-  host.querySelectorAll('.ob-dismiss').forEach(btn => {
-    btn.addEventListener('click', () => acknowledgeOutboxItem(btn.dataset.obId));
-  });
-}
-
-function escapeOutboxText(s) {
-  if (s == null) return '';
-  return String(s).replace(/[&<>"']/g, c =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 async function acknowledgeOutboxItem(id) {
   try {
     await fetch(`/api/outbox/${encodeURIComponent(id)}/acknowledge`, { method: 'POST' });
-    fetchOutbox();
   } catch (err) {
     console.warn('outbox ack failed', err);
   }
+}
+
+// HTML-escape for the few remaining places that still build innerHTML
+// from outbox-adjacent strings (trusted-contacts list rendering, etc).
+// Kept with its historical name so the call sites below don't have to
+// move when we eventually phase the banner UI out completely.
+function escapeOutboxText(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 function startOutboxPolling() {

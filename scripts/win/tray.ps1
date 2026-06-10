@@ -82,25 +82,116 @@ function Test-Port {
     try { $c = New-Object Net.Sockets.TcpClient('127.0.0.1', [int]$script:port); $c.Close(); return $true } catch { return $false }
 }
 
-function Stop-StrayServerProcesses {
-    # Kill every node.exe whose CommandLine references server.js and is
-    # rooted at this project dir. Catches the launcher-tracked PID, plus
-    # any instance started outside the tray (manual `npm start`, leftover
-    # from before a port migration still listening on the old port, ...).
-    $rootPattern = [regex]::Escape($script:projectRoot)
+# Who owns our TCP port right now? Returns the PID or $null. Used to
+# detect orphaned node.exe instances (previous Quit didn't kill them,
+# so they're still bound to the port) and to verify our kill landed.
+function Get-PortOwnerPid {
     try {
-        $stray = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
-                 Where-Object { $_.CommandLine -match 'server\.js' -and $_.CommandLine -match $rootPattern }
-        foreach ($p in $stray) {
-            try { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
-        }
+        $c = Get-NetTCPConnection -LocalPort ([int]$script:port) -State Listen -ErrorAction SilentlyContinue |
+             Select-Object -First 1 -ExpandProperty OwningProcess
+        if ($c) { return [int]$c }
     } catch {}
+    return $null
+}
+
+# Read the PID we wrote when we last launched node. Returns $null if
+# missing, malformed, or no longer alive. The PID file is the canonical
+# "this is the instance the tray spawned" signal — more reliable than
+# trying to match by command-line, because the project root is NOT in
+# Win32_Process.CommandLine (it's only in the working directory, which
+# Win32_Process doesn't expose). The old filter
+#   $_.CommandLine -match $rootPattern
+# never matched in practice — that's why Quit/Stop/Restart silently
+# failed to kill node and orphaned the process across updates.
+function Get-TrackedPid {
+    if (-not (Test-Path $script:pidFile)) { return $null }
+    try {
+        # $pid is a PowerShell automatic variable (this process's own PID) —
+        # using it as a local would silently shadow it everywhere else.
+        $trackedId = [int](Get-Content -LiteralPath $script:pidFile -ErrorAction Stop).Trim()
+        if ($trackedId -le 0) { return $null }
+        $p = Get-Process -Id $trackedId -ErrorAction SilentlyContinue
+        if ($p) { return $trackedId }
+    } catch {}
+    return $null
+}
+
+# Kill a process AND its child tree. taskkill /T traverses the parent-
+# child relationship to catch the MCP children (deno for entity-core,
+# python via uv for Unruh) that thalamus.js spawns. Stop-Process -Force
+# only calls TerminateProcess on the parent, which orphans the
+# children — they'd keep running with the port released but their state
+# directories locked, which itself can break a subsequent uv sync.
+function Stop-ProcessTree([int]$processId) {
+    try {
+        & taskkill /PID $processId /T /F 2>$null | Out-Null
+    } catch {}
+}
+
+function Stop-StrayServerProcesses {
+    # Step 1: kill what our PID file points at. That's the canonical
+    # "spawned by this tray" signal. taskkill /T /F sweeps the tree so
+    # MCP children (deno + python) die with it.
+    $tracked = Get-TrackedPid
+    if ($tracked) { Stop-ProcessTree $tracked }
+
+    # Step 2: wait briefly for the port to release. Without this wait,
+    # Start-Server's Test-Port check immediately after Restart could
+    # race the kernel's socket-cleanup and see the port as still held.
+    for ($i = 0; $i -lt 25; $i++) {
+        if (-not (Test-Port)) { break }
+        Start-Sleep -Milliseconds 200
+    }
+
+    # Step 3: still held? Something is on the port that wasn't our
+    # tracked PID — almost always an orphan from a previous tray run
+    # whose Quit didn't kill node (the bug this rewrite fixes). Kill
+    # the port owner if it looks like a node.exe + server.js; we don't
+    # require a project-root match because Win32_Process can't see cwd
+    # and the old "matches project root" filter never worked anyway.
+    if (Test-Port) {
+        $owner = Get-PortOwnerPid
+        if ($owner) {
+            try {
+                $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$owner" -ErrorAction SilentlyContinue
+                if ($proc -and $proc.Name -match '^node(\.exe)?$' -and $proc.CommandLine -match 'server\.js') {
+                    Stop-ProcessTree $owner
+                    for ($i = 0; $i -lt 25; $i++) {
+                        if (-not (Test-Port)) { break }
+                        Start-Sleep -Milliseconds 200
+                    }
+                }
+            } catch {}
+        }
+    }
+
     if (Test-Path $script:pidFile) { Remove-Item $script:pidFile -ErrorAction SilentlyContinue }
 }
 
 function Start-Server {
-    if (Test-Port) { Set-Status "running"; return }
-    Stop-StrayServerProcesses
+    # Port already in use — figure out WHY before adopting it.
+    #
+    # Old behaviour: any port-in-use → declare "running" and bail. That
+    # is exactly what made the orphan-node bug invisible: Stop failed
+    # to kill node (regex bug), Start saw the port held by the orphan,
+    # reported "running", and the user saw the OLD version in the UI
+    # corner forever. Updates "didn't go through" because the running
+    # process was still the pre-update node.
+    #
+    # New behaviour: if the port owner matches our PID file, that IS
+    # our running instance — adopt it. Otherwise it's an orphan; kill
+    # it via Stop-StrayServerProcesses and continue to a real launch.
+    if (Test-Port) {
+        $tracked = Get-TrackedPid
+        $owner   = Get-PortOwnerPid
+        if ($tracked -and $owner -and ($tracked -eq $owner)) {
+            Set-Status "running"
+            return
+        }
+        # Mismatch: a previous node.exe is squatting on the port.
+        # Reclaim before we launch a new one.
+        Stop-StrayServerProcesses
+    }
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
         [System.Windows.Forms.MessageBox]::Show(
             "Node.js is not on PATH. Run the installer (double-click Proto-Familiar.vbs while node_modules is missing, or run scripts\win\install.ps1).",

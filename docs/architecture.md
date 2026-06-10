@@ -129,9 +129,9 @@ ponderings injection, care-check framing) and as background loops
 │
 ├── public/
 │   ├── index.html           App shell — sidebar, chat pane, Temporal editor modal, all modals
-│   ├── style.css            All styling — dark/light themes, outbox banners, modal/tab styles
+│   ├── style.css            All styling — dark/light themes, modal/tab styles
 │   └── app.js               All frontend logic — state, API calls, rendering, topics, Tomes,
-│                            temporal editor, outbox banner polling, BUILTIN_TOOLS definitions
+│                            temporal editor, outbox delivery polling, BUILTIN_TOOLS definitions
 │
 └── docs/                    This documentation (incl. research/ for design-input notes)
     ├── architecture.md      You are here
@@ -185,8 +185,8 @@ ack/cancel — see `memorization.js`.
 - `POST /api/threat/reset` — manual reset to calm (always works)
 
 **Outbox surface:**
-- `GET /api/outbox[?pending=1&limit=N]` — UI banner polling
-- `POST /api/outbox/:id/acknowledge`
+- `GET /api/outbox[?pending=1&limit=N]` — UI polls this; pending items are injected as assistant chat messages in the active session (since 0.3.9-alpha; before, they rendered as banners)
+- `POST /api/outbox/:id/acknowledge` — fired automatically by the client after each item is rendered into chat
 - `POST /api/outbox/clear-acknowledged`
 
 **Settings + Tailscale gate:** as before.
@@ -263,9 +263,10 @@ in-flight ticks.
 
 **`reminders-loop.js`** — autonomous singleton. Every 30s, calls
 Unruh's `reminders_due` MCP tool, enqueues each into the outbox
-(idempotent on origin id so retries don't double-banner), then marks
-the schedule node `resolution='fired'`. Health-watch warns when
-`overdue` climbs across consecutive ticks.
+(idempotent on origin id so retries don't double-fire), then marks
+the schedule node `resolution='fired'`. The frontend's outbox poller
+turns each item into an assistant chat message in the active session.
+Health-watch warns when `overdue` climbs across consecutive ticks.
 
 **`silence-triage-loop.js`** — autonomous singleton. Every 5min, gates
 on tier (calm/mild = no-op) and cool-down (LLM-controlled
@@ -318,9 +319,19 @@ per-Tome write mutex, idempotent enqueue on
 - **Local-time helpers** for the time pickers: convert between
   `<input type="time">` + `<input type="datetime-local">` and ISO UTC
   via real local-time semantics, not string-slicing.
-- **Outbox banner polling** — `startOutboxPolling()` polls
-  `/api/outbox` every 30s and renders reminder / triage / outbound_alert
-  items as gentle dismissible banners at the top of the chat.
+- **Outbox delivery polling** — `startOutboxPolling()` polls
+  `/api/outbox` every 30s; reminder / triage / outbound_alert items
+  are injected as ordinary assistant chat messages in the active
+  session (with `proactive: true` + `outboxKind` flags persisted on
+  the message). Auto-acked after injection. Per-poll cap of 5 items
+  so an upgrade-day backlog doesn't dump a wall of historical
+  messages all at once.
+  - **Design note (future):** The `#outbox-banners` div is still in
+    `index.html` as an inert host. If pondering activity or the
+    Familiar's in-progress thinking is ever made visible, the banner
+    surface is the right place for it — ephemeral, non-intrusive,
+    doesn't pollute the chat log. Reminders and triage stay as chat
+    messages; pondering/thinking visibility would use banners.
 - **Trusted contacts** UI for M12c (Discord webhook list).
 - **Topic system** — gutter bars, "▷ Topic start" / "■ Topic end"
   buttons per-message, summarizer modal.
@@ -517,7 +528,7 @@ temporalPayload.schedule.window   ←  open tasks/events/reminders
 | Trigger | When | Riding | Carrier |
 |---|---|---|---|
 | Opportunistic | User just sent a chat message | Chat-turn enrich call | `[Surface candidates]` block in `dynamic` |
-| Triggered | Reminder hits its `when_ts` | Pure-code firing (set at creation by the Familiar) | Banner via outbox |
+| Triggered | Reminder hits its `when_ts` | Pure-code firing (set at creation by the Familiar) | Chat message via outbox (since 0.3.9-alpha) |
 | Care-driven | Silence-triage decided to reach out | The triage LLM call that's already happening | "Candidate tasks I could touch on" block in triage prompt |
 
 **`stakes_tier`** controls surfacing pressure:

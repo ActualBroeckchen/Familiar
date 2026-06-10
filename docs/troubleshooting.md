@@ -62,6 +62,38 @@ captures output via a different mechanism.
 
 ---
 
+## Windows: update doesn't take effect / version stays the same
+
+Symptom: you ran `update.bat` (or pulled and re-ran `install.bat`), but
+the new version isn't running — the version badge in the sidebar
+footer still shows the old number, and new features aren't there.
+
+Cause: a previous `node.exe` from Proto-Familiar is still running.
+`robocopy` (used by `update.bat`) silently fails to overwrite source
+files that the running process has open, so the on-disk update is
+partial. On the next launch the tray sees the orphan on port 8742 and
+adopts it as "running" — that orphan is still serving the old code.
+
+Through 0.3.6-alpha there was a bug in `tray.ps1` / `start.bat` /
+`stop.bat` where the orphan detection filtered Win32 processes by a
+project-root path that never actually appeared in their command line.
+Quit / Stop / Restart all silently killed nothing, leaving node.exe
+to linger across updates. **Fixed in 0.3.7-alpha** — the launchers now
+use the PID file as the canonical signal and fall back to taskkill-ing
+the port owner if it looks like Proto-Familiar.
+
+If you're on 0.3.7-alpha or newer and still hitting this, run
+`stop.bat`; it now reports each PID it kills so the failure mode is
+visible. If `stop.bat` says "Port 8742 held by PID X but it doesn't
+look like Proto-Familiar", another app on your machine grabbed the
+port — stop that app, or run with `set PROTO_FAMILIAR_PORT=<other>`
+before `start.bat`.
+
+To unstick by hand on an older build: Task Manager → Details tab →
+sort by Name → find `node.exe` → End task. Then run the update.
+
+---
+
 ## Knowledge editor / graph
 
 ### "Failed to load graph: entity-core not connected"
