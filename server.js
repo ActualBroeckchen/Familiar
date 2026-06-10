@@ -48,7 +48,7 @@ import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
 import { listOutbox, acknowledgeOutbox, clearAcknowledged, enqueueOutbox, updateOutboxMeta } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, TRIAGE_SILENCE_THRESHOLD_MS } from './silence-triage-loop.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
-import { buildTimeAnchorBlock } from './relative-time.js';
+import { buildTimeAnchorBlock, relativeTime, plainInterval } from './relative-time.js';
 import { expandWindow } from './recurrence.js';
 import {
   enqueueMemorization,
@@ -2011,7 +2011,12 @@ async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   const url = PROVIDER_URLS[conn.provider];
   if (!url) return { action: 'wait' };
 
-  const minutes  = Math.round(silenceMs / 60_000);
+  const nowMs = Date.now();
+  // Use plainInterval so a half-minute silence reads as "less than a minute"
+  // rather than rounding to "0 minutes" (which the previous prompt did and
+  // which is what made Familiars ask "is it done yet?" 30s after the user
+  // said they were starting a task — the time signal was effectively gone).
+  const silencePhrase = plainInterval(nowMs - silenceMs, nowMs);
   const contacts = Array.isArray(s?.trustedContacts) ? s.trustedContacts : [];
 
   // Pull identity context (who the Familiar is, who the user is) and the
@@ -2021,20 +2026,32 @@ async function decideTriageViaLLM({ threat, silenceMs, signals }) {
     getRecentSessionMessages({ limit: 8 }),
   ]);
 
+  // [Now] wall-clock anchor — same shape the chat-turn gets, so the
+  // Familiar deliberating about silence has a real "now" to reason from
+  // rather than just an isolated minutes-since-last-message number.
+  // lastUserMessageAt comes from silenceMs; the loop calls us with that
+  // already computed.
+  const lastUserAt = new Date(nowMs - silenceMs).toISOString();
+  const nowBlock = buildTimeAnchorBlock({ now: nowMs, lastUserMessageAt: lastUserAt });
+
   const signalsBlock = signals?.length
     ? `\nRecent signals that raised the threat level:\n${signals.map(sig => {
-        const t   = sig.ts ? new Date(sig.ts).toLocaleString() : 'unknown time';
-        const ids = Array.isArray(sig.signals) ? sig.signals.join(', ') : 'unknown';
-        return `  - [${t}] ${ids} (delta ${Number(sig.delta) >= 0 ? '+' : ''}${sig.delta})`;
+        const when = sig.ts ? relativeTime(sig.ts, nowMs) : 'unknown time';
+        const ids  = Array.isArray(sig.signals) ? sig.signals.join(', ') : 'unknown';
+        return `  - [${when}] ${ids} (delta ${Number(sig.delta) >= 0 ? '+' : ''}${sig.delta})`;
       }).join('\n')}`
     : '';
 
   const sessionBlock = recentMessages.length
-    ? `\nRecent conversation (what we were discussing before the silence):\n${recentMessages.map(m => {
+    ? `\nRecent conversation (what we were discussing before the silence — relative times so I see how long ago each thing was said):\n${recentMessages.map(m => {
         const text = typeof m.content === 'string'
           ? m.content
           : (Array.isArray(m.content) ? (m.content.find(c => c.type === 'text')?.text ?? '') : '');
-        return `  [${m.role === 'user' ? 'User' : 'Me'}]: ${text.slice(0, 400)}`;
+        const when = m.timestamp ? relativeTime(m.timestamp, nowMs) : '';
+        const prefix = when
+          ? `[${m.role === 'user' ? 'User' : 'Me'} · ${when}]`
+          : `[${m.role === 'user' ? 'User' : 'Me'}]`;
+        return `  ${prefix}: ${text.slice(0, 400)}`;
       }).join('\n')}`
     : '\nNo recent conversation on record.';
 
@@ -2090,9 +2107,11 @@ async function decideTriageViaLLM({ threat, silenceMs, signals }) {
 
 I am in a background moment of deliberation. My human has been silent and my care concern is elevated. I need to decide whether to reach out to them right now.
 
+${nowBlock}
+
 What I know:
 - Threat tier: ${threat.tier} (accumulated weight: ${threat.weight?.toFixed?.(2) ?? threat.weight}) - this number increases when my human says concerning phrases in our conversation
-- my human has been silent for ${minutes} minutes (this has already passed the threshold for this tier) - I should check the conversation to see if my human told me what they're doing or have just silently disappeared and perhaps withdrawn
+- my human has been silent for ${silencePhrase} (this has passed the threshold for this tier, but the threshold is 0 at moderate+ — so a "silence" of less than a minute is still flagged for my judgement, not because it's actually long). I check the conversation below for context: did they say what they're doing (cooking, in the shower, heading out), or did they just go quiet mid-thread? Asking "is X done yet?" 30 seconds after they said they were starting it would be obviously off — the relative-time markers on each message let me see that.
 ${signalsBlock}
 ${sessionBlock}
 ${contactsBlock}
