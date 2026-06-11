@@ -2928,7 +2928,7 @@ function init() {
   autoResumeMostRecentSession().catch(() => {});
 
   // Outbox polling (M11 reminders, M12 silence triage). Cheap GET every
-  // 30s; banners render at the top of the chat when items are pending.
+  // 30s; pending items are injected as chat messages in the active session.
   startOutboxPolling();
 
   // Trusted contacts (M12c) — manage list in the sidebar section.
