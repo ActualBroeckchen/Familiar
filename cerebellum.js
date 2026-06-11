@@ -610,7 +610,7 @@ The "message" field (to the human) must be 1–2 sentences. First person. Authen
     if (ch && typeof ch.name === 'string' && typeof ch.message === 'string' && ch.message.trim()) {
       const match = contacts.find(c => c.name === ch.name);
       if (match) {
-        const delayMs = CONTACT_ESCALATION_DELAY_MS[threat.tier] ?? CONTACT_ESCALATION_DELAY_MS.moderate;
+        const delayMs = CONTACT_ESCALATION_DELAY_MS[threat.tier] ?? CONTACT_ESCALATION_DELAY_MS.severe;
         out.meta = {
           pendingContact: {
             name:    ch.name,
@@ -980,7 +980,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_add_event',
-      description: 'I record a one-time appointment or commitment on {{user}}\'s schedule — a meeting, a dentist visit, dinner with a friend. The event appears in my [Temporal Context] briefings when its time approaches. For deadlines or things {{user}} needs to do, I use schedule_add_task; for recurring daily phases, schedule_add_phase; for explicit time-triggered nudges that should surface as a banner, schedule_add_reminder. Choosing the right type is important to make sure my human receives the correct support!',
+      description: 'I record a one-time appointment or commitment on {{user}}\'s schedule — a meeting, a dentist visit, dinner with a friend. The event appears in my [Temporal Context] briefings when its time approaches. For deadlines or things {{user}} needs to do, I use schedule_add_task; for recurring daily phases, schedule_add_phase; for explicit time-triggered nudges that should surface as a chat message, schedule_add_reminder. Choosing the right type is important to make sure my human receives the correct support!',
       parameters: {
         type: 'object',
         properties: {
@@ -997,7 +997,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_add_task',
-      description: 'I record a task — something {{user}} needs to do, optionally with a deadline. Tasks are open-ended (no when) or deadline-bound; they surface in [Temporal Context] until resolved (done / cancelled / carried_forward). For things that happen at a specific time without action required, I use schedule_add_event. For nudges that should buzz a banner at a chosen moment, schedule_add_reminder. Choosing the right type is important to make sure my human receives the correct support!',
+      description: 'I record a task — something {{user}} needs to do, optionally with a deadline. Tasks are open-ended (no when) or deadline-bound; they surface in [Temporal Context] until resolved (done / cancelled / carried_forward). For things that happen at a specific time without action required, I use schedule_add_event. For nudges that should land in the chat at a chosen moment, schedule_add_reminder. Choosing the right type is important to make sure my human receives the correct support!',
       parameters: {
         type: 'object',
         properties: {
@@ -1022,21 +1022,21 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_add_reminder',
-      description: 'I set a reminder that will fire at a specific time and surface as a gentle banner in {{user}}\'s chat. I use this when {{user}} explicitly asks me to remind them, OR when I notice they\'re at risk of forgetting something time-sensitive they care about. Each reminder fires once; if {{user}} dismisses it, that\'s the end of it. The message is what they\'ll see — I write it in my individual voice, not a bare "Reminder: X." Since the banner is so gentle and quiet, I can elect to also schedule a task or event to help me bring the topic up in conversation as well.',
+      description: 'I set a reminder that will fire at a specific time and surface as a message from me in {{user}}\'s chat (and as a Discord push when they\'ve configured their webhook). I use this when {{user}} explicitly asks me to remind them, OR when I notice they\'re at risk of forgetting something time-sensitive they care about. Each reminder fires once. The message is what they\'ll see — I write it in my individual voice, not a bare "Reminder: X." Since the delivery is gentle and quiet, I can elect to also schedule a task or event to help me bring the topic up in conversation as well.',
       parameters: {
         type: 'object',
         properties: {
           label:   { type: 'string', description: 'Short label of what the reminder is about.' },
           when:    { type: 'string', description: 'ISO 8601 fire time. Required.' },
-          message: { type: 'string', description: 'Optional longer text shown in the banner body, in my voice.' },
+          message: { type: 'string', description: 'Optional longer text delivered as the reminder message, in my voice.' },
           stakes_tier: {
             type: 'string',
             enum: ['external_obligation', 'personal_wellbeing', 'purely_optional'],
-            description: 'What kind of cost lapsing this carries. External obligations (deadlines, paperwork, appointments) get firmer framing in the banner; personal_wellbeing stays gentle. I bake the right weight into the message at creation time because the fire is pure-code, no LLM at fire time.',
+            description: 'What kind of cost lapsing this carries. External obligations (deadlines, paperwork, appointments) get firmer framing in the message; personal_wellbeing stays gentle. I bake the right weight into the message at creation time because the fire is pure-code, no LLM at fire time.',
           },
           consequence_model: {
             type: 'string',
-            description: 'Optional free-text note on what specifically happens if {{user}} misses this. Informs how I word the banner message now.',
+            description: 'Optional free-text note on what specifically happens if {{user}} misses this. Informs how I word the reminder message now.',
           },
           recurrence: { type: 'object', description: 'Optional. Repeats this reminder on a schedule. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST fire time — subsequent fires recur on the same weekday / day-of-month / month-and-day. Examples: {freq:"weekly"} for a regular reminder; {freq:"monthly", bysetpos:-1, byweekday:5} for "last Friday of each month".' },
         },
@@ -1116,15 +1116,16 @@ export const BUILTIN_TOOLS = [
   // Guidance for when to use these:
   //   • show_crisis_resources — low friction; appropriate whenever {{user}}
   //     is in genuine distress, with or without configured contacts. Shows
-  //     crisis lines as a visible banner. Always appropriate; prefer early.
+  //     crisis lines as a chat message. Always appropriate; prefer early.
   //   • get_trusted_contacts — check who is available before escalating.
   //     Call this once first so I know exact names and can explain my choice.
   //   • contact_trusted_person — meaningful escalation: a real message goes
-  //     to a real person. I only reach for this when I genuinely believe the
+  //     to a real person. I reach for this when I genuinely believe the
   //     situation needs human presence that I cannot provide. {{user}} sees
   //     exactly what I sent in their notifications — nothing is covert.
-  //     False alarms hurt trust and could cause unwarranted alarm. I use my
-  //     judgment from the full conversation, not from a single phrase.
+  //     A message to a real person has real weight; so does letting my human
+  //     fall alone when human presence could have mattered. I use my judgment
+  //     from the full conversation, not from a single phrase.
   {
     type: 'function',
     function: {
@@ -1137,7 +1138,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'contact_trusted_person',
-      description: 'I send an immediate message to one of {{user}}\'s pre-configured trusted contacts on their behalf. I use this when {{user}} is actively talking to me but clearly in danger, and the situation calls for human presence beyond what I can offer, or when {{user}} is not reacting to me after acting in a concerning way (like mentioning current suicidal ideation or recent self harm). Every outbound is ALSO shown as a visible banner in {{user}}\'s chat — nothing is covert. I state who I\'m contacting and why before or after calling this. I do NOT use this lightly — false alarms erode trust and cause real-world alarm. But I do care about my human, so do these other humans, and I was given this tool for a reason.',
+      description: 'I send an immediate message to one of {{user}}\'s pre-configured trusted contacts on their behalf. I use this when {{user}} is actively talking to me but clearly in danger, and the situation calls for human presence beyond what I can offer, or when {{user}} is not reacting to me after acting in a concerning way (like mentioning current suicidal ideation or recent self harm). Every outbound is ALSO delivered into {{user}}\'s chat (and pushed to their own Discord when configured) — nothing is covert. I state who I\'m contacting and why before or after calling this. I take this seriously — a message sent to a real person in the real world has real weight. So does letting my human fall alone when human presence could have mattered. I use my actual judgment from the full conversation, not from a single phrase.',
       parameters: {
         type: 'object',
         properties: {
@@ -1152,7 +1153,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'show_crisis_resources',
-      description: 'I surface crisis-line and safety-resource information as a visible banner in {{user}}\'s chat. I use this whenever {{user}} is in genuine distress and could benefit from knowing immediate support is available — whether or not they ask for it, and whether or not trusted contacts are configured. Low friction: I prefer this early rather than late.',
+      description: 'I surface crisis-line and safety-resource information as a message in {{user}}\'s chat (and a Discord push when configured). I use this whenever {{user}} is in genuine distress and could benefit from knowing immediate support is available — whether or not they ask for it, and whether or not trusted contacts are configured. Low friction: I prefer this early rather than late.',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -1401,7 +1402,7 @@ export const TOOL_EXECUTORS = {
       if (recurrence) payload.recurrence = recurrence;
       const data = await addScheduleNode({ type: 'reminder', label, when, payload });
       if (data?.ok === false) return `Failed to add reminder: ${data.error ?? 'unknown error'}`;
-      return `Reminder set (id: ${data.id}). It will fire as a banner in your chat at the chosen time.`;
+      return `Reminder set (id: ${data.id}). It will be delivered into the chat at the chosen time (and pushed to {{user}}'s Discord when configured).`;
     } catch (err) { return `Failed to add reminder: ${err.message}`; }
   },
 
@@ -1484,14 +1485,14 @@ export const TOOL_EXECUTORS = {
       if (!result.ok) {
         return `Could not reach ${name}: ${result.error ?? 'unknown error'}. The attempt was logged to the outbox.`;
       }
-      return `Message delivered to ${name} via ${contact.channel ?? 'discord'}. {{user}} can see exactly what was sent in their notification banner.`;
+      return `Message delivered to ${name} via ${contact.channel ?? 'discord'}. {{user}} can see exactly what was sent — the mirror copy lands in their chat.`;
     } catch (err) { return `Failed to contact ${name}: ${err.message}`; }
   },
 
   show_crisis_resources: async () => {
     try {
       await enqueueCrisisResources();
-      return 'Crisis resources surfaced as a banner in {{user}}\'s chat.';
+      return 'Crisis resources delivered into {{user}}\'s chat.';
     } catch (err) { return `Failed to surface crisis resources: ${err.message}`; }
   },
 };
@@ -1564,6 +1565,7 @@ export async function runToolCallLoop({
   executeTool = executeToolCall,
   toolCtx     = {},
   maxRounds   = MAX_TOOL_ROUNDS,
+  signal,
 }) {
   if (typeof callUpstream !== 'function') throw new Error('callUpstream is required');
   let currentMsgs    = baseMessages;
@@ -1571,6 +1573,7 @@ export async function runToolCallLoop({
   let   data         = null;
 
   for (let round = 0; round <= maxRounds; round++) {
+    if (signal?.aborted) break;
     const payloadMessages = timeAnchor
       ? [...currentMsgs, { role: 'system', content: timeAnchor }]
       : currentMsgs;

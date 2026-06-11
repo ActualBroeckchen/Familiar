@@ -374,6 +374,14 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       'Authorization': `Bearer ${apiKey.trim()}`,
     };
 
+    // Abort the loop when the browser tab closes or the client disconnects.
+    // Fires req.on('close') which is emitted by Express/Node when the
+    // underlying socket closes. The signal is forwarded into runToolCallLoop
+    // (non-streaming) and into each upstream fetch (both paths).
+    const ac = new AbortController();
+    const onClientClose = () => ac.abort();
+    req.on('close', onClientClose);
+
     const thalamusEnvelope = (enrichedResult.static || enrichedResult.dynamic || timeAnchor) ? {
       static:     enrichedResult.static  || '',
       dynamic:    enrichedResult.dynamic || '',
@@ -393,8 +401,13 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
                 method:  'POST',
                 headers: authHeaders,
                 body:    JSON.stringify({ ...payload, messages: msgs, stream: false }),
+                signal:  ac.signal,
               });
             } catch (err) {
+              if (err.name === 'AbortError') {
+                const e = new Error('client disconnected');
+                e.status = 499; e.body = ''; throw e;
+              }
               const e = new Error(`Network error reaching ${provider}: ${err.message}`);
               e.status = 502; e.body = JSON.stringify({ error: e.message });
               throw e;
@@ -415,7 +428,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
           baseMessages: enrichedMessages,
           timeAnchor,
           toolCtx,
+          signal: ac.signal,
         });
+        req.off('close', onClientClose);
         if (thalamusEnvelope) data._thalamus = thalamusEnvelope;
         if (toolRounds.length > 0) data._toolRounds = toolRounds;
         // M8 idle-mode outcome reporting: fire-and-forget after response sent.
@@ -426,6 +441,8 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         }
         return res.json(data);
       } catch (err) {
+        req.off('close', onClientClose);
+        if (err.status === 499) return; // client already gone — nothing to send
         res.status(err.status ?? 502).setHeader('Content-Type', 'application/json');
         return res.send(err.body ?? JSON.stringify({ error: err.message }));
       }
@@ -445,6 +462,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     const clientGone = () => res.writableEnded || res.destroyed;
 
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+      if (clientGone() || ac.signal.aborted) break;
       const payloadMessages = timeAnchor
         ? [...currentMsgs, { role: 'system', content: timeAnchor }]
         : currentMsgs;
@@ -455,6 +473,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
           method:  'POST',
           headers: authHeaders,
           body:    JSON.stringify({ ...payload, messages: payloadMessages, stream: true }),
+          signal:  ac.signal,
         });
       } catch (err) {
         if (!headersSent) return res.status(502).json({ error: `Network error reaching ${provider}: ${err.message}` });
@@ -549,6 +568,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       break;
     }
 
+    req.off('close', onClientClose);
     if (!res.writableEnded) {
       res.write('data: [DONE]\n\n');
       res.end();
@@ -807,7 +827,11 @@ app.post('/api/session/handoff', async (req, res) => {
 
 // ── Log endpoints ───────────────────────────────────────────────
 
-// POST /api/log — create or overwrite a session log file
+// POST /api/log — create or overwrite a session log file.
+// Merges with any existing log using message IDs so that two devices
+// sharing the same session (auto-sync) don't clobber each other's
+// messages. Messages without an id field (old-format logs) are treated
+// as a stable common prefix; only id-carrying messages are diffed.
 app.post('/api/log', async (req, res) => {
   const { sessionId, startedAt, endedAt, provider, model, messages } = req.body;
   if (!isValidUUID(sessionId))
@@ -816,8 +840,37 @@ app.post('/api/log', async (req, res) => {
     return res.status(400).json({ error: 'messages must be an array.' });
 
   const logPath = path.join(LOGS_DIR, `${sessionId}.json`);
+
+  // Merge: keep any server-side messages the client doesn't have.
+  // Uses the `id` field when present; falls back to last-writer-wins
+  // for legacy messages without ids (they form a shared prefix).
+  let finalMessages = messages;
+  try {
+    const existing = JSON.parse(await fsp.readFile(logPath, 'utf8'));
+    if (Array.isArray(existing.messages) && existing.messages.length > 0) {
+      const clientIdSet = new Set(messages.filter(m => m.id).map(m => m.id));
+      const serverOnly  = existing.messages.filter(m => m.id && !clientIdSet.has(m.id));
+      if (serverOnly.length > 0) {
+        // Interleave server-only messages in timestamp order.
+        const merged = [...messages];
+        for (const msg of serverOnly) {
+          const msgTs = msg.timestamp ? new Date(msg.timestamp).getTime() : Infinity;
+          let insertAt = merged.length;
+          for (let i = merged.length - 1; i >= 0; i--) {
+            const mTs = merged[i].timestamp ? new Date(merged[i].timestamp).getTime() : Infinity;
+            if (mTs <= msgTs) break;
+            insertAt = i;
+          }
+          merged.splice(insertAt, 0, msg);
+        }
+        finalMessages = merged;
+      }
+    }
+  } catch { /* no existing file or corrupt — use client's messages as-is */ }
+
   const data = {
-    sessionId, startedAt, endedAt: endedAt || null, provider, model, messages,
+    sessionId, startedAt, endedAt: endedAt || null, provider, model,
+    messages: finalMessages,
     updatedAt: new Date().toISOString(),
   };
   try {

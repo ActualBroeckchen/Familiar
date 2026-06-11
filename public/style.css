@@ -2526,50 +2526,6 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
   letter-spacing: 0.04em;
 }
 
-/* Outbox banners (M11 reminders + M12 silence triage deliveries) ───── */
-.outbox-banners {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 0 16px;
-}
-.outbox-banner {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 14px;
-  margin-top: 8px;
-  border-radius: 6px;
-  background: var(--surface-elevated, #1f2228);
-  border-left: 3px solid var(--accent, #6fa8dc);
-  font-size: 0.92em;
-  line-height: 1.4;
-}
-.outbox-banner.kind-triage {
-  border-left-color: #d4a44c;
-}
-.outbox-banner .ob-icon { opacity: 0.85; margin-top: 1px; }
-.outbox-banner .ob-content { flex: 1; min-width: 0; }
-.outbox-banner .ob-title {
-  font-weight: 600;
-  margin-bottom: 2px;
-}
-.outbox-banner .ob-body { opacity: 0.85; }
-.outbox-banner .ob-time {
-  opacity: 0.55;
-  font-size: 0.85em;
-  margin-top: 2px;
-}
-.outbox-banner .ob-dismiss {
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  color: var(--text-dim);
-  font-size: 1.1em;
-  padding: 0 4px;
-}
-.outbox-banner .ob-dismiss:hover { color: var(--text); }
-
 /* ── Auto-sync resume banner ─────────────────────────────────── */
 /* Shown at the top of the chat pane when a newer session was found
    on the server. Stays until the user either resumes or dismisses. */

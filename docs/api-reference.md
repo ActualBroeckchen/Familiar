@@ -251,6 +251,26 @@ Deletes the session log file for the given UUID.
 
 ---
 
+### `GET /api/active-session`
+
+Returns metadata for the most-recently-updated session log, or `null` when no logs exist. This powers the auto-sync flow: on startup the client compares this against its locally loaded session and either silently resumes it (empty local chat + server session less than 48 h old) or offers a resume banner (local chat has messages, or the server session is older).
+
+Metadata only — no message content is read or returned, so the call stays cheap enough to run on every page load.
+
+**Response:**
+
+```json
+{
+  "sessionId":    "8f14e45f-…",
+  "startedAt":    "2026-06-11T09:12:00.000Z",
+  "endedAt":      null,
+  "updatedAt":    "2026-06-11T11:47:23.000Z",
+  "messageCount": 42
+}
+```
+
+---
+
 ### `GET /api/triage-events`
 
 Returns the full history of silence-triage decisions, newest first. Each entry is one tick of the 5-minute triage loop, regardless of whether the Familiar acted. Stored as newline-delimited JSON at `logs/triage-events.jsonl`; returns an empty array when the file doesn't exist yet.

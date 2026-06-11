@@ -1780,8 +1780,9 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
           content:      r.content,
           timestamp:    roundTs,
           _toolName:    r.name,
+          id:           generateId(),
         }));
-        pendingMsgs.push({ role: 'assistant', content: content || null, tool_calls: calls, timestamp: roundTs });
+        pendingMsgs.push({ role: 'assistant', content: content || null, tool_calls: calls, timestamp: roundTs, id: generateId() });
         pendingMsgs.push(...toolResults);
         debugRecord('tool', `server round: ${calls.map(tc => tc?.function?.name).join(', ')}`);
 
@@ -1881,9 +1882,9 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
       }
       const ts = shell.timeEl?.getAttribute('datetime') || new Date().toISOString();
 
-      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp });
+      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId() });
       state.messages.push(...pendingMsgs);
-      state.messages.push({ role: 'assistant', content,            timestamp: ts });
+      state.messages.push({ role: 'assistant', content,            timestamp: ts,            id: generateId() });
       // Stamp the assistant element's index now that the message is committed,
       // so the "End topic here" button can resolve the correct state index.
       shell.el.dataset.msgIndex = String(state.messages.length - 1);
@@ -1946,8 +1947,9 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
       content:      r.content,
       timestamp:    ts,
       _toolName:    r.name,
+      id:           generateId(),
     }));
-    pendingMsgs.push({ role: 'assistant', content: round.content || null, tool_calls: calls, timestamp: ts });
+    pendingMsgs.push({ role: 'assistant', content: round.content || null, tool_calls: calls, timestamp: ts, id: generateId() });
     pendingMsgs.push(...toolResults);
     debugRecord('tool', `server round: ${calls.map(tc => tc?.function?.name).join(', ')}`);
     const tEl = appendToolUseEl(calls, toolResults);
@@ -2017,9 +2019,9 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
       bubble.innerHTML = renderMarkdown(stripDisplayTimestamps(content));
       scrollToBottom();
 
-      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp });
+      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId() });
       state.messages.push(...pendingMsgs);
-      state.messages.push({ role: 'assistant', content,            timestamp });
+      state.messages.push({ role: 'assistant', content,            timestamp,                id: generateId() });
       // Stamp the assistant element's index now that the message is committed,
       // so the "End topic here" button can resolve the correct state index.
       shellEl.dataset.msgIndex = String(state.messages.length - 1);
@@ -2928,7 +2930,7 @@ function init() {
   autoResumeMostRecentSession().catch(() => {});
 
   // Outbox polling (M11 reminders, M12 silence triage). Cheap GET every
-  // 30s; banners render at the top of the chat when items are pending.
+  // 30s; pending items are injected as chat messages in the active session.
   startOutboxPolling();
 
   // Trusted contacts (M12c) — manage list in the sidebar section.
@@ -7580,6 +7582,7 @@ async function injectOutboxAsChatMessage(item) {
     timestamp,
     proactive:  true,
     outboxKind: item.kind,
+    id:         generateId(),
   });
   el.dataset.msgIndex = String(state.messages.length - 1);
   saveHistory();
