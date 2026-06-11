@@ -82,7 +82,8 @@ import {
   upsertCategory as upsertVillageCategory, deleteCategory as deleteVillageCategory,
   upsertVillager, deleteVillager,
   upsertLocation as upsertVillageLocation, deleteLocation as deleteVillageLocation,
-  migrateTrustedContacts, initVillageSync, bootSync as villageBootSync,
+  migrateTrustedContacts, seedDefaultCategories,
+  initVillageSync, bootSync as villageBootSync,
 } from './village.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -2200,6 +2201,8 @@ async function startVillageSync() {
   });
   try {
     await villageBootSync();
+    const { added } = await seedDefaultCategories();
+    if (added > 0) console.log(`[village] seeded ${added} default category/categories`);
     const reg = await getVillageRegistry();
     if (reg.villagers.length === 0) {
       const contacts = readSettingsSync()?.trustedContacts;

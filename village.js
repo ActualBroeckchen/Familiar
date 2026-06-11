@@ -45,6 +45,56 @@ const DEFAULT_VILLAGE_PATH = path.join(__dirname, 'village.json');
 export const CATEGORY_EMERGENCY = 'emergency-contacts';
 export const CATEGORY_STRANGERS = 'strangers';
 
+// ── Default category seeds ────────────────────────────────────────
+//
+// Three pre-seeded categories provided on fresh installs (and back-filled
+// on first boot for existing registries). Not builtins — the ward can
+// rename, adjust grants, or delete them freely. Stable IDs make seeding
+// idempotent across upgrades.
+
+const CAT_CLOSE_FRIENDS = '00000000-0000-4000-8001-000000000001';
+const CAT_ACQUAINTANCES  = '00000000-0000-4000-8001-000000000002';
+const CAT_CARE_NETWORK   = '00000000-0000-4000-8001-000000000003';
+
+const DEFAULT_CATEGORY_SEEDS = [
+  {
+    id: CAT_CLOSE_FRIENDS,
+    name: 'Close Friends',
+    builtin: false,
+    grants: {
+      identityBasic: true,
+      identitySensitive: true,   // V3 gate: everything except address
+      wardPresence: true,
+      memories: true,
+      health: true,
+      schedule: 'full',
+      contacts: true,
+    },
+  },
+  {
+    id: CAT_ACQUAINTANCES,
+    name: 'Acquaintances',
+    builtin: false,
+    grants: {
+      identityBasic: true,       // online name, surface persona
+      wardPresence: true,
+      memories: 'shared',        // only memories they're actually part of
+    },
+  },
+  {
+    id: CAT_CARE_NETWORK,
+    name: 'Care Network',
+    builtin: false,
+    grants: {
+      identityBasic: true,
+      wardPresence: true,
+      health: true,              // medical context
+      schedule: 'coarse',        // rough rhythms only
+      contacts: 'care-visible',  // emergency + close friends when relevant
+    },
+  },
+];
+
 function builtinCategories() {
   return [
     {
@@ -66,7 +116,7 @@ function emptyRegistry() {
   return {
     updatedAt: new Date(0).toISOString(),
     syncPending: false,
-    categories: builtinCategories(),
+    categories: [...builtinCategories(), ...DEFAULT_CATEGORY_SEEDS.map(d => ({ ...d }))],
     villagers: [],
     locations: [],
   };
@@ -451,6 +501,28 @@ export async function deleteLocation({ key }, { filePath = DEFAULT_VILLAGE_PATH 
     reg.locations = reg.locations.filter(l => l.key !== key);
     if (reg.locations.length === before) throw new Error(`unknown location: ${key}`);
     return { ok: true };
+  });
+}
+
+// ── Default-category seeding ──────────────────────────────────────
+//
+// Called once at boot (after bootSync) to back-fill the three pre-seeded
+// categories into existing registries that were created before 0.4.20.
+// Idempotent: checks for the stable IDs before writing anything.
+
+export async function seedDefaultCategories({ filePath = DEFAULT_VILLAGE_PATH } = {}) {
+  const existing = await readRegistryFile(filePath);
+  const missing = DEFAULT_CATEGORY_SEEDS.filter(d => !existing.categories.some(c => c.id === d.id));
+  if (!missing.length) return { added: 0 };
+  return mutate(filePath, (reg) => {
+    let added = 0;
+    for (const cat of missing) {
+      if (!reg.categories.some(c => c.id === cat.id)) {
+        reg.categories.push({ ...cat });
+        added++;
+      }
+    }
+    return { added };
   });
 }
 

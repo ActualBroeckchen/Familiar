@@ -220,6 +220,12 @@ const state = {
   // item; the trusted-contact escalation deadline counts from confirmed
   // delivery. Empty = in-app delivery only.
   userDiscordWebhook:      '',
+
+  // Session audience (Village Support V2).
+  // Tracks who is physically present during this session so the Familiar
+  // can reference them and (in V3) gate knowledge appropriately.
+  // Ephemeral: not synced to the server, cleared on new session.
+  sessionAudience: { location: null, participants: [] },
 };
 
 // ── Persistence ──────────────────────────────────────────────────
@@ -2291,6 +2297,7 @@ function startNewSession() {
   state.sessionEndedAt   = null;
   state.messages         = [];
   state.topics           = [];
+  state.sessionAudience  = { location: null, participants: [] };
   lastMessage            = null;
   state.lastMessage      = null;
   elapsedTime            = 0;
@@ -2299,6 +2306,7 @@ function startNewSession() {
   $('messages').innerHTML = '';
   updateTopicStrip();
   refreshTopicGutter();
+  updateAudienceBtn();
 }
 
 /**
@@ -3156,6 +3164,22 @@ function init() {
   document.querySelectorAll('.ke-tab').forEach(el => {
     el.addEventListener('click', () => keSwitchTab(el.dataset.tab));
   });
+  // Session audience (Village Support V2)
+  if ($('audience-btn')) {
+    $('audience-btn').addEventListener('click', toggleAudiencePopover);
+    $('audience-popover-close').addEventListener('click', closeAudiencePopover);
+    $('audience-add-btn').addEventListener('click', audienceAddFromInput);
+    $('audience-search').addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); audienceAddFromInput(); }
+      if (e.key === 'Escape') closeAudiencePopover();
+    });
+    document.addEventListener('click', e => {
+      const wrap = $('audience-wrap');
+      if (wrap && !wrap.contains(e.target)) closeAudiencePopover();
+    });
+    updateAudienceBtn();
+  }
+
   // Village editor (Village Support V1)
   if ($('village-btn')) {
     $('village-btn').addEventListener('click', openVillageModal);
@@ -8268,6 +8292,122 @@ function vlBindBackBtn(btnId, panelId) {
   if (!btn) return;
   btn.style.display = window.matchMedia('(max-width: 767px)').matches ? '' : 'none';
   btn.addEventListener('click', () => vlCloseDetail(panelId));
+}
+
+// ── Session audience (Village Support V2) ────────────────────────────────────
+//
+// Tracks who is physically present during the session. The Familiar is aware
+// of them (referenced in context) and V3 will use the list for knowledge
+// gating. State lives in `state.sessionAudience` and is cleared on new session.
+
+let _audienceReg = null; // cached village registry for the popover
+
+function toggleAudiencePopover() {
+  const popover = $('audience-popover');
+  if (!popover) return;
+  if (popover.classList.contains('hidden')) openAudiencePopover();
+  else closeAudiencePopover();
+}
+
+function openAudiencePopover() {
+  const popover = $('audience-popover');
+  if (!popover) return;
+  popover.classList.remove('hidden');
+  $('audience-btn').setAttribute('aria-expanded', 'true');
+  $('audience-btn').classList.add('active');
+  audiencePopulateDatalist();
+  renderAudienceChips();
+  $('audience-search').focus();
+}
+
+function closeAudiencePopover() {
+  const popover = $('audience-popover');
+  if (!popover) return;
+  popover.classList.add('hidden');
+  $('audience-btn').setAttribute('aria-expanded', 'false');
+  $('audience-btn').classList.remove('active');
+}
+
+async function audiencePopulateDatalist() {
+  try {
+    if (!_audienceReg) {
+      const r = await fetch('/api/village');
+      if (r.ok) _audienceReg = await r.json();
+    }
+    const dl = $('audience-datalist');
+    if (!dl || !_audienceReg) return;
+    dl.innerHTML = (_audienceReg.villagers ?? []).map(v =>
+      `<option value="${esc(v.name)}">`
+    ).join('');
+  } catch { /* network blip — datalist stays empty, free-text still works */ }
+}
+
+function audienceAddFromInput() {
+  const input = $('audience-search');
+  const name  = input?.value.trim();
+  if (!name) return;
+
+  // Resolve to a villager id if the name matches; else store the raw name.
+  const villager = (_audienceReg?.villagers ?? []).find(v => v.name.toLowerCase() === name.toLowerCase());
+  const id = villager?.id ?? null;
+
+  const audience = state.sessionAudience ?? { location: null, participants: [] };
+  const already  = audience.participants.some(p => (typeof p === 'string' ? p : p.id) === (id ?? name));
+  if (already) { input.value = ''; return; }
+
+  audience.participants = [...audience.participants, id ? { id, name: villager.name } : { id: null, name }];
+  state.sessionAudience = audience;
+  saveSettings();
+  renderAudienceChips();
+  updateAudienceBtn();
+  input.value = '';
+}
+
+function audienceRemove(identifier) {
+  const audience = state.sessionAudience ?? { location: null, participants: [] };
+  audience.participants = audience.participants.filter(p => {
+    const key = (typeof p === 'string' ? p : p.name);
+    return key !== identifier;
+  });
+  state.sessionAudience = audience;
+  saveSettings();
+  renderAudienceChips();
+  updateAudienceBtn();
+}
+
+function renderAudienceChips() {
+  const container = $('audience-participants');
+  if (!container) return;
+  const participants = state.sessionAudience?.participants ?? [];
+  if (!participants.length) {
+    container.innerHTML = '<span style="font-size:0.76rem;color:var(--text-dim)">No one added yet.</span>';
+    return;
+  }
+  container.innerHTML = participants.map(p => {
+    const name = typeof p === 'string' ? p : p.name;
+    return `<div class="audience-chip">
+      <span>${esc(name)}</span>
+      <button data-name="${esc(name)}" title="Remove" aria-label="Remove ${esc(name)}">×</button>
+    </div>`;
+  }).join('');
+  container.querySelectorAll('button[data-name]').forEach(btn =>
+    btn.addEventListener('click', () => audienceRemove(btn.dataset.name))
+  );
+}
+
+function updateAudienceBtn() {
+  const btn = $('audience-btn');
+  const label = $('audience-label');
+  if (!btn || !label) return;
+  const participants = state.sessionAudience?.participants ?? [];
+  if (!participants.length) {
+    label.textContent = 'Present';
+    btn.classList.remove('active');
+    return;
+  }
+  const names = participants.map(p => (typeof p === 'string' ? p : p.name));
+  label.textContent = names.length <= 2 ? names.join(', ') : `${names[0]} +${names.length - 1}`;
+  btn.classList.add('active');
 }
 
 

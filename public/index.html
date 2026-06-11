@@ -420,6 +420,25 @@
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
               <span class="btn-new-topic-label">Topic</span>
             </button>
+            <!-- Session audience indicator (Village Support V2) -->
+            <div class="audience-wrap" id="audience-wrap">
+              <button id="audience-btn" class="btn-audience" title="Who's here with you?" aria-label="Session audience" aria-expanded="false" aria-controls="audience-popover">
+                🏘 <span id="audience-label">Present</span>
+              </button>
+              <div id="audience-popover" class="audience-popover hidden" role="dialog" aria-label="Who's present in this session">
+                <div class="audience-popover-head">
+                  <span class="audience-popover-title">Who's here with you?</span>
+                  <button id="audience-popover-close" class="icon-btn" aria-label="Close" style="font-size:0.8rem">✕</button>
+                </div>
+                <div id="audience-participants" class="audience-participants"></div>
+                <div class="audience-add-row">
+                  <input type="text" id="audience-search" placeholder="Add a name…" autocomplete="off" list="audience-datalist">
+                  <datalist id="audience-datalist"></datalist>
+                  <button id="audience-add-btn" class="btn-secondary" style="flex-shrink:0">Add</button>
+                </div>
+                <p class="field-hint" style="margin-top:4px;font-size:0.74rem">People listed here are present with you right now. Your Familiar will be aware of them this session.</p>
+              </div>
+            </div>
           </div>
           <div class="input-row">
             <textarea
