@@ -242,6 +242,27 @@ the storage key from DevTools (`localStorage.removeItem('pf-knowledge-modal-size
 
 ---
 
+## Knowledge editor — memories
+
+### Significant memory shows "⚠ invalid date format" when clicked
+
+Affects builds before **0.5.3-alpha**. Significant memories are stored
+one named file per milestone (`2026-06-11_why-melian-trusts-me.md`),
+and entity-core's listing returns that composite `date_slug` key — but
+the read/edit/delete endpoints only accepted plain dates, so clicking
+a slugged entry failed validation. Saving worked the whole time; only
+viewing/editing from the Knowledge editor was broken.
+
+Fixed in 0.5.3-alpha: the composite key is accepted everywhere and
+split into the separate `date` + `slug` parameters entity-core
+expects. Update Proto-Familiar; the existing files need no migration.
+The Familiar's own `update_memory` / `delete_memory` tools take the
+same composite key for significant memories (it's included in
+`save_memory`'s confirmation, e.g.
+`Memory saved (significant/2026-06-11_why-melian-trusts-me).`).
+
+---
+
 ## Snapshots & undo
 
 ### "I deleted something I shouldn't have"

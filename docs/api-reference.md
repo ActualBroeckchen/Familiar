@@ -737,12 +737,14 @@ The endpoints below back the **Knowledge editor** modal in the sidebar and the L
 
 #### Memory
 
+The `:date` segment accepts what `memory_list` actually returns: a plain date (`YYYY-MM-DD`, `YYYY-MM`, `YYYY`, or `YYYY-Www`) — or, for **significant** memories, the composite key `YYYY-MM-DD_slug` (one named file per milestone, e.g. `2026-06-11_why-melian-trusts-me`). The server splits the composite into the separate `date` + `slug` parameters entity-core's read/update/delete tools expect (since 0.5.3-alpha; before that, slugged keys were rejected with `invalid date format`).
+
 | Method & path | Purpose | Body / query |
 |---|---|---|
 | `GET /api/entity/memories` | List memories. Query: `granularity` (optional, one of the five tiers), `limit` (1–100, default 50) | — |
 | `GET /api/entity/memories/:granularity/:date` | Read one memory | — |
 | `PUT /api/entity/memories/:granularity/:date` | Overwrite the memory's content (auto-snapshots) | `{ "content": "…", "editedBy": "user-edit" }` (≤ 16 KB) |
-| `DELETE /api/entity/memories/:granularity/:date` | Delete the memory (auto-snapshots). Query: `instanceId`, `slug` (optional) | — |
+| `DELETE /api/entity/memories/:granularity/:date` | Delete the memory (auto-snapshots). Query: `instanceId`, `slug` (optional; an explicit `?slug=` wins over the composite key's slug) | — |
 | `POST /api/entity/memories/supersede` | Write a new dated memory contradicting an old one, prefixed with `[supersedes <granularity>/<date>]`. Preserves history; recency-decay demotes the stale entry | `{ "content": "…", "granularity": "daily", "supersedes": { "granularity": "daily", "date": "2026-05-15" } }` |
 
 #### Identity

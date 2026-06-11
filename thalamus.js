@@ -1903,8 +1903,11 @@ export async function listMemories({ granularity, limit = 50, offset = 0 } = {})
   return callTool('memory_list', { granularity, limit, offset });
 }
 
-export async function readMemory({ granularity, date }) {
-  return callTool('memory_read', { granularity, date });
+export async function readMemory({ granularity, date, slug }) {
+  // slug: significant memories live one-file-per-milestone as
+  // {date}_{slug}.md; passing the slug addresses the exact file instead
+  // of letting entity-core fall back to first-match-by-date.
+  return callTool('memory_read', { granularity, date, ...(slug ? { slug } : {}) });
 }
 
 export async function getIdentityAll() {
@@ -1963,13 +1966,17 @@ export async function listSnapshots() {
 
 // ── Writes (auto-snapshot before destructive) ────────────────────────────────
 
-export async function updateMemory({ granularity, date, content, editedBy = PROTO_INSTANCE_ID }) {
+export async function updateMemory({ granularity, date, slug, content, editedBy = PROTO_INSTANCE_ID }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
-  await autoSnapshot(`memory_update ${granularity}/${date}`);
+  await autoSnapshot(`memory_update ${granularity}/${date}${slug ? `_${slug}` : ''}`);
   try {
-    const result = await callTool('memory_update', { granularity, date, content, editedBy });
-    console.log(`[thalamus] updateMemory ${granularity}/${date}`);
+    // slug matters for significant memories: entity-core's memory_update
+    // preserves the existing entry's slug on a date-only match, but an
+    // explicit slug addresses the exact {date}_{slug}.md file when
+    // several milestones share a date.
+    const result = await callTool('memory_update', { granularity, date, content, editedBy, ...(slug ? { slug } : {}) });
+    console.log(`[thalamus] updateMemory ${granularity}/${date}${slug ? `_${slug}` : ''}`);
     return { ok: true, result };
   } catch (err) {
     console.error('[thalamus] updateMemory failed:', err.message);

@@ -671,6 +671,27 @@ export function deriveMemorySlug(input, maxLen = 60) {
   return slug || null;
 }
 
+// Parse a memory key as entity-core's memory_list renders it. Plain
+// dates pass through; SIGNIFICANT memories list as the composite
+// `YYYY-MM-DD_slug` (one file per milestone), but memory_read /
+// memory_update / memory_delete want the date and the slug as SEPARATE
+// parameters — this is the single splitting point for every consumer
+// (HTTP routes and tool executors). Returns { date, slug|null } or
+// null when the key is invalid. The slug charset is restricted to
+// word chars and hyphens so a key can never smuggle path segments.
+const MEMORY_DATE_PART_RE = /^\d{4}(-W\d{2}|(-\d{2})?(-\d{2})?)$/;
+const MEMORY_SLUG_PART_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+export function parseMemoryKey(key) {
+  if (typeof key !== 'string' || !key) return null;
+  const sep = key.indexOf('_');
+  const date = sep === -1 ? key : key.slice(0, sep);
+  const slug = sep === -1 ? null : key.slice(sep + 1);
+  if (!MEMORY_DATE_PART_RE.test(date)) return null;
+  if (slug !== null && !MEMORY_SLUG_PART_RE.test(slug)) return null;
+  return { date, slug };
+}
+
 // Crisis-resources surface — enqueued as an outbox item containing
 // international hotline information. Deduped to one item per hour so
 // repeated model calls during a single crisis don't flood the queue.
@@ -815,7 +836,7 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier of the entry to overwrite.' },
-          date:        { type: 'string', description: 'Date of the entry, in the same format the entry was stored (e.g. YYYY-MM-DD for daily).' },
+          date:        { type: 'string', description: 'Date of the entry, in the same format the entry was stored (e.g. YYYY-MM-DD for daily). Significant memories are one named file per milestone and are addressed by the composite key YYYY-MM-DD_slug (as shown when I saved them and in memory listings) — I pass that whole key here.' },
           content:     { type: 'string', description: 'The full new contents. This REPLACES the entry — include everything I want to keep, not just the diff, or else I will lose important information.' },
         },
         required: ['granularity', 'date', 'content'],
@@ -831,7 +852,7 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier of the entry to delete.' },
-          date:        { type: 'string', description: 'Date of the entry, in the same format the entry was stored.' },
+          date:        { type: 'string', description: 'Date of the entry, in the same format the entry was stored. For significant memories I pass the composite key YYYY-MM-DD_slug so the right milestone file is targeted.' },
         },
         required: ['granularity', 'date'],
       },
@@ -1195,7 +1216,15 @@ export const TOOL_EXECUTORS = {
     }
     try {
       const result = await createMemory({ content: content.trim(), granularity, slug });
-      return result.ok ? 'Memory saved.' : `Memory save failed: ${result.error ?? 'unknown error'}`;
+      if (!result.ok) return `Memory save failed: ${result.error ?? 'unknown error'}`;
+      // For significant memories, hand back the composite key — it's how
+      // the entry is addressed later (update_memory / delete_memory take
+      // YYYY-MM-DD_slug for significant).
+      if (slug) {
+        const today = new Date().toISOString().slice(0, 10);
+        return `Memory saved (significant/${today}_${slug}).`;
+      }
+      return 'Memory saved.';
     } catch (err) { return `Failed to save memory: ${err.message}`; }
   },
 
@@ -1235,8 +1264,12 @@ export const TOOL_EXECUTORS = {
     if (!VALID_MEMORY_GRANULARITIES.has(granularity)) return 'Failed to update memory: invalid granularity';
     if (typeof content !== 'string' || !content.trim()) return 'Failed to update memory: content required';
     if (content.length > 16384) return 'Failed to update memory: content exceeds 16 KB limit';
+    // Significant memories are addressed as YYYY-MM-DD_slug; split the
+    // composite key so entity-core gets date + slug separately.
+    const key = parseMemoryKey(date);
+    if (!key) return 'Failed to update memory: invalid date format (use YYYY-MM-DD, or YYYY-MM-DD_slug for significant memories)';
     try {
-      const result = await updateMemory({ granularity, date, content: content.trim(), editedBy: 'familiar-toolcall' });
+      const result = await updateMemory({ granularity, date: key.date, slug: key.slug ?? undefined, content: content.trim(), editedBy: 'familiar-toolcall' });
       if (!result.ok) return `Failed to update memory: ${result.error ?? 'entity-core unavailable'}`;
       return `Memory ${granularity}/${date} updated.`;
     } catch (err) { return `Failed to update memory: ${err.message}`; }
@@ -1244,8 +1277,10 @@ export const TOOL_EXECUTORS = {
 
   delete_memory: async ({ granularity, date }) => {
     if (!VALID_MEMORY_GRANULARITIES.has(granularity)) return 'Failed to delete memory: invalid granularity';
+    const key = parseMemoryKey(date);
+    if (!key) return 'Failed to delete memory: invalid date format (use YYYY-MM-DD, or YYYY-MM-DD_slug for significant memories)';
     try {
-      const result = await deleteMemory({ granularity, date });
+      const result = await deleteMemory({ granularity, date: key.date, slug: key.slug ?? undefined });
       if (!result.ok) return `Failed to delete memory: ${result.error ?? 'entity-core unavailable'}`;
       return `Memory ${granularity}/${date} deleted (snapshot saved — recoverable from the Knowledge editor).`;
     } catch (err) { return `Failed to delete memory: ${err.message}`; }

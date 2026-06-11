@@ -92,7 +92,7 @@ Entries are saved to the first enabled Tome (auto-creates "General" if none exis
 | `granularity` | enum | Yes | `daily` \| `weekly` \| `monthly` \| `yearly` \| `significant` |
 | `title` | string | Required for `significant`, ignored otherwise | Short human-readable label (e.g. `"first meeting"`). Used to slug-name the file so each significant memory gets its own `YYYY-MM-DD_slug.md` and does not overwrite previous ones. |
 
-Requires entity-core to be running. Degrades gracefully (returns an error string) if entity-core is unavailable. For `significant`, the server auto-derives a slug from the title (or from `content`'s first line if the title is missing) before forwarding to entity-core.
+Requires entity-core to be running. Degrades gracefully (returns an error string) if entity-core is unavailable. For `significant`, the server auto-derives a slug from the title (or from `content`'s first line if the title is missing) before forwarding to entity-core, and the confirmation string includes the composite key (`Memory saved (significant/2026-06-11_why-melian-trusts-me).`) — that key is how the entry is addressed later in `update_memory` / `delete_memory`.
 
 #### `update_identity`
 
@@ -128,17 +128,17 @@ Calls `graph_subgraph` server-side. Returns one edge per line as `<from> -<rel>-
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `granularity` | enum | Yes | `daily` \| `weekly` \| `monthly` \| `yearly` \| `significant` |
-| `date`        | string | Yes | Date of the entry, in the format it was stored (e.g. `YYYY-MM-DD` for daily) |
+| `date`        | string | Yes | Date of the entry, in the format it was stored (e.g. `YYYY-MM-DD` for daily). **Significant memories use the composite key `YYYY-MM-DD_slug`** (as returned by `save_memory` and shown in memory listings) so the right milestone file is targeted. |
 | `content`     | string | Yes | Full new contents — REPLACES the entry |
 
-Auto-snapshots entity-core, then calls `memory_update`. Use to correct an inaccuracy. To record a change that has historical value, use `save_memory` instead so the old version is preserved.
+Auto-snapshots entity-core, then calls `memory_update` (the composite key is split into separate `date` + `slug` parameters). Use to correct an inaccuracy. To record a change that has historical value, use `save_memory` instead so the old version is preserved.
 
 #### `delete_memory`
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `granularity` | enum | Yes | Memory tier |
-| `date`        | string | Yes | Date of the entry to delete |
+| `date`        | string | Yes | Date of the entry to delete. Significant memories use the composite key `YYYY-MM-DD_slug`. |
 
 Auto-snapshots, then calls `memory_delete`. Reserve for fully wrong / obsolete entries.
 

@@ -61,7 +61,7 @@ import {
   composeActiveTools, executeToolCall, MAX_TOOL_ROUNDS,
   initCerebellumTools, enqueueCrisisResources, runToolCallLoop,
   VALID_MEMORY_GRANULARITIES, VALID_IDENTITY_CATEGORIES, VALID_FILENAME_RE,
-  deriveMemorySlug,
+  deriveMemorySlug, parseMemoryKey,
   // Channel adapters — enqueueAndDispatch pushes every user-facing
   // outbox item to the configured push channels (e.g. the human's own
   // Discord webhook) and records per-channel delivery state.
@@ -1314,7 +1314,6 @@ app.post('/api/entity/identity', async (req, res) => {
 // before calling the entity-core tool, so the Snapshots tab in the UI lets
 // the user roll back if something goes sideways.
 
-const VALID_MEMORY_DATE_RE = /^\d{4}(-W\d{2}|(-\d{2})?(-\d{2})?)$/;
 const VALID_GRAPH_ID_RE    = /^[\w-]{1,128}$/;
 const VALID_SECTION_RE     = /^[\w\s\-()&'?!,.:/]{1,200}$/; // markdown headings — permissive but bounded
 const VALID_SNAPSHOT_ID_RE = /^[\w.\-:]{1,200}$/;
@@ -1323,6 +1322,11 @@ function badRequest(res, message) { return res.status(400).json({ error: message
 function gatewayDown(res, err)    { return res.status(502).json({ error: err ?? 'entity-core unavailable' }); }
 
 // ── Memory ────────────────────────────────────────────────────────────────
+// The :date param accepts what memory_list actually returns: a plain
+// date (daily/weekly/monthly/yearly) OR the composite `YYYY-MM-DD_slug`
+// key that significant memories list as (one named file per milestone).
+// cerebellum.parseMemoryKey splits the composite into the separate
+// date + slug parameters entity-core's read/update/delete tools expect.
 app.get('/api/entity/memories', async (req, res) => {
   const { granularity, limit } = req.query;
   if (granularity && !VALID_MEMORY_GRANULARITIES.has(granularity))
@@ -1335,8 +1339,9 @@ app.get('/api/entity/memories', async (req, res) => {
 app.get('/api/entity/memories/:granularity/:date', async (req, res) => {
   const { granularity, date } = req.params;
   if (!VALID_MEMORY_GRANULARITIES.has(granularity)) return badRequest(res, 'invalid granularity');
-  if (!VALID_MEMORY_DATE_RE.test(date))             return badRequest(res, 'invalid date format');
-  try { res.json(await readMemory({ granularity, date })); }
+  const key = parseMemoryKey(date);
+  if (!key) return badRequest(res, 'invalid date format');
+  try { res.json(await readMemory({ granularity, date: key.date, slug: key.slug ?? undefined })); }
   catch (err) { gatewayDown(res, err.message); }
 });
 
@@ -1344,10 +1349,11 @@ app.put('/api/entity/memories/:granularity/:date', async (req, res) => {
   const { granularity, date } = req.params;
   const { content, editedBy } = req.body;
   if (!VALID_MEMORY_GRANULARITIES.has(granularity)) return badRequest(res, 'invalid granularity');
-  if (!VALID_MEMORY_DATE_RE.test(date))             return badRequest(res, 'invalid date format');
+  const key = parseMemoryKey(date);
+  if (!key) return badRequest(res, 'invalid date format');
   if (typeof content !== 'string' || !content.trim()) return badRequest(res, 'content required');
   if (content.length > 16384)                       return badRequest(res, 'content exceeds 16 KB limit');
-  const result = await updateMemory({ granularity, date, content: content.trim(), editedBy });
+  const result = await updateMemory({ granularity, date: key.date, slug: key.slug ?? undefined, content: content.trim(), editedBy });
   if (!result.ok) return gatewayDown(res, result.error);
   res.json(result.result);
 });
@@ -1355,8 +1361,12 @@ app.put('/api/entity/memories/:granularity/:date', async (req, res) => {
 app.delete('/api/entity/memories/:granularity/:date', async (req, res) => {
   const { granularity, date } = req.params;
   if (!VALID_MEMORY_GRANULARITIES.has(granularity)) return badRequest(res, 'invalid granularity');
-  if (!VALID_MEMORY_DATE_RE.test(date))             return badRequest(res, 'invalid date format');
-  const result = await deleteMemory({ granularity, date, instanceId: req.query.instanceId, slug: req.query.slug });
+  const key = parseMemoryKey(date);
+  if (!key) return badRequest(res, 'invalid date format');
+  // An explicit ?slug= query wins over the composite key's slug (the
+  // pre-0.5.3 calling convention some callers still use).
+  const slug = req.query.slug || key.slug || undefined;
+  const result = await deleteMemory({ granularity, date: key.date, instanceId: req.query.instanceId, slug });
   if (!result.ok) return gatewayDown(res, result.error);
   res.json(result.result);
 });

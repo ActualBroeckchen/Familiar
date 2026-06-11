@@ -465,3 +465,43 @@ test('enqueueAndDispatch: dedup short-circuits the push', async () => {
     assert.equal(pushes, 1);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ── parseMemoryKey — composite significant-memory keys ───────────
+
+import { parseMemoryKey, TOOL_EXECUTORS as EXECS } from '../cerebellum.js';
+
+test('parseMemoryKey: plain dates pass through for every granularity shape', () => {
+  assert.deepEqual(parseMemoryKey('2026-06-11'), { date: '2026-06-11', slug: null });
+  assert.deepEqual(parseMemoryKey('2026-06'),    { date: '2026-06',    slug: null });
+  assert.deepEqual(parseMemoryKey('2026'),       { date: '2026',       slug: null });
+  assert.deepEqual(parseMemoryKey('2026-W24'),   { date: '2026-W24',   slug: null });
+});
+
+test('parseMemoryKey: splits the composite significant key into date + slug', () => {
+  assert.deepEqual(
+    parseMemoryKey('2026-06-11_why-melian-trusts-me'),
+    { date: '2026-06-11', slug: 'why-melian-trusts-me' },
+  );
+  // Slugs may themselves contain underscores — split happens at the FIRST one.
+  assert.deepEqual(
+    parseMemoryKey('2026-06-11_a_b_c'),
+    { date: '2026-06-11', slug: 'a_b_c' },
+  );
+});
+
+test('parseMemoryKey: rejects junk, empty slugs, and path-smuggling keys', () => {
+  assert.equal(parseMemoryKey('garbage'), null);
+  assert.equal(parseMemoryKey(''), null);
+  assert.equal(parseMemoryKey(undefined), null);
+  assert.equal(parseMemoryKey('2026-06-11_'), null);            // empty slug
+  assert.equal(parseMemoryKey('2026-06-11_../escape'), null);   // dot segments
+  assert.equal(parseMemoryKey('2026-06-11_a/b'), null);         // slashes
+  assert.equal(parseMemoryKey('2026-06-11_.hidden'), null);     // leading dot
+});
+
+test('update_memory / delete_memory executors reject malformed keys with a readable hint', async () => {
+  const upd = await EXECS.update_memory({ granularity: 'significant', date: 'not-a-date', content: 'x' });
+  assert.match(upd, /invalid date format .*YYYY-MM-DD_slug/);
+  const del = await EXECS.delete_memory({ granularity: 'significant', date: '2026-06-11_a/b' });
+  assert.match(del, /invalid date format .*YYYY-MM-DD_slug/);
+});
