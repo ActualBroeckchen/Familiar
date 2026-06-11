@@ -876,6 +876,33 @@ app.delete('/api/logs/:id', async (req, res) => {
   }
 });
 
+// GET /api/active-session — most recently updated session (metadata only).
+// The client calls this on startup to auto-resume if a newer session is on
+// the server than what's in the local browser. Returns null when no logs exist.
+app.get('/api/active-session', async (_req, res) => {
+  try {
+    const files = await fsp.readdir(LOGS_DIR);
+    let best = null;
+    let bestTs = '';
+    for (const f of files) {
+      if (!f.endsWith('.json')) continue;
+      try {
+        const raw  = await fsp.readFile(path.join(LOGS_DIR, f), 'utf8');
+        const { sessionId, startedAt, endedAt, updatedAt, messages } = JSON.parse(raw);
+        const ts   = updatedAt || startedAt || '';
+        if (ts > bestTs) {
+          bestTs = ts;
+          best   = { sessionId, startedAt, endedAt: endedAt || null, updatedAt: ts,
+            messageCount: Array.isArray(messages) ? messages.length : 0 };
+        }
+      } catch { /* skip corrupt */ }
+    }
+    res.json(best);
+  } catch {
+    res.json(null);
+  }
+});
+
 // GET /api/triage-events — return triage decision log (newest first).
 // Each entry is one JSON line from triage-events.jsonl: timestamp, tier,
 // silence duration, decision, and whether the Familiar acted.

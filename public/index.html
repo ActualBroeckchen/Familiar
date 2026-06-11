@@ -379,6 +379,13 @@
       <!-- ── Chat pane ──────────────────────────────────────── -->
       <main class="chat-pane" id="chat-pane">
 
+        <!-- Auto-sync resume banner: shown when a newer session is on the server -->
+        <div id="resume-banner" class="resume-banner hidden" role="status" aria-live="polite">
+          <span id="resume-banner-msg" class="resume-banner-msg"></span>
+          <button id="resume-banner-yes" class="resume-banner-btn">Resume</button>
+          <button id="resume-banner-dismiss" class="resume-banner-dismiss" aria-label="Dismiss">✕</button>
+        </div>
+
         <!-- Outbox banners (M11/M12 — reminders + silence triage deliveries) -->
         <div id="outbox-banners" class="outbox-banners" aria-live="polite"></div>
 

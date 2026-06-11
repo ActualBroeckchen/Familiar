@@ -449,12 +449,16 @@ button { cursor: pointer; font-family: var(--font); }
   top: calc(100% + 8px);
   right: 0;
   width: 280px;
+  /* Clamp so the popover doesn't clip off the left edge on narrow phones */
+  max-width: min(280px, calc(100vw - 28px));
   padding: 12px;
   background: var(--surface, #1e1e22);
   border: 1px solid var(--border, #333);
   border-radius: var(--radius, 8px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  z-index: 1000;
+  /* Above the topbar (40) but below modal backdrops (60) — the old
+     z-index:1000 caused this popover to float on top of open modals. */
+  z-index: 45;
   font-size: 0.85rem;
   color: var(--text, #eee);
 }
@@ -1094,6 +1098,68 @@ button { cursor: pointer; font-family: var(--font); }
   #user-input {
     max-height: 40dvh;
   }
+
+  /* ── Bottom-sheet modals ───────────────────────────────────── */
+  /* Modals slide up from the bottom on phones — the native iOS/Android
+     pattern for full-width overlays. Backdrop padding collapses to 0;
+     rounded corners only on the top edge. */
+  .modal-backdrop {
+    align-items: flex-end;
+    padding: 0 0 env(safe-area-inset-bottom);
+  }
+  .modal,
+  .modal-wide {
+    max-width: 100%;
+    width: 100%;
+    max-height: 90vh;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  /* Drag-handle indicator at the top of every bottom-sheet modal */
+  .modal-header {
+    position: relative;
+    padding-top: 24px;
+  }
+  .modal-header::before {
+    content: '';
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--text-muted);
+    opacity: 0.7;
+  }
+  /* Resizable modals (KE, TE, Lore, Tome entries): go full-width
+     sheet, drop the resize handle (pointless on touch). */
+  .modal-resizable {
+    width: 100%;
+    height: 88vh;
+    min-width: 0;
+    min-height: 0;
+    resize: none;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+
+  /* ── Knowledge-editor split: stack on mobile ─────────────── */
+  /* The 280px fixed list column is too wide to coexist with the
+     detail pane on a 375px screen — stack them vertically instead. */
+  .ke-split {
+    grid-template-columns: 1fr;
+  }
+  .ke-list:not(.ke-list-full) {
+    max-height: 35vh;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* ── Calendar: tighter cells on small screens ─────────────── */
+  .te-cal-day {
+    min-height: 44px;
+  }
 }
 
 /* Suppress iOS Safari's auto-zoom on input focus — anything under 16px
@@ -1111,11 +1177,58 @@ button { cursor: pointer; font-family: var(--font); }
   #messages {
     padding: 0;
   }
+
+  /* WCAG 2.5.8: touch targets should be at least 44×44px.
+     On desktop 34px is fine for mouse precision; on touch it's too small. */
+  .icon-btn {
+    width: 44px;
+    height: 44px;
+  }
+
+  /* Bump message text to 16px so it reads comfortably without squinting
+     and avoids any residual iOS auto-zoom on tap. */
+  .msg-bubble {
+    font-size: 16px;
+  }
 }
 
 /* ── Responsive: tablet (768–1100px) ─────────────────────────── */
 @media (min-width: 768px) and (max-width: 1100px) {
   :root { --sidebar-w: 270px; }
+}
+
+/* ── Responsive: compact phones (≤380px) ─────────────────────── */
+/* Extra breathing room for the very narrow end of the phone range. */
+@media (max-width: 380px) {
+  .modal-body {
+    padding: 10px 14px;
+  }
+  .modal-header {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  .modal-footer {
+    padding: 10px 14px 12px;
+  }
+  .sidebar-section {
+    padding: 12px 14px;
+  }
+}
+
+/* ── Responsive: landscape phones ────────────────────────────── */
+/* In landscape on a phone, viewport height shrinks dramatically.
+   Cap modals tighter so the header and footer remain reachable. */
+@media (max-width: 767px) and (orientation: landscape) {
+  .modal,
+  .modal-wide {
+    max-height: 80vh;
+  }
+  .modal-resizable {
+    height: 78vh;
+  }
+  #user-input {
+    max-height: 25dvh;
+  }
 }
 
 /* ── Accessibility: reduced motion ───────────────────────────── */
@@ -2549,3 +2662,53 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
   padding: 0 4px;
 }
 .outbox-banner .ob-dismiss:hover { color: var(--text); }
+
+/* ── Auto-sync resume banner ─────────────────────────────────── */
+/* Shown at the top of the chat pane when a newer session was found
+   on the server. Stays until the user either resumes or dismisses. */
+.resume-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background: var(--accent-dim);
+  border-bottom: 1px solid var(--accent);
+  font-size: 0.84rem;
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+.resume-banner.hidden { display: none; }
+
+.resume-banner-msg {
+  flex: 1;
+  min-width: 0;
+}
+
+.resume-banner-btn {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.resume-banner-btn:hover { background: var(--accent-hover); }
+
+.resume-banner-dismiss {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 1rem;
+  padding: 2px 4px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.resume-banner-dismiss:hover { color: var(--text); }

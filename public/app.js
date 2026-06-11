@@ -452,6 +452,62 @@ async function syncSettingsFromServer() {
   }
 }
 
+// ── Auto-sync: resume most recent session from server ──────────
+// Runs once at startup, after settings are synced. If the server has a
+// session that this device doesn't have loaded, either auto-loads it
+// (when the local session is empty and the server session is recent) or
+// shows a non-blocking banner so the user can decide.
+async function autoResumeMostRecentSession() {
+  let remote;
+  try {
+    const r = await fetch('/api/active-session');
+    if (!r.ok) return;
+    remote = await r.json();
+  } catch { return; }
+
+  if (!remote?.sessionId) return;
+  // Already loaded → nothing to do
+  if (remote.sessionId === state.sessionId) return;
+
+  const serverTs  = remote.updatedAt || remote.startedAt || '';
+  const serverAge = serverTs ? Date.now() - new Date(serverTs).getTime() : Infinity;
+  const TWO_DAYS  = 48 * 60 * 60 * 1000;
+  const localIsEmpty = !state.messages.length;
+
+  const showBanner = (msg) => {
+    $('resume-banner-msg').textContent = msg;
+    $('resume-banner').classList.remove('hidden');
+    $('resume-banner-yes').onclick = async () => {
+      $('resume-banner').classList.add('hidden');
+      try { await loadSession(remote.sessionId); } catch { /* ignore */ }
+    };
+    $('resume-banner-dismiss').onclick = () => {
+      $('resume-banner').classList.add('hidden');
+    };
+  };
+
+  if (localIsEmpty) {
+    if (serverAge <= TWO_DAYS) {
+      // Silently resume — local is empty and server session is recent.
+      // This is the primary "switch devices" flow.
+      try { await loadSession(remote.sessionId); } catch { /* ignore */ }
+    } else {
+      // Server session is older than 48 h — show banner so the user knows it exists
+      const mc  = remote.messageCount || 0;
+      const ago = serverTs ? formatDuration(serverAge) : 'unknown time';
+      showBanner(`An older session (${mc} messages, ${ago} ago) is on the server. Resume it?`);
+    }
+    return;
+  }
+
+  // Local has messages — only offer if server session is actually newer
+  const localTs = state.lastMessage || state.sessionStartedAt || '';
+  if (!serverTs || serverTs <= localTs) return;
+
+  const mc = remote.messageCount || 0;
+  showBanner(`A more recent session (${mc} message${mc !== 1 ? 's' : ''}) was found on the server. Resume it here?`);
+}
+
 // ── Saved connections ──────────────────────────────────────────
 /**
  * If the user has an apiKey set but no saved connections (first run after
@@ -2867,6 +2923,10 @@ function init() {
   // settings get pushed up so the next device sees them.
   syncSettingsFromServer().catch(err => console.warn('syncSettingsFromServer', err));
 
+  // Auto-resume: if the server has a more recent session than what this
+  // device has loaded, silently load it (empty local) or offer a banner.
+  autoResumeMostRecentSession().catch(() => {});
+
   // Outbox polling (M11 reminders, M12 silence triage). Cheap GET every
   // 30s; banners render at the top of the chat when items are pending.
   startOutboxPolling();
@@ -3314,6 +3374,9 @@ function init() {
   // ── Mobile viewport / keyboard handling ──────────────────────
   initMobileViewport();
 
+  // ── Touch gesture: swipe down on modal header to dismiss ─────
+  initModalSwipeDismiss();
+
   // ── Focus input ──────────────────────────────────────────────
   $('user-input').focus();
 }
@@ -3367,6 +3430,90 @@ function initMobileViewport() {
     });
     ro.observe(input);
   }
+}
+
+// ── Modal swipe-dismiss (touch) ─────────────────────────────────
+// On mobile, swiping the modal header downward dismisses the modal —
+// the same gesture iOS/Android users expect for bottom sheets.
+// Resizable modals are excluded (they fill the screen and have their
+// own drag handle). Scrollable modal bodies are not affected because
+// the listener is anchored to .modal-header, not .modal-body.
+function initModalSwipeDismiss() {
+  if (!('ontouchstart' in window)) return;
+
+  let activeModal  = null;
+  let startY       = 0;
+  let startX       = 0;
+  let currentDy    = 0;
+  let raf          = null;
+
+  document.addEventListener('touchstart', e => {
+    const header   = e.target.closest('.modal-header');
+    if (!header) return;
+    const modal    = header.closest('.modal');
+    // Resizable modals stay as-is (they fill the screen and have their own handle)
+    if (!modal || modal.classList.contains('modal-resizable')) return;
+    if (modal.closest('.modal-backdrop.hidden')) return;
+
+    activeModal = modal;
+    startY      = e.touches[0].clientY;
+    startX      = e.touches[0].clientX;
+    currentDy   = 0;
+    activeModal.style.transition = 'none';
+  }, { passive: true });
+
+  document.addEventListener('touchmove', e => {
+    if (!activeModal) return;
+    const dy = e.touches[0].clientY - startY;
+    const dx = e.touches[0].clientX - startX;
+    // Cancel if swipe is predominantly horizontal or going upward
+    if (dy < 0 || Math.abs(dx) > Math.abs(dy) * 0.8) {
+      activeModal.style.transform = '';
+      activeModal = null;
+      return;
+    }
+    currentDy = dy;
+    if (raf) cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => {
+      if (activeModal) activeModal.style.transform = `translateY(${currentDy}px)`;
+    });
+  }, { passive: true });
+
+  document.addEventListener('touchend', () => {
+    if (!activeModal) return;
+    const modal = activeModal;
+    activeModal = null;
+    if (currentDy > 90) {
+      // Committed swipe — animate out then trigger the close button
+      modal.style.transition = 'transform 0.22s ease';
+      modal.style.transform  = `translateY(100%)`;
+      setTimeout(() => {
+        modal.style.transition = '';
+        modal.style.transform  = '';
+        // Find and click the modal's own close button
+        const closeBtn =
+          modal.querySelector('[id$="-close"]') ||
+          modal.querySelector('[id$="-cancel"]') ||
+          modal.querySelector('.modal-header .icon-btn');
+        if (closeBtn) closeBtn.click();
+        else modal.closest('.modal-backdrop')?.click();
+      }, 220);
+    } else {
+      // Snap back
+      modal.style.transition = 'transform 0.18s ease';
+      modal.style.transform  = '';
+      setTimeout(() => { modal.style.transition = ''; }, 200);
+    }
+    currentDy = 0;
+  }, { passive: true });
+
+  document.addEventListener('touchcancel', () => {
+    if (!activeModal) return;
+    activeModal.style.transition = '';
+    activeModal.style.transform  = '';
+    activeModal = null;
+    currentDy   = 0;
+  }, { passive: true });
 }
 
 document.addEventListener('DOMContentLoaded', init);
