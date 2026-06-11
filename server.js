@@ -46,7 +46,7 @@ import {
 import { getRecentPonderings, deletePondering, markIntentActedOn } from './recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
 import { listOutbox, acknowledgeOutbox, clearAcknowledged, enqueueOutbox } from './outbox.js';
-import { startSilenceTriageLoop, stopSilenceTriageLoop, TRIAGE_SILENCE_THRESHOLD_MS } from './silence-triage-loop.js';
+import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
 import { buildTimeAnchorBlock } from './relative-time.js';
 // Cerebellum is the motor module — the outbound counterpart to thalamus.
@@ -2249,7 +2249,7 @@ function startSilenceTriage() {
     },
     onError: (err) => console.error('[triage]', err?.message ?? err),
   });
-  console.log(`[triage] Silence triage ENABLED. Thresholds: severe=${TRIAGE_SILENCE_THRESHOLD_MS.severe/60_000}min, high=${TRIAGE_SILENCE_THRESHOLD_MS.high/60_000}min, moderate=${TRIAGE_SILENCE_THRESHOLD_MS.moderate/60_000}min. Hard-disable with PROTO_FAMILIAR_TRIAGE_DISABLED=1.`);
+  console.log(`[triage] Silence triage ENABLED. Re-check defaults: severe=${DEFAULT_RECHECK_MS.severe/60_000}min, high=${DEFAULT_RECHECK_MS.high/60_000}min, moderate=${DEFAULT_RECHECK_MS.moderate/60_000}min (LLM may shorten/lengthen). calm/mild never trigger. Hard-disable with PROTO_FAMILIAR_TRIAGE_DISABLED=1.`);
 }
 
 // Graceful shutdown — fires on SIGTERM (stop.sh / stop.bat / docker
