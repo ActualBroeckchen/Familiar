@@ -8307,6 +8307,79 @@ async function vlDeleteCategory(id) {
   } catch (err) { status.textContent = `Error: ${err.message}`; }
 }
 
+// ── Location knock list (V4.x) ──
+
+async function vlLoadLocationKnocks() {
+  const box = $('vl-location-knocks');
+  if (!box) return;
+  try {
+    const r = await fetch('/api/village/location-knocks');
+    vlRenderLocationKnocks(r.ok ? await r.json() : []);
+  } catch { box.classList.add('hidden'); }
+}
+
+function vlRenderLocationKnocks(knocks) {
+  const box = $('vl-location-knocks');
+  if (!box) return;
+  if (!Array.isArray(knocks) || !knocks.length) {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  box.classList.remove('hidden');
+  box.innerHTML = `<div class="vl-knocks-head">🚪 Knocked on the door <span class="field-hint">— Discord channels your Familiar has spoken in that aren't registered yet. Register them to set an access ceiling.</span></div>`
+    + knocks.map((k, i) => {
+      const channelId = k.channelId || (k.key.split(':channel:')[1] ?? '');
+      const guildId   = k.guildId   || (k.key.match(/guild:([^:]+)/)?.[1] ?? '');
+      const displayKey = channelId ? `#${channelId}` : k.key;
+      const sub = [
+        guildId ? `guild ${guildId}` : '',
+        esc(k.platform ?? ''),
+        `${k.count ?? 1}×, last ${k.lastSeenAt ? new Date(k.lastSeenAt).toLocaleString() : '?'}`,
+      ].filter(Boolean).join(' · ');
+      return `<div class="vl-knock" data-lki="${i}">
+        <div class="vl-knock-info">
+          <div class="vl-knock-name">${esc(displayKey)} <span class="vl-knock-id">${esc(k.key)}</span></div>
+          <div class="vl-knock-sub">${sub}</div>
+        </div>
+        <div class="vl-knock-actions">
+          <button class="btn-secondary vl-loc-knock-register" type="button">Register</button>
+          <button class="btn-ghost vl-loc-knock-x" type="button" title="Dismiss (the channel can knock again — nothing is blocked)">×</button>
+        </div>
+      </div>`;
+    }).join('');
+
+  box.querySelectorAll('.vl-knock').forEach(row => {
+    const k = knocks[Number(row.dataset.lki)];
+    row.querySelector('.vl-loc-knock-register').addEventListener('click', () => vlRegisterFromLocationKnock(k));
+    row.querySelector('.vl-loc-knock-x').addEventListener('click', () => vlDismissLocationKnock(k));
+  });
+}
+
+async function vlDismissLocationKnock(k, { silent = false } = {}) {
+  if (!silent && !confirm(`Dismiss knock from ${k.key}? It can knock again — nothing is blocked.`)) return;
+  try {
+    await fetch('/api/village/location-knocks', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: k.key }),
+    });
+  } catch { /* best-effort */ }
+  vlLoadLocationKnocks();
+}
+
+/** Open the new-location panel prefilled with the knock's key. */
+function vlRegisterFromLocationKnock(k) {
+  vlStartNewLocation();
+  const keyEl = $('vl-l-key');
+  if (keyEl) keyEl.value = k.key;
+  const labelEl = $('vl-l-label');
+  if (labelEl) {
+    const channelId = k.channelId || (k.key.split(':channel:')[1] ?? '');
+    labelEl.value = channelId ? `Discord #${channelId}` : '';
+  }
+}
+
 // ── Locations ──
 
 async function vlLoadLocations() {
@@ -8315,6 +8388,7 @@ async function vlLoadLocations() {
   try {
     vlRenderLocList(await vlFetch(true));
   } catch (err) { list.innerHTML = vlErr(err); }
+  vlLoadLocationKnocks();
 }
 
 function vlRenderLocList(reg) {
@@ -8420,6 +8494,7 @@ async function vlSaveLocation(key) {
     _vlSelL = saved.key;
     vlRenderLocList(reg);
     vlRenderLocDetail(reg.locations.find(l => l.key === saved.key) ?? null);
+    vlLoadLocationKnocks();
     setTimeout(() => { const s = $('vl-l-status'); if (s) s.textContent = ''; }, 2000);
   } catch (err) { status.textContent = `Error: ${err.message}`; }
 }

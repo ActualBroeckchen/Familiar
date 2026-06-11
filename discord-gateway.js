@@ -41,7 +41,7 @@ import { PROVIDER_URLS } from './providers.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
 import { recordUserActivity } from './last-activity.js';
-import { recordKnock } from './knocks.js';
+import { recordKnock, recordLocationKnock } from './knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOGS_DIR  = path.join(__dirname, 'logs');
@@ -378,6 +378,18 @@ async function handleTurn(gw, msg, decision) {
   const regLoc = (registry.locations ?? []).find(l => l.key === decision.locationKey);
   const label  = regLoc?.label
     ?? (decision.kind === 'guild' ? `Discord channel ${msg.channel_id}` : `Discord DM`);
+
+  // Location knock — capture unregistered guild channels for one-click
+  // registration in the Locations tab. Fire-and-forget; registration
+  // grants nothing.
+  if (decision.kind === 'guild' && !regLoc) {
+    recordLocationKnock({
+      key: decision.locationKey,
+      platform: 'discord',
+      guildId: msg.guild_id,
+      channelId: msg.channel_id,
+    }).catch(() => { /* best-effort */ });
+  }
   const session = await sessionForLocation(decision.locationKey, label, decision.kind === 'guild' ? 'group' : 'private');
   if (!decision.isWard && decision.speakerName) {
     session.participants = mergeParticipant(session.participants, {
