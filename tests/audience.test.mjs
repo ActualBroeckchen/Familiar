@@ -10,6 +10,7 @@ import {
   resolveAudience,
   isGranted,
   stripGatedSections,
+  fetchEligibility,
 } from '../audience.js';
 
 // ── resolveAudience helpers ───────────────────────────────────────
@@ -367,6 +368,44 @@ describe('stripGatedSections — gated mode', () => {
   it('non-string content returns empty string', () => {
     assert.equal(stripGatedSections(null, {}), '');
     assert.equal(stripGatedSections(undefined, {}), '');
+  });
+});
+
+// ── fetchEligibility (gate-before-fetch, fail-closed ladders) ─────
+
+describe('fetchEligibility', () => {
+  it('WARD_PRIVATE → everything eligible, marked ward-private', () => {
+    const e = fetchEligibility(WARD_PRIVATE);
+    assert.deepEqual(e, { wardPrivate: true, memory: true, graph: true, temporal: true });
+  });
+
+  it('strangers floor ({}) → nothing eligible', () => {
+    const e = fetchEligibility({});
+    assert.equal(e.wardPrivate, false);
+    assert.equal(e.memory, false);
+    assert.equal(e.graph, false);
+    assert.equal(e.temporal, false);
+  });
+
+  it('memories: true → memory fetch eligible', () => {
+    assert.equal(fetchEligibility({ memories: true }).memory, true);
+  });
+
+  it("memories: 'shared' → memory fetch NOT eligible (no audience tags exist yet — fail-closed)", () => {
+    assert.equal(fetchEligibility({ memories: 'shared' }).memory, false);
+  });
+
+  it("schedule: 'full' → temporal fetch eligible", () => {
+    assert.equal(fetchEligibility({ schedule: 'full' }).temporal, true);
+  });
+
+  it("schedule: 'coarse' → temporal fetch NOT eligible (no coarse renderer yet — fail-closed)", () => {
+    assert.equal(fetchEligibility({ schedule: 'coarse' }).temporal, false);
+  });
+
+  it('graph: true → graph fetch eligible; absent → not', () => {
+    assert.equal(fetchEligibility({ graph: true }).graph, true);
+    assert.equal(fetchEligibility({ memories: true }).graph, false);
   });
 });
 

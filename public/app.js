@@ -221,6 +221,14 @@ const state = {
   // delivery. Empty = in-app delivery only.
   userDiscordWebhook:      '',
 
+  // Discord presence (Village V4 — gateway bot). The Familiar joins
+  // Discord as a bot: ward DMs get full context, registered villagers
+  // get gated context, guild replies only when @-mentioned. The token
+  // is server-synced so the gateway (which runs server-side) can read it.
+  discordEnabled:    false,
+  discordBotToken:   '',
+  discordWardUserId: '',
+
   // Session audience (Village Support V2).
   // Tracks who is physically present during this session so the Familiar
   // can reference them and (in V3) gate knowledge appropriately.
@@ -251,6 +259,7 @@ const SERVER_SYNCED_KEYS = [
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale',
   'trustedContacts', 'userDiscordWebhook',
+  'discordEnabled', 'discordBotToken', 'discordWardUserId',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -2188,6 +2197,12 @@ function readSettingsFromUI() {
   }
   const udwEl = $('user-discord-webhook');
   if (udwEl) state.userDiscordWebhook = udwEl.value.trim();
+  const denEl = $('discord-enabled');
+  if (denEl) state.discordEnabled = denEl.checked;
+  const dbtEl = $('discord-bot-token');
+  if (dbtEl) state.discordBotToken = dbtEl.value.trim();
+  const dwuEl = $('discord-ward-user-id');
+  if (dwuEl) state.discordWardUserId = dwuEl.value.trim();
   // Keep the primary connection in sync with the live Connection-section fields.
   syncFieldsToPrimaryConnection();
   saveSettings();
@@ -2222,6 +2237,9 @@ function writeSettingsToUI() {
   setIfNotFocused($('tools-enabled'),      'checked', state.toolsEnabled ?? true);
   setIfNotFocused($('custom-tools'),       'value',   state.customTools ?? '');
   setIfNotFocused($('user-discord-webhook'), 'value', state.userDiscordWebhook ?? '');
+  setIfNotFocused($('discord-enabled'),      'checked', state.discordEnabled === true);
+  setIfNotFocused($('discord-bot-token'),    'value', state.discordBotToken ?? '');
+  setIfNotFocused($('discord-ward-user-id'), 'value', state.discordWardUserId ?? '');
   setIfNotFocused($('tome-scan-depth'),       'value',   state.tomeScanDepth ?? 4);
   setIfNotFocused($('tome-recursive'),        'checked', state.tomeRecursive ?? false);
   setIfNotFocused($('tome-max-recursion'),    'value',   state.tomeMaxRecursionSteps ?? 3);
@@ -2955,6 +2973,26 @@ function init() {
     renderTrustedContacts();
   }
 
+  // Discord presence (Village V4) — show live gateway status when the
+  // section is opened. Cheap GET; failures render as a quiet dash.
+  const discordSection = document.querySelector('#section-discord .collapse-toggle');
+  if (discordSection) {
+    discordSection.addEventListener('click', async () => {
+      const el = $('discord-status');
+      if (!el) return;
+      try {
+        const s = await (await fetch('/api/discord/status')).json();
+        const bits = [];
+        bits.push(s.connected ? `🟢 Connected as ${s.botUser ?? 'bot'}` : (s.running ? '🟡 Starting / reconnecting…' : '⚪ Not running'));
+        if (s.turns) bits.push(`${s.turns} replies this boot`);
+        if (s.lastError) bits.push(`Last error: ${s.lastError}`);
+        el.textContent = bits.join(' · ');
+      } catch {
+        el.textContent = '—';
+      }
+    });
+  }
+
   // ── Settings field listeners ─────────────────────────────────
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
@@ -2963,6 +3001,7 @@ function init() {
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
     'user-discord-webhook',
+    'discord-enabled', 'discord-bot-token', 'discord-ward-user-id',
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',
     'tome-case-sensitive', 'tome-match-whole-words',
     'max-empty-retries',

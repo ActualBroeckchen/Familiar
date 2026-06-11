@@ -356,6 +356,31 @@
           </div>
         </div>
 
+        <!-- Discord presence (Village V4 — gateway bot) -->
+        <div class="sidebar-section collapsible collapsed" id="section-discord">
+          <button class="section-label collapse-toggle" aria-expanded="false" aria-controls="content-discord">
+            Discord presence
+            <span class="chevron">▾</span>
+          </button>
+          <div class="section-content" id="content-discord">
+            <div class="field checkbox-field">
+              <label><input type="checkbox" id="discord-enabled"> Enable Discord presence</label>
+            </div>
+            <div class="field">
+              <label for="discord-bot-token">Bot token <span class="label-hint">(from the Developer Portal)</span></label>
+              <input type="password" id="discord-bot-token" placeholder="Bot token…" spellcheck="false" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="discord-ward-user-id">My Discord user ID <span class="label-hint">(so your Familiar knows it's you)</span></label>
+              <input type="text" id="discord-ward-user-id" placeholder="e.g. 123456789012345678" spellcheck="false">
+            </div>
+            <p class="field-hint">Your Familiar joins Discord as this bot: it answers your DMs with full context, answers DMs from registered Villagers with only what their category grants, and replies in server channels <em>only when @-mentioned</em> — with the room's assigned trust ceiling applied (unassigned rooms are treated as Strangers). Unregistered users' DMs are ignored.</p>
+            <p class="field-hint"><strong>Setup:</strong> Developer Portal → your application → Bot → enable the <em>Message Content</em> privileged intent, copy the token, invite the bot to your server. Your user ID: Discord Settings → Advanced → Developer Mode, then right-click yourself → Copy User ID.</p>
+            <p class="field-hint">All Discord conversations land in Session logs, same as web chats — nothing is hidden from you. Hard off-switch: <code>PROTO_FAMILIAR_DISCORD_DISABLED=1</code>.</p>
+            <div id="discord-status" class="field-hint" style="margin-top: 6px"></div>
+          </div>
+        </div>
+
         <!-- Village (Village Support) -->
         <div class="sidebar-section collapsible collapsed" id="section-village">
           <button class="section-label collapse-toggle" aria-expanded="false" aria-controls="content-village">

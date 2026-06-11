@@ -189,6 +189,38 @@ export function isGranted(grantKey, grants) {
   return false;
 }
 
+// ── Fetch eligibility (gate-before-fetch) ─────────────────────────
+
+/**
+ * Decide which enrich() fetches may run for this audience.
+ *
+ * IMPORTANT fail-closed rule: intermediate ladder values gate the fetch
+ * OFF until their narrowing machinery actually exists:
+ *   - memories: 'shared' requires audience-tagged memories to filter by.
+ *     No tags exist yet → a 'shared' grant must NOT trigger memory_search,
+ *     or the audience would receive ALL memories (leak). Only `true`
+ *     (memories: all) permits the fetch today.
+ *   - schedule: 'coarse' requires a coarse renderer ("busy until evening").
+ *     None exists yet → only 'full' (or boolean true) permits the
+ *     temporal_context fetch today.
+ * When tagging / coarse rendering land, this is the single place to widen.
+ *
+ * @param {object|null} audience effective grants or WARD_PRIVATE
+ * @returns {{ wardPrivate: boolean, memory: boolean, graph: boolean, temporal: boolean }}
+ */
+export function fetchEligibility(audience) {
+  if (audience === WARD_PRIVATE) {
+    return { wardPrivate: true, memory: true, graph: true, temporal: true };
+  }
+  const g = audience ?? {};
+  return {
+    wardPrivate: false,
+    memory:   g.memories === true,
+    graph:    g.graph === true,
+    temporal: g.schedule === 'full' || g.schedule === true,
+  };
+}
+
 // ── Section-marker filtering ──────────────────────────────────────
 
 /**

@@ -86,6 +86,7 @@ import {
   initVillageSync, bootSync as villageBootSync,
 } from './village.js';
 import { resolveAudience, WARD_PRIVATE } from './audience.js';
+import { startDiscordGateway, stopDiscordGateway, getDiscordStatus } from './discord-gateway.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -2125,6 +2126,13 @@ const villageError = (res, err) => {
   res.status(status).json({ error: msg });
 };
 
+// GET /api/discord/status — gateway observability (Village V4).
+// Lets the ward see connection state, the bot identity, the last
+// error, and turn/failure counters without reading server logs.
+app.get('/api/discord/status', (_req, res) => {
+  res.json(getDiscordStatus());
+});
+
 app.get('/api/village', async (_req, res) => {
   try { res.json(await getVillageRegistry()); }
   catch (err) { res.status(500).json({ error: err.message }); }
@@ -2260,6 +2268,10 @@ const httpServer = app.listen(PORT, HOST, async () => {
   startRemindersScheduler();
   startSilenceTriage();
   startVillageSync();
+  // Discord gateway (Village V4). Supervisor idles until the ward sets
+  // a bot token + enables the toggle in Settings; follows settings
+  // changes within 30s. Hard off-switch: PROTO_FAMILIAR_DISCORD_DISABLED=1.
+  startDiscordGateway();
 });
 
 // ── Autonomous pondering loop (step 4a) ─────────────────────────────
@@ -2495,6 +2507,7 @@ async function handleSignal(signal) {
   try { await stopPonderingLoop(); } catch { /* already stopped */ }
   try { await stopRemindersLoop(); } catch { /* already stopped */ }
   try { await stopSilenceTriageLoop(); } catch { /* already stopped */ }
+  try { stopDiscordGateway(); } catch { /* already stopped */ }
   try { shutdownEntityCore(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }
   // Give the close handshakes a tiny window, then exit.

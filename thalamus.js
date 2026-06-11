@@ -1112,7 +1112,7 @@ import {
   getRecentOfferInfo,
   tagOutcomes,
 } from './surface-events.js';
-import { WARD_PRIVATE, isGranted, stripGatedSections } from './audience.js';
+import { WARD_PRIVATE, isGranted, stripGatedSections, fetchEligibility } from './audience.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
 function sortFiles(files, order) {
@@ -1215,10 +1215,14 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // V3 knowledge gate: determine which fetches are permitted for this
     // session's audience. WARD_PRIVATE means no gating (today's behavior).
     // Absent grant = denied → skip the fetch entirely (gate-before-fetch).
-    const gated = audience !== WARD_PRIVATE;
-    const doMemory  = !gated || isGranted('memories',  audience);
-    const doGraph   = !gated || isGranted('graph',     audience);
-    const doTemporal = !gated || isGranted('schedule', audience);
+    // fetchEligibility holds the fail-closed ladder rules: 'shared'
+    // memories and 'coarse' schedule gate OFF until their narrowing
+    // machinery (audience-tagged memories / coarse renderer) exists.
+    const eligibility = fetchEligibility(audience);
+    const gated = !eligibility.wardPrivate;
+    const doMemory   = eligibility.memory;
+    const doGraph    = eligibility.graph;
+    const doTemporal = eligibility.temporal;
 
     if (mcpClient) {
       const extras = staticOnly ? '' : [
