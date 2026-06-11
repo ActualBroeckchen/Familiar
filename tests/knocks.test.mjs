@@ -4,7 +4,8 @@ import path from 'path';
 import os from 'os';
 import { promises as fsp } from 'fs';
 
-import { recordKnock, listKnocks, dismissKnock, KNOCKS_CAP } from '../knocks.js';
+import { recordKnock, listKnocks, dismissKnock, KNOCKS_CAP,
+         recordLocationKnock, listLocationKnocks, dismissLocationKnock, LOCATION_KNOCKS_CAP } from '../knocks.js';
 
 let dir;
 let file;
@@ -138,6 +139,119 @@ describe('dismissKnock', () => {
     await dismissKnock({ platform: 'discord', id: 'a' }, opts);
     await recordKnock({ platform: 'discord', id: 'a' }, opts);
     const list = await listKnocks(opts);
+    assert.equal(list.length, 1);
+    assert.equal(list[0].count, 1, 'fresh knock starts a fresh count');
+  });
+});
+
+// ── Location knock list ──────────────────────────────────────────
+
+describe('recordLocationKnock', () => {
+  it('records a new location knock with count 1 and timestamps', async () => {
+    const opts = freshFile();
+    const r = await recordLocationKnock(
+      { key: 'discord:guild:1:channel:2', platform: 'discord', guildId: '1', channelId: '2' },
+      opts,
+    );
+    assert.equal(r.ok, true);
+    const list = await listLocationKnocks(opts);
+    assert.equal(list.length, 1);
+    assert.equal(list[0].key, 'discord:guild:1:channel:2');
+    assert.equal(list[0].count, 1);
+    assert.ok(list[0].firstSeenAt);
+    assert.ok(list[0].lastSeenAt);
+  });
+
+  it('upserts by key: repeat knock bumps count, not entries', async () => {
+    const opts = freshFile();
+    await recordLocationKnock({ key: 'discord:guild:1:channel:2' }, opts);
+    await recordLocationKnock({ key: 'discord:guild:1:channel:2' }, opts);
+    const list = await listLocationKnocks(opts);
+    assert.equal(list.length, 1);
+    assert.equal(list[0].count, 2);
+  });
+
+  it('different keys = separate entries', async () => {
+    const opts = freshFile();
+    await recordLocationKnock({ key: 'discord:guild:1:channel:2' }, opts);
+    await recordLocationKnock({ key: 'discord:guild:1:channel:3' }, opts);
+    assert.equal((await listLocationKnocks(opts)).length, 2);
+  });
+
+  it('rejects missing key without throwing', async () => {
+    const opts = freshFile();
+    assert.equal((await recordLocationKnock({}, opts)).ok, false);
+    assert.equal((await listLocationKnocks(opts)).length, 0);
+  });
+
+  it('never stores message content — only the allowed metadata fields', async () => {
+    const opts = freshFile();
+    await recordLocationKnock({
+      key: 'discord:guild:1:channel:2', platform: 'discord',
+      guildId: '1', channelId: '2',
+      content: 'secret message', message: 'also secret',
+    }, opts);
+    const [lk] = await listLocationKnocks(opts);
+    const allowed = ['key', 'platform', 'guildId', 'channelId', 'count', 'firstSeenAt', 'lastSeenAt'];
+    for (const field of Object.keys(lk)) {
+      assert.ok(allowed.includes(field), `unexpected field stored: ${field}`);
+    }
+  });
+
+  it(`caps the list at ${LOCATION_KNOCKS_CAP}, evicting least-recently-seen`, async () => {
+    const opts = freshFile();
+    for (let i = 0; i < LOCATION_KNOCKS_CAP + 5; i++) {
+      await recordLocationKnock({ key: `discord:guild:1:channel:${i}` }, opts);
+    }
+    const list = await listLocationKnocks(opts);
+    assert.equal(list.length, LOCATION_KNOCKS_CAP);
+    assert.ok(!list.some(k => k.key === 'discord:guild:1:channel:0'));
+    assert.ok(list.some(k => k.key === `discord:guild:1:channel:${LOCATION_KNOCKS_CAP + 4}`));
+  });
+});
+
+describe('listLocationKnocks', () => {
+  it('returns most-recently-seen first', async () => {
+    const opts = freshFile();
+    await recordLocationKnock({ key: 'a' }, opts);
+    await new Promise(r => setTimeout(r, 5));
+    await recordLocationKnock({ key: 'b' }, opts);
+    await new Promise(r => setTimeout(r, 5));
+    await recordLocationKnock({ key: 'a' }, opts); // a seen again
+    const list = await listLocationKnocks(opts);
+    assert.equal(list[0].key, 'a');
+    assert.equal(list[1].key, 'b');
+  });
+
+  it('returns [] for a missing file', async () => {
+    assert.deepEqual(await listLocationKnocks(freshFile()), []);
+  });
+});
+
+describe('dismissLocationKnock', () => {
+  it('removes the targeted knock only', async () => {
+    const opts = freshFile();
+    await recordLocationKnock({ key: 'a' }, opts);
+    await recordLocationKnock({ key: 'b' }, opts);
+    const r = await dismissLocationKnock({ key: 'a' }, opts);
+    assert.equal(r.ok, true);
+    const list = await listLocationKnocks(opts);
+    assert.equal(list.length, 1);
+    assert.equal(list[0].key, 'b');
+  });
+
+  it('unknown knock → ok:false, not a throw', async () => {
+    const opts = freshFile();
+    const r = await dismissLocationKnock({ key: 'nope' }, opts);
+    assert.equal(r.ok, false);
+  });
+
+  it('a dismissed location can knock again', async () => {
+    const opts = freshFile();
+    await recordLocationKnock({ key: 'a' }, opts);
+    await dismissLocationKnock({ key: 'a' }, opts);
+    await recordLocationKnock({ key: 'a' }, opts);
+    const list = await listLocationKnocks(opts);
     assert.equal(list.length, 1);
     assert.equal(list[0].count, 1, 'fresh knock starts a fresh count');
   });

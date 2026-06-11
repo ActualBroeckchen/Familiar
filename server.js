@@ -87,7 +87,7 @@ import {
 } from './village.js';
 import { resolveAudience, WARD_PRIVATE } from './audience.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus } from './discord-gateway.js';
-import { listKnocks, dismissKnock } from './knocks.js';
+import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock } from './knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -2147,6 +2147,20 @@ app.delete('/api/village/knocks/:platform/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
+// Location knock list (V4.x) — unregistered Discord channels the
+// Familiar has spoken in. Metadata only; never message content.
+app.get('/api/village/location-knocks', async (_req, res) => {
+  res.json(await listLocationKnocks());
+});
+
+// Location keys contain ':' so they ride the body, not the path.
+app.delete('/api/village/location-knocks', async (req, res) => {
+  const { key } = req.body ?? {};
+  const result = await dismissLocationKnock({ key });
+  if (!result.ok) return res.status(result.error === 'knock not found' ? 404 : 400).json({ error: result.error });
+  res.json({ ok: true });
+});
+
 app.get('/api/village', async (_req, res) => {
   try { res.json(await getVillageRegistry()); }
   catch (err) { res.status(500).json({ error: err.message }); }
@@ -2179,6 +2193,11 @@ function reconcileKnocks(villager) {
   }
 }
 
+// A saved location settles any matching location knock.
+function reconcileLocationKnock(location) {
+  if (location?.key) dismissLocationKnock({ key: location.key }).catch(() => {});
+}
+
 app.post('/api/village/villagers', async (req, res) => {
   const { name, categoryIds, categoryId, aliases, connection, triage } = req.body ?? {};
   try {
@@ -2206,14 +2225,22 @@ app.delete('/api/village/villagers/:id', async (req, res) => {
 
 app.post('/api/village/locations', async (req, res) => {
   const { key, label, assignedCategoryId, connectionId, rateLimit } = req.body ?? {};
-  try { res.json(await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit })); }
+  try {
+    const saved = await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit });
+    reconcileLocationKnock(saved);
+    res.json(saved);
+  }
   catch (err) { villageError(res, err); }
 });
 
 app.patch('/api/village/locations', async (req, res) => {
   // Location keys contain ':' and '/' so they ride the body, not the path.
   const { key, label, assignedCategoryId, connectionId, rateLimit } = req.body ?? {};
-  try { res.json(await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit })); }
+  try {
+    const saved = await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit });
+    reconcileLocationKnock(saved);
+    res.json(saved);
+  }
   catch (err) { villageError(res, err); }
 });
 

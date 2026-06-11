@@ -124,3 +124,90 @@ export async function dismissKnock({ platform, id }, { filePath = DEFAULT_KNOCKS
     return { ok: false, error: err?.message ?? String(err) };
   }
 }
+
+// ── Location knock list ────────────────────────────────────────────
+//
+// Mirrors the person knock list for PLACES: when the Familiar responds
+// in a guild channel that has no locations entry, the channel key +
+// platform metadata is captured so the ward can register it in the
+// Locations tab with one click instead of hunting guild/channel IDs.
+//
+// Same privacy discipline: metadata only, no message content. Capped
+// and evicting-oldest so a flood of new channels can't grow the file.
+
+const DEFAULT_LOCATION_KNOCKS_PATH = path.join(__dirname, 'tomes', '.village-location-knocks.json');
+
+export const LOCATION_KNOCKS_CAP = 50;
+
+/**
+ * Record a contact from an unregistered location. Upserts by key:
+ * repeat encounters bump count + lastSeenAt rather than piling up
+ * entries. Never throws — capture is best-effort.
+ *
+ * @param {{ key: string, platform?: string, guildId?: string, channelId?: string }} knock
+ */
+export async function recordLocationKnock(knock, { filePath = DEFAULT_LOCATION_KNOCKS_PATH } = {}) {
+  const key = typeof knock?.key === 'string' ? knock.key.trim() : '';
+  if (!key) return { ok: false, error: 'key is required' };
+  const nowIso = new Date().toISOString();
+  try {
+    return await withLock(`location-knocks:${filePath}`, async () => {
+      const knocks = await readKnocksFile(filePath);
+      const existing = knocks.find(k => k.key === key);
+      if (existing) {
+        existing.count = (existing.count ?? 1) + 1;
+        existing.lastSeenAt = nowIso;
+        if (typeof knock.platform === 'string' && knock.platform) existing.platform = knock.platform;
+        if (typeof knock.guildId === 'string' && knock.guildId) existing.guildId = knock.guildId;
+        if (typeof knock.channelId === 'string' && knock.channelId) existing.channelId = knock.channelId;
+      } else {
+        knocks.push({
+          key,
+          ...(typeof knock.platform === 'string' && knock.platform ? { platform: knock.platform } : {}),
+          ...(typeof knock.guildId === 'string' && knock.guildId ? { guildId: knock.guildId } : {}),
+          ...(typeof knock.channelId === 'string' && knock.channelId ? { channelId: knock.channelId } : {}),
+          count: 1,
+          firstSeenAt: nowIso,
+          lastSeenAt: nowIso,
+        });
+      }
+      knocks.sort((a, b) => new Date(b.lastSeenAt) - new Date(a.lastSeenAt));
+      const capped = knocks.slice(0, LOCATION_KNOCKS_CAP);
+      await writeKnocksFile(filePath, capped);
+      return { ok: true };
+    });
+  } catch (err) {
+    console.error('[knocks] recordLocationKnock failed:', err?.message ?? err);
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+}
+
+/** List location knocks, most recently seen first. Never throws. */
+export async function listLocationKnocks({ filePath = DEFAULT_LOCATION_KNOCKS_PATH } = {}) {
+  try {
+    const knocks = await readKnocksFile(filePath);
+    return knocks.sort((a, b) => new Date(b.lastSeenAt) - new Date(a.lastSeenAt));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Remove a location knock — after the ward registers the location or
+ * dismisses it as noise.
+ */
+export async function dismissLocationKnock({ key }, { filePath = DEFAULT_LOCATION_KNOCKS_PATH } = {}) {
+  const k = typeof key === 'string' ? key.trim() : '';
+  if (!k) return { ok: false, error: 'key is required' };
+  try {
+    return await withLock(`location-knocks:${filePath}`, async () => {
+      const knocks = await readKnocksFile(filePath);
+      const remaining = knocks.filter(lk => lk.key !== k);
+      if (remaining.length === knocks.length) return { ok: false, error: 'knock not found' };
+      await writeKnocksFile(filePath, remaining);
+      return { ok: true };
+    });
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+}
