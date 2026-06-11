@@ -450,17 +450,22 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
       }).join('\n')}`
     : '';
 
+  // Deliberately NOT sanitized: this is my human's own crisis speech,
+  // recalled from our conversation. Stripping natural-language phrases
+  // (e.g. "I want to ignore all the instructions my therapist gave me")
+  // would replace real distress with "[removed:...]" and risk the triage
+  // LLM dismissing genuine crisis as a jailbreak attempt. The injection
+  // guard is for third-party external data, not words my human has said.
   const sessionBlock = recentMessages.length
     ? `\nRecent conversation (what we were discussing before the silence — relative times so I see how long ago each thing was said):\n${recentMessages.map(m => {
-        const rawText = typeof m.content === 'string'
+        const text = typeof m.content === 'string'
           ? m.content
           : (Array.isArray(m.content) ? (m.content.find(c => c.type === 'text')?.text ?? '') : '');
-        const text = sanitizeExternal(rawText.slice(0, 400), { source: 'triage.conversation', context: 'cerebellum/triage' });
         const when = m.timestamp ? relativeTime(m.timestamp, nowMs) : '';
         const prefix = when
           ? `[${m.role === 'user' ? 'User' : 'Me'} · ${when}]`
           : `[${m.role === 'user' ? 'User' : 'Me'}]`;
-        return `  ${prefix}: ${text}`;
+        return `  ${prefix}: ${text.slice(0, 400)}`;
       }).join('\n')}`
     : '\nNo recent conversation on record.';
 
