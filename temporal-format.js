@@ -1,4 +1,5 @@
 import { relativeTime } from './relative-time.js';
+import { sanitizeExternal } from './injection-guard.js';
 
 /**
  * Pure renderer for Unruh's temporal_context payload.
@@ -82,9 +83,10 @@ export function formatTemporalContext(payload) {
       : '';
     const header = rel ? `Last session (ended ${rel}):` : 'Last session:';
     const handoffLines = [header];
-    if (handoff.intent) handoffLines.push(`  intent — ${handoff.intent}`);
+    if (handoff.intent) handoffLines.push(`  intent — ${sanitizeExternal(handoff.intent, { source: 'handoff.intent', context: 'temporal-format' })}`);
     for (const thread of handoff.open_threads ?? []) {
-      handoffLines.push(`  open — ${typeof thread === 'string' ? thread : thread.label ?? thread.id}`);
+      const threadLabel = typeof thread === 'string' ? thread : (thread.label ?? thread.id ?? '');
+      handoffLines.push(`  open — ${sanitizeExternal(threadLabel, { source: 'handoff.thread', context: 'temporal-format' })}`);
     }
     blocks.push(handoffLines.join('\n'));
   }
@@ -115,8 +117,9 @@ export function formatTemporalContext(payload) {
         const start = formatLocalTime(p.when, { timeOnly: true });
         const end   = formatLocalTime(p.end,  { timeOnly: true });
         const here  = phase && p.id === phase.id ? '  ← I am here' : '';
-        const texture = p.payload?.texture ? ` — ${p.payload.texture}` : '';
-        return `  ${start}–${end}  ${p.label ?? p.id}${texture}${here}`;
+        const texture = p.payload?.texture ? ` — ${sanitizeExternal(p.payload.texture, { source: 'routine.phase.texture', context: 'temporal-format' })}` : '';
+        const pLabel = sanitizeExternal(p.label ?? p.id ?? '', { source: 'routine.phase.label', context: 'temporal-format' });
+        return `  ${start}–${end}  ${pLabel}${texture}${here}`;
       });
     blocks.push(["Today's rhythm:", ...rhythm].join('\n'));
   }
@@ -160,11 +163,11 @@ export function formatTemporalContext(payload) {
 
     const schedLines = [];
     if (phase) {
-      const phaseLabel = phase.label ?? phase.id ?? phase;
+      const phaseLabel = sanitizeExternal(String(phase.label ?? phase.id ?? phase), { source: 'phase.label', context: 'temporal-format' });
       const span = phase.when && phase.end
         ? ` (${formatLocalTime(phase.when, { timeOnly: true })}–${formatLocalTime(phase.end, { timeOnly: true })})`
         : '';
-      const texturePart = phase.payload?.texture ? ` — ${phase.payload.texture}` : '';
+      const texturePart = phase.payload?.texture ? ` — ${sanitizeExternal(phase.payload.texture, { source: 'phase.texture', context: 'temporal-format' })}` : '';
       schedLines.push(`Current phase: ${phaseLabel}${span}${texturePart}`);
     }
     if (upcoming.length) {
@@ -173,7 +176,7 @@ export function formatTemporalContext(payload) {
         const when = renderWhen(item.when ?? item.fires_at ?? '');
         const whenText = when ? `${when} — ` : '';
         const type = item.type ? `[${item.type}] ` : '';
-        schedLines.push(`  ${whenText}${type}${item.label ?? item.id ?? ''}`);
+        schedLines.push(`  ${whenText}${type}${sanitizeExternal(item.label ?? item.id ?? '', { source: 'schedule.item.label', context: 'temporal-format' })}`);
       }
     }
     if (reminders.length) {
@@ -181,7 +184,7 @@ export function formatTemporalContext(payload) {
       for (const item of reminders) {
         const when = renderWhen(item.when ?? item.fires_at ?? '');
         const whenText = when ? `${when} — ` : '';
-        schedLines.push(`  ${whenText}${item.label ?? item.id ?? ''}`);
+        schedLines.push(`  ${whenText}${sanitizeExternal(item.label ?? item.id ?? '', { source: 'schedule.reminder.label', context: 'temporal-format' })}`);
       }
     }
     if (openTasks.length) {
@@ -192,7 +195,7 @@ export function formatTemporalContext(payload) {
       // passive list to perceive.
       schedLines.push("Open tasks I'm holding for {{user}} — mine to remember and to raise when a moment fits (no completion confirmed):");
       for (const item of openTasks) {
-        schedLines.push(`  - ${item.label ?? item.id ?? ''}`);
+        schedLines.push(`  - ${sanitizeExternal(item.label ?? item.id ?? '', { source: 'schedule.task.label', context: 'temporal-format' })}`);
       }
     }
     if (resolved.length) {
@@ -200,7 +203,7 @@ export function formatTemporalContext(payload) {
       for (const item of resolved) {
         const when = renderWhen(item.when ?? item.fires_at ?? '');
         const whenText = when ? `${when} — ` : '';
-        schedLines.push(`  ${whenText}${item.label ?? item.id ?? ''} [${item.resolution}]`);
+        schedLines.push(`  ${whenText}${sanitizeExternal(item.label ?? item.id ?? '', { source: 'schedule.resolved.label', context: 'temporal-format' })} [${item.resolution}]`);
       }
     }
     if (schedLines.length) blocks.push(schedLines.join('\n'));
@@ -213,13 +216,13 @@ export function formatTemporalContext(payload) {
     const interestLines = [];
     if (standing.length) {
       interestLines.push('Standing values:');
-      for (const v of standing) interestLines.push(`  ${v.label ?? v}`);
+      for (const v of standing) interestLines.push(`  ${sanitizeExternal(String(v.label ?? v), { source: 'interests.standing', context: 'temporal-format' })}`);
     }
     if (live.length) {
       interestLines.push('Live interests (by weight):');
       for (const i of live) {
         const w = typeof i.weight === 'number' ? ` [${i.weight.toFixed(2)}]` : '';
-        interestLines.push(`  ${i.label ?? i.id}${w}`);
+        interestLines.push(`  ${sanitizeExternal(String(i.label ?? i.id ?? ''), { source: 'interests.live', context: 'temporal-format' })}${w}`);
       }
     }
     blocks.push(interestLines.join('\n'));

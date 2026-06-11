@@ -103,6 +103,7 @@ ponderings injection, care-check framing) and as background loops
 ├── temporal-format.js       Pure renderer for the Unruh temporal_context payload
 ├── surface-context.js       Consumer pipeline — hard gates + candidate selection + block format
 ├── surface-events.js        Event store (offers + outcomes) + pure-code tagger + reflection inputs
+├── injection-guard.js       Prompt injection immunization — pattern scanner + sanitizer applied at every external-data boundary
 ├── memorization.js          Persistent per-session memorization queue + worker
 ├── providers.js             Shared chat-completions URL map (used by server.js + thalamus.js)
 ├── entity-ref.js            Validate entity-core:self/file.md#section refs (M7 standing-value bridge)
@@ -459,13 +460,22 @@ thalamus.enrich(userMessage, { liveTurn: true })
    ├── memory_search        ──►  entity-core (MCP)        ┐
    ├── graph_node_search    ──►  entity-core (MCP)        │
    ├── temporal_context     ──►  Unruh (MCP)              │ dynamic block:
-   │     ├── current phase                                │  - RAG memory matches
-   │     ├── full routine (live phases, date-independent) │  - graph excerpt
-   │     ├── schedule window (events/tasks/reminders)     │  - "Today's rhythm"
-   │     ├── interests (standing + live with weights)     │  - schedule sections
-   │     └── handoff (session-end note)                   │  - interests
-   ├── getRecentPonderings() ──► local tome read          │  - [CARE CHECK]
-   └── getThreat()           ──► local file read          ┘  - [Temporal Context]
+   │     ├── current phase                                │  - [HOW I HANDLE EXTERNAL DATA]
+   │     ├── full routine (live phases, date-independent) │    (meta-instruction, if any external data)
+   │     ├── schedule window (events/tasks/reminders)     │  - RAG memory matches (sanitized)
+   │     ├── interests (standing + live with weights)     │  - graph excerpt (sanitized)
+   │     └── handoff (session-end note)                   │  - "Today's rhythm" (labels sanitized)
+   ├── getRecentPonderings() ──► local tome read          │  - schedule sections (labels sanitized)
+   └── getThreat()           ──► local file read          │  - interests (sanitized)
+                                                          │  - [CARE CHECK]
+                                                          ┘  - [Temporal Context]
+       │
+       ├── injection-guard.sanitizeExternal() applied at every external-data
+       │   interpolation point before the string reaches the LLM:
+       │   memory excerpts, graph node/edge labels+descriptions,
+       │   schedule labels (all types), handoff intent+threads,
+       │   outbox bodies (server.js + cerebellum.js triage),
+       │   surface-candidate labels, triage conversation history
        │
        ▼
 Prompt assembly (see "Prompt assembly" below)

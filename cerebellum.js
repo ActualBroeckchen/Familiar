@@ -51,6 +51,7 @@ import {
 import { markIntentActedOn } from './recent-ponderings.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta } from './outbox.js';
 import { buildTimeAnchorBlock, relativeTime, plainInterval } from './relative-time.js';
+import { sanitizeExternal } from './injection-guard.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -451,14 +452,15 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
 
   const sessionBlock = recentMessages.length
     ? `\nRecent conversation (what we were discussing before the silence — relative times so I see how long ago each thing was said):\n${recentMessages.map(m => {
-        const text = typeof m.content === 'string'
+        const rawText = typeof m.content === 'string'
           ? m.content
           : (Array.isArray(m.content) ? (m.content.find(c => c.type === 'text')?.text ?? '') : '');
+        const text = sanitizeExternal(rawText.slice(0, 400), { source: 'triage.conversation', context: 'cerebellum/triage' });
         const when = m.timestamp ? relativeTime(m.timestamp, nowMs) : '';
         const prefix = when
           ? `[${m.role === 'user' ? 'User' : 'Me'} · ${when}]`
           : `[${m.role === 'user' ? 'User' : 'Me'}]`;
-        return `  ${prefix}: ${text.slice(0, 400)}`;
+        return `  ${prefix}: ${text}`;
       }).join('\n')}`
     : '\nNo recent conversation on record.';
 
@@ -478,7 +480,8 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
     if (pendingCheckins.length > 0) {
       const lines = pendingCheckins.map(i => {
         const when = i.ts ? relativeTime(i.ts, nowMs) : 'unknown time';
-        return `  - [${when}] "${i.body.slice(0, 200)}" ${formatDeliveryNote(i, { hasPushChannel: pushConfigured })}`;
+        const safeBody = sanitizeExternal(i.body.slice(0, 200), { source: 'triage.pending-checkin', context: 'cerebellum/triage' });
+        return `  - [${when}] "${safeBody}" ${formatDeliveryNote(i, { hasPushChannel: pushConfigured })}`;
       }).join('\n');
       pendingBlock = `\nCheck-ins I already sent that my human has NOT yet acknowledged:\n${lines}\nIf a delivery FAILED or there is no push channel, my human may simply never have seen me — silence after an undelivered message is not the same signal as silence after a delivered one.`;
     }
@@ -519,7 +522,8 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
       if (candidates.length > 0) {
         const lines = candidates.map(c => {
           const stakes = c.stakesTier === 'external_obligation' ? ' [external stakes]' : '';
-          return `  - ${c.label}${stakes}`;
+          const safeLabel = sanitizeExternal(c.label ?? '', { source: 'triage.task-candidate', context: 'cerebellum/triage' });
+          return `  - ${safeLabel}${stakes}`;
         }).join('\n');
         // Tier-aware framing. The hard gates upstream already decide
         // WHETHER tasks appear here at all (severe → never; high →

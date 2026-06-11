@@ -14,6 +14,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { sanitizeExternal } from './injection-guard.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -255,7 +256,8 @@ export function formatSurfaceCandidatesBlock(candidates) {
     const tierTag = c.stakesTier === 'external_obligation'
       ? ' [external stakes]'
       : c.stakesTier === 'purely_optional' ? ' [optional]' : '';
-    parts.push(`— ${c.label} (${c.type || 'task'})${tierTag}`);
+    const safeLabel = sanitizeExternal(c.label ?? '', { source: 'surface-candidate.label', context: 'surface-context' });
+    parts.push(`— ${safeLabel} (${c.type || 'task'})${tierTag}`);
 
     if (c.ageDays != null && c.ageDays >= 1) {
       parts.push(`  Age: ${c.ageDays}d`);
@@ -268,7 +270,7 @@ export function formatSurfaceCandidatesBlock(candidates) {
       parts.push(`  Generic priors — ${indent(c.priorsBlock, '    ').trimStart()}`);
     }
     if (c.taskSpecific) {
-      parts.push(`  What I already know about THIS task: ${c.taskSpecific}`);
+      parts.push(`  What I already know about THIS task: ${sanitizeExternal(c.taskSpecific, { source: 'surface-candidate.consequence_model', context: 'surface-context' })}`);
     }
     if (c.confidence === 'low') {
       parts.push(

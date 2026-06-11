@@ -77,6 +77,7 @@ import {
   startMemorizationWorker, stopMemorizationWorker,
   findOrCreateSessionMemoriesTome,
 } from './memorization.js';
+import { sanitizeExternal } from './injection-guard.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -296,7 +297,10 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       if (triagePending.length > 0) {
         const pushConfigured = activePushAdapters().length > 0;
         const notices = triagePending
-          .map(i => `  - At ${i.ts}: "${i.body}" ${formatDeliveryNote(i, { hasPushChannel: pushConfigured })}`)
+          .map(i => {
+            const safeBody = sanitizeExternal(i.body, { source: 'outbox.triage-body', context: 'server/pending-notices' });
+            return `  - At ${i.ts}: "${safeBody}" ${formatDeliveryNote(i, { hasPushChannel: pushConfigured })}`;
+          })
           .join('\n');
         const block = `\n\n[PENDING CHECK-IN NOTICES]\nWhile my human was away, I reached out to them with the following (they have not yet acknowledged):\n${notices}\n\nI am aware I did this. If their first message back opens a door to it, I may acknowledge having reached out — but I should not lead with it or press.`;
         enrichedResult = { ...enriched, dynamic: (enriched.dynamic || '') + block };
