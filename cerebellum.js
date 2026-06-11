@@ -521,7 +521,17 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
           const stakes = c.stakesTier === 'external_obligation' ? ' [external stakes]' : '';
           return `  - ${c.label}${stakes}`;
         }).join('\n');
-        candidateTasksBlock = `\nOpen tasks I could touch on if it fits this reach-out (NOT a list I should mention — only if one of these genuinely opens a door to {{user}} right now):\n${lines}`;
+        // Tier-aware framing. The hard gates upstream already decide
+        // WHETHER tasks appear here at all (severe → never; high →
+        // external obligations only), so this wording only has to
+        // teach me HOW to weigh the ones that survived. At moderate a
+        // task can be the doorway itself; at high, presence comes
+        // before productivity.
+        const triageTier = String(threat?.tier || '').toLowerCase();
+        const preamble = triageTier === 'high'
+          ? 'Open tasks with external stakes — the only kind that surfaces at this tier. My human\'s state comes first, but a real-world deadline can sometimes be the anchor that re-grounds someone. Presence before productivity: I weave one in only if it serves the reach-out, never as pressure:'
+          : 'Open tasks I\'m holding for {{user}} — at this level of concern, a task can BE the doorway: a concrete, low-pressure reason to reach out that doesn\'t put their state on the spot (\'hey, how\'s X coming along?\'). I use one if it fits the reach-out I\'m shaping; I skip them if directness would serve better:';
+        candidateTasksBlock = `\n${preamble}\n${lines}`;
       }
     }
   } catch (err) {
