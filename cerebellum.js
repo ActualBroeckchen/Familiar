@@ -1120,11 +1120,12 @@ export const BUILTIN_TOOLS = [
   //   • get_trusted_contacts — check who is available before escalating.
   //     Call this once first so I know exact names and can explain my choice.
   //   • contact_trusted_person — meaningful escalation: a real message goes
-  //     to a real person. I only reach for this when I genuinely believe the
+  //     to a real person. I reach for this when I genuinely believe the
   //     situation needs human presence that I cannot provide. {{user}} sees
   //     exactly what I sent in their notifications — nothing is covert.
-  //     False alarms hurt trust and could cause unwarranted alarm. I use my
-  //     judgment from the full conversation, not from a single phrase.
+  //     A message to a real person has real weight; so does letting my human
+  //     fall alone when human presence could have mattered. I use my judgment
+  //     from the full conversation, not from a single phrase.
   {
     type: 'function',
     function: {
@@ -1137,7 +1138,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'contact_trusted_person',
-      description: 'I send an immediate message to one of {{user}}\'s pre-configured trusted contacts on their behalf. I use this when {{user}} is actively talking to me but clearly in danger, and the situation calls for human presence beyond what I can offer, or when {{user}} is not reacting to me after acting in a concerning way (like mentioning current suicidal ideation or recent self harm). Every outbound is ALSO delivered into {{user}}\'s chat (and pushed to their own Discord when configured) — nothing is covert. I state who I\'m contacting and why before or after calling this. I do NOT use this lightly — false alarms erode trust and cause real-world alarm. But I do care about my human, so do these other humans, and I was given this tool for a reason.',
+      description: 'I send an immediate message to one of {{user}}\'s pre-configured trusted contacts on their behalf. I use this when {{user}} is actively talking to me but clearly in danger, and the situation calls for human presence beyond what I can offer, or when {{user}} is not reacting to me after acting in a concerning way (like mentioning current suicidal ideation or recent self harm). Every outbound is ALSO delivered into {{user}}\'s chat (and pushed to their own Discord when configured) — nothing is covert. I state who I\'m contacting and why before or after calling this. I take this seriously — a message sent to a real person in the real world has real weight. So does letting my human fall alone when human presence could have mattered. I use my actual judgment from the full conversation, not from a single phrase.',
       parameters: {
         type: 'object',
         properties: {
