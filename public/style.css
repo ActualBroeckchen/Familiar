@@ -1098,69 +1098,10 @@ button { cursor: pointer; font-family: var(--font); }
   #user-input {
     max-height: 40dvh;
   }
-
-  /* ── Bottom-sheet modals ───────────────────────────────────── */
-  /* Modals slide up from the bottom on phones — the native iOS/Android
-     pattern for full-width overlays. Backdrop padding collapses to 0;
-     rounded corners only on the top edge. */
-  .modal-backdrop {
-    align-items: flex-end;
-    padding: 0 0 env(safe-area-inset-bottom);
-  }
-  .modal,
-  .modal-wide {
-    max-width: 100%;
-    width: 100%;
-    max-height: 90vh;
-    border-bottom-left-radius: 0;
-    border-bottom-right-radius: 0;
-  }
-  /* Drag-handle indicator at the top of every bottom-sheet modal */
-  .modal-header {
-    position: relative;
-    padding-top: 24px;
-  }
-  .modal-header::before {
-    content: '';
-    position: absolute;
-    top: 8px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 36px;
-    height: 4px;
-    border-radius: 2px;
-    background: var(--text-muted);
-    opacity: 0.7;
-  }
-  /* Resizable modals (KE, TE, Lore, Tome entries): go full-width
-     sheet, drop the resize handle (pointless on touch). */
-  .modal-resizable {
-    width: 100%;
-    height: 88vh;
-    min-width: 0;
-    min-height: 0;
-    resize: none;
-    border-bottom-left-radius: 0;
-    border-bottom-right-radius: 0;
-  }
-
-  /* ── Knowledge-editor split: stack on mobile ─────────────── */
-  /* The 280px fixed list column is too wide to coexist with the
-     detail pane on a 375px screen — stack them vertically instead. */
-  .ke-split {
-    grid-template-columns: 1fr;
-  }
-  .ke-list:not(.ke-list-full) {
-    max-height: 35vh;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
-
-  /* ── Calendar: tighter cells on small screens ─────────────── */
-  .te-cal-day {
-    min-height: 44px;
-  }
 }
+/* NOTE: mobile modal / knowledge-editor / calendar overrides live at the
+   BOTTOM of this file — they must come after the base .modal-resizable /
+   .ke-split / .te-cal-day rules in source order to win the cascade. */
 
 /* Suppress iOS Safari's auto-zoom on input focus — anything under 16px
    triggers it. Coarse pointer = touch. */
@@ -1195,40 +1136,6 @@ button { cursor: pointer; font-family: var(--font); }
 /* ── Responsive: tablet (768–1100px) ─────────────────────────── */
 @media (min-width: 768px) and (max-width: 1100px) {
   :root { --sidebar-w: 270px; }
-}
-
-/* ── Responsive: compact phones (≤380px) ─────────────────────── */
-/* Extra breathing room for the very narrow end of the phone range. */
-@media (max-width: 380px) {
-  .modal-body {
-    padding: 10px 14px;
-  }
-  .modal-header {
-    padding-left: 14px;
-    padding-right: 14px;
-  }
-  .modal-footer {
-    padding: 10px 14px 12px;
-  }
-  .sidebar-section {
-    padding: 12px 14px;
-  }
-}
-
-/* ── Responsive: landscape phones ────────────────────────────── */
-/* In landscape on a phone, viewport height shrinks dramatically.
-   Cap modals tighter so the header and footer remain reachable. */
-@media (max-width: 767px) and (orientation: landscape) {
-  .modal,
-  .modal-wide {
-    max-height: 80vh;
-  }
-  .modal-resizable {
-    height: 78vh;
-  }
-  #user-input {
-    max-height: 25dvh;
-  }
 }
 
 /* ── Accessibility: reduced motion ───────────────────────────── */
@@ -2712,3 +2619,112 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
 }
 
 .resume-banner-dismiss:hover { color: var(--text); }
+
+/* ================================================================
+   Mobile overrides — MUST stay at the end of the file.
+   These re-style selectors whose base rules are defined above
+   (.modal-resizable, .ke-split, .te-cal-day, .modal-footer, …).
+   A media query adds no specificity, so if these blocks sit before
+   the base rules in source order, the base rules win and phones get
+   the desktop layout. That exact bug shipped once already.
+   ================================================================ */
+
+/* ── Responsive: mobile modals (<768px) ──────────────────────── */
+@media (max-width: 767px) {
+  /* ── Bottom-sheet modals ───────────────────────────────────── */
+  /* Modals slide up from the bottom on phones — the native iOS/Android
+     pattern for full-width overlays. Backdrop padding collapses to 0;
+     rounded corners only on the top edge. */
+  .modal-backdrop {
+    align-items: flex-end;
+    padding: 0 0 env(safe-area-inset-bottom);
+  }
+  .modal,
+  .modal-wide {
+    max-width: 100%;
+    width: 100%;
+    max-height: 90vh;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  /* Drag-handle indicator at the top of every bottom-sheet modal */
+  .modal-header {
+    position: relative;
+    padding-top: 24px;
+  }
+  .modal-header::before {
+    content: '';
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--text-muted);
+    opacity: 0.7;
+  }
+  /* Resizable modals (KE, TE, Lore, Tome entries): go full-width
+     sheet, drop the resize handle (pointless on touch). */
+  .modal-resizable {
+    width: 100%;
+    height: 88vh;
+    min-width: 0;
+    min-height: 0;
+    resize: none;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+
+  /* ── Knowledge-editor split: stack on mobile ─────────────── */
+  /* The 280px fixed list column is too wide to coexist with the
+     detail pane on a 375px screen — stack them vertically instead. */
+  .ke-split {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .ke-list:not(.ke-list-full) {
+    max-height: 35vh;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* ── Calendar: tighter cells on small screens ─────────────── */
+  .te-cal-day {
+    min-height: 44px;
+  }
+}
+
+/* ── Responsive: compact phones (≤380px) ─────────────────────── */
+/* Extra breathing room for the very narrow end of the phone range. */
+@media (max-width: 380px) {
+  .modal-body {
+    padding: 10px 14px;
+  }
+  .modal-header {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  .modal-footer {
+    padding: 10px 14px 12px;
+  }
+  .sidebar-section {
+    padding: 12px 14px;
+  }
+}
+
+/* ── Responsive: landscape phones ────────────────────────────── */
+/* In landscape on a phone, viewport height shrinks dramatically.
+   Cap modals tighter so the header and footer remain reachable. */
+@media (max-width: 767px) and (orientation: landscape) {
+  .modal,
+  .modal-wide {
+    max-height: 80vh;
+  }
+  .modal-resizable {
+    height: 78vh;
+  }
+  #user-input {
+    max-height: 25dvh;
+  }
+}
