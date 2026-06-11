@@ -38,7 +38,8 @@ server.js  (Express, Node 18+, ESM)
     │                     ──►  Unruh        (Python via uv, MCP) — schedule / interests / handoff / routine
     │
     │  ── motor module (action + delivery, OUTWARD) ───────────────
-    ├── cerebellum.js       ── triage deliberation, trusted-contact delivery,
+    ├── cerebellum.js       ── tool registry + executors + tool-call loop,
+    │                          triage deliberation, trusted-contact delivery,
     │                          escalation deadlines (uses thalamus's wrappers
     │                          for every MCP write — never its own connection)
     │
@@ -85,7 +86,7 @@ ponderings injection, care-check framing) and as background loops
 /
 ├── server.js                Express server — chat proxy, all HTTP endpoints, autonomous-loop boot
 ├── thalamus.js              MCP bridge — entity-core + Unruh, plus all the helper wrappers
-├── cerebellum.js            Motor module — triage deliberation, trusted-contact delivery, escalation deadlines, triage event log
+├── cerebellum.js            Motor module — tool registry + executors + tool loop, triage deliberation, trusted-contact delivery, escalation deadlines
 ├── crisis-signals.js        Pattern-based detector — 5 tiers, ~13 signal categories, damping
 ├── threat-tracker.js        Decaying scalar with audit history, off-switches, file persistence
 ├── pondering.js             Pure `ponderOnce()` primitive — LLM call + tome write
@@ -137,7 +138,8 @@ ponderings injection, care-check framing) and as background loops
 │   ├── index.html           App shell — sidebar, chat pane, Temporal editor modal, all modals
 │   ├── style.css            All styling — dark/light themes, modal/tab styles
 │   └── app.js               All frontend logic — state, API calls, rendering, topics, Tomes,
-│                            temporal editor, outbox delivery polling, BUILTIN_TOOLS definitions
+│                            temporal editor, outbox delivery polling (tool registry + execution
+│                            moved server-side to cerebellum.js in 0.4.0-alpha)
 │
 └── docs/                    This documentation (incl. research/ for design-input notes)
     ├── architecture.md      You are here
@@ -157,7 +159,11 @@ lifecycle of the autonomous loops:
   (fire-and-forget timestamp) + `scoreMessage()` → `recordThreat()`
   on the user text, then `thalamus.enrich()` to assemble static +
   dynamic context. Returns the `_thalamus` envelope so the prompt
-  inspector can show what was actually injected.
+  inspector can show what was actually injected. With
+  `runToolLoop: true` (sent by the app when tools are enabled) the
+  server also runs the multi-round tool-call loop here, executing via
+  cerebellum and emitting `_toolRound` SSE events / a `_toolRounds`
+  response array — see "Data flow" below.
 - `POST /api/debug-prompt` — offline preview (no upstream call).
 - `POST /api/interest/engage` — fire-and-forget engagement bump.
 - `POST /api/session/handoff` — store session-end intent for the
@@ -242,6 +248,17 @@ entity-core's MCP").
 
 Currently owns:
 
+- **Tool dispatch** — `BUILTIN_TOOLS` (the full registry of tool
+  definitions, first-person descriptions, raw `{{user}}`/`{{char}}`
+  macros) + `TOOL_EXECUTORS` (server-side implementations; writes ride
+  thalamus's wrappers) + `executeToolCall()` (never throws — failures
+  become structured strings into the loop) + `composeActiveTools()`
+  (built-ins + the user's advertise-only custom tools) +
+  `runToolCallLoop()` (the non-streaming multi-round loop; the
+  streaming variant lives in /api/chat because it is SSE transport).
+  `initCerebellumTools()` receives the tome-storage capability from
+  server.js at boot so `save_to_tome` works without cerebellum ever
+  importing server.js.
 - **`decideTriageViaLLM({threat, silenceMs, signals})`** — the triage
   deliberation: assembles the [Now]-anchored prompt (identity context,
   recent conversation with relative times, threat signals, trusted
@@ -339,14 +356,17 @@ per-Tome write mutex, idempotent enqueue on
 ### `public/app.js` — frontend (one file)
 
 - **State + persistence** as before.
-- **BUILTIN_TOOLS** — the LLM-callable tool definitions including the
-  seven temporal-write tools (`schedule_add_event/task/reminder/phase`,
-  `schedule_resolve`, `interest_bump`, `interest_set_standing`) plus
-  the knowledge-editing tools.
-- **buildApiMessages** — assembles the request. Now sends an explicit
-  `userMessage` field on round 0 (avoids the "post-history prompt
-  shadows the actual user input" bug); post-history prompt is
-  `role: 'system'` not `'user'`.
+- **Tool rendering only** (since 0.4.0-alpha) — the registry and the
+  executors live server-side in cerebellum.js. The app sends
+  `runToolLoop: true` + custom tools + session metadata, renders the
+  `_toolRound` / `_toolRounds` records as collapsible blocks, and
+  persists the same assistant-tool_calls / tool message shapes in
+  history as before, so old sessions render identically.
+- **buildApiMessages** — assembles the request. Sends an explicit
+  `userMessage` field (avoids the "post-history prompt shadows the
+  actual user input" bug); post-history prompt is `role: 'system'`
+  not `'user'`. One /api/chat request per user message — the server
+  runs all tool rounds inside it.
 - **Temporal editor modal** — six tabs (Interests / Threat /
   Ponderings / Schedule / Routine / Handoff), each with CRUD where
   applicable. The Routine tab hits `/api/temporal/phases` so phases
@@ -424,10 +444,37 @@ Prompt assembly (see "Prompt assembly" below)
 fetch(providerURL, enrichedPayload)
        │
        ▼  SSE stream or JSON
-Tool calls?
-   ├── YES → execute client-side (incl. schedule_add_task etc.) → re-send (up to 5 rounds)
+Tool calls?  (server-side loop since 0.4.0-alpha)
+   ├── YES → cerebellum.executeToolCall() per call → append results →
+   │         re-call provider (up to 5 rounds, all inside the one
+   │         /api/chat request; the [Now] time anchor is re-appended
+   │         as the LAST message every round). Each round is streamed
+   │         to the client as a `_toolRound` SSE event (or returned as
+   │         the `_toolRounds` array when non-streaming) so the chat
+   │         renders the collapsible tool blocks without executing
+   │         anything.
    └── NO  → render assistant message → save to localStorage + server
 ```
+
+The browser opts in by sending `runToolLoop: true` plus its custom
+tools and session metadata; the built-in registry is composed
+server-side (`cerebellum.composeActiveTools`). Direct `/api/chat`
+callers that pass their own `tools` array keep the legacy passthrough
+(single round, results handled by the caller). Enrichment runs ONCE
+per user message — tool rounds reuse it — and the internal provider
+re-calls never count against the 20 req/min chat rate limit.
+
+### Custom tools — advertise-only (needs addressing post-MVP)
+
+The Settings → Custom tools JSON array is appended to the advertised
+tool list, but **no executor exists**: calls return a structured
+"not implemented" notice into the loop. This is a deliberate pre-MVP
+posture — useful for prototyping what the Familiar *would* do with a
+tool — and it is flagged in the Settings UI. A real extension point
+needs a decision about where user-supplied executors run (server-side
+JS modules? declarative HTTP templates?) and what their security
+boundary is. Until then: keep them advertised, keep the disclaimer,
+don't silently drop the feature.
 
 ## Prompt assembly (cache-aware)
 

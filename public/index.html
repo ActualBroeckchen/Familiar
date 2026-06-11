@@ -246,7 +246,7 @@
             </div>
             <p class="field-hint">Built-in tools always available: <code>get_datetime</code>, <code>get_session_info</code></p>
             <div class="field">
-              <label for="custom-tools">Custom tools <span class="label-hint">(JSON array)</span></label>
+              <label for="custom-tools">Custom tools <span class="label-hint">(JSON array — advertise-only: the model sees and may call these, but nothing executes them yet; calls return a "not implemented" notice)</span></label>
               <textarea id="custom-tools" rows="5" spellcheck="false" placeholder='[{"type":"function","function":{"name":"my_tool","description":"...","parameters":{"type":"object","properties":{}}}}]'></textarea>
             </div>
             <div class="field-actions">

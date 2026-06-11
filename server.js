@@ -56,6 +56,12 @@ import {
   readSettingsSync, primaryConnectionFrom,
   decideTriageViaLLM, deliverToTrustedContact, checkAndFirePendingContacts,
   appendTriageEventLog, readTriageEvents,
+  // Tool dispatch — the registry + executors live in cerebellum; the
+  // multi-round loop runs inside /api/chat below.
+  composeActiveTools, executeToolCall, MAX_TOOL_ROUNDS,
+  initCerebellumTools, enqueueCrisisResources, runToolCallLoop,
+  VALID_MEMORY_GRANULARITIES, VALID_IDENTITY_CATEGORIES, VALID_FILENAME_RE,
+  deriveMemorySlug,
 } from './cerebellum.js';
 import { expandWindow } from './recurrence.js';
 import {
@@ -177,7 +183,14 @@ function chatRateLimit(req, res, next) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt } = req.body;
+  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo } = req.body;
+  // runToolLoop: the app sends true when the user has tools enabled.
+  // The server then composes the tool list (built-ins + custom) and runs
+  // the multi-round tool-call loop HERE — executing via cerebellum —
+  // instead of bouncing each round back to the browser. Direct API
+  // callers that pass their own `tools` array keep the legacy
+  // passthrough (single round, results handled by the caller).
+  const loopMode = !!runToolLoop;
   // Enrichment mode:
   //   true / undefined → full (identity + memory + graph + temporal),
   //                      and consume any surfaced session handoff.
@@ -316,13 +329,16 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   //    nearest the model's response slot so they're at maximum
   //    salience for care reasoning. Only on enrichMode=full — the
   //    handoff summariser path and debug-prompt previews don't need it.
+  //    In loop mode the anchor is kept SEPARATE and re-appended as the
+  //    last message on every tool round, so it stays at maximum
+  //    salience even as tool traffic grows the tail.
   let timeAnchor = '';
   if (enrichMode === 'full') {
     timeAnchor = buildTimeAnchorBlock({
       now: Date.now(),
       lastUserMessageAt: lastUserMessageAt ?? null,
     }) || '';
-    if (timeAnchor) {
+    if (timeAnchor && !loopMode) {
       enrichedMessages = [...enrichedMessages, { role: 'system', content: timeAnchor }];
     }
   }
@@ -330,8 +346,216 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   const payload = { model: model.trim(), messages: enrichedMessages, stream: !!stream };
   if (typeof temperature === 'number') payload.temperature = temperature;
   if (typeof max_tokens === 'number' && max_tokens > 0) payload.max_tokens = max_tokens;
-  if (Array.isArray(tools) && tools.length > 0) payload.tools = tools;
-  if (tool_choice !== undefined) payload.tool_choice = tool_choice;
+  if (loopMode) {
+    const activeTools = composeActiveTools(customTools);
+    if (activeTools.length > 0) {
+      payload.tools = activeTools;
+      payload.tool_choice = 'auto';
+    }
+  } else {
+    if (Array.isArray(tools) && tools.length > 0) payload.tools = tools;
+    if (tool_choice !== undefined) payload.tool_choice = tool_choice;
+  }
+
+  // ── Tool-call loop (loop mode only) ──────────────────────────────
+  // Internal provider re-calls do NOT pass through the /api/chat rate
+  // limiter — one user message costs one request against the limit no
+  // matter how many tool rounds it takes.
+  if (loopMode) {
+    const toolCtx     = { sessionInfo: sessionInfo && typeof sessionInfo === 'object' ? sessionInfo : null };
+    const upstreamUrl = url;
+    const authHeaders = {
+      'Content-Type':  'application/json',
+      'Authorization': `Bearer ${apiKey.trim()}`,
+    };
+
+    const thalamusEnvelope = (enrichedResult.static || enrichedResult.dynamic || timeAnchor) ? {
+      static:     enrichedResult.static  || '',
+      dynamic:    enrichedResult.dynamic || '',
+      depth,
+      injectedAt,
+      timeAnchor,
+    } : null;
+
+    // ── Non-streaming loop ─────────────────────────────────────────
+    if (!stream) {
+      try {
+        const { data, toolRounds } = await runToolCallLoop({
+          callUpstream: async (msgs) => {
+            let r;
+            try {
+              r = await fetch(upstreamUrl, {
+                method:  'POST',
+                headers: authHeaders,
+                body:    JSON.stringify({ ...payload, messages: msgs, stream: false }),
+              });
+            } catch (err) {
+              const e = new Error(`Network error reaching ${provider}: ${err.message}`);
+              e.status = 502; e.body = JSON.stringify({ error: e.message });
+              throw e;
+            }
+            const text = await r.text();
+            if (!r.ok) {
+              const e = new Error(`upstream ${r.status}`);
+              e.status = r.status; e.body = text;
+              throw e;
+            }
+            try { return JSON.parse(text); }
+            catch {
+              const e = new Error('upstream returned non-JSON');
+              e.status = 502; e.body = JSON.stringify({ error: e.message });
+              throw e;
+            }
+          },
+          baseMessages: enrichedMessages,
+          timeAnchor,
+          toolCtx,
+        });
+        if (thalamusEnvelope) data._thalamus = thalamusEnvelope;
+        if (toolRounds.length > 0) data._toolRounds = toolRounds;
+        // M8 idle-mode outcome reporting: fire-and-forget after response sent.
+        if (enriched.surfacedBookmarks?.length > 0) {
+          const responseText = data.choices?.[0]?.message?.content ?? '';
+          reportSurfacingOutcomes({ responseText, bookmarks: enriched.surfacedBookmarks })
+            .catch(err => console.error('[server] reportSurfacingOutcomes failed:', err?.message ?? err));
+        }
+        return res.json(data);
+      } catch (err) {
+        res.status(err.status ?? 502).setHeader('Content-Type', 'application/json');
+        return res.send(err.body ?? JSON.stringify({ error: err.message }));
+      }
+    }
+
+    // ── Streaming loop ─────────────────────────────────────────────
+    // Each round streams the upstream SSE through to the client
+    // (content deltas verbatim); when a round ends in tool_calls, the
+    // calls are executed via cerebellum and a `_toolRound` event is
+    // emitted so the client can render the collapsible tool block.
+    // [DONE] is suppressed on intermediate rounds and emitted once at
+    // the true end.
+    let currentMsgs = enrichedMessages;
+    let headersSent = false;
+    let finalText   = '';
+    // Stop wasting upstream tokens if the browser goes away mid-loop.
+    const clientGone = () => res.writableEnded || res.destroyed;
+
+    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+      const payloadMessages = timeAnchor
+        ? [...currentMsgs, { role: 'system', content: timeAnchor }]
+        : currentMsgs;
+
+      let upstream;
+      try {
+        upstream = await fetch(upstreamUrl, {
+          method:  'POST',
+          headers: authHeaders,
+          body:    JSON.stringify({ ...payload, messages: payloadMessages, stream: true }),
+        });
+      } catch (err) {
+        if (!headersSent) return res.status(502).json({ error: `Network error reaching ${provider}: ${err.message}` });
+        res.write(`data: ${JSON.stringify({ _loopError: `Network error reaching ${provider}: ${err.message}` })}\n\n`);
+        return res.end();
+      }
+
+      const upCt = upstream.headers.get('content-type') || '';
+      if (!upstream.ok || upCt.includes('application/json')) {
+        const text = await upstream.text();
+        if (!headersSent) {
+          res.status(upstream.status).setHeader('Content-Type', 'application/json');
+          return res.send(text);
+        }
+        let msg = `API error ${upstream.status}`;
+        try {
+          const parsedErr = JSON.parse(text);
+          msg = parsedErr?.error?.message ?? (typeof parsedErr?.error === 'string' ? parsedErr.error : msg);
+        } catch { /* keep generic */ }
+        res.write(`data: ${JSON.stringify({ _loopError: msg })}\n\n`);
+        return res.end();
+      }
+
+      if (!headersSent) {
+        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('X-Accel-Buffering', 'no');
+        if (thalamusEnvelope) {
+          res.write(`data: ${JSON.stringify({ _thalamus: thalamusEnvelope })}\n\n`);
+        }
+        headersSent = true;
+      }
+
+      // Forward this round's SSE lines while accumulating content +
+      // tool-call deltas server-side.
+      const reader  = upstream.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '', fullContent = '', finishReason = null;
+      const toolCallsAcc = {};
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (clientGone()) { try { await reader.cancel(); } catch {} return; }
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) { if (line.trim()) res.write(line + '\n'); continue; }
+            const raw = line.slice(6).trim();
+            if (raw === '[DONE]') continue; // emitted once, at the true end
+            try {
+              const evt = JSON.parse(raw);
+              const choice = evt.choices?.[0];
+              if (choice?.finish_reason) finishReason = choice.finish_reason;
+              const delta = choice?.delta;
+              if (typeof delta?.content === 'string') fullContent += delta.content;
+              for (const tc of (delta?.tool_calls ?? [])) {
+                const acc = (toolCallsAcc[tc.index] ??= { id: '', type: 'function', function: { name: '', arguments: '' } });
+                if (tc.id)                  acc.id                 += tc.id;
+                if (tc.function?.name)      acc.function.name      += tc.function.name;
+                if (tc.function?.arguments) acc.function.arguments += tc.function.arguments;
+              }
+            } catch { /* malformed line — forward as-is */ }
+            res.write(line + '\n\n');
+          }
+        }
+      } catch {
+        if (!res.writableEnded) res.end();
+        return;
+      }
+
+      const toolCalls = Object.values(toolCallsAcc);
+      if (finishReason === 'tool_calls' && toolCalls.length > 0 && round < MAX_TOOL_ROUNDS) {
+        const timestamp = new Date().toISOString();
+        const results = await Promise.all(toolCalls.map(async tc => ({
+          tool_call_id: tc.id,
+          name:         tc.function.name,
+          content:      await executeToolCall(tc.function.name, tc.function.arguments, toolCtx),
+        })));
+        if (clientGone()) return;
+        res.write(`data: ${JSON.stringify({ _toolRound: { toolCalls, results, content: fullContent || null, timestamp } })}\n\n`);
+        currentMsgs = [
+          ...currentMsgs,
+          { role: 'assistant', content: fullContent || null, tool_calls: toolCalls },
+          ...results.map(r => ({ role: 'tool', tool_call_id: r.tool_call_id, content: r.content })),
+        ];
+        continue;
+      }
+
+      finalText = fullContent;
+      break;
+    }
+
+    if (!res.writableEnded) {
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+    // M8 idle-mode outcome reporting (streaming path). Fire-and-forget.
+    const streamBookmarksLoop = enriched.surfacedBookmarks ?? [];
+    if (streamBookmarksLoop.length > 0 && finalText) {
+      reportSurfacingOutcomes({ responseText: finalText, bookmarks: streamBookmarksLoop })
+        .catch(err => console.error('[server] reportSurfacingOutcomes (streaming) failed:', err?.message ?? err));
+    }
+    return;
+  }
 
   let upstream;
   try {
@@ -869,17 +1093,11 @@ app.delete('/api/tomes/:id/entries/:uid', async (req, res) => {
   }
 });
 
-// POST /api/tomes/default/entries — add a single entry to the default (first enabled) tome.
-// Used by the save_to_tome LLM tool so the model can write knowledge back mid-conversation.
-app.post('/api/tomes/default/entries', async (req, res) => {
-  const { comment, content, keys, learnedAt } = req.body;
-  if (!content || typeof content !== 'string' || !content.trim())
-    return res.status(400).json({ error: 'content is required.' });
-  if (content.length > 16384)
-    return res.status(400).json({ error: 'content exceeds 16 KB limit.' });
-  if (comment !== undefined && typeof comment !== 'string')
-    return res.status(400).json({ error: 'comment must be a string.' });
-
+// Add a single entry to the default (first enabled) tome. Shared by the
+// POST /api/tomes/default/entries route and the save_to_tome tool executor
+// (handed to cerebellum via initCerebellumTools at boot — cerebellum never
+// imports server.js).
+async function addDefaultTomeEntry({ comment, content, keys, learnedAt }) {
   // Accept keys as string[] or comma-separated string
   let normKeys = [];
   if (Array.isArray(keys)) {
@@ -888,39 +1106,38 @@ app.post('/api/tomes/default/entries', async (req, res) => {
     normKeys = keys.split(',').map(k => k.trim()).filter(Boolean);
   }
 
-  try {
-    // Find first enabled tome — directory scan is read-only so doesn't
-    // need a lock. The actual entry insert happens through modifyTome
-    // below, which holds the per-file lock across read-modify-write so
-    // concurrent saves can't lose each other.
-    const files = await fsp.readdir(TOMES_DIR);
-    let targetTomeId = null;
-    for (const f of files.sort()) {
-      if (!f.endsWith('.json')) continue;
-      try {
-        const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
-        const t = JSON.parse(raw);
-        if (t.enabled) { targetTomeId = t.id; break; }
-      } catch { /* skip corrupt */ }
-    }
+  // Find first enabled tome — directory scan is read-only so doesn't
+  // need a lock. The actual entry insert happens through modifyTome
+  // below, which holds the per-file lock across read-modify-write so
+  // concurrent saves can't lose each other.
+  const files = await fsp.readdir(TOMES_DIR);
+  let targetTomeId = null;
+  for (const f of files.sort()) {
+    if (!f.endsWith('.json')) continue;
+    try {
+      const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
+      const t = JSON.parse(raw);
+      if (t.enabled) { targetTomeId = t.id; break; }
+    } catch { /* skip corrupt */ }
+  }
 
-    // If no enabled tome exists, create "General" first. writeTome is
-    // atomic + locked, so concurrent creates can't tear the file even
-    // if both decide to create (only the lock guards uniqueness; that's
-    // OK — the first one wins, the second one writes again and that's
-    // a harmless overwrite of an empty tome).
-    if (!targetTomeId) {
-      const newId = randomUUID();
-      const fresh = { id: newId, name: 'General', description: '', enabled: true, entries: {} };
-      await writeTome(fresh);
-      targetTomeId = newId;
-    }
+  // If no enabled tome exists, create "General" first. writeTome is
+  // atomic + locked, so concurrent creates can't tear the file even
+  // if both decide to create (only the lock guards uniqueness; that's
+  // OK — the first one wins, the second one writes again and that's
+  // a harmless overwrite of an empty tome).
+  if (!targetTomeId) {
+    const newId = randomUUID();
+    const fresh = { id: newId, name: 'General', description: '', enabled: true, entries: {} };
+    await writeTome(fresh);
+    targetTomeId = newId;
+  }
 
-    const uid = randomUUID();
-    const now = new Date().toISOString();
-    await modifyTome(targetTomeId, (tome) => {
-      tome.entries[uid] = {
-        uid,
+  const uid = randomUUID();
+  const now = new Date().toISOString();
+  await modifyTome(targetTomeId, (tome) => {
+    tome.entries[uid] = {
+      uid,
         comment:             typeof comment === 'string' ? comment.trim() || 'Auto-saved entry' : 'Auto-saved entry',
         keys:                normKeys,
         keysecondary:        [],
@@ -950,12 +1167,30 @@ app.post('/api/tomes/default/entries', async (req, res) => {
         created_at:          now,
         learnedAt:           (typeof learnedAt === 'string' && learnedAt) ? learnedAt : now,
       };
-    });
-    res.json({ ok: true, tomeId: targetTomeId, uid });
+  });
+  return { tomeId: targetTomeId, uid };
+}
+
+// POST /api/tomes/default/entries — add a single entry to the default (first enabled) tome.
+// Used by the save_to_tome LLM tool so the model can write knowledge back mid-conversation.
+app.post('/api/tomes/default/entries', async (req, res) => {
+  const { comment, content, keys, learnedAt } = req.body;
+  if (!content || typeof content !== 'string' || !content.trim())
+    return res.status(400).json({ error: 'content is required.' });
+  if (content.length > 16384)
+    return res.status(400).json({ error: 'content exceeds 16 KB limit.' });
+  if (comment !== undefined && typeof comment !== 'string')
+    return res.status(400).json({ error: 'comment must be a string.' });
+  try {
+    const { tomeId, uid } = await addDefaultTomeEntry({ comment, content, keys, learnedAt });
+    res.json({ ok: true, tomeId, uid });
   } catch {
     res.status(500).json({ error: 'Failed to save entry.' });
   }
 });
+
+// Hand the tome-storage capability to cerebellum's save_to_tome executor.
+initCerebellumTools({ addDefaultTomeEntry });
 
 // ── Memorization queue endpoints ────────────────────────────────
 
@@ -1013,27 +1248,9 @@ app.delete('/api/memorize/:id', async (req, res) => {
 
 // ── Entity-core write endpoints ─────────────────────────────────
 
-const VALID_MEMORY_GRANULARITIES = new Set(['daily', 'weekly', 'monthly', 'yearly', 'significant']);
-const VALID_IDENTITY_CATEGORIES  = new Set(['self', 'user', 'relationship', 'custom']);
-const VALID_FILENAME_RE           = /^[\w]+\.md$/;
-
-// Derive a filesystem-safe slug from a human title or memory bullet.
-// Entity-core stores significant memories as `YYYY-MM-DD_slug.md`. Without
-// a slug, every significant save lands at `YYYY-MM-DD.md` and collides with
-// the previous one — which triggers entity-core's merge-and-dedup path and
-// destroys content (same root cause as the daily-memory wipe in aba6b8a,
-// but worse here because the file format itself disagrees on the key).
-function deriveMemorySlug(input, maxLen = 60) {
-  const slug = String(input ?? '')
-    .toLowerCase()
-    .replace(/^[\s\-*•]+/, '')      // strip leading bullet markers
-    .split(/\r?\n/)[0]              // first line only
-    .replace(/[^a-z0-9]+/g, '-')    // non-alphanumeric → hyphen
-    .replace(/^-+|-+$/g, '')        // trim hyphens at the ends
-    .slice(0, maxLen)
-    .replace(/-+$/g, '');           // trim again after truncation
-  return slug || null;
-}
+// VALID_MEMORY_GRANULARITIES / VALID_IDENTITY_CATEGORIES /
+// VALID_FILENAME_RE / deriveMemorySlug are imported from cerebellum.js —
+// one source of truth shared by these routes and the tool executors.
 
 // POST /api/entity/memory — write a new memory entry to entity-core
 app.post('/api/entity/memory', async (req, res) => {
@@ -1749,21 +1966,7 @@ app.post('/api/contact-trusted-person', async (req, res) => {
 // flood the banner queue.
 app.post('/api/crisis-resources', async (_req, res) => {
   try {
-    const result = await enqueueOutbox({
-      kind:     'crisis_resources',
-      originId: `crisis-resources-${Math.floor(Date.now() / 3_600_000)}`,
-      title:    'If you need immediate support',
-      body: [
-        '**Crisis resources — always available:**',
-        '',
-        '🆘 **International directory:** https://www.iasp.info/resources/Crisis_Centres/',
-        '🇺🇸 **988 Suicide & Crisis Lifeline (US):** call or text **988**',
-        '🇺🇸 **Crisis Text Line (US):** text HOME to **741741**',
-        '🇬🇧 **Samaritans (UK):** call **116 123** (free, 24/7)',
-        '🇦🇺 **Lifeline (AU):** call **13 11 14**',
-        '🌐 **findahelpline.com** — searchable global directory',
-      ].join('\n'),
-    });
+    const result = await enqueueCrisisResources();
     res.json({ ok: true, id: result.id, deduped: result.deduped ?? false });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });

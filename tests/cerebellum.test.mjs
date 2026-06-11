@@ -164,3 +164,143 @@ test('CONTACT_ESCALATION_DELAY_MS keeps severe shorter than high shorter than mo
   assert.ok(CONTACT_ESCALATION_DELAY_MS.severe < CONTACT_ESCALATION_DELAY_MS.high);
   assert.ok(CONTACT_ESCALATION_DELAY_MS.high   < CONTACT_ESCALATION_DELAY_MS.moderate);
 });
+
+// ── Tool dispatch ────────────────────────────────────────────────
+
+import {
+  BUILTIN_TOOLS,
+  TOOL_EXECUTORS,
+  executeToolCall,
+  composeActiveTools,
+  runToolCallLoop,
+  MAX_TOOL_ROUNDS,
+} from '../cerebellum.js';
+
+test('BUILTIN_TOOLS carries the full registry in OpenAI function format', () => {
+  assert.ok(BUILTIN_TOOLS.length >= 20);
+  for (const t of BUILTIN_TOOLS) {
+    assert.equal(t.type, 'function');
+    assert.equal(typeof t.function.name, 'string');
+    assert.equal(typeof t.function.description, 'string');
+  }
+  const names = BUILTIN_TOOLS.map(t => t.function.name);
+  for (const expected of ['get_datetime', 'save_to_tome', 'save_memory', 'schedule_add_reminder', 'contact_trusted_person', 'show_crisis_resources']) {
+    assert.ok(names.includes(expected), `missing ${expected}`);
+  }
+  // Every advertised built-in has an executor, and vice versa.
+  for (const n of names) assert.ok(n in TOOL_EXECUTORS, `no executor for ${n}`);
+  for (const n of Object.keys(TOOL_EXECUTORS)) assert.ok(names.includes(n), `executor ${n} not advertised`);
+});
+
+test('composeActiveTools appends custom tool objects after the built-ins', () => {
+  const custom = [{ type: 'function', function: { name: 'my_tool', description: 'x', parameters: {} } }];
+  const tools = composeActiveTools(custom);
+  assert.equal(tools.length, BUILTIN_TOOLS.length + 1);
+  assert.equal(tools.at(-1).function.name, 'my_tool');
+  // Non-arrays and junk entries are ignored, never thrown on.
+  assert.equal(composeActiveTools(undefined).length, BUILTIN_TOOLS.length);
+  assert.equal(composeActiveTools([null, 'junk']).length, BUILTIN_TOOLS.length);
+});
+
+test('executeToolCall: unknown / custom tool returns advertise-only notice, not a throw', async () => {
+  const out = await executeToolCall('my_custom_tool', '{}');
+  assert.match(out, /advertised but has no implementation yet/);
+});
+
+test('executeToolCall: malformed JSON args produce a structured failure into the loop', async () => {
+  const out = await executeToolCall('get_datetime', '{not json');
+  assert.match(out, /^Error executing get_datetime: /);
+});
+
+test('executeToolCall: a throwing executor produces a structured failure, not an exception', async () => {
+  TOOL_EXECUTORS.__test_throw = () => { throw new Error('peer is down'); };
+  try {
+    const out = await executeToolCall('__test_throw', '{}');
+    assert.equal(out, 'Error executing __test_throw: peer is down');
+  } finally {
+    delete TOOL_EXECUTORS.__test_throw;
+  }
+});
+
+test('get_session_info renders ctx.sessionInfo and degrades to nulls without it', async () => {
+  const withCtx = JSON.parse(await executeToolCall('get_session_info', '{}', {
+    sessionInfo: { startedAt: 't0', messageCount: 7, provider: 'zai', model: 'm', elapsedMsSinceLastMessage: 123 },
+  }));
+  assert.equal(withCtx.messageCount, 7);
+  assert.equal(withCtx.elapsedMsSinceLastMessage, 123);
+  const bare = JSON.parse(await executeToolCall('get_session_info', '{}'));
+  assert.equal(bare.messageCount, null);
+});
+
+// ── runToolCallLoop ──────────────────────────────────────────────
+
+function toolCallResponse(name, args = '{}') {
+  return {
+    choices: [{
+      finish_reason: 'tool_calls',
+      message: { content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name, arguments: args } }] },
+    }],
+  };
+}
+const finalResponse = { choices: [{ finish_reason: 'stop', message: { content: 'done' } }] };
+
+test('runToolCallLoop: executes tools and feeds results into the next round', async () => {
+  const upstreamCalls = [];
+  let round = 0;
+  const { data, toolRounds } = await runToolCallLoop({
+    callUpstream: async (msgs) => {
+      upstreamCalls.push(msgs);
+      return round++ === 0 ? toolCallResponse('fake_tool') : finalResponse;
+    },
+    baseMessages: [{ role: 'user', content: 'hi' }],
+    executeTool:  async (name) => `result of ${name}`,
+  });
+  assert.equal(data.choices[0].message.content, 'done');
+  assert.equal(toolRounds.length, 1);
+  assert.equal(toolRounds[0].results[0].content, 'result of fake_tool');
+  // Round 2's messages include the assistant tool_calls turn + the tool result.
+  const second = upstreamCalls[1];
+  assert.equal(second.at(-2).role, 'assistant');
+  assert.ok(Array.isArray(second.at(-2).tool_calls));
+  assert.equal(second.at(-1).role, 'tool');
+  assert.equal(second.at(-1).content, 'result of fake_tool');
+});
+
+test('runToolCallLoop: caps at maxRounds even if the model keeps calling tools', async () => {
+  let calls = 0;
+  const { toolRounds } = await runToolCallLoop({
+    callUpstream: async () => { calls++; return toolCallResponse('fake_tool'); },
+    baseMessages: [{ role: 'user', content: 'hi' }],
+    executeTool:  async () => 'r',
+  });
+  assert.equal(calls, MAX_TOOL_ROUNDS + 1);     // initial + one per executed round
+  assert.equal(toolRounds.length, MAX_TOOL_ROUNDS);
+});
+
+test('runToolCallLoop: re-appends the time anchor as the LAST message every round', async () => {
+  const seen = [];
+  let round = 0;
+  await runToolCallLoop({
+    callUpstream: async (msgs) => { seen.push(msgs.at(-1)); return round++ === 0 ? toolCallResponse('t') : finalResponse; },
+    baseMessages: [{ role: 'user', content: 'hi' }],
+    timeAnchor:   '[Now] it is teatime',
+    executeTool:  async () => 'r',
+  });
+  assert.equal(seen.length, 2);
+  for (const last of seen) {
+    assert.equal(last.role, 'system');
+    assert.equal(last.content, '[Now] it is teatime');
+  }
+});
+
+test('runToolCallLoop: no tool calls means a single round and no toolRounds', async () => {
+  let calls = 0;
+  const { data, toolRounds } = await runToolCallLoop({
+    callUpstream: async () => { calls++; return finalResponse; },
+    baseMessages: [{ role: 'user', content: 'hi' }],
+    executeTool:  async () => { throw new Error('should not run'); },
+  });
+  assert.equal(calls, 1);
+  assert.equal(toolRounds.length, 0);
+  assert.equal(data.choices[0].message.content, 'done');
+});
