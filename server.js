@@ -77,6 +77,13 @@ import {
   startMemorizationWorker, stopMemorizationWorker,
   findOrCreateSessionMemoriesTome,
 } from './memorization.js';
+import {
+  getRegistry as getVillageRegistry,
+  upsertCategory as upsertVillageCategory, deleteCategory as deleteVillageCategory,
+  upsertVillager, deleteVillager,
+  upsertLocation as upsertVillageLocation, deleteLocation as deleteVillageLocation,
+  migrateTrustedContacts, initVillageSync, bootSync as villageBootSync,
+} from './village.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -2091,6 +2098,121 @@ app.post('/api/crisis-resources', async (_req, res) => {
   }
 });
 
+// ── Village registry (V1 of Village Support) ────────────────────────
+// CRUD for categories / villagers / locations. The registry's local
+// mirror (village.json) is what gating will read; mutations write
+// through to entity-core (canonical) via the sync wired in
+// startVillageSync() below. Validation errors surface as 400s.
+
+const villageError = (res, err) => {
+  const msg = err?.message ?? String(err);
+  const status = /unknown|required|locked|built-in|reassignTo/.test(msg) ? 400 : 500;
+  res.status(status).json({ error: msg });
+};
+
+app.get('/api/village', async (_req, res) => {
+  try { res.json(await getVillageRegistry()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/village/categories', async (req, res) => {
+  const { name, grants } = req.body ?? {};
+  try { res.json(await upsertVillageCategory({ name, grants })); }
+  catch (err) { villageError(res, err); }
+});
+
+app.patch('/api/village/categories/:id', async (req, res) => {
+  const { name, grants } = req.body ?? {};
+  try { res.json(await upsertVillageCategory({ id: req.params.id, name, grants })); }
+  catch (err) { villageError(res, err); }
+});
+
+app.delete('/api/village/categories/:id', async (req, res) => {
+  try { res.json(await deleteVillageCategory({ id: req.params.id, reassignTo: req.query.reassignTo })); }
+  catch (err) { villageError(res, err); }
+});
+
+app.post('/api/village/villagers', async (req, res) => {
+  const { name, categoryId, aliases, connection, triage } = req.body ?? {};
+  try { res.json(await upsertVillager({ name, categoryId, aliases, connection, triage })); }
+  catch (err) { villageError(res, err); }
+});
+
+app.patch('/api/village/villagers/:id', async (req, res) => {
+  const { name, categoryId, aliases, connection, triage } = req.body ?? {};
+  try { res.json(await upsertVillager({ id: req.params.id, name, categoryId, aliases, connection, triage })); }
+  catch (err) { villageError(res, err); }
+});
+
+app.delete('/api/village/villagers/:id', async (req, res) => {
+  try { res.json(await deleteVillager({ id: req.params.id })); }
+  catch (err) { villageError(res, err); }
+});
+
+app.post('/api/village/locations', async (req, res) => {
+  const { key, label, assignedCategoryId, connectionId, rateLimit } = req.body ?? {};
+  try { res.json(await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit })); }
+  catch (err) { villageError(res, err); }
+});
+
+app.patch('/api/village/locations', async (req, res) => {
+  // Location keys contain ':' and '/' so they ride the body, not the path.
+  const { key, label, assignedCategoryId, connectionId, rateLimit } = req.body ?? {};
+  try { res.json(await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit })); }
+  catch (err) { villageError(res, err); }
+});
+
+app.delete('/api/village/locations', async (req, res) => {
+  const { key } = req.body ?? {};
+  try { res.json(await deleteVillageLocation({ key })); }
+  catch (err) { villageError(res, err); }
+});
+
+// Wires the hybrid sync (entity-core canonical, local mirror) and runs
+// the boot reconciliation + trusted-contacts migration. Degrades
+// gracefully: entity-core down → mirror stays authoritative for
+// gating, writes accumulate as syncPending and replay on next boot.
+async function startVillageSync() {
+  initVillageSync({
+    push: async (json) => {
+      const content = '```json\n' + json + '\n```';
+      const result = await rewriteIdentitySection({
+        category: 'custom', filename: 'village-registry.md', section: 'Registry', content,
+      });
+      if (result.ok) return result;
+      // Section may not exist yet (first sync) — create file + section.
+      return appendIdentity({
+        category: 'custom', filename: 'village-registry.md',
+        content: `## Registry\n\n${content}`,
+      });
+    },
+    pull: async () => {
+      try {
+        const id = await getIdentityAll();
+        const file = (id?.custom ?? []).find(f => f.filename === 'village-registry.md');
+        const m = file?.content?.match(/```json\s*\n([\s\S]*?)\n```/);
+        return m ? JSON.parse(m[1]) : null;
+      } catch (err) {
+        console.warn('[village] canonical pull failed:', err?.message ?? err);
+        return null;
+      }
+    },
+  });
+  try {
+    await villageBootSync();
+    const reg = await getVillageRegistry();
+    if (reg.villagers.length === 0) {
+      const contacts = readSettingsSync()?.trustedContacts;
+      if (Array.isArray(contacts) && contacts.length > 0) {
+        const { imported } = await migrateTrustedContacts(contacts);
+        if (imported > 0) console.log(`[village] migrated ${imported} trusted contact(s) into Emergency Contacts`);
+      }
+    }
+  } catch (err) {
+    console.error('[village] boot sync failed (mirror stays authoritative):', err?.message ?? err);
+  }
+}
+
 // Start the MCP children (entity-core + Unruh) at server boot rather
 // than as a thalamus.js import side-effect. Tests and other importers
 // of thalamus's coordination helpers (withLock, modifyTomeFile, etc.)
@@ -2120,6 +2242,7 @@ const httpServer = app.listen(PORT, HOST, async () => {
   startAutonomousPondering();
   startRemindersScheduler();
   startSilenceTriage();
+  startVillageSync();
 });
 
 // ── Autonomous pondering loop (step 4a) ─────────────────────────────

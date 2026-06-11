@@ -1305,7 +1305,10 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       selfContent = identitySection(selfFiles, SELF_ORDER);
       userContent = identitySection(id.user ?? [], USER_ORDER);
       relContent  = identitySection(id.relationship ?? [], RELATIONSHIP_ORDER);
-      custContent = identitySection(id.custom ?? [], []);
+      // village-registry.md is the canonical Village registry (routing +
+      // gating data synced from village.js) — machine state, not identity
+      // prose. It must never render into the prompt.
+      custContent = identitySection((id.custom ?? []).filter(f => f.filename !== 'village-registry.md'), []);
     } catch (err) {
       console.error('[thalamus] identity assembly failed (defaulting to empty):', err?.message ?? err);
     }
