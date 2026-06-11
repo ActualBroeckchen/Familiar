@@ -90,6 +90,7 @@ export function startRemindersLoop({
   getDueReminders,
   fireReminder,
   getHealth,
+  enqueueOutboxFn = enqueueOutbox,
   tickMs    = DEFAULT_TICK_MS,
   onTick    = () => {},
   onError   = () => {},
@@ -105,7 +106,7 @@ export function startRemindersLoop({
     _activeTick = (async () => {
       try {
         if (!(await isEnabled())) { onTick({ skipped: true, reason: 'disabled' }); return; }
-        const result = await runOneReminderTick({ getDueReminders, fireReminder });
+        const result = await runOneReminderTick({ getDueReminders, fireReminder, enqueueOutboxFn });
         // Health check (best-effort; never blocks delivery).
         if (typeof getHealth === 'function') {
           try {

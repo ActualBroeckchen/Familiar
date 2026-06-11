@@ -1096,7 +1096,12 @@ import { formatTemporalContext } from './temporal-format.js';
 import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
 import { expandWindow } from './recurrence.js';
 import { resolveEntityCoreRef, identityHasContent } from './entity-ref.js';
-import { getRecentPonderings, formatPonderingsForPrompt } from './recent-ponderings.js';
+import {
+  getRecentPonderings,
+  formatPonderingsForPrompt,
+  getUnactedIntents,
+  formatDeferredIntentsBlock,
+} from './recent-ponderings.js';
 import { getThreat, tierForThreat } from './threat-tracker.js';
 import {
   selectSurfaceCandidates,
@@ -1104,7 +1109,7 @@ import {
 } from './surface-context.js';
 import {
   recordSurfaceOffers,
-  getRecentOfferTimes,
+  getRecentOfferInfo,
   tagOutcomes,
 } from './surface-events.js';
 
@@ -1550,6 +1555,24 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         });
     const ponderingsBlock = formatPonderingsForPrompt(ponderings);
 
+    // ── Deferred intents (Pillar B) ───────────────────────────────────────
+    // Surface any wants_to_save intents the Familiar flagged during free
+    // cycles but hasn't yet acted on. Only on live turns so debug-prompt
+    // previews and handoff summaries don't consume the dedup state.
+    // Best-effort; failure → silent omission.
+    let deferredIntentsBlock = '';
+    if (liveTurn && !staticOnly) {
+      try {
+        const intents = await getUnactedIntents({ limit: 5 });
+        deferredIntentsBlock = formatDeferredIntentsBlock(intents);
+        if (intents.length > 0) {
+          console.log(`[thalamus] deferred intents: ${intents.length} unacted (oldest first)`);
+        }
+      } catch (err) {
+        console.error('[thalamus] getUnactedIntents failed:', err?.message ?? err);
+      }
+    }
+
     // ── Care check / break-through framing (step 4b) ──────────────────────
     // Read current threat; if elevated, prepend a [CARE CHECK] block that
     // tells the Familiar to consider checking in proactively. Never forces
@@ -1605,7 +1628,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
           const routinePhaseLabel = temporalPayload?.schedule?.phase?.label || '';
           const lapsesFile = (id.custom ?? []).find(f => f.filename === 'what_lapses_cost.md');
           const personModel = lapsesFile?.content?.trim() ?? '';
-          const surfacingHistory = await getRecentOfferTimes();
+          const surfacingHistory = await getRecentOfferInfo();
           const nowMs = Date.now();
 
           const candidates = await selectSurfaceCandidates({
@@ -1670,6 +1693,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (memLines)               dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
     if (graphLines)             dynamicSections.push(`Relevant Knowledge from Graph:\n${graphLines}`);
     if (ponderingsBlock)        dynamicSections.push(ponderingsBlock);
+    if (deferredIntentsBlock)   dynamicSections.push(deferredIntentsBlock);
     if (careBlock)              dynamicSections.push(careBlock);
     if (temporalLines)          dynamicSections.push(`[Temporal Context]\n${temporalLines}`);
     if (surfaceCandidatesBlock) dynamicSections.push(surfaceCandidatesBlock);
@@ -1682,18 +1706,19 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // content this turn. If something stops contributing without an
     // error log alongside, that's the trail.
     const presence = [
-      timeAnchorBlock   ? 'time'      : null,
-      baseContent       ? 'base'      : null,
-      selfContent       ? 'self'      : null,
-      userContent       ? 'user'      : null,
-      relContent        ? 'rel'       : null,
-      custContent       ? 'cust'      : null,
-      memLines          ? 'mem'       : null,
-      graphLines        ? 'graph'     : null,
-      ponderingsBlock   ? 'pondering' : null,
-      careBlock         ? 'care'      : null,
-      temporalLines     ? 'temporal'  : null,
-      surfaceCandidatesBlock ? 'surface' : null,
+      timeAnchorBlock        ? 'time'     : null,
+      baseContent            ? 'base'     : null,
+      selfContent            ? 'self'     : null,
+      userContent            ? 'user'     : null,
+      relContent             ? 'rel'      : null,
+      custContent            ? 'cust'     : null,
+      memLines               ? 'mem'      : null,
+      graphLines             ? 'graph'    : null,
+      ponderingsBlock        ? 'pondering': null,
+      deferredIntentsBlock   ? 'intents'  : null,
+      careBlock              ? 'care'     : null,
+      temporalLines          ? 'temporal' : null,
+      surfaceCandidatesBlock ? 'surface'  : null,
     ].filter(Boolean).join(',');
     if (totalChars === 0) {
       console.warn('[thalamus] enrich() produced no content — identity files may be empty and no memories found');
@@ -1772,19 +1797,26 @@ export async function reportSurfacingOutcomes({ responseText, bookmarks }) {
 
 /**
  * Create a new memory entry in entity-core.
- * @param {{ content: string, granularity: string, date?: string, instanceId?: string }} opts
+ *
+ * `slug` is required by entity-core for significant memories — their
+ * storage filename is `YYYY-MM-DD_slug.md`, so without it every save
+ * lands at the same path and entity-core's merge logic destroys
+ * earlier content. The caller (server.js POST /api/entity/memory) is
+ * responsible for ensuring `slug` is set whenever `granularity ===
+ * 'significant'`; we forward whatever it gives us.
+ *
+ * @param {{ content: string, granularity: string, date?: string, slug?: string, instanceId?: string }} opts
  * @returns {Promise<{ ok: boolean, error?: string }>}
  */
-export async function createMemory({ content, granularity = 'daily', date, instanceId = 'proto-familiar' }) {
+export async function createMemory({ content, granularity = 'daily', date, slug, instanceId = 'proto-familiar' }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
   try {
     const today = new Date().toISOString().slice(0, 10);
-    await mcpClient.callTool({
-      name: 'memory_create',
-      arguments: { content, granularity, date: date ?? today, instanceId },
-    });
-    console.log(`[thalamus] createMemory() saved ${granularity} memory`);
+    const args = { content, granularity, date: date ?? today, instanceId };
+    if (slug) args.slug = slug;
+    await mcpClient.callTool({ name: 'memory_create', arguments: args });
+    console.log(`[thalamus] createMemory() saved ${granularity} memory${slug ? ` (slug=${slug})` : ''}`);
     return { ok: true };
   } catch (err) {
     console.error('[thalamus] createMemory failed:', err.message);
@@ -1871,8 +1903,11 @@ export async function listMemories({ granularity, limit = 50, offset = 0 } = {})
   return callTool('memory_list', { granularity, limit, offset });
 }
 
-export async function readMemory({ granularity, date }) {
-  return callTool('memory_read', { granularity, date });
+export async function readMemory({ granularity, date, slug }) {
+  // slug: significant memories live one-file-per-milestone as
+  // {date}_{slug}.md; passing the slug addresses the exact file instead
+  // of letting entity-core fall back to first-match-by-date.
+  return callTool('memory_read', { granularity, date, ...(slug ? { slug } : {}) });
 }
 
 export async function getIdentityAll() {
@@ -1931,13 +1966,17 @@ export async function listSnapshots() {
 
 // ── Writes (auto-snapshot before destructive) ────────────────────────────────
 
-export async function updateMemory({ granularity, date, content, editedBy = PROTO_INSTANCE_ID }) {
+export async function updateMemory({ granularity, date, slug, content, editedBy = PROTO_INSTANCE_ID }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
-  await autoSnapshot(`memory_update ${granularity}/${date}`);
+  await autoSnapshot(`memory_update ${granularity}/${date}${slug ? `_${slug}` : ''}`);
   try {
-    const result = await callTool('memory_update', { granularity, date, content, editedBy });
-    console.log(`[thalamus] updateMemory ${granularity}/${date}`);
+    // slug matters for significant memories: entity-core's memory_update
+    // preserves the existing entry's slug on a date-only match, but an
+    // explicit slug addresses the exact {date}_{slug}.md file when
+    // several milestones share a date.
+    const result = await callTool('memory_update', { granularity, date, content, editedBy, ...(slug ? { slug } : {}) });
+    console.log(`[thalamus] updateMemory ${granularity}/${date}${slug ? `_${slug}` : ''}`);
     return { ok: true, result };
   } catch (err) {
     console.error('[thalamus] updateMemory failed:', err.message);

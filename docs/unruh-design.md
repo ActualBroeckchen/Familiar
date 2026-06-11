@@ -244,7 +244,7 @@ An action available to the triage decision — not a separate automatic trigger.
 
 This is the highest-stakes, lowest-frequency category. It should never fire automatically without passing through triage judgment. The decision to escalate to a human is always a considered one, not a threshold crossing.
 
-**Escalation is sequential, not simultaneous.** When the LLM decides to involve a trusted contact, Familiar contacts the user first (outbox banner). The trusted-contact webhook fires only if the deadline passes without the user acknowledging the check-in — severe=30min, high=2h, moderate=6h. The identical message is always mirrored into the outbox so there is no covert contact.
+**Escalation is sequential, not simultaneous.** When the LLM decides to involve a trusted contact, Familiar contacts the user first — the check-in lands as a chat message in the active session and, when the user has configured their own Discord webhook, as a push notification. The trusted-contact webhook fires only if the acknowledgement deadline passes without a response — severe=30min, high=2h, moderate=6h, counted from the moment the check-in is *confirmed delivered* to the user (falling back to enqueue time when no push channel exists, so a dead channel can never block escalation). The identical message is always mirrored into the user's outbox so there is no covert contact. Delivery and escalation mechanics live in the motor module — see [`cerebellum-design.md`](cerebellum-design.md); Unruh's role ends at informing the decision.
 
 ---
 

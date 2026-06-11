@@ -150,3 +150,14 @@ was subsequently hardened:
   readable via `GET /api/triage-events`.
 - Pending triage notices are injected into the `[DYNAMIC CONTEXT]`
   block of the next `/api/chat` call so the Familiar can reference them.
+
+**Cerebellum era (0.4.x):** the spine's delivery side moved into the
+motor module — see [`cerebellum-design.md`](cerebellum-design.md). The
+triage deliberation, trusted-contact delivery, and escalation
+deadlines now live in `cerebellum.js` (server.js only boots the loop);
+outbox items deliver as chat messages plus an optional Discord push to
+the user's own webhook; and the escalation deadline counts from
+*confirmed delivery* of the check-in rather than from enqueue, with
+delivery failures visible to the Familiar in its deliberation prompt.
+The step descriptions above record the spine as originally built and
+stand as the historical record.

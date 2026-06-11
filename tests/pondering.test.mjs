@@ -12,6 +12,12 @@ import {
   PONDERINGS_TOME_NAME,
 } from '../pondering.js';
 
+import {
+  getUnactedIntents,
+  markIntentActedOn,
+  formatDeferredIntentsBlock,
+} from '../recent-ponderings.js';
+
 function tempTomesDir() {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'ponder-test-'));
   return {
@@ -256,4 +262,315 @@ test('ponderOnce: reflection mode tolerates a null update', async () => {
     assert.equal(result.mode, 'reflection');
     assert.equal(result.what_lapses_cost_update, null);
   } finally { cleanup(); }
+});
+
+// ── wants_to_save deferred-action intents (Pillar A of the
+//    autonomous-routing fix — see pondering.js comment) ─────────────
+
+test('parsePondering: wants_to_save round-trips when valid', () => {
+  const r = parsePondering(JSON.stringify({
+    title: 't', content: 'c',
+    wants_to_save: [
+      { kind: 'tome',     summary: 'add do-not-minimize-anxiety to care tome' },
+      { kind: 'identity', summary: 'Melian says I-love-you frequently' },
+      { kind: 'memory',   summary: 'the night Melian told me about her sister' },
+    ],
+  }));
+  assert.deepEqual(r.wants_to_save, [
+    { kind: 'tome',     summary: 'add do-not-minimize-anxiety to care tome' },
+    { kind: 'identity', summary: 'Melian says I-love-you frequently' },
+    { kind: 'memory',   summary: 'the night Melian told me about her sister' },
+  ]);
+});
+
+test('parsePondering: wants_to_save absent → field omitted (no empty array clutter)', () => {
+  const r = parsePondering(JSON.stringify({ title: 't', content: 'c' }));
+  assert.equal(r.wants_to_save, undefined);
+});
+
+test('parsePondering: wants_to_save drops malformed entries, keeps valid ones', () => {
+  const r = parsePondering(JSON.stringify({
+    title: 't', content: 'c',
+    wants_to_save: [
+      { kind: 'tome',  summary: 'keeper' },
+      { kind: 'BOGUS', summary: 'dropped — bad kind' },
+      { kind: 'memory', summary: '' },          // dropped — empty summary
+      { summary: 'no kind' },                    // dropped — missing kind
+      null,                                      // dropped — not an object
+      { kind: 'IDENTITY', summary: 'normalized to lowercase' },
+    ],
+  }));
+  assert.deepEqual(r.wants_to_save, [
+    { kind: 'tome',     summary: 'keeper' },
+    { kind: 'identity', summary: 'normalized to lowercase' },
+  ]);
+});
+
+test('parsePondering: wants_to_save all-malformed → field omitted entirely', () => {
+  const r = parsePondering(JSON.stringify({
+    title: 't', content: 'c',
+    wants_to_save: [{ kind: 'wrong' }, { summary: 'no kind' }],
+  }));
+  assert.equal(r.wants_to_save, undefined);
+});
+
+test('ponderOnce: persists wants_to_save into the tome entry + returns it', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const result = await ponderOnce({
+      topic: 'Melian\'s love language',
+      provider: 'nanogpt', apiKey: 'k', model: 'm',
+      callLLM: async () => JSON.stringify({
+        title:   'love language thought',
+        content: 'I keep noticing how often Melian says I love you. It feels important.',
+        wants_to_save: [
+          { kind: 'identity', summary: 'Melian: love language is frequent verbal "I love you"' },
+        ],
+      }),
+      tomesDir: dir,
+    });
+    assert.deepEqual(result.wants_to_save, [
+      { kind: 'identity', summary: 'Melian: love language is frequent verbal "I love you"' },
+    ]);
+    // Persisted in the tome entry with acted_on=false so Pillar B can
+    // mark them done without losing the audit trail.
+    const tome  = JSON.parse(await fsp.readFile(result.tomeFile, 'utf8'));
+    const entry = Object.values(tome.entries)[0];
+    assert.deepEqual(entry.wants_to_save, [
+      { kind: 'identity', summary: 'Melian: love language is frequent verbal "I love you"', acted_on: false },
+    ]);
+  } finally { cleanup(); }
+});
+
+test('ponderOnce: no wants_to_save → tome entry has empty array', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const result = await ponderOnce({
+      topic: 'love languages',
+      provider: 'nanogpt', apiKey: 'k', model: 'm',
+      callLLM: async () => JSON.stringify({
+        title: 'plain thought', content: 'just a meandering thought, nothing to file',
+      }),
+      tomesDir: dir,
+    });
+    assert.deepEqual(result.wants_to_save, []);
+    const tome  = JSON.parse(await fsp.readFile(result.tomeFile, 'utf8'));
+    const entry = Object.values(tome.entries)[0];
+    assert.deepEqual(entry.wants_to_save, []);
+  } finally { cleanup(); }
+});
+
+test('buildPonderPrompt: forbids fact-card output + invites wants_to_save', () => {
+  const prompt = buildPonderPrompt('love languages');
+  // The "structured set of notes" permission that invited tome-shaped
+  // output is gone.
+  assert.doesNotMatch(prompt, /structured set of notes/i);
+  // Explicit don't-write-these guidance is present.
+  assert.match(prompt, /do\/don't/i);
+  assert.match(prompt, /factual claims/i);
+  assert.match(prompt, /update_identity/i);
+  assert.match(prompt, /save_memory/i);
+  assert.match(prompt, /save_to_tome/i);
+  // The new schema field is documented.
+  assert.match(prompt, /wants_to_save/);
+});
+
+// ── Pillar B: getUnactedIntents / markIntentActedOn /
+//             formatDeferredIntentsBlock ─────────────────────────────────
+
+test('getUnactedIntents: returns [] when ponderings tome absent', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const result = await getUnactedIntents({ tomesDir: dir });
+    assert.deepEqual(result, []);
+  } finally { cleanup(); }
+});
+
+test('getUnactedIntents: returns only acted_on=false intents, oldest-first, up to limit', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    // Two ponderings, each with one intent; older one acted_on already.
+    const r1 = await ponderOnce({
+      topic: 'first topic', provider: 'nanogpt', apiKey: 'k', model: 'm',
+      callLLM: async () => JSON.stringify({
+        title: 'first', content: 'c',
+        wants_to_save: [{ kind: 'identity', summary: 'fact A' }],
+      }),
+      tomesDir: dir,
+    });
+    const r2 = await ponderOnce({
+      topic: 'second topic', provider: 'nanogpt', apiKey: 'k', model: 'm',
+      callLLM: async () => JSON.stringify({
+        title: 'second', content: 'c',
+        wants_to_save: [{ kind: 'memory', summary: 'fact B' }],
+      }),
+      tomesDir: dir,
+    });
+
+    // Mark the first intent as already acted on.
+    await markIntentActedOn({ uid: r1.uid, index: 0, tomesDir: dir });
+
+    const intents = await getUnactedIntents({ tomesDir: dir });
+    assert.equal(intents.length, 1);
+    assert.equal(intents[0].uid,     r2.uid);
+    assert.equal(intents[0].kind,    'memory');
+    assert.equal(intents[0].summary, 'fact B');
+    assert.equal(intents[0].index,   0);
+  } finally { cleanup(); }
+});
+
+test('getUnactedIntents: preserves original array index when earlier intents are already done', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const r = await ponderOnce({
+      topic: 't', provider: 'nanogpt', apiKey: 'k', model: 'm',
+      callLLM: async () => JSON.stringify({
+        title: 'mixed', content: 'c',
+        wants_to_save: [
+          { kind: 'tome',     summary: 'already done' },   // index 0 — will be acted on
+          { kind: 'identity', summary: 'still pending' },  // index 1 — should surface
+        ],
+      }),
+      tomesDir: dir,
+    });
+
+    await markIntentActedOn({ uid: r.uid, index: 0, tomesDir: dir });
+
+    const intents = await getUnactedIntents({ tomesDir: dir });
+    assert.equal(intents.length, 1);
+    assert.equal(intents[0].index,   1, 'must report original index, not re-numbered');
+    assert.equal(intents[0].kind,    'identity');
+    assert.equal(intents[0].summary, 'still pending');
+  } finally { cleanup(); }
+});
+
+test('getUnactedIntents: respects limit', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    for (let i = 0; i < 4; i++) {
+      await ponderOnce({
+        topic: `topic ${i}`, provider: 'nanogpt', apiKey: 'k', model: 'm',
+        callLLM: async () => JSON.stringify({
+          title: `t${i}`, content: 'c',
+          wants_to_save: [{ kind: 'memory', summary: `intent ${i}` }],
+        }),
+        tomesDir: dir,
+      });
+    }
+    const intents = await getUnactedIntents({ tomesDir: dir, limit: 2 });
+    assert.equal(intents.length, 2);
+  } finally { cleanup(); }
+});
+
+test('markIntentActedOn: flips acted_on to true and is idempotent', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const r = await ponderOnce({
+      topic: 't', provider: 'nanogpt', apiKey: 'k', model: 'm',
+      callLLM: async () => JSON.stringify({
+        title: 'x', content: 'c',
+        wants_to_save: [{ kind: 'tome', summary: 'something' }],
+      }),
+      tomesDir: dir,
+    });
+
+    const first = await markIntentActedOn({ uid: r.uid, index: 0, tomesDir: dir });
+    assert.equal(first.ok, true);
+    assert.equal(first.alreadyDone, undefined);
+
+    // Verify the tome was updated.
+    const tome  = JSON.parse(await fsp.readFile(r.tomeFile, 'utf8'));
+    const entry = tome.entries[r.uid];
+    assert.equal(entry.wants_to_save[0].acted_on, true);
+
+    // Idempotent second call.
+    const second = await markIntentActedOn({ uid: r.uid, index: 0, tomesDir: dir });
+    assert.equal(second.ok, true);
+    assert.equal(second.alreadyDone, true);
+  } finally { cleanup(); }
+});
+
+test('markIntentActedOn: returns error on unknown uid or out-of-range index', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const r = await ponderOnce({
+      topic: 't', provider: 'nanogpt', apiKey: 'k', model: 'm',
+      callLLM: async () => JSON.stringify({
+        title: 'x', content: 'c',
+        wants_to_save: [{ kind: 'tome', summary: 'something' }],
+      }),
+      tomesDir: dir,
+    });
+
+    const badUid = await markIntentActedOn({ uid: '00000000-0000-0000-0000-000000000000', index: 0, tomesDir: dir });
+    assert.equal(badUid.ok, false);
+    assert.ok(badUid.error);
+
+    const badIdx = await markIntentActedOn({ uid: r.uid, index: 99, tomesDir: dir });
+    assert.equal(badIdx.ok, false);
+    assert.ok(badIdx.error);
+  } finally { cleanup(); }
+});
+
+test('formatDeferredIntentsBlock: returns empty string with no intents', () => {
+  assert.equal(formatDeferredIntentsBlock([]), '');
+  assert.equal(formatDeferredIntentsBlock(null), '');
+});
+
+test('formatDeferredIntentsBlock: renders routing hints and uid/index for each intent', () => {
+  const block = formatDeferredIntentsBlock([
+    { uid: 'abc', kind: 'identity', summary: 'love language note', index: 0 },
+    { uid: 'def', kind: 'memory',   summary: 'the night of the DnD session', index: 1 },
+    { uid: 'ghi', kind: 'tome',     summary: 'add care-posture note', index: 2 },
+  ]);
+  assert.match(block, /Deferred intents from my free time/);
+  assert.match(block, /\[identity\].*love language note/);
+  assert.match(block, /update_identity/);
+  assert.match(block, /uid="abc".*index=0/);
+  assert.match(block, /\[memory\].*the night of the DnD session/);
+  assert.match(block, /save_memory/);
+  assert.match(block, /uid="def".*index=1/);
+  assert.match(block, /\[tome\].*add care-posture note/);
+  assert.match(block, /save_to_tome/);
+  assert.match(block, /uid="ghi".*index=2/);
+  assert.match(block, /acknowledge_deferred_intent/);
+});
+
+// ── tell kind ─────────────────────────────────────────────────────────────
+
+test('parsePondering: wants_to_save accepts tell kind', () => {
+  const r = parsePondering(JSON.stringify({
+    title: 't', content: 'c',
+    wants_to_save: [
+      { kind: 'tell', summary: 'I want to ask how the DnD session went' },
+    ],
+  }));
+  assert.deepEqual(r.wants_to_save, [
+    { kind: 'tell', summary: 'I want to ask how the DnD session went' },
+  ]);
+});
+
+test('formatDeferredIntentsBlock: tell renders as conversational hint, not tool call', () => {
+  const block = formatDeferredIntentsBlock([
+    { uid: 'abc', kind: 'tell',     summary: 'ask how the DnD session went', index: 0 },
+    { uid: 'def', kind: 'identity', summary: 'Melian dislikes sudden plan changes', index: 1 },
+  ]);
+  // tell: no tool name, just the conversational instruction
+  assert.match(block, /\[tell\].*ask how the DnD session went/);
+  assert.match(block, /mention when the moment fits/);
+  assert.doesNotMatch(block, /save_to_tome.*index=0/);
+  assert.doesNotMatch(block, /save_memory.*index=0/);
+  assert.doesNotMatch(block, /update_identity.*index=0/);
+  // storage kind still renders its tool
+  assert.match(block, /\[identity\].*Melian dislikes sudden plan changes/);
+  assert.match(block, /update_identity/);
+  // both carry acknowledge call
+  assert.match(block, /acknowledge_deferred_intent\(uid="abc", index=0\)/);
+  assert.match(block, /acknowledge_deferred_intent\(uid="def", index=1\)/);
+});
+
+test('buildPonderPrompt: documents tell kind in wants_to_save schema', () => {
+  const prompt = buildPonderPrompt('checking in on my human');
+  assert.match(prompt, /"tell"/);
+  assert.match(prompt, /conversational intent/i);
 });

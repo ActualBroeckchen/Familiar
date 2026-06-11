@@ -57,7 +57,7 @@ export const TRIAGE_SILENCE_THRESHOLD_MS = Object.freeze({
 // LLM hands back 0 / null / nonsense.
 const MIN_RECHECK_MS = 30 * 1000;            // 30s — per the spec
 const MAX_RECHECK_MS = 24 * 60 * 60_000;     // 24h — never forget forever
-const DEFAULT_RECHECK_MS = Object.freeze({
+export const DEFAULT_RECHECK_MS = Object.freeze({
   severe:   15 * 60_000,
   high:     30 * 60_000,
   moderate: 60 * 60_000,

@@ -97,31 +97,66 @@ test('passesHardGates: quiet routine phase blocks non-external', () => {
   );
 });
 
-test('passesHardGates: dedup window blocks recent same-id, external bypasses', () => {
-  const recentMs = NOW - 60 * 60 * 1000; // 1h ago, inside 6h window
+test('passesHardGates: dedup window blocks recently-RAISED same-id, external bypasses', () => {
+  const recent = { at: NOW - 60 * 60 * 1000, raised: true }; // raised 1h ago, inside 6h window
   assert.equal(
     passesHardGates(
       { id: 't1' },
-      { threat: calm, routinePhaseLabel: '', surfacingHistory: { t1: recentMs }, now: NOW, stakesTier: 'personal_wellbeing' },
+      { threat: calm, routinePhaseLabel: '', surfacingHistory: { t1: recent }, now: NOW, stakesTier: 'personal_wellbeing' },
     ),
     false,
   );
   assert.equal(
     passesHardGates(
       { id: 't1' },
-      { threat: calm, routinePhaseLabel: '', surfacingHistory: { t1: recentMs }, now: NOW, stakesTier: 'external_obligation' },
+      { threat: calm, routinePhaseLabel: '', surfacingHistory: { t1: recent }, now: NOW, stakesTier: 'external_obligation' },
     ),
     true,
     'external bypasses dedup',
   );
-  // Old offer beyond window — re-eligible
-  const oldMs = NOW - 12 * 60 * 60 * 1000;
+  // Raised offer beyond the 6h window — re-eligible
+  const old = { at: NOW - 12 * 60 * 60 * 1000, raised: true };
   assert.equal(
     passesHardGates(
       { id: 't1' },
-      { threat: calm, routinePhaseLabel: '', surfacingHistory: { t1: oldMs }, now: NOW, stakesTier: 'personal_wellbeing' },
+      { threat: calm, routinePhaseLabel: '', surfacingHistory: { t1: old }, now: NOW, stakesTier: 'personal_wellbeing' },
     ),
     true,
+  );
+});
+
+test('passesHardGates: un-raised offers get the SHORT window — silence never buys 6h', () => {
+  // Offered 2h ago but never actually mentioned → past the 90min
+  // unraised window → eligible again. Under the old single 6h window
+  // this would have been suppressed.
+  for (const raised of [false, null, undefined]) {
+    assert.equal(
+      passesHardGates(
+        { id: 't1' },
+        { threat: calm, routinePhaseLabel: '', surfacingHistory: { t1: { at: NOW - 2 * 60 * 60 * 1000, raised } }, now: NOW, stakesTier: 'personal_wellbeing' },
+      ),
+      true,
+      `un-raised (raised=${raised}) past 90min must be re-eligible`,
+    );
+  }
+  // Offered 30min ago, not raised → still inside the short window.
+  assert.equal(
+    passesHardGates(
+      { id: 't1' },
+      { threat: calm, routinePhaseLabel: '', surfacingHistory: { t1: { at: NOW - 30 * 60 * 1000, raised: false } }, now: NOW, stakesTier: 'personal_wellbeing' },
+    ),
+    false,
+    'inside the 90min unraised window stays suppressed',
+  );
+  // Legacy plain-number history entry (pre-raised-tag events) → treated
+  // as un-raised → short window.
+  assert.equal(
+    passesHardGates(
+      { id: 't1' },
+      { threat: calm, routinePhaseLabel: '', surfacingHistory: { t1: NOW - 2 * 60 * 60 * 1000 }, now: NOW, stakesTier: 'personal_wellbeing' },
+    ),
+    true,
+    'legacy numeric entry gets the short window',
   );
 });
 
@@ -216,6 +251,24 @@ test('formatSurfaceCandidatesBlock: includes label, framing, prompts probe on lo
   assert.match(block, /Age: 3d/);
   assert.match(block, /confidence on the consequences here is low/);
   assert.match(block, /once, naturally, refusable/);
+});
+
+test('formatSurfaceCandidatesBlock: header names BOTH costs and carries no bias-toward-quiet', () => {
+  const block = formatSurfaceCandidatesBlock([
+    {
+      id: 't1', label: 'eat lunch', type: 'task',
+      stakesTier: 'personal_wellbeing', priorsBlock: '', personModel: '',
+      taskSpecific: null, confidence: 'medium', ageDays: null,
+    },
+  ]);
+  // Both costs, at equal weight (CLAUDE.md proactivity rule 2).
+  assert.match(block, /raising a task can cut across/i, 'cost of acting must be named');
+  assert.match(block, /never gets raised often becomes a task that never gets done/i, 'cost of silence must be named');
+  // Identity framing, not permission framing (rule 4).
+  assert.match(block, /Holding these is part of how I care/i);
+  // Regression guard: the bias-toward-quiet language that shipped once
+  // (and mirrors the recorded 1.5h-silence failure) must never return.
+  assert.doesNotMatch(block, /None of these need to be mentioned|let them rest|bias toward (staying )?quiet|only .{0,40}when the answer feels obvious|err on the side of not/i);
 });
 
 test('formatSurfaceCandidatesBlock: high-confidence omits the probe nudge', () => {

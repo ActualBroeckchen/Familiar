@@ -183,7 +183,11 @@ async function callProvider({ provider, apiKey, model, prompt }) {
       messages:    [{ role: 'user', content: prompt }],
       stream:      false,
       temperature: 0.2,
-      max_tokens:  2000,
+      // Long sessions produce several topics with substantial content;
+      // 2000 used to truncate the JSON mid-object and every retry hit
+      // the same deterministic wall. Truncation is now also DETECTED
+      // (finish_reason) instead of surfacing as a confusing parse error.
+      max_tokens:  8000,
     }),
   });
   const text = await resp.text();
@@ -191,18 +195,80 @@ async function callProvider({ provider, apiKey, model, prompt }) {
   let data;
   try { data = JSON.parse(text); } catch { throw new Error('Provider returned non-JSON response.'); }
   if (data.error) throw new Error(typeof data.error === 'string' ? data.error : (data.error.message ?? 'Provider error'));
-  const content = data.choices?.[0]?.message?.content ?? '';
+  const choice  = data.choices?.[0];
+  const content = choice?.message?.content ?? '';
   if (!content) throw new Error('Provider returned empty content.');
-  return content;
+  return { content, finishReason: choice?.finish_reason ?? null };
 }
 
-function parseTopics(raw) {
-  const match = raw.match(/\{[\s\S]+\}/);
-  if (!match) throw new Error('No JSON object found in LLM response.');
-  const parsed = JSON.parse(match[0]);
-  const topics = parsed.topics;
-  if (!Array.isArray(topics) || !topics.length) throw new Error('LLM returned no topics.');
+/**
+ * Salvage complete topic objects from a truncated/malformed response.
+ * Walks the "topics" array with a string-aware brace counter and
+ * individually parses each complete object — a session that produced
+ * four whole entries and one cut-off one keeps the four.
+ */
+export function salvageTopics(raw) {
+  const topicsKey = raw.indexOf('"topics"');
+  if (topicsKey < 0) return [];
+  const arrStart = raw.indexOf('[', topicsKey);
+  if (arrStart < 0) return [];
+  const topics = [];
+  let i = arrStart + 1;
+  while (i < raw.length) {
+    while (i < raw.length && raw[i] !== '{' && raw[i] !== ']') i++;
+    if (i >= raw.length || raw[i] === ']') break;
+    const start = i;
+    let depth = 0, inStr = false, esc = false, complete = false;
+    for (; i < raw.length; i++) {
+      const ch = raw[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === '\\') esc = true;
+        else if (ch === '"') inStr = false;
+      } else if (ch === '"') inStr = true;
+      else if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) { i++; complete = true; break; }
+      }
+    }
+    if (!complete) break; // truncated mid-object — nothing further is whole
+    try {
+      const obj = JSON.parse(raw.slice(start, i));
+      if (obj && typeof obj === 'object') topics.push(obj);
+    } catch { /* malformed object — skip, keep scanning */ }
+  }
   return topics;
+}
+
+export function parseTopics(raw, finishReason = null) {
+  // Models sometimes wrap the JSON in markdown fences despite the prompt.
+  const cleaned = String(raw).replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '');
+  const match = cleaned.match(/\{[\s\S]+\}/);
+  if (match) {
+    try {
+      const parsed = JSON.parse(match[0]);
+      const topics = parsed.topics;
+      if (Array.isArray(topics) && topics.length) return topics;
+      throw new Error('LLM returned no topics.');
+    } catch (err) {
+      if (err.message === 'LLM returned no topics.') throw err;
+      // SyntaxError — truncated or malformed. Fall through to salvage.
+    }
+  }
+  const salvaged = salvageTopics(cleaned)
+    .filter(t => (t?.title ?? '').toString().trim() && (t?.content ?? '').toString().trim());
+  if (salvaged.length) {
+    if (finishReason === 'length') {
+      console.warn(`[memorization] LLM output truncated by token limit — salvaged ${salvaged.length} complete entr${salvaged.length === 1 ? 'y' : 'ies'} from partial JSON`);
+    }
+    return salvaged;
+  }
+  if (finishReason === 'length') {
+    throw new Error('LLM output was cut off by the token limit before the JSON completed, and no complete entries could be salvaged.');
+  }
+  if (!match) throw new Error('No JSON object found in LLM response.');
+  throw new Error('Could not parse JSON from LLM response.');
 }
 
 // ── Worker ───────────────────────────────────────────────────────
@@ -211,8 +277,8 @@ async function processJob(job) {
   const prompt = buildPrompt(job.messages, job.topicLabel ?? null);
   if (!prompt) throw new Error('Conversation too short to memorize.');
 
-  const raw    = await callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, prompt });
-  const topics = parseTopics(raw);
+  const { content: raw, finishReason } = await callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, prompt });
+  const topics = parseTopics(raw, finishReason);
 
   const { tome, file } = await findOrCreateSessionMemoriesTome();
 

@@ -29,7 +29,18 @@ if "%TAILSCALE%"=="" set "TAILSCALE=0"
 set "PID_FILE=%SCRIPT_DIR%\.proto-familiar.pid"
 set "LOG_FILE=%SCRIPT_DIR%\.proto-familiar.log"
 
-REM Already running? PID alive *and* configured port responding.
+REM Detect existing/stale Proto-Familiar instances. The previous logic
+REM filtered Win32_Process by CommandLine matching the project root —
+REM but PowerShell's Start-Process -WorkingDirectory does NOT put the
+REM cwd into Win32_Process.CommandLine, so that filter NEVER matched
+REM in practice and orphans never got killed. (Same bug was the upstream
+REM cause of "node.exe sticks around after Quit, blocks updates" reports.)
+REM
+REM Replacement: the PID file is the canonical "started by our launcher"
+REM signal. We trust it. For port collisions where the PID file doesn't
+REM cover the owner, we fall back to "kill the port owner if it looks
+REM like node.exe + server.js" — same disposition as stop.bat and
+REM tray.ps1's Stop-StrayServerProcesses.
 set "EXISTING_PID="
 set "PID_ALIVE=0"
 if exist "%PID_FILE%" (
@@ -41,29 +52,38 @@ set "PORT_LISTENING=0"
 powershell -NoProfile -Command "try { $c = New-Object Net.Sockets.TcpClient('127.0.0.1', %PORT%); $c.Close(); exit 0 } catch { exit 1 }" >nul 2>nul
 if not errorlevel 1 set "PORT_LISTENING=1"
 
-REM Find every node.exe process whose CommandLine references server.js
-REM and whose ExecutablePath / CommandLine is rooted at this project dir.
-REM Catches instances launched outside this script (manual `npm start`,
-REM leftovers from before a port migration that may still be listening
-REM on the old port, etc).
-for /f %%P in ('powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'server\.js' -and $_.CommandLine -match [regex]::Escape('%SCRIPT_DIR%') } | ForEach-Object { $_.ProcessId }" 2^>nul') do (
-  if not "%%P"=="!EXISTING_PID!" (
-    set "STRAY_PIDS=!STRAY_PIDS! %%P"
-  ) else (
-    if not "!PORT_LISTENING!"=="1" set "STRAY_PIDS=!STRAY_PIDS! %%P"
-  )
-)
+REM Who owns the port right now? Empty if free.
+set "PORT_OWNER="
+for /f %%P in ('powershell -NoProfile -Command "(Get-NetTCPConnection -LocalPort %PORT% -State Listen -ErrorAction SilentlyContinue ^| Select-Object -First 1 -ExpandProperty OwningProcess)" 2^>nul') do set "PORT_OWNER=%%P"
 
-if "!PID_ALIVE!"=="1" if "!PORT_LISTENING!"=="1" if not defined STRAY_PIDS (
+REM Happy path: our tracked PID owns the port. Already running, just open.
+if "!PID_ALIVE!"=="1" if "!PORT_LISTENING!"=="1" if "!PORT_OWNER!"=="!EXISTING_PID!" (
   echo Proto-Familiar already running ^(PID !EXISTING_PID!^) on port %PORT%.
   goto :open_browser
 )
-if defined STRAY_PIDS (
-  echo Killing stray Proto-Familiar processes:!STRAY_PIDS! ^(leftovers / other ports^)
-  for %%P in (!STRAY_PIDS!) do taskkill /PID %%P /T /F >nul 2>nul
-  set "STRAY_PIDS="
+
+REM Port held by something OTHER than our tracked PID — an orphan from
+REM a previous launcher run whose Stop failed to kill node, or a parallel
+REM instance from a different checkout. Reclaim if it looks like one of
+REM ours; refuse and report otherwise so we don't kill an unrelated app.
+if "!PORT_LISTENING!"=="1" if defined PORT_OWNER if not "!PORT_OWNER!"=="!EXISTING_PID!" (
+  for /f "delims=" %%C in ('powershell -NoProfile -Command "$p = Get-CimInstance Win32_Process -Filter \"ProcessId=!PORT_OWNER!\" -ErrorAction SilentlyContinue; if ($p -and $p.Name -match '^node(\.exe)?$' -and $p.CommandLine -match 'server\.js') { 'ours' } else { 'foreign' }" 2^>nul') do set "OWNER_KIND=%%C"
+  if "!OWNER_KIND!"=="ours" (
+    echo Reclaiming port %PORT% from orphaned node.exe ^(PID !PORT_OWNER!^)...
+    taskkill /PID !PORT_OWNER! /T /F >nul 2>nul
+    set "PORT_LISTENING=0"
+  ) else (
+    echo [ERROR] Port %PORT% is held by PID !PORT_OWNER!, which does not look like Proto-Familiar.
+    echo         Stop that process, or set PORT=^<other^> in this shell and re-run start.bat.
+    pause
+    exit /b 1
+  )
 )
-if "!PID_ALIVE!"=="1" (
+
+REM Tracked PID is alive but isn't on the port (crashed, restarted to a
+REM different port, or hung mid-shutdown). Reap it so the new launch
+REM doesn't leave a duplicate node.exe lingering.
+if "!PID_ALIVE!"=="1" if "!PORT_LISTENING!"=="0" (
   echo Found stale Proto-Familiar process ^(PID !EXISTING_PID!^) not on port %PORT% — restarting.
   taskkill /PID !EXISTING_PID! /T /F >nul 2>nul
   del "%PID_FILE%" >nul 2>nul

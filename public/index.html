@@ -246,7 +246,7 @@
             </div>
             <p class="field-hint">Built-in tools always available: <code>get_datetime</code>, <code>get_session_info</code></p>
             <div class="field">
-              <label for="custom-tools">Custom tools <span class="label-hint">(JSON array)</span></label>
+              <label for="custom-tools">Custom tools <span class="label-hint">(JSON array — advertise-only: the model sees and may call these, but nothing executes them yet; calls return a "not implemented" notice)</span></label>
               <textarea id="custom-tools" rows="5" spellcheck="false" placeholder='[{"type":"function","function":{"name":"my_tool","description":"...","parameters":{"type":"object","properties":{}}}}]'></textarea>
             </div>
             <div class="field-actions">
@@ -340,6 +340,11 @@
             <span class="chevron">▾</span>
           </button>
           <div class="section-content" id="content-contacts">
+            <div class="field">
+              <label for="user-discord-webhook">My Discord webhook <span class="label-hint">(push notifications to me)</span></label>
+              <input type="text" id="user-discord-webhook" placeholder="https://discord.com/api/webhooks/…" spellcheck="false">
+            </div>
+            <p class="field-hint">When set, reminders, check-ins, and outreach notices are <em>also</em> pushed to this webhook — so your Familiar can still reach you when no tab is open. The escalation countdown for trusted-contact outreach only starts once a check-in actually reaches you here.</p>
             <p class="field-hint">People your Familiar may reach out to <em>about you</em> when threat is severe and you've been quiet a long time. The Familiar can only contact someone listed here — and every outbound also lands in your chat outbox so you can see exactly what was sent. Leave empty to disable outreach entirely.</p>
             <div id="contacts-list" style="margin-top: 8px"></div>
             <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap">
@@ -374,8 +379,12 @@
       <!-- ── Chat pane ──────────────────────────────────────── -->
       <main class="chat-pane" id="chat-pane">
 
-        <!-- Outbox banners (M11/M12 — reminders + silence triage deliveries) -->
-        <div id="outbox-banners" class="outbox-banners" aria-live="polite"></div>
+        <!-- Auto-sync resume banner: shown when a newer session is on the server -->
+        <div id="resume-banner" class="resume-banner hidden" role="status" aria-live="polite">
+          <span id="resume-banner-msg" class="resume-banner-msg"></span>
+          <button id="resume-banner-yes" class="resume-banner-btn">Resume</button>
+          <button id="resume-banner-dismiss" class="resume-banner-dismiss" aria-label="Dismiss">✕</button>
+        </div>
 
         <div class="messages-scroller" id="messages-scroller">
           <div class="messages-with-gutter">

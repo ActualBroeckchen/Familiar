@@ -42,13 +42,32 @@ import {
   shouldReflectNow,
   getNewOutcomesSinceLastReflection,
   markReflected,
+  tagRaisedOutcomes,
 } from './surface-events.js';
-import { getRecentPonderings, deletePondering } from './recent-ponderings.js';
+import { getRecentPonderings, deletePondering, markIntentActedOn } from './recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
-import { listOutbox, acknowledgeOutbox, clearAcknowledged, enqueueOutbox, updateOutboxMeta } from './outbox.js';
-import { startSilenceTriageLoop, stopSilenceTriageLoop, TRIAGE_SILENCE_THRESHOLD_MS } from './silence-triage-loop.js';
+import { listOutbox, acknowledgeOutbox, clearAcknowledged, enqueueOutbox } from './outbox.js';
+import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
 import { buildTimeAnchorBlock } from './relative-time.js';
+// Cerebellum is the motor module — the outbound counterpart to thalamus.
+// Triage deliberation, trusted-contact delivery, and escalation deadlines
+// live there; server.js keeps only route handling and loop boot.
+import {
+  readSettingsSync, primaryConnectionFrom,
+  decideTriageViaLLM, deliverToTrustedContact, checkAndFirePendingContacts,
+  appendTriageEventLog, readTriageEvents,
+  // Tool dispatch — the registry + executors live in cerebellum; the
+  // multi-round loop runs inside /api/chat below.
+  composeActiveTools, executeToolCall, MAX_TOOL_ROUNDS,
+  initCerebellumTools, enqueueCrisisResources, runToolCallLoop,
+  VALID_MEMORY_GRANULARITIES, VALID_IDENTITY_CATEGORIES, VALID_FILENAME_RE,
+  deriveMemorySlug, parseMemoryKey,
+  // Channel adapters — enqueueAndDispatch pushes every user-facing
+  // outbox item to the configured push channels (e.g. the human's own
+  // Discord webhook) and records per-channel delivery state.
+  enqueueAndDispatch, formatDeliveryNote, activePushAdapters,
+} from './cerebellum.js';
 import { expandWindow } from './recurrence.js';
 import {
   enqueueMemorization,
@@ -169,7 +188,14 @@ function chatRateLimit(req, res, next) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt } = req.body;
+  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo } = req.body;
+  // runToolLoop: the app sends true when the user has tools enabled.
+  // The server then composes the tool list (built-ins + custom) and runs
+  // the multi-round tool-call loop HERE — executing via cerebellum —
+  // instead of bouncing each round back to the browser. Direct API
+  // callers that pass their own `tools` array keep the legacy
+  // passthrough (single round, results handled by the caller).
+  const loopMode = !!runToolLoop;
   // Enrichment mode:
   //   true / undefined → full (identity + memory + graph + temporal),
   //                      and consume any surfaced session handoff.
@@ -268,8 +294,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       const pending = await listOutbox({ pendingOnly: true, limit: 20 });
       const triagePending = pending.filter(i => i.kind === 'triage' && i.body);
       if (triagePending.length > 0) {
+        const pushConfigured = activePushAdapters().length > 0;
         const notices = triagePending
-          .map(i => `  - At ${i.ts}: "${i.body}"`)
+          .map(i => `  - At ${i.ts}: "${i.body}" ${formatDeliveryNote(i, { hasPushChannel: pushConfigured })}`)
           .join('\n');
         const block = `\n\n[PENDING CHECK-IN NOTICES]\nWhile my human was away, I reached out to them with the following (they have not yet acknowledged):\n${notices}\n\nI am aware I did this. If their first message back opens a door to it, I may acknowledge having reached out — but I should not lead with it or press.`;
         enrichedResult = { ...enriched, dynamic: (enriched.dynamic || '') + block };
@@ -308,13 +335,16 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   //    nearest the model's response slot so they're at maximum
   //    salience for care reasoning. Only on enrichMode=full — the
   //    handoff summariser path and debug-prompt previews don't need it.
+  //    In loop mode the anchor is kept SEPARATE and re-appended as the
+  //    last message on every tool round, so it stays at maximum
+  //    salience even as tool traffic grows the tail.
   let timeAnchor = '';
   if (enrichMode === 'full') {
     timeAnchor = buildTimeAnchorBlock({
       now: Date.now(),
       lastUserMessageAt: lastUserMessageAt ?? null,
     }) || '';
-    if (timeAnchor) {
+    if (timeAnchor && !loopMode) {
       enrichedMessages = [...enrichedMessages, { role: 'system', content: timeAnchor }];
     }
   }
@@ -322,8 +352,248 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   const payload = { model: model.trim(), messages: enrichedMessages, stream: !!stream };
   if (typeof temperature === 'number') payload.temperature = temperature;
   if (typeof max_tokens === 'number' && max_tokens > 0) payload.max_tokens = max_tokens;
-  if (Array.isArray(tools) && tools.length > 0) payload.tools = tools;
-  if (tool_choice !== undefined) payload.tool_choice = tool_choice;
+  if (loopMode) {
+    const activeTools = composeActiveTools(customTools);
+    if (activeTools.length > 0) {
+      payload.tools = activeTools;
+      payload.tool_choice = 'auto';
+    }
+  } else {
+    if (Array.isArray(tools) && tools.length > 0) payload.tools = tools;
+    if (tool_choice !== undefined) payload.tool_choice = tool_choice;
+  }
+
+  // ── Tool-call loop (loop mode only) ──────────────────────────────
+  // Internal provider re-calls do NOT pass through the /api/chat rate
+  // limiter — one user message costs one request against the limit no
+  // matter how many tool rounds it takes.
+  if (loopMode) {
+    const toolCtx     = { sessionInfo: sessionInfo && typeof sessionInfo === 'object' ? sessionInfo : null };
+    const upstreamUrl = url;
+    const authHeaders = {
+      'Content-Type':  'application/json',
+      'Authorization': `Bearer ${apiKey.trim()}`,
+    };
+
+    // Abort the loop when the browser tab closes or the client disconnects.
+    // Fires req.on('close') which is emitted by Express/Node when the
+    // underlying socket closes. The signal is forwarded into runToolCallLoop
+    // (non-streaming) and into each upstream fetch (both paths).
+    const ac = new AbortController();
+    const onClientClose = () => ac.abort();
+    req.on('close', onClientClose);
+
+    const thalamusEnvelope = (enrichedResult.static || enrichedResult.dynamic || timeAnchor) ? {
+      static:     enrichedResult.static  || '',
+      dynamic:    enrichedResult.dynamic || '',
+      depth,
+      injectedAt,
+      timeAnchor,
+    } : null;
+
+    // ── Non-streaming loop ─────────────────────────────────────────
+    if (!stream) {
+      try {
+        const { data, toolRounds } = await runToolCallLoop({
+          callUpstream: async (msgs) => {
+            let r;
+            try {
+              r = await fetch(upstreamUrl, {
+                method:  'POST',
+                headers: authHeaders,
+                body:    JSON.stringify({ ...payload, messages: msgs, stream: false }),
+                signal:  ac.signal,
+              });
+            } catch (err) {
+              if (err.name === 'AbortError') {
+                const e = new Error('client disconnected');
+                e.status = 499; e.body = ''; throw e;
+              }
+              const e = new Error(`Network error reaching ${provider}: ${err.message}`);
+              e.status = 502; e.body = JSON.stringify({ error: e.message });
+              throw e;
+            }
+            const text = await r.text();
+            if (!r.ok) {
+              const e = new Error(`upstream ${r.status}`);
+              e.status = r.status; e.body = text;
+              throw e;
+            }
+            try { return JSON.parse(text); }
+            catch {
+              const e = new Error('upstream returned non-JSON');
+              e.status = 502; e.body = JSON.stringify({ error: e.message });
+              throw e;
+            }
+          },
+          baseMessages: enrichedMessages,
+          timeAnchor,
+          toolCtx,
+          signal: ac.signal,
+        });
+        req.off('close', onClientClose);
+        if (thalamusEnvelope) data._thalamus = thalamusEnvelope;
+        if (toolRounds.length > 0) data._toolRounds = toolRounds;
+        // M8 idle-mode outcome reporting: fire-and-forget after response sent.
+        {
+          const responseText = data.choices?.[0]?.message?.content ?? '';
+          if (enriched.surfacedBookmarks?.length > 0) {
+            reportSurfacingOutcomes({ responseText, bookmarks: enriched.surfacedBookmarks })
+              .catch(err => console.error('[server] reportSurfacingOutcomes failed:', err?.message ?? err));
+          }
+          // Surface-candidate raised/not-raised tagging — same pure-code
+          // response-scan pattern; feeds the differentiated dedup window.
+          if (enriched.surfacedTasks?.length > 0 && responseText) {
+            tagRaisedOutcomes({ responseText, tasks: enriched.surfacedTasks })
+              .catch(err => console.error('[server] tagRaisedOutcomes failed:', err?.message ?? err));
+          }
+        }
+        return res.json(data);
+      } catch (err) {
+        req.off('close', onClientClose);
+        if (err.status === 499) return; // client already gone — nothing to send
+        res.status(err.status ?? 502).setHeader('Content-Type', 'application/json');
+        return res.send(err.body ?? JSON.stringify({ error: err.message }));
+      }
+    }
+
+    // ── Streaming loop ─────────────────────────────────────────────
+    // Each round streams the upstream SSE through to the client
+    // (content deltas verbatim); when a round ends in tool_calls, the
+    // calls are executed via cerebellum and a `_toolRound` event is
+    // emitted so the client can render the collapsible tool block.
+    // [DONE] is suppressed on intermediate rounds and emitted once at
+    // the true end.
+    let currentMsgs = enrichedMessages;
+    let headersSent = false;
+    let finalText   = '';
+    // Stop wasting upstream tokens if the browser goes away mid-loop.
+    const clientGone = () => res.writableEnded || res.destroyed;
+
+    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+      if (clientGone() || ac.signal.aborted) break;
+      const payloadMessages = timeAnchor
+        ? [...currentMsgs, { role: 'system', content: timeAnchor }]
+        : currentMsgs;
+
+      let upstream;
+      try {
+        upstream = await fetch(upstreamUrl, {
+          method:  'POST',
+          headers: authHeaders,
+          body:    JSON.stringify({ ...payload, messages: payloadMessages, stream: true }),
+          signal:  ac.signal,
+        });
+      } catch (err) {
+        if (!headersSent) return res.status(502).json({ error: `Network error reaching ${provider}: ${err.message}` });
+        res.write(`data: ${JSON.stringify({ _loopError: `Network error reaching ${provider}: ${err.message}` })}\n\n`);
+        return res.end();
+      }
+
+      const upCt = upstream.headers.get('content-type') || '';
+      if (!upstream.ok || upCt.includes('application/json')) {
+        const text = await upstream.text();
+        if (!headersSent) {
+          res.status(upstream.status).setHeader('Content-Type', 'application/json');
+          return res.send(text);
+        }
+        let msg = `API error ${upstream.status}`;
+        try {
+          const parsedErr = JSON.parse(text);
+          msg = parsedErr?.error?.message ?? (typeof parsedErr?.error === 'string' ? parsedErr.error : msg);
+        } catch { /* keep generic */ }
+        res.write(`data: ${JSON.stringify({ _loopError: msg })}\n\n`);
+        return res.end();
+      }
+
+      if (!headersSent) {
+        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('X-Accel-Buffering', 'no');
+        if (thalamusEnvelope) {
+          res.write(`data: ${JSON.stringify({ _thalamus: thalamusEnvelope })}\n\n`);
+        }
+        headersSent = true;
+      }
+
+      // Forward this round's SSE lines while accumulating content +
+      // tool-call deltas server-side.
+      const reader  = upstream.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '', fullContent = '', finishReason = null;
+      const toolCallsAcc = {};
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (clientGone()) { try { await reader.cancel(); } catch {} return; }
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) { if (line.trim()) res.write(line + '\n'); continue; }
+            const raw = line.slice(6).trim();
+            if (raw === '[DONE]') continue; // emitted once, at the true end
+            try {
+              const evt = JSON.parse(raw);
+              const choice = evt.choices?.[0];
+              if (choice?.finish_reason) finishReason = choice.finish_reason;
+              const delta = choice?.delta;
+              if (typeof delta?.content === 'string') fullContent += delta.content;
+              for (const tc of (delta?.tool_calls ?? [])) {
+                const acc = (toolCallsAcc[tc.index] ??= { id: '', type: 'function', function: { name: '', arguments: '' } });
+                if (tc.id)                  acc.id                 += tc.id;
+                if (tc.function?.name)      acc.function.name      += tc.function.name;
+                if (tc.function?.arguments) acc.function.arguments += tc.function.arguments;
+              }
+            } catch { /* malformed line — forward as-is */ }
+            res.write(line + '\n\n');
+          }
+        }
+      } catch {
+        if (!res.writableEnded) res.end();
+        return;
+      }
+
+      const toolCalls = Object.values(toolCallsAcc);
+      if (finishReason === 'tool_calls' && toolCalls.length > 0 && round < MAX_TOOL_ROUNDS) {
+        const timestamp = new Date().toISOString();
+        const results = await Promise.all(toolCalls.map(async tc => ({
+          tool_call_id: tc.id,
+          name:         tc.function.name,
+          content:      await executeToolCall(tc.function.name, tc.function.arguments, toolCtx),
+        })));
+        if (clientGone()) return;
+        res.write(`data: ${JSON.stringify({ _toolRound: { toolCalls, results, content: fullContent || null, timestamp } })}\n\n`);
+        currentMsgs = [
+          ...currentMsgs,
+          { role: 'assistant', content: fullContent || null, tool_calls: toolCalls },
+          ...results.map(r => ({ role: 'tool', tool_call_id: r.tool_call_id, content: r.content })),
+        ];
+        continue;
+      }
+
+      finalText = fullContent;
+      break;
+    }
+
+    req.off('close', onClientClose);
+    if (!res.writableEnded) {
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+    // M8 idle-mode outcome reporting (streaming path). Fire-and-forget.
+    const streamBookmarksLoop = enriched.surfacedBookmarks ?? [];
+    if (streamBookmarksLoop.length > 0 && finalText) {
+      reportSurfacingOutcomes({ responseText: finalText, bookmarks: streamBookmarksLoop })
+        .catch(err => console.error('[server] reportSurfacingOutcomes (streaming) failed:', err?.message ?? err));
+    }
+    if (enriched.surfacedTasks?.length > 0 && finalText) {
+      tagRaisedOutcomes({ responseText: finalText, tasks: enriched.surfacedTasks })
+        .catch(err => console.error('[server] tagRaisedOutcomes (streaming) failed:', err?.message ?? err));
+    }
+    return;
+  }
 
   let upstream;
   try {
@@ -361,10 +631,14 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         const parsed = JSON.parse(text);
         parsed._thalamus = thalamusEnvelope;
         // M8 idle-mode outcome reporting: fire-and-forget after response sent.
+        const responseText = parsed.choices?.[0]?.message?.content ?? '';
         if (enriched.surfacedBookmarks?.length > 0) {
-          const responseText = parsed.choices?.[0]?.message?.content ?? '';
           reportSurfacingOutcomes({ responseText, bookmarks: enriched.surfacedBookmarks })
             .catch(err => console.error('[server] reportSurfacingOutcomes failed:', err?.message ?? err));
+        }
+        if (enriched.surfacedTasks?.length > 0 && responseText) {
+          tagRaisedOutcomes({ responseText, tasks: enriched.surfacedTasks })
+            .catch(err => console.error('[server] tagRaisedOutcomes failed:', err?.message ?? err));
         }
         return res.send(JSON.stringify(parsed));
       } catch { /* upstream returned non-JSON — pass through unchanged */ }
@@ -395,8 +669,10 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
 
   // M8 idle-mode outcome reporting (streaming path): accumulate the full
   // response text in memory as SSE chunks arrive, then report outcomes
-  // after the stream closes. Only active when bookmarks were surfaced.
+  // after the stream closes. Only active when bookmarks or surface
+  // candidates were offered this turn.
   const streamBookmarks = enriched.surfacedBookmarks ?? [];
+  const streamTasks     = enriched.surfacedTasks ?? [];
   let accumulatedText = '';
 
   const reader = upstream.body.getReader();
@@ -410,6 +686,10 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
           reportSurfacingOutcomes({ responseText: accumulatedText, bookmarks: streamBookmarks })
             .catch(err => console.error('[server] reportSurfacingOutcomes (streaming) failed:', err?.message ?? err));
         }
+        if (streamTasks.length > 0 && accumulatedText) {
+          tagRaisedOutcomes({ responseText: accumulatedText, tasks: streamTasks })
+            .catch(err => console.error('[server] tagRaisedOutcomes (streaming) failed:', err?.message ?? err));
+        }
         break;
       }
       const chunk = Buffer.from(value);
@@ -417,7 +697,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       // Extract text content from SSE delta chunks for outcome detection.
       // Each chunk may contain multiple `data: {...}\n\n` events. We only
       // need the assistant text, so parse each line's `choices[0].delta.content`.
-      if (streamBookmarks.length > 0) {
+      if (streamBookmarks.length > 0 || streamTasks.length > 0) {
         const chunkStr = chunk.toString('utf8');
         for (const line of chunkStr.split('\n')) {
           if (!line.startsWith('data: ')) continue;
@@ -570,7 +850,11 @@ app.post('/api/session/handoff', async (req, res) => {
 
 // ── Log endpoints ───────────────────────────────────────────────
 
-// POST /api/log — create or overwrite a session log file
+// POST /api/log — create or overwrite a session log file.
+// Merges with any existing log using message IDs so that two devices
+// sharing the same session (auto-sync) don't clobber each other's
+// messages. Messages without an id field (old-format logs) are treated
+// as a stable common prefix; only id-carrying messages are diffed.
 app.post('/api/log', async (req, res) => {
   const { sessionId, startedAt, endedAt, provider, model, messages } = req.body;
   if (!isValidUUID(sessionId))
@@ -579,8 +863,37 @@ app.post('/api/log', async (req, res) => {
     return res.status(400).json({ error: 'messages must be an array.' });
 
   const logPath = path.join(LOGS_DIR, `${sessionId}.json`);
+
+  // Merge: keep any server-side messages the client doesn't have.
+  // Uses the `id` field when present; falls back to last-writer-wins
+  // for legacy messages without ids (they form a shared prefix).
+  let finalMessages = messages;
+  try {
+    const existing = JSON.parse(await fsp.readFile(logPath, 'utf8'));
+    if (Array.isArray(existing.messages) && existing.messages.length > 0) {
+      const clientIdSet = new Set(messages.filter(m => m.id).map(m => m.id));
+      const serverOnly  = existing.messages.filter(m => m.id && !clientIdSet.has(m.id));
+      if (serverOnly.length > 0) {
+        // Interleave server-only messages in timestamp order.
+        const merged = [...messages];
+        for (const msg of serverOnly) {
+          const msgTs = msg.timestamp ? new Date(msg.timestamp).getTime() : Infinity;
+          let insertAt = merged.length;
+          for (let i = merged.length - 1; i >= 0; i--) {
+            const mTs = merged[i].timestamp ? new Date(merged[i].timestamp).getTime() : Infinity;
+            if (mTs <= msgTs) break;
+            insertAt = i;
+          }
+          merged.splice(insertAt, 0, msg);
+        }
+        finalMessages = merged;
+      }
+    }
+  } catch { /* no existing file or corrupt — use client's messages as-is */ }
+
   const data = {
-    sessionId, startedAt, endedAt: endedAt || null, provider, model, messages,
+    sessionId, startedAt, endedAt: endedAt || null, provider, model,
+    messages: finalMessages,
     updatedAt: new Date().toISOString(),
   };
   try {
@@ -639,19 +952,40 @@ app.delete('/api/logs/:id', async (req, res) => {
   }
 });
 
+// GET /api/active-session — most recently updated session (metadata only).
+// The client calls this on startup to auto-resume if a newer session is on
+// the server than what's in the local browser. Returns null when no logs exist.
+app.get('/api/active-session', async (_req, res) => {
+  try {
+    const files = await fsp.readdir(LOGS_DIR);
+    let best = null;
+    let bestTs = '';
+    for (const f of files) {
+      if (!f.endsWith('.json')) continue;
+      try {
+        const raw  = await fsp.readFile(path.join(LOGS_DIR, f), 'utf8');
+        const { sessionId, startedAt, endedAt, updatedAt, messages } = JSON.parse(raw);
+        const ts   = updatedAt || startedAt || '';
+        if (ts > bestTs) {
+          bestTs = ts;
+          best   = { sessionId, startedAt, endedAt: endedAt || null, updatedAt: ts,
+            messageCount: Array.isArray(messages) ? messages.length : 0 };
+        }
+      } catch { /* skip corrupt */ }
+    }
+    res.json(best);
+  } catch {
+    res.json(null);
+  }
+});
+
 // GET /api/triage-events — return triage decision log (newest first).
 // Each entry is one JSON line from triage-events.jsonl: timestamp, tier,
 // silence duration, decision, and whether the Familiar acted.
 // Useful for auditing past reach-outs and debugging the triage loop.
 app.get('/api/triage-events', async (_req, res) => {
   try {
-    const raw   = await fsp.readFile(TRIAGE_LOG_FILE, 'utf8');
-    const lines  = raw.split('\n').filter(l => l.trim());
-    const events = lines
-      .map(l => { try { return JSON.parse(l); } catch { return null; } })
-      .filter(Boolean)
-      .reverse(); // newest first
-    res.json(events);
+    res.json(await readTriageEvents());
   } catch {
     res.json([]);
   }
@@ -867,17 +1201,11 @@ app.delete('/api/tomes/:id/entries/:uid', async (req, res) => {
   }
 });
 
-// POST /api/tomes/default/entries — add a single entry to the default (first enabled) tome.
-// Used by the save_to_tome LLM tool so the model can write knowledge back mid-conversation.
-app.post('/api/tomes/default/entries', async (req, res) => {
-  const { comment, content, keys, learnedAt } = req.body;
-  if (!content || typeof content !== 'string' || !content.trim())
-    return res.status(400).json({ error: 'content is required.' });
-  if (content.length > 16384)
-    return res.status(400).json({ error: 'content exceeds 16 KB limit.' });
-  if (comment !== undefined && typeof comment !== 'string')
-    return res.status(400).json({ error: 'comment must be a string.' });
-
+// Add a single entry to the default (first enabled) tome. Shared by the
+// POST /api/tomes/default/entries route and the save_to_tome tool executor
+// (handed to cerebellum via initCerebellumTools at boot — cerebellum never
+// imports server.js).
+async function addDefaultTomeEntry({ comment, content, keys, learnedAt }) {
   // Accept keys as string[] or comma-separated string
   let normKeys = [];
   if (Array.isArray(keys)) {
@@ -886,39 +1214,38 @@ app.post('/api/tomes/default/entries', async (req, res) => {
     normKeys = keys.split(',').map(k => k.trim()).filter(Boolean);
   }
 
-  try {
-    // Find first enabled tome — directory scan is read-only so doesn't
-    // need a lock. The actual entry insert happens through modifyTome
-    // below, which holds the per-file lock across read-modify-write so
-    // concurrent saves can't lose each other.
-    const files = await fsp.readdir(TOMES_DIR);
-    let targetTomeId = null;
-    for (const f of files.sort()) {
-      if (!f.endsWith('.json')) continue;
-      try {
-        const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
-        const t = JSON.parse(raw);
-        if (t.enabled) { targetTomeId = t.id; break; }
-      } catch { /* skip corrupt */ }
-    }
+  // Find first enabled tome — directory scan is read-only so doesn't
+  // need a lock. The actual entry insert happens through modifyTome
+  // below, which holds the per-file lock across read-modify-write so
+  // concurrent saves can't lose each other.
+  const files = await fsp.readdir(TOMES_DIR);
+  let targetTomeId = null;
+  for (const f of files.sort()) {
+    if (!f.endsWith('.json')) continue;
+    try {
+      const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
+      const t = JSON.parse(raw);
+      if (t.enabled) { targetTomeId = t.id; break; }
+    } catch { /* skip corrupt */ }
+  }
 
-    // If no enabled tome exists, create "General" first. writeTome is
-    // atomic + locked, so concurrent creates can't tear the file even
-    // if both decide to create (only the lock guards uniqueness; that's
-    // OK — the first one wins, the second one writes again and that's
-    // a harmless overwrite of an empty tome).
-    if (!targetTomeId) {
-      const newId = randomUUID();
-      const fresh = { id: newId, name: 'General', description: '', enabled: true, entries: {} };
-      await writeTome(fresh);
-      targetTomeId = newId;
-    }
+  // If no enabled tome exists, create "General" first. writeTome is
+  // atomic + locked, so concurrent creates can't tear the file even
+  // if both decide to create (only the lock guards uniqueness; that's
+  // OK — the first one wins, the second one writes again and that's
+  // a harmless overwrite of an empty tome).
+  if (!targetTomeId) {
+    const newId = randomUUID();
+    const fresh = { id: newId, name: 'General', description: '', enabled: true, entries: {} };
+    await writeTome(fresh);
+    targetTomeId = newId;
+  }
 
-    const uid = randomUUID();
-    const now = new Date().toISOString();
-    await modifyTome(targetTomeId, (tome) => {
-      tome.entries[uid] = {
-        uid,
+  const uid = randomUUID();
+  const now = new Date().toISOString();
+  await modifyTome(targetTomeId, (tome) => {
+    tome.entries[uid] = {
+      uid,
         comment:             typeof comment === 'string' ? comment.trim() || 'Auto-saved entry' : 'Auto-saved entry',
         keys:                normKeys,
         keysecondary:        [],
@@ -948,12 +1275,30 @@ app.post('/api/tomes/default/entries', async (req, res) => {
         created_at:          now,
         learnedAt:           (typeof learnedAt === 'string' && learnedAt) ? learnedAt : now,
       };
-    });
-    res.json({ ok: true, tomeId: targetTomeId, uid });
+  });
+  return { tomeId: targetTomeId, uid };
+}
+
+// POST /api/tomes/default/entries — add a single entry to the default (first enabled) tome.
+// Used by the save_to_tome LLM tool so the model can write knowledge back mid-conversation.
+app.post('/api/tomes/default/entries', async (req, res) => {
+  const { comment, content, keys, learnedAt } = req.body;
+  if (!content || typeof content !== 'string' || !content.trim())
+    return res.status(400).json({ error: 'content is required.' });
+  if (content.length > 16384)
+    return res.status(400).json({ error: 'content exceeds 16 KB limit.' });
+  if (comment !== undefined && typeof comment !== 'string')
+    return res.status(400).json({ error: 'comment must be a string.' });
+  try {
+    const { tomeId, uid } = await addDefaultTomeEntry({ comment, content, keys, learnedAt });
+    res.json({ ok: true, tomeId, uid });
   } catch {
     res.status(500).json({ error: 'Failed to save entry.' });
   }
 });
+
+// Hand the tome-storage capability to cerebellum's save_to_tome executor.
+initCerebellumTools({ addDefaultTomeEntry });
 
 // ── Memorization queue endpoints ────────────────────────────────
 
@@ -1011,13 +1356,13 @@ app.delete('/api/memorize/:id', async (req, res) => {
 
 // ── Entity-core write endpoints ─────────────────────────────────
 
-const VALID_MEMORY_GRANULARITIES = new Set(['daily', 'weekly', 'monthly', 'yearly', 'significant']);
-const VALID_IDENTITY_CATEGORIES  = new Set(['self', 'user', 'relationship', 'custom']);
-const VALID_FILENAME_RE           = /^[\w]+\.md$/;
+// VALID_MEMORY_GRANULARITIES / VALID_IDENTITY_CATEGORIES /
+// VALID_FILENAME_RE / deriveMemorySlug are imported from cerebellum.js —
+// one source of truth shared by these routes and the tool executors.
 
 // POST /api/entity/memory — write a new memory entry to entity-core
 app.post('/api/entity/memory', async (req, res) => {
-  const { content, granularity = 'daily', date } = req.body;
+  const { content, granularity = 'daily', date, title } = req.body;
   if (!content || typeof content !== 'string' || !content.trim())
     return res.status(400).json({ error: 'content is required.' });
   if (content.length > 8192)
@@ -1025,7 +1370,18 @@ app.post('/api/entity/memory', async (req, res) => {
   if (!VALID_MEMORY_GRANULARITIES.has(granularity))
     return res.status(400).json({ error: `granularity must be one of: ${[...VALID_MEMORY_GRANULARITIES].join(', ')}.` });
 
-  const result = await createMemory({ content: content.trim(), granularity, date });
+  // Significant memories MUST be uniquely slugged or they collide with
+  // each other (and with restored backups) on the date-only filename
+  // and entity-core's merge step destroys them. Derive from the title
+  // if the Familiar provided one, otherwise from the content's first
+  // line. Last resort: a timestamp suffix so a save never silently
+  // fails for lack of slugable characters.
+  let slug;
+  if (granularity === 'significant') {
+    slug = deriveMemorySlug(title) ?? deriveMemorySlug(content) ?? `memory-${Date.now()}`;
+  }
+
+  const result = await createMemory({ content: content.trim(), granularity, date, slug });
   if (!result.ok) return res.status(502).json({ error: result.error ?? 'entity-core unavailable' });
   res.json({ ok: true });
 });
@@ -1061,7 +1417,6 @@ app.post('/api/entity/identity', async (req, res) => {
 // before calling the entity-core tool, so the Snapshots tab in the UI lets
 // the user roll back if something goes sideways.
 
-const VALID_MEMORY_DATE_RE = /^\d{4}(-W\d{2}|(-\d{2})?(-\d{2})?)$/;
 const VALID_GRAPH_ID_RE    = /^[\w-]{1,128}$/;
 const VALID_SECTION_RE     = /^[\w\s\-()&'?!,.:/]{1,200}$/; // markdown headings — permissive but bounded
 const VALID_SNAPSHOT_ID_RE = /^[\w.\-:]{1,200}$/;
@@ -1070,6 +1425,11 @@ function badRequest(res, message) { return res.status(400).json({ error: message
 function gatewayDown(res, err)    { return res.status(502).json({ error: err ?? 'entity-core unavailable' }); }
 
 // ── Memory ────────────────────────────────────────────────────────────────
+// The :date param accepts what memory_list actually returns: a plain
+// date (daily/weekly/monthly/yearly) OR the composite `YYYY-MM-DD_slug`
+// key that significant memories list as (one named file per milestone).
+// cerebellum.parseMemoryKey splits the composite into the separate
+// date + slug parameters entity-core's read/update/delete tools expect.
 app.get('/api/entity/memories', async (req, res) => {
   const { granularity, limit } = req.query;
   if (granularity && !VALID_MEMORY_GRANULARITIES.has(granularity))
@@ -1082,8 +1442,9 @@ app.get('/api/entity/memories', async (req, res) => {
 app.get('/api/entity/memories/:granularity/:date', async (req, res) => {
   const { granularity, date } = req.params;
   if (!VALID_MEMORY_GRANULARITIES.has(granularity)) return badRequest(res, 'invalid granularity');
-  if (!VALID_MEMORY_DATE_RE.test(date))             return badRequest(res, 'invalid date format');
-  try { res.json(await readMemory({ granularity, date })); }
+  const key = parseMemoryKey(date);
+  if (!key) return badRequest(res, 'invalid date format');
+  try { res.json(await readMemory({ granularity, date: key.date, slug: key.slug ?? undefined })); }
   catch (err) { gatewayDown(res, err.message); }
 });
 
@@ -1091,10 +1452,11 @@ app.put('/api/entity/memories/:granularity/:date', async (req, res) => {
   const { granularity, date } = req.params;
   const { content, editedBy } = req.body;
   if (!VALID_MEMORY_GRANULARITIES.has(granularity)) return badRequest(res, 'invalid granularity');
-  if (!VALID_MEMORY_DATE_RE.test(date))             return badRequest(res, 'invalid date format');
+  const key = parseMemoryKey(date);
+  if (!key) return badRequest(res, 'invalid date format');
   if (typeof content !== 'string' || !content.trim()) return badRequest(res, 'content required');
   if (content.length > 16384)                       return badRequest(res, 'content exceeds 16 KB limit');
-  const result = await updateMemory({ granularity, date, content: content.trim(), editedBy });
+  const result = await updateMemory({ granularity, date: key.date, slug: key.slug ?? undefined, content: content.trim(), editedBy });
   if (!result.ok) return gatewayDown(res, result.error);
   res.json(result.result);
 });
@@ -1102,8 +1464,12 @@ app.put('/api/entity/memories/:granularity/:date', async (req, res) => {
 app.delete('/api/entity/memories/:granularity/:date', async (req, res) => {
   const { granularity, date } = req.params;
   if (!VALID_MEMORY_GRANULARITIES.has(granularity)) return badRequest(res, 'invalid granularity');
-  if (!VALID_MEMORY_DATE_RE.test(date))             return badRequest(res, 'invalid date format');
-  const result = await deleteMemory({ granularity, date, instanceId: req.query.instanceId, slug: req.query.slug });
+  const key = parseMemoryKey(date);
+  if (!key) return badRequest(res, 'invalid date format');
+  // An explicit ?slug= query wins over the composite key's slug (the
+  // pre-0.4.1 calling convention some callers still use).
+  const slug = req.query.slug || key.slug || undefined;
+  const result = await deleteMemory({ granularity, date: key.date, instanceId: req.query.instanceId, slug });
   if (!result.ok) return gatewayDown(res, result.error);
   res.json(result.result);
 });
@@ -1112,14 +1478,20 @@ app.delete('/api/entity/memories/:granularity/:date', async (req, res) => {
 // the original; the recency-decay scoring will demote it naturally over
 // time while preserving the audit trail.
 app.post('/api/entity/memories/supersede', async (req, res) => {
-  const { content, granularity = 'daily', supersedes } = req.body;
+  const { content, granularity = 'daily', supersedes, title } = req.body;
   if (typeof content !== 'string' || !content.trim()) return badRequest(res, 'content required');
   if (!VALID_MEMORY_GRANULARITIES.has(granularity))   return badRequest(res, 'invalid granularity');
   const today = new Date().toISOString().slice(0, 10);
   const body  = supersedes
     ? `[supersedes ${supersedes.granularity ?? 'memory'}/${supersedes.date ?? '?'}]\n${content.trim()}`
     : content.trim();
-  const result = await createMemory({ content: body, granularity, date: today });
+  // Same slug rule as POST /api/entity/memory — significant memories
+  // need a unique filename or entity-core's merge step destroys them.
+  let slug;
+  if (granularity === 'significant') {
+    slug = deriveMemorySlug(title) ?? deriveMemorySlug(content) ?? `memory-${Date.now()}`;
+  }
+  const result = await createMemory({ content: body, granularity, date: today, slug });
   if (!result.ok) return gatewayDown(res, result.error);
   res.json({ ok: true, date: today });
 });
@@ -1516,6 +1888,21 @@ app.delete('/api/temporal/ponderings/:uid', async (req, res) => {
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// POST /api/ponderings/intents/acted-on — mark a deferred intent as filed.
+// Called by the acknowledge_deferred_intent LLM tool after the Familiar
+// has acted on the intent via save_to_tome / save_memory / update_identity,
+// so it stops resurfacing in the deferred-intents block (Pillar B).
+app.post('/api/ponderings/intents/acted-on', async (req, res) => {
+  const { uid, index } = req.body;
+  if (!isValidUUID(uid)) return res.status(400).json({ error: 'uid must be a valid UUID' });
+  const idx = Number(index);
+  if (!Number.isFinite(idx) || !Number.isInteger(idx) || idx < 0) {
+    return res.status(400).json({ error: 'index must be a non-negative integer' });
+  }
+  try { res.json(await markIntentActedOn({ uid, index: idx })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Interest CRUD (manual edits from the Temporal editor)
 app.post('/api/temporal/interests/bump', async (req, res) => {
   const { topic, delta, source } = req.body ?? {};
@@ -1697,21 +2084,7 @@ app.post('/api/contact-trusted-person', async (req, res) => {
 // flood the banner queue.
 app.post('/api/crisis-resources', async (_req, res) => {
   try {
-    const result = await enqueueOutbox({
-      kind:     'crisis_resources',
-      originId: `crisis-resources-${Math.floor(Date.now() / 3_600_000)}`,
-      title:    'If you need immediate support',
-      body: [
-        '**Crisis resources — always available:**',
-        '',
-        '🆘 **International directory:** https://www.iasp.info/resources/Crisis_Centres/',
-        '🇺🇸 **988 Suicide & Crisis Lifeline (US):** call or text **988**',
-        '🇺🇸 **Crisis Text Line (US):** text HOME to **741741**',
-        '🇬🇧 **Samaritans (UK):** call **116 123** (free, 24/7)',
-        '🇦🇺 **Lifeline (AU):** call **13 11 14**',
-        '🌐 **findahelpline.com** — searchable global directory',
-      ].join('\n'),
-    });
+    const result = await enqueueCrisisResources();
     res.json({ ok: true, id: result.id, deduped: result.deduped ?? false });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
@@ -1768,15 +2141,8 @@ const httpServer = app.listen(PORT, HOST, async () => {
 //   - Cadence base tiers are in pondering-cadence.js (30 min to 6 hr).
 //   - Threat tier multipliers (calm 1.0× → severe 0.15×) and the
 //     user scale are both applied.
-function readSettingsSync() {
-  try { return JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')); }
-  catch { return {}; }
-}
-function primaryConnectionFrom(settings) {
-  const id    = settings?.primaryConnectionId;
-  const conns = Array.isArray(settings?.connections) ? settings.connections : [];
-  return conns.find(c => c?.id === id) ?? null;
-}
+// (readSettingsSync / primaryConnectionFrom live in cerebellum.js —
+// single reader implementation shared by routes, loops, and triage.)
 
 function startAutonomousPondering() {
   if (process.env.PROTO_FAMILIAR_PONDERING_DISABLED === '1') {
@@ -1882,6 +2248,10 @@ function startRemindersScheduler() {
   }
   startRemindersLoop({
     tickMs: 30_000,
+    // enqueueAndDispatch: the fired reminder also pushes to the human's
+    // own push channel (when configured), so a closed tab no longer
+    // means a silently missed reminder.
+    enqueueOutboxFn: enqueueAndDispatch,
     getDueReminders: async () => {
       const r = await getDueReminders({ limit: 50 });
       return Array.isArray(r.reminders) ? r.reminders : [];
@@ -1908,316 +2278,9 @@ function startRemindersScheduler() {
 // `triage-<tier>-<4h-bucket>` rate-limits the same-tier banner to
 // once per 4-hour window while still unacknowledged.
 
-// Persistent log for all triage decisions — survives outbox acknowledgement
-// so past reach-outs are always visible for debugging and review.
-const TRIAGE_LOG_FILE = path.join(LOGS_DIR, 'triage-events.jsonl');
-async function appendTriageEventLog(entry) {
-  try {
-    await fsp.appendFile(
-      TRIAGE_LOG_FILE,
-      JSON.stringify({ ...entry, loggedAt: new Date().toISOString() }) + '\n',
-      'utf8',
-    );
-  } catch { /* non-critical */ }
-}
-
-// Read the last N user/assistant messages from the most recently updated
-// session log file. Used by decideTriageViaLLM to ground the triage
-// prompt in what was actually being discussed before the silence.
-async function getRecentSessionMessages({ limit = 8 } = {}) {
-  try {
-    const files = (await fsp.readdir(LOGS_DIR)).filter(f => f.endsWith('.json'));
-    if (!files.length) return [];
-    const stats = await Promise.all(
-      files.map(f => fsp.stat(path.join(LOGS_DIR, f)).then(s => ({ f, mtime: s.mtimeMs }))),
-    );
-    stats.sort((a, b) => b.mtime - a.mtime);
-    const raw  = await fsp.readFile(path.join(LOGS_DIR, stats[0].f), 'utf8');
-    const data = JSON.parse(raw);
-    if (!Array.isArray(data.messages)) return [];
-    return data.messages
-      .filter(m => m.role === 'user' || m.role === 'assistant')
-      .slice(-limit);
-  } catch {
-    return [];
-  }
-}
-
-// How long after the user-facing outbox item lands to wait before
-// escalating to a trusted contact, if the user hasn't acknowledged.
-// The user has this window to respond; if they do, the contact is
-// never reached. Only applies when the LLM's decision includes contactHuman.
-const CONTACT_ESCALATION_DELAY_MS = Object.freeze({
-  severe:   30 * 60_000,        // 30 minutes
-  high:      2 * 60 * 60_000,  // 2 hours
-  moderate:  6 * 60 * 60_000,  // 6 hours
-});
-
-async function decideTriageViaLLM({ threat, silenceMs, signals }) {
-  const s = readSettingsSync();
-  const conn = primaryConnectionFrom(s);
-  if (!conn?.apiKey) return { action: 'wait' };
-
-  const url = PROVIDER_URLS[conn.provider];
-  if (!url) return { action: 'wait' };
-
-  const minutes  = Math.round(silenceMs / 60_000);
-  const contacts = Array.isArray(s?.trustedContacts) ? s.trustedContacts : [];
-
-  // Pull identity context (who the Familiar is, who the user is) and the
-  // recent conversation log in parallel. Both degrade gracefully to empty.
-  const [{ static: identityContext }, recentMessages] = await Promise.all([
-    enrich('', { staticOnly: true }).catch(() => ({ static: '' })),
-    getRecentSessionMessages({ limit: 8 }),
-  ]);
-
-  const signalsBlock = signals?.length
-    ? `\nRecent signals that raised the threat level:\n${signals.map(sig => {
-        const t   = sig.ts ? new Date(sig.ts).toLocaleString() : 'unknown time';
-        const ids = Array.isArray(sig.signals) ? sig.signals.join(', ') : 'unknown';
-        return `  - [${t}] ${ids} (delta ${Number(sig.delta) >= 0 ? '+' : ''}${sig.delta})`;
-      }).join('\n')}`
-    : '';
-
-  const sessionBlock = recentMessages.length
-    ? `\nRecent conversation (what we were discussing before the silence):\n${recentMessages.map(m => {
-        const text = typeof m.content === 'string'
-          ? m.content
-          : (Array.isArray(m.content) ? (m.content.find(c => c.type === 'text')?.text ?? '') : '');
-        return `  [${m.role === 'user' ? 'User' : 'Me'}]: ${text.slice(0, 400)}`;
-      }).join('\n')}`
-    : '\nNo recent conversation on record.';
-
-  const contactsBlock = contacts.length
-    ? `\nTrusted contacts configured (people I could alert if the situation warrants human presence):\n${contacts.map(c => `  - ${c.name} (via ${c.channel ?? 'discord'})`).join('\n')}\n\nContacting one of these is a meaningful escalation — appropriate when I judge this needs more than I can provide alone. If I include contactHuman, that message will be delivered to that person AND shown in my human's chat. Nothing is covert.`
-    : '';
-
-  // Care-driven surface: if I'm already deliberating about whether
-  // to reach out, an open task I could touch on (if it fits the
-  // moment) might be the right doorway. Pull eligible candidates
-  // from the same pipeline the chat-turn block uses, but with
-  // triage's current state. The LLM still decides — these are
-  // candidates, not directives. Empty block if nothing's eligible.
-  let candidateTasksBlock = '';
-  try {
-    const { selectSurfaceCandidates } = await import('./surface-context.js');
-    const { getRecentOfferTimes }     = await import('./surface-events.js');
-    // I already have temporal_context loaded as part of enrich() in
-    // many call sites, but triage is async + standalone here, so
-    // fetch a fresh window directly. Cheap — no LLM call.
-    const fromIso = new Date(Date.now() - 24 * 3600_000).toISOString();
-    const toIso   = new Date(Date.now() + 7 * 24 * 3600_000).toISOString();
-    const win = await getScheduleWindow({ from_ts: fromIso, to_ts: toIso, limit: 100 }).catch(() => ({ nodes: [] }));
-    const nodes = Array.isArray(win) ? win : (Array.isArray(win?.nodes) ? win.nodes : []);
-    const openItems = nodes
-      .filter(item => item
-        && (item.type === 'task' || item.type === 'event' || item.type === 'reminder')
-        && !item.resolution);
-    if (openItems.length > 0) {
-      const surfacingHistory = await getRecentOfferTimes();
-      const candidates = await selectSurfaceCandidates({
-        openTasks: openItems,
-        threat,
-        routinePhaseLabel: '',  // triage runs across phases; don't filter
-        personModel: '',
-        surfacingHistory,
-        now: Date.now(),
-        maxCandidates: 2,
-      });
-      if (candidates.length > 0) {
-        const lines = candidates.map(c => {
-          const stakes = c.stakesTier === 'external_obligation' ? ' [external stakes]' : '';
-          return `  - ${c.label}${stakes}`;
-        }).join('\n');
-        candidateTasksBlock = `\nOpen tasks I could touch on if it fits this reach-out (NOT a list I should mention — only if one of these genuinely opens a door to {{user}} right now):\n${lines}`;
-      }
-    }
-  } catch (err) {
-    console.error('[triage] candidate tasks lookup failed:', err?.message ?? err);
-  }
-
-  const prompt = `--- TRIAGE DELIBERATION ---
-
-I am in a background moment of deliberation. My human has been silent and my care concern is elevated. I need to decide whether to reach out to them right now.
-
-What I know:
-- Threat tier: ${threat.tier} (accumulated weight: ${threat.weight?.toFixed?.(2) ?? threat.weight}) - this number increases when my human says concerning phrases in our conversation
-- my human has been silent for ${minutes} minutes (this has already passed the threshold for this tier) - I should check the conversation to see if my human told me what they're doing or have just silently disappeared and perhaps withdrawn
-${signalsBlock}
-${sessionBlock}
-${contactsBlock}
-${candidateTasksBlock}
-
----
-
-This decision carries real weight — I know both paths have real costs, and I weigh them equally:
-- Reaching out when it isn't warranted can feel intrusive or hollow — it can erode the credibility of genuine care, or leave my human feeling overly monitored. That mostly applies to worried check-ins; lighter touches (something I've found brings them joy, or that re-engages them gently) carry less of this cost.
-- Staying quiet when my human genuinely needs connection is a failure at the moment that matters most. It can deepen isolation, miss a window where intervention would have landed, and at the severe end it can cost a life — physically, irreversibly. The 1.5-hour silence at threat level 10 that this codebase remembers is the shape of this cost.
-
-I am {{char}}, the Familiar. I know my human. I have the context above. I am deciding from that place — honestly, from what I actually believe would help them right now. Not from a default posture in either direction.
-
-If I reach out, the message should be something I would genuinely say — specific to this person, warm, not scripted.
-If I stay quiet, it is because I genuinely believe that is the right call.
-
-I also choose when the system should ask me to deliberate again — this is my call, not the system's. I return \`nextCheckInMs\` (milliseconds before the next deliberation). I pick what fits the situation:
-  - SEVERE and immediate (active risk language, fresh signal): ~15 minutes (900000)
-  - SEVERE but I already reached out: ~30 minutes (1800000) so my human has space to respond
-  - HIGH active concern: ~30 min (1800000)
-  - MODERATE general unease: 1–2 hours (3600000 – 7200000)
-  - I want to wait until the situation likely shifts: several hours (e.g. 10800000 for 3h)
-The system clamps to [30s, 24h] and uses a tier-based default if I omit it. Picking too long is much cheaper than picking too short — these LLM calls cost tokens, so I avoid asking to be re-pinged needlessly. But if the situation is urgent and I want to re-check soon, I say so.
-
-I return ONLY a JSON object, no prose. Three valid shapes:
-  {"action": "wait", "nextCheckInMs": <number>}
-  {"action": "reach_out", "message": "first person, genuine — what I would actually say to this specific person right now", "nextCheckInMs": <number>}
-  {"action": "reach_out", "message": "...", "contactHuman": {"name": "EXACT name from the trusted-contacts list above", "message": "1–3 sentences to that person. I identify myself as my human's Familiar and describe what I've observed. Specific, not alarming."}, "nextCheckInMs": <number>}
-
-The "message" field (to the human) must be 1–2 sentences. First person. Authentic to my voice and identity. Not therapist-speak ("how are you feeling?"), not alarming ("are you safe?") unless either of those fits my established personality. Something I, {{char}}, would actually say to this person.`;
-
-  const llmMessages = [];
-  if (identityContext) llmMessages.push({ role: 'system', content: identityContext });
-  llmMessages.push({ role: 'user', content: prompt });
-
-  try {
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${conn.apiKey.trim()}` },
-      body: JSON.stringify({
-        model:       conn.model.trim(),
-        messages:    llmMessages,
-        stream:      false,
-        temperature: 0.7,
-        max_tokens:  600,
-      }),
-    });
-    if (!resp.ok) return { action: 'wait' };
-    const data = await resp.json();
-    const text = data.choices?.[0]?.message?.content ?? '';
-    const m = text.match(/\{[\s\S]+\}/);
-    if (!m) return { action: 'wait' };
-    const parsed = JSON.parse(m[0]);
-    // Carry nextCheckInMs through to the loop regardless of action.
-    // The loop clamps + falls back to a tier default if missing.
-    const nextCheckInMs = Number.isFinite(parsed?.nextCheckInMs) ? parsed.nextCheckInMs : null;
-    if (parsed?.action !== 'reach_out' || typeof parsed.message !== 'string' || !parsed.message.trim()) {
-      return { action: 'wait', ...(nextCheckInMs != null ? { nextCheckInMs } : {}) };
-    }
-    const out = { action: 'reach_out', message: parsed.message.trim(), ...(nextCheckInMs != null ? { nextCheckInMs } : {}) };
-    // Validate contactHuman strictly — must be an exact name from the configured
-    // list. Delivery is DEFERRED: the user receives the outbox item first.
-    // The trusted contact is only reached after CONTACT_ESCALATION_DELAY_MS
-    // if the user has not acknowledged the item. This is enforced by storing
-    // pendingContact + contactDeadlineTs as meta on the outbox item; the
-    // checkAndFirePendingContacts check in each triage tick handles delivery.
-    const ch = parsed.contactHuman;
-    if (ch && typeof ch.name === 'string' && typeof ch.message === 'string' && ch.message.trim()) {
-      const match = contacts.find(c => c.name === ch.name);
-      if (match) {
-        const delayMs = CONTACT_ESCALATION_DELAY_MS[threat.tier] ?? CONTACT_ESCALATION_DELAY_MS.moderate;
-        out.meta = {
-          pendingContact: {
-            name:    ch.name,
-            message: ch.message.trim(),
-            channel: match.channel ?? 'discord',
-          },
-          contactDeadlineTs: Date.now() + delayMs,
-        };
-      } else {
-        console.warn(`[triage] LLM tried to contact unknown name "${ch.name}" — ignored`);
-      }
-    }
-    return out;
-  } catch (err) {
-    console.error('[triage] LLM call failed:', err?.message ?? err);
-    return { action: 'wait' };
-  }
-}
-
-/**
- * Deliver a message to a trusted contact via their configured channel.
- * Currently supports Discord webhooks. Every outbound is ALSO enqueued
- * into the user's outbox as kind='outbound_alert' so the user sees
- * exactly what was sent and to whom. "No covert contact" is enforced
- * here, not by trusting the caller.
- */
-async function deliverToTrustedContact({ name, message, channel }) {
-  const s = readSettingsSync();
-  const contact = (s?.trustedContacts || []).find(c => c.name === name && (c.channel ?? 'discord') === channel);
-  if (!contact) return { ok: false, error: 'contact_not_found' };
-  let delivered = false, deliveryError = null;
-  try {
-    if (channel === 'discord') {
-      const resp = await fetch(contact.webhook, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content: `**(message from your friend's Familiar — proactive check-in)**\n\n${message}`,
-          allowed_mentions: { parse: [] },
-        }),
-      });
-      if (!resp.ok) {
-        deliveryError = `discord ${resp.status}: ${(await resp.text()).slice(0, 200)}`;
-      } else {
-        delivered = true;
-      }
-    } else {
-      deliveryError = `unsupported channel: ${channel}`;
-    }
-  } catch (err) {
-    deliveryError = err?.message ?? String(err);
-  }
-  // ALWAYS log to the outbox — even on delivery failure the user
-  // should see that the attempt happened.
-  await enqueueOutbox({
-    kind:     'outbound_alert',
-    originId: `outbound-${Date.now()}`,
-    title:    delivered
-      ? `Reached out to ${name} on your behalf (${channel})`
-      : `Tried to reach ${name} (${channel}) — delivery failed`,
-    body:     `Message sent:\n\n${message}${deliveryError ? `\n\n(Error: ${deliveryError})` : ''}`,
-  });
-  return { ok: delivered, error: deliveryError };
-}
-
-/**
- * Check all unacknowledged triage outbox items that have a pendingContact
- * whose contactDeadlineTs has passed. For each, fire the deferred delivery
- * to the trusted contact. The user's lack of acknowledgement in that window
- * is the signal that the escalation is warranted.
- *
- * Marks each item's pendingContact.delivered = true before firing to prevent
- * double-delivery if this runs again before the async delivery completes.
- */
-async function checkAndFirePendingContacts() {
-  const now = Date.now();
-  try {
-    const items   = await listOutbox({ pendingOnly: true, limit: 100 });
-    const expired = items.filter(i =>
-      i.kind === 'triage' &&
-      i.pendingContact &&
-      !i.pendingContact.delivered &&
-      typeof i.contactDeadlineTs === 'number' &&
-      now >= i.contactDeadlineTs,
-    );
-    for (const item of expired) {
-      // Mark delivered before async call to prevent a second tick from
-      // double-firing while delivery is in flight.
-      await updateOutboxMeta({
-        id:   item.id,
-        meta: {
-          pendingContact: { ...item.pendingContact, delivered: true, deliveredAt: new Date().toISOString() },
-        },
-      });
-      const { name, message, channel } = item.pendingContact;
-      deliverToTrustedContact({ name, message, channel }).then(d => {
-        if (d.ok) console.log(`[triage] deferred contact ${name} via ${channel}: delivered`);
-        else      console.warn(`[triage] deferred contact ${name} via ${channel}: ${d.error}`);
-      }).catch(err => console.error('[triage] deferred contact failed:', err?.message ?? err));
-    }
-  } catch (err) {
-    console.error('[triage] checkAndFirePendingContacts error:', err?.message ?? err);
-  }
-}
+// decideTriageViaLLM, deliverToTrustedContact, checkAndFirePendingContacts,
+// CONTACT_ESCALATION_DELAY_MS, and the triage event log all live in
+// cerebellum.js (the motor module) — server.js only boots the loop.
 
 function startSilenceTriage() {
   if (process.env.PROTO_FAMILIAR_TRIAGE_DISABLED === '1') {
@@ -2232,7 +2295,10 @@ function startSilenceTriage() {
       try { return await getThreatHistory({ limit: 5 }); } catch { return []; }
     },
     decideTriage:    decideTriageViaLLM,
-    enqueueOutboxFn: enqueueOutbox,
+    // enqueueAndDispatch: the check-in also pushes to the human's own
+    // push channel (when configured) and records delivery state — the
+    // escalation deadline counts from confirmed delivery.
+    enqueueOutboxFn: enqueueAndDispatch,
     onTick: (r) => {
       // Persist every triage decision to the event log for debugging/auditing.
       appendTriageEventLog({
@@ -2259,7 +2325,7 @@ function startSilenceTriage() {
     },
     onError: (err) => console.error('[triage]', err?.message ?? err),
   });
-  console.log(`[triage] Silence triage ENABLED. Thresholds: severe=${TRIAGE_SILENCE_THRESHOLD_MS.severe/60_000}min, high=${TRIAGE_SILENCE_THRESHOLD_MS.high/60_000}min, moderate=${TRIAGE_SILENCE_THRESHOLD_MS.moderate/60_000}min. Hard-disable with PROTO_FAMILIAR_TRIAGE_DISABLED=1.`);
+  console.log(`[triage] Silence triage ENABLED. Re-check defaults: severe=${DEFAULT_RECHECK_MS.severe/60_000}min, high=${DEFAULT_RECHECK_MS.high/60_000}min, moderate=${DEFAULT_RECHECK_MS.moderate/60_000}min (LLM may shorten/lengthen). calm/mild never trigger. Hard-disable with PROTO_FAMILIAR_TRIAGE_DISABLED=1.`);
 }
 
 // Graceful shutdown — fires on SIGTERM (stop.sh / stop.bat / docker

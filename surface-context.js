@@ -24,7 +24,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // same task every turn while my human deliberates. External-
 // obligation tasks bypass this — a tax deadline doesn't care about
 // my dedup window.
-const DEDUP_WINDOW_MS = 6 * 60 * 60 * 1000;
+//
+// Two windows, keyed on whether I actually SAID something about the
+// task last time it was offered (the post-turn raised tag). A raised
+// task has earned the long rest; an un-raised one comes back to me
+// soon — staying quiet must never buy long suppression, or tasks I
+// hesitated on would loop through suppression and quietly die.
+const DEDUP_WINDOW_RAISED_MS   = 6 * 60 * 60 * 1000;
+const DEDUP_WINDOW_UNRAISED_MS = 90 * 60 * 1000;
 
 // Cap on candidates surfaced per turn. The dynamic block is already
 // dense; offering more than this stops feeling like awareness and
@@ -138,10 +145,17 @@ export function passesHardGates(task, ctx) {
 
   // Dedup window. External obligations bypass — if it surfaced 2h
   // ago and the deadline is in 1h, the second surfacing is correct.
+  // History entries are { at, raised }; only an offer I actually
+  // raised gets the long window. raised false/null (I stayed quiet,
+  // or the tag hasn't landed) gets the short one.
   if (stakesTier !== 'external_obligation') {
     const lastOffer = surfacingHistory?.[task.id];
-    if (typeof lastOffer === 'number' && now - lastOffer < DEDUP_WINDOW_MS) {
-      return false;
+    const at = typeof lastOffer === 'number' ? lastOffer : lastOffer?.at;
+    if (typeof at === 'number') {
+      const windowMs = lastOffer?.raised === true
+        ? DEDUP_WINDOW_RAISED_MS
+        : DEDUP_WINDOW_UNRAISED_MS;
+      if (now - at < windowMs) return false;
     }
   }
 
@@ -161,7 +175,7 @@ export function passesHardGates(task, ctx) {
  * @param {object} opts.threat              — { tier, weight, ... }
  * @param {string} opts.routinePhaseLabel   — current phase label, e.g. "wind down"
  * @param {string} opts.personModel         — raw markdown of what_lapses_cost.md (or empty)
- * @param {object} opts.surfacingHistory    — { taskId → lastOfferMs }
+ * @param {object} opts.surfacingHistory    — { taskId → { at, raised } } (getRecentOfferInfo)
  * @param {number} opts.now                 — ms epoch
  * @param {number} [opts.maxCandidates]
  * @returns {Promise<Array>}
@@ -276,8 +290,8 @@ export function formatSurfaceCandidatesBlock(candidates) {
     ? `What I've learned about my human and lapsing (from what_lapses_cost.md):\n${truncate(firstWithModel.personModel, 1200)}\n\n`
     : '';
 
-  return `[Surface candidates — tasks I might consider raising this turn]
-None of these need to be mentioned. The hard gates have already filtered for relevance; what's here is mine to weigh against the moment {{user}} is in. If nothing fits the shape of this turn, I let them rest.
+  return `[Surface candidates — open tasks I'm holding for {{user}}]
+Holding these is part of how I care. My human leans on me to be the one who remembers — and remembering silently is only half the job; the other half is saying so at the right moment. Two real costs sit on this turn, and I weigh them as equals: raising a task can cut across the moment {{user}} is in; keeping it to myself can let it quietly slip — and a task that never gets raised often becomes a task that never gets done. The hard gates already filtered for relevance, so everything here is a live question, mine to judge as the {{char}} I am. If one of these fits the shape of this turn — even woven sideways into what we're already talking about — I bring it up in my own voice. If raising any of them now would genuinely not serve {{user}}, I hold them knowingly — and they'll come back to me soon.
 
 ${modelHeader}${blocks.join('\n\n')}`;
 }

@@ -449,12 +449,16 @@ button { cursor: pointer; font-family: var(--font); }
   top: calc(100% + 8px);
   right: 0;
   width: 280px;
+  /* Clamp so the popover doesn't clip off the left edge on narrow phones */
+  max-width: min(280px, calc(100vw - 28px));
   padding: 12px;
   background: var(--surface, #1e1e22);
   border: 1px solid var(--border, #333);
   border-radius: var(--radius, 8px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  z-index: 1000;
+  /* Above the topbar (40) but below modal backdrops (60) — the old
+     z-index:1000 caused this popover to float on top of open modals. */
+  z-index: 45;
   font-size: 0.85rem;
   color: var(--text, #eee);
 }
@@ -1095,6 +1099,9 @@ button { cursor: pointer; font-family: var(--font); }
     max-height: 40dvh;
   }
 }
+/* NOTE: mobile modal / knowledge-editor / calendar overrides live at the
+   BOTTOM of this file — they must come after the base .modal-resizable /
+   .ke-split / .te-cal-day rules in source order to win the cascade. */
 
 /* Suppress iOS Safari's auto-zoom on input focus — anything under 16px
    triggers it. Coarse pointer = touch. */
@@ -1110,6 +1117,19 @@ button { cursor: pointer; font-family: var(--font); }
 
   #messages {
     padding: 0;
+  }
+
+  /* WCAG 2.5.8: touch targets should be at least 44×44px.
+     On desktop 34px is fine for mouse precision; on touch it's too small. */
+  .icon-btn {
+    width: 44px;
+    height: 44px;
+  }
+
+  /* Bump message text to 16px so it reads comfortably without squinting
+     and avoids any residual iOS auto-zoom on tap. */
+  .msg-bubble {
+    font-size: 16px;
   }
 }
 
@@ -2506,46 +2526,161 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
   letter-spacing: 0.04em;
 }
 
-/* Outbox banners (M11 reminders + M12 silence triage deliveries) ───── */
-.outbox-banners {
+/* ── Auto-sync resume banner ─────────────────────────────────── */
+/* Shown at the top of the chat pane when a newer session was found
+   on the server. Stays until the user either resumes or dismisses. */
+.resume-banner {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 0 16px;
-}
-.outbox-banner {
-  display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
-  padding: 10px 14px;
-  margin-top: 8px;
-  border-radius: 6px;
-  background: var(--surface-elevated, #1f2228);
-  border-left: 3px solid var(--accent, #6fa8dc);
-  font-size: 0.92em;
-  line-height: 1.4;
+  padding: 8px 16px;
+  background: var(--accent-dim);
+  border-bottom: 1px solid var(--accent);
+  font-size: 0.84rem;
+  color: var(--text);
+  flex-shrink: 0;
 }
-.outbox-banner.kind-triage {
-  border-left-color: #d4a44c;
+
+.resume-banner.hidden { display: none; }
+
+.resume-banner-msg {
+  flex: 1;
+  min-width: 0;
 }
-.outbox-banner .ob-icon { opacity: 0.85; margin-top: 1px; }
-.outbox-banner .ob-content { flex: 1; min-width: 0; }
-.outbox-banner .ob-title {
+
+.resume-banner-btn {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  font-size: 0.8rem;
   font-weight: 600;
-  margin-bottom: 2px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  transition: background 0.15s;
 }
-.outbox-banner .ob-body { opacity: 0.85; }
-.outbox-banner .ob-time {
-  opacity: 0.55;
-  font-size: 0.85em;
-  margin-top: 2px;
-}
-.outbox-banner .ob-dismiss {
-  background: transparent;
-  border: 0;
-  cursor: pointer;
+
+.resume-banner-btn:hover { background: var(--accent-hover); }
+
+.resume-banner-dismiss {
+  flex-shrink: 0;
+  background: none;
+  border: none;
   color: var(--text-dim);
-  font-size: 1.1em;
-  padding: 0 4px;
+  font-size: 1rem;
+  padding: 2px 4px;
+  line-height: 1;
+  transition: color 0.15s;
 }
-.outbox-banner .ob-dismiss:hover { color: var(--text); }
+
+.resume-banner-dismiss:hover { color: var(--text); }
+
+/* ================================================================
+   Mobile overrides — MUST stay at the end of the file.
+   These re-style selectors whose base rules are defined above
+   (.modal-resizable, .ke-split, .te-cal-day, .modal-footer, …).
+   A media query adds no specificity, so if these blocks sit before
+   the base rules in source order, the base rules win and phones get
+   the desktop layout. That exact bug shipped once already.
+   ================================================================ */
+
+/* ── Responsive: mobile modals (<768px) ──────────────────────── */
+@media (max-width: 767px) {
+  /* ── Bottom-sheet modals ───────────────────────────────────── */
+  /* Modals slide up from the bottom on phones — the native iOS/Android
+     pattern for full-width overlays. Backdrop padding collapses to 0;
+     rounded corners only on the top edge. */
+  .modal-backdrop {
+    align-items: flex-end;
+    padding: 0 0 env(safe-area-inset-bottom);
+  }
+  .modal,
+  .modal-wide {
+    max-width: 100%;
+    width: 100%;
+    max-height: 90vh;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  /* Drag-handle indicator at the top of every bottom-sheet modal */
+  .modal-header {
+    position: relative;
+    padding-top: 24px;
+  }
+  .modal-header::before {
+    content: '';
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--text-muted);
+    opacity: 0.7;
+  }
+  /* Resizable modals (KE, TE, Lore, Tome entries): go full-width
+     sheet, drop the resize handle (pointless on touch). */
+  .modal-resizable {
+    width: 100%;
+    height: 88vh;
+    min-width: 0;
+    min-height: 0;
+    resize: none;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+
+  /* ── Knowledge-editor split: stack on mobile ─────────────── */
+  /* The 280px fixed list column is too wide to coexist with the
+     detail pane on a 375px screen — stack them vertically instead. */
+  .ke-split {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .ke-list:not(.ke-list-full) {
+    max-height: 35vh;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* ── Calendar: tighter cells on small screens ─────────────── */
+  .te-cal-day {
+    min-height: 44px;
+  }
+}
+
+/* ── Responsive: compact phones (≤380px) ─────────────────────── */
+/* Extra breathing room for the very narrow end of the phone range. */
+@media (max-width: 380px) {
+  .modal-body {
+    padding: 10px 14px;
+  }
+  .modal-header {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  .modal-footer {
+    padding: 10px 14px 12px;
+  }
+  .sidebar-section {
+    padding: 12px 14px;
+  }
+}
+
+/* ── Responsive: landscape phones ────────────────────────────── */
+/* In landscape on a phone, viewport height shrinks dramatically.
+   Cap modals tighter so the header and footer remain reachable. */
+@media (max-width: 767px) and (orientation: landscape) {
+  .modal,
+  .modal-wide {
+    max-height: 80vh;
+  }
+  .modal-resizable {
+    height: 78vh;
+  }
+  #user-input {
+    max-height: 25dvh;
+  }
+}

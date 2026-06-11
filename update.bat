@@ -15,7 +15,7 @@ REM
 REM If you installed with `git clone`, you don't need this - just re-run
 REM install.bat; it does `git pull` for you.
 
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 set "SCRIPT_DIR=%~dp0"
 set "DEST=%SCRIPT_DIR:~0,-1%"
 REM BRANCH defaults to `main`. Override to test a feature branch BEFORE
@@ -31,6 +31,29 @@ if exist "%DEST%\.git" (
   echo This is a git checkout - just run install.bat; it updates via git pull.
   pause
   exit /b 0
+)
+
+REM Refuse to overlay files while Proto-Familiar is still running. robocopy
+REM can't overwrite source files that node.exe has open (server.js, loaded
+REM modules), so the update would partially-succeed and the running process
+REM would keep serving the old code — exactly the "previous version in the
+REM corner after update" symptom. We use stop.bat (which knows how to kill
+REM the tracked PID and the port owner) so the update can proceed cleanly.
+set "PF_PORT=8742"
+if not "%PROTO_FAMILIAR_PORT%"=="" set "PF_PORT=%PROTO_FAMILIAR_PORT%"
+for /f %%R in ('powershell -NoProfile -Command "try { $c = New-Object Net.Sockets.TcpClient('127.0.0.1', [int]'%PF_PORT%'); $c.Close(); 'busy' } catch { 'free' }" 2^>nul') do set "PORT_STATE=%%R"
+if "%PORT_STATE%"=="busy" (
+  echo Proto-Familiar is still running on port %PF_PORT% — stopping it
+  echo before applying the update so file replacements can land...
+  call "%DEST%\stop.bat" >nul 2>nul
+  for /f %%R in ('powershell -NoProfile -Command "try { $c = New-Object Net.Sockets.TcpClient('127.0.0.1', [int]'%PF_PORT%'); $c.Close(); 'busy' } catch { 'free' }" 2^>nul') do set "PORT_STATE=%%R"
+  if "!PORT_STATE!"=="busy" (
+    echo [ERROR] Could not stop Proto-Familiar — something is still on port %PF_PORT%.
+    echo         Right-click the tray icon and choose Quit, or open Task Manager,
+    echo         find node.exe, end task, then re-run update.bat.
+    pause
+    exit /b 1
+  )
 )
 
 set "TMP=%TEMP%\pf_update_%RANDOM%%RANDOM%"

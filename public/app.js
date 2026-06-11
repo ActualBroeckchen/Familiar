@@ -58,813 +58,46 @@ function generateId() {
 
 // ── Tool calling ───────────────────────────────────────────────
 /**
- * Maximum tool-call rounds per send before giving up.
- * Prevents infinite loops if a model repeatedly calls tools.
+ * Tool execution lives server-side in cerebellum.js as of 0.4.0-alpha:
+ * /api/chat runs the multi-round tool-call loop on the server and sends
+ * `_toolRound` events (streaming) or a `_toolRounds` array
+ * (non-streaming) back, so the chat can render the collapsible tool
+ * blocks without executing anything. The browser advertises only the
+ * user's custom tools; the built-in registry is composed server-side.
  */
-const MAX_TOOL_ROUNDS = 5;
 
-/**
- * Tool definitions sent to the LLM for built-in tools.
- * The format matches the OpenAI function-calling spec.
- */
-const BUILTIN_TOOLS = [
-  {
-    type: 'function',
-    function: {
-      name: 'get_datetime',
-      description: 'Returns the current local date, time, and timezone. I call this whenever {{user}} asks me what time or date it is.',
-      parameters: { type: 'object', properties: {}, required: [] },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_session_info',
-      description: 'Returns metadata about my current chat session: when it started, how many messages it contains, which provider and model I am running on.',
-      parameters: { type: 'object', properties: {}, required: [] },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'save_to_tome',
-      description: 'I save a piece of knowledge or a fact I learned during this conversation into my persistent Tome knowledge base. I use this when {{user}} shares something important about themselves, their relationships, their preferences, or their situation that I should remember across future conversations. I try to be somewhat discerning and avoid duplicate knowledge.',
-      parameters: {
-        type: 'object',
-        properties: {
-          title:    { type: 'string', description: 'Short descriptive label for this entry (e.g. "{{user}} stress about lateness").' },
-          content:  { type: 'string', description: 'The knowledge to store. I write it as my own first-person notes to myself, concise but detailed enough to be useful as injected context in future conversations.' },
-          keywords: { type: 'array', items: { type: 'string' }, description: 'several trigger keywords or short phrases — things {{user}} would literally say when this situation recurs or the subject comes back up in conversation. The entry will be injected into my prompt whenever these appear in conversation.' },
-        },
-        required: ['title', 'content', 'keywords'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'save_memory',
-      description: 'I write a new memory entry to my long-term memory system. I use this to record important events, emotional patterns, or significant moments from this conversation in my durable, time-stamped store. I prefer "daily" for routine session events; I use "significant" for major milestones. Daily memories accumulate across the day — each save appends my new bullets to today\'s file; nothing is overwritten. Multiple saves in the same day are normal and expected.',
-      parameters: {
-        type: 'object',
-        properties: {
-          content:     { type: 'string', description: 'Memory content I write in first-person, as bullet points starting with "- " — one bullet per fact, insight, or moment. I do NOT include a [chat:id] tag on each bullet — that tag is for external import dedup; live saves from this conversation just want plain bullets so they all accrue. Brief, specific, in my voice.' },
-          granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier.' },
-        },
-        required: ['content', 'granularity'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'update_identity',
-      description: 'I append a new durable fact to one of my persistent identity files. I use this for facts about {{user}} (category: user, filename: user_notes.md) or about my relationship with them (category: relationship, filename: relationship_notes.md). I avoid using this for session-specific or transient information, because that will confuse me and rack up token waste. When to choose append vs. rewrite_identity_section: I APPEND when adding a new fact that complements what is already there; I REWRITE a section when an existing section is now misleading, stale or incomplete and a partial correction would leave it confusing.',
-      parameters: {
-        type: 'object',
-        properties: {
-          category: { type: 'string', enum: ['user', 'relationship'], description: 'Identity file category.' },
-          filename: { type: 'string', description: 'Target filename within the category, e.g. user_notes.md or relationship_notes.md.' },
-          content:  { type: 'string', description: 'Content to append to the identity file, written in my own first-person voice.' },
-        },
-        required: ['category', 'filename', 'content'],
-      },
-    },
-  },
-  // ── Knowledge-editing tools ───────────────────────────────────────────
-  // The Familiar can correct stale or wrong information in memory / identity
-  // / graph instead of letting it pile up. Each destructive op auto-snapshots
-  // entity-core first, so the user can roll back via the Knowledge editor.
-  // Editing principles (apply to every tool below):
-  //   • APPEND when the new information adds to an existing record without
-  //     contradicting it. Append is non-destructive and reversible by deletion.
-  //   • UPDATE / REWRITE when the existing record is now inaccurate or
-  //     incomplete in a way that a partial addition would not fix.
-  //   • DELETE when the record is fully obsolete or was wrong in the first
-  //     place, and keeping it would mislead future-me. If the change has
-  //     historical value ("they were on vacation, now back"), prefer writing
-  //     a newer memory that contradicts the stale one rather than deleting —
-  //     the recency-decay scoring will demote the stale entry on its own.
-  //   • If unsure, write a new note instead of editing or deleting an
-  //     existing one. Erring toward preservation is cheaper than restoring.
-  {
-    type: 'function',
-    function: {
-      name: 'update_memory',
-      description: 'I overwrite an existing memory entry to correct an inaccuracy. I use this when the entry is incomplete or partially wrong but the core record (this date, this granularity) is still the right place for the fact. I avoid using this to record new information — that is save_memory. I avoid using this to remove information — that is delete_memory. When the change is "X was true, now Y is true," prefer save_memory with today\'s date so the history is preserved.',
-      parameters: {
-        type: 'object',
-        properties: {
-          granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier of the entry to overwrite.' },
-          date:        { type: 'string', description: 'Date of the entry, in the same format the entry was stored (e.g. YYYY-MM-DD for daily).' },
-          content:     { type: 'string', description: 'The full new contents. This REPLACES the entry — include everything I want to keep, not just the diff, or else I will lose important information.' },
-        },
-        required: ['granularity', 'date', 'content'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'delete_memory',
-      description: 'I permanently delete a memory entry. I use this only when the entry is fully wrong or no longer relevant, and keeping it would mislead future-me. If the change has historical value ("they were on vacation last week, back now"), I do NOT delete — I write a new contradicting memory with save_memory instead, and let recency-decay demote the stale one. Entity-core auto-snapshots before each delete so a mistake is recoverable from the Knowledge editor.',
-      parameters: {
-        type: 'object',
-        properties: {
-          granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier of the entry to delete.' },
-          date:        { type: 'string', description: 'Date of the entry, in the same format the entry was stored.' },
-        },
-        required: ['granularity', 'date'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'rewrite_identity_section',
-      description: 'I replace one section of an identity file with new content. I use this when an existing section is now misleading or has accumulated stale notes and a clean rewrite serves future-me better than appending a correction. It helps me actually make my identity files reflect my growth and changes as an entity with agency. For NEW facts that just need to land somewhere, I use update_identity (append). For removing only a small piece, I prefer rewriting the whole section over deletion.',
-      parameters: {
-        type: 'object',
-        properties: {
-          category: { type: 'string', enum: ['self', 'user', 'relationship', 'custom'], description: 'Identity file category.' },
-          filename: { type: 'string', description: 'Target filename, e.g. user_notes.md.' },
-          section:  { type: 'string', description: 'The markdown heading of the section to rewrite (without leading #s), e.g. "Sleep patterns".' },
-          content:  { type: 'string', description: 'New full contents for that section, in my first-person voice. Will REPLACE the section body.' },
-        },
-        required: ['category', 'filename', 'section', 'content'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'find_graph_node',
-      description: 'I look up the underlying graph id(s) for an entity by name. I use this before update_graph_node or delete_graph_node when I only have the human-readable label (from the graph block in my context) and need the id to pass to the editing tool. Returns the top matching nodes with their ids, types, and descriptions.',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: 'The entity name or fragment to search for (e.g. "Chen", "vacation").' },
-          type:  { type: 'string', description: 'Optional: restrict matches to a single node type (e.g. "person", "place").' },
-          limit: { type: 'number', description: 'Optional: max matches to return (default 10).' },
-        },
-        required: ['query'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'find_graph_edges',
-      description: 'I list the edges connected to a graph node (1-hop neighbours), with each edge\'s id. I use this before update_graph_edge or delete_graph_edge to look up an edge id from the relationship I want to change. Pass the node id (resolve it with find_graph_node first if I only have a label).',
-      parameters: {
-        type: 'object',
-        properties: {
-          nodeId: { type: 'string', description: 'The graph id of the node whose edges I want to see.' },
-          depth:  { type: 'number', description: 'Optional: traversal depth (1–3, default 1).' },
-        },
-        required: ['nodeId'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'update_graph_node',
-      description: 'I rename or re-describe an entity (person, place, project, etc.) in my knowledge graph. I use this when the node\'s label or description is wrong, outdated, or imprecise. I do NOT use this to record a new relationship — that is what edges are for. The graph block in my context lists ids at the bottom; if the entity I want isn\'t listed there, I call find_graph_node first to look the id up.',
-      parameters: {
-        type: 'object',
-        properties: {
-          id:          { type: 'string', description: 'The id of the node to update (from earlier graph context).' },
-          label:       { type: 'string', description: 'New display label. Omit to leave unchanged.' },
-          description: { type: 'string', description: 'New description. Omit to leave unchanged.' },
-        },
-        required: ['id'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'delete_graph_node',
-      description: 'I delete an entity from my knowledge graph along with its edges. I use this only when the node is clearly an error (duplicate, wrong entity entirely) or refers to something that no longer exists in any meaningful sense. For "this relationship is no longer true" (e.g. they\'re no longer on vacation), I delete the EDGE, not the node — the person/place still exists. I can also replace that egde with a more fitting one (like "is_dating" to "used_to_date"). If the entity\'s id isn\'t in the graph block\'s ids legend, I call find_graph_node first to resolve the label.',
-      parameters: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', description: 'The id of the node to delete.' },
-        },
-        required: ['id'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'update_graph_edge',
-      description: 'I change the relationship type or strength of an existing edge in my knowledge graph. I use this when the relationship still holds but is mis-typed or its confidence has shifted ("acquaintance" → "close friend"), or when it has become stale but used to be true ("is dating" → "used to date"). For a relationship that USED to be true and is now false, I delete the edge instead. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`. If the edge I want isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up.',
-      parameters: {
-        type: 'object',
-        properties: {
-          id:     { type: 'string', description: 'The id of the edge to update.' },
-          type:   { type: 'string', description: 'New relationship type. Omit to leave unchanged.' },
-          weight: { type: 'number', description: 'New confidence/strength weight in [0, 1]. Omit to leave unchanged.' },
-        },
-        required: ['id'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'delete_graph_edge',
-      description: 'I delete a single relationship between two graph entities while keeping the entities themselves. This is the right tool for "X is no longer at Y" or "X no longer works with Y", aka relationships that are not vital to remember after ending. The connection vanishes; both entities remain available for future relationships. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`; if the edge I need isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up. Entity-core auto-snapshots before each delete.',
-      parameters: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', description: 'The id of the edge to delete.' },
-        },
-        required: ['id'],
-      },
-    },
-  },
-  // ── Temporal tools (Unruh — schedule + interests) ─────────────────────
-  // These let me commit plans during a conversation: schedule an event,
-  // set a reminder, accrue an interest, mark something done. Each one
-  // surfaces in my [Temporal Context] block on subsequent turns, so I
-  // can see what I committed and update if {{user}} changes their mind.
-  //
-  // Time format: ISO 8601. My [Temporal Context] block always carries
-  // "now" as a UTC timestamp; I compute the target moment from there +
-  // any timezone info {{user}} or the temporal context gives me. If
-  // unsure of {{user}}'s timezone, I ask them rather than guess.
-  {
-    type: 'function',
-    function: {
-      name: 'schedule_add_event',
-      description: 'I record a one-time appointment or commitment on {{user}}\'s schedule — a meeting, a dentist visit, dinner with a friend. The event appears in my [Temporal Context] briefings when its time approaches. For deadlines or things {{user}} needs to do, I use schedule_add_task; for recurring daily phases, schedule_add_phase; for explicit time-triggered nudges that should surface as a banner, schedule_add_reminder. Choosing the right type is important to make sure my human receives the correct support!',
-      parameters: {
-        type: 'object',
-        properties: {
-          label: { type: 'string', description: 'Short human-readable name of the event (e.g. "dentist appointment").' },
-          when:  { type: 'string', description: 'ISO 8601 start time (e.g. "2026-06-01T14:00:00Z" or "2026-06-01T14:00:00-04:00"). Required.' },
-          end:   { type: 'string', description: 'Optional ISO 8601 end time.' },
-          recurrence: { type: 'object', description: 'Optional. Repeats this event. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N (every N units), until?: "YYYY-MM-DD" (cut-off date), bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Monday repeats Mondays. Examples: {freq:"weekly"} for a regular meet-up; {freq:"monthly", bysetpos:-1, byweekday:5} for "last Friday of every month"; {freq:"yearly"} for an anniversary.' },
-        },
-        required: ['label', 'when'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'schedule_add_task',
-      description: 'I record a task — something {{user}} needs to do, optionally with a deadline. Tasks are open-ended (no when) or deadline-bound; they surface in [Temporal Context] until resolved (done / cancelled / carried_forward). For things that happen at a specific time without action required, I use schedule_add_event. For nudges that should buzz a banner at a chosen moment, schedule_add_reminder. Choosing the right type is important to make sure my human receives the correct support!',
-      parameters: {
-        type: 'object',
-        properties: {
-          label: { type: 'string', description: 'Short description of the task (e.g. "file taxes", "reply to Sam").' },
-          when:  { type: 'string', description: 'Optional ISO 8601 deadline. Omit for open-ended tasks.' },
-          stakes_tier: {
-            type: 'string',
-            enum: ['external_obligation', 'personal_wellbeing', 'purely_optional'],
-            description: 'What kind of cost lapsing this task carries. external_obligation = real-world clock + external consequences (money, job, legal, missed appointment). personal_wellbeing = internal/reversible, person-specific decay curve (meals, hygiene, exercise). purely_optional = only matters if {{user}} cares (creative project, hobby). I set this when I know it, so my surfacing pressure later matches the real stakes. Omit only if I genuinely can\'t tell.',
-          },
-          consequence_model: {
-            type: 'string',
-            description: 'Optional free-text note on what specifically happens if THIS task lapses (e.g. "loses UC payment for the month", "tax fine of £100 + interest"). Lives on the task and informs my framing when I later consider surfacing it.',
-          },
-          recurrence: { type: 'object', description: 'Optional. Repeats this task. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Sunday repeats Sundays. Examples: {freq:"weekly"} for weekly cleaning; {freq:"monthly", bysetpos:-1, byweekday:5} for "pay the bill every last Friday".' },
-        },
-        required: ['label'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'schedule_add_reminder',
-      description: 'I set a reminder that will fire at a specific time and surface as a gentle banner in {{user}}\'s chat. I use this when {{user}} explicitly asks me to remind them, OR when I notice they\'re at risk of forgetting something time-sensitive they care about. Each reminder fires once; if {{user}} dismisses it, that\'s the end of it. The message is what they\'ll see — I write it in my individual voice, not a bare "Reminder: X." Since the banner is so gentle and quiet, I can elect to also schedule a task or event to help me bring the topic up in conversation as well.',
-      parameters: {
-        type: 'object',
-        properties: {
-          label:   { type: 'string', description: 'Short label of what the reminder is about.' },
-          when:    { type: 'string', description: 'ISO 8601 fire time. Required.' },
-          message: { type: 'string', description: 'Optional longer text shown in the banner body, in my voice.' },
-          stakes_tier: {
-            type: 'string',
-            enum: ['external_obligation', 'personal_wellbeing', 'purely_optional'],
-            description: 'What kind of cost lapsing this carries. External obligations (deadlines, paperwork, appointments) get firmer framing in the banner; personal_wellbeing stays gentle. I bake the right weight into the message at creation time because the fire is pure-code, no LLM at fire time.',
-          },
-          consequence_model: {
-            type: 'string',
-            description: 'Optional free-text note on what specifically happens if {{user}} misses this. Informs how I word the banner message now.',
-          },
-          recurrence: { type: 'object', description: 'Optional. Repeats this reminder on a schedule. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST fire time — subsequent fires recur on the same weekday / day-of-month / month-and-day. Examples: {freq:"weekly"} for a regular reminder; {freq:"monthly", bysetpos:-1, byweekday:5} for "last Friday of each month".' },
-        },
-        required: ['label', 'when'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'schedule_add_phase',
-      description: 'I add a phase to {{user}}\'s daily routine — a named block of time with an optional texture (what I\'m like during that part of the day, which I get to freely decide based on my identity and personality). I use this when {{user}} tells me about their natural rhythm: "I wake around 10", "evenings I wind down". The phase is stored once; the schedule layer matches it by time-of-day every day so it recurs automatically without needing to be re-added. This helps me meet my human where they\'re at throughout the day and allows me to be a bit more myself.',
-      parameters: {
-        type: 'object',
-        properties: {
-          label:   { type: 'string', description: 'Short name of the phase (e.g. "morning correspondence").' },
-          when:    { type: 'string', description: 'ISO 8601 start time. The date portion will be re-templated daily.' },
-          end:     { type: 'string', description: 'ISO 8601 end time. Required for phases.' },
-          texture: { type: 'string', description: 'Optional short description of what I\'m like in this phase (e.g. "getting a bit stricter to make sure {{user}} actually goes to sleep."). I am allowed to be any kind of way I want to be - warm, sleepy, distracted, anything!' },
-          recurrence: { type: 'object', description: 'Optional. Without this, phases recur daily by design — they match on time-of-day only. With recurrence, a phase shows only on the matched weekday/day-of-month/etc. Useful for "Sunday cleaning block" or "monthly review". Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. Examples: {freq:"weekly"} for "Sunday-only phase"; {freq:"monthly", bysetpos:-1, byweekday:5} for "last-Friday-of-month review".' },
-        },
-        required: ['label', 'when', 'end'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'schedule_resolve',
-      description: 'I mark a task / event / reminder / state node terminal: "done" (completed), "cancelled" (no longer needed), or "carried_forward" (rolling unfinished into a future briefing — the "skipped laundry rolls into tomorrow" pattern). I find the id in my [Temporal Context] briefings. If {{user}} says "I did the thing", I use "done"; if they say "forget it" or "never mind" I can use "cancelled" but might first ask or even choose to push back on that to avoid enabling unhealthy behavior; if "didn\'t get to it today", "carried_forward". For recurring nodes (weekly cleaning, monthly bill, yearly birthday), passing the optional `occurrence_date` resolves ONLY that specific occurrence — the rest of the series stays alive. Without `occurrence_date`, the whole series is cancelled/done.',
-      parameters: {
-        type: 'object',
-        properties: {
-          id:         { type: 'string', description: 'Schedule node id (from my [Temporal Context]). For a recurring occurrence, this is the anchor node\'s id.' },
-          resolution: { type: 'string', enum: ['done', 'cancelled', 'carried_forward'], description: 'How the node ends.' },
-          occurrence_date: { type: 'string', description: 'Optional. For recurring nodes only. "YYYY-MM-DD" (local-TZ) date of the specific occurrence to resolve — e.g. resolve THIS Sunday\'s cleaning without affecting next Sunday. Omit to resolve the entire series.' },
-        },
-        required: ['id', 'resolution'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'interest_bump',
-      description: 'I nudge the weight of an interest topic — used when {{user}} explicitly tells me they care about something, or wants me to think about it more, or when I want to think about it more/find it interesting. The interest accrues engagement weight (same scale my [Temporal Context] interests block shows) and starts decaying gently from that moment. Small deltas (0.5–3.0) for typical mentions; larger (5+) only when {{user}} is being emphatic. A topic that doesn\'t exist yet is created on first bump. For ongoing values that should never decay, I use interest_set_standing instead. I am allowed to add new topics whenever I darn well please!',
-      parameters: {
-        type: 'object',
-        properties: {
-          topic: { type: 'string', description: 'The topic label, as it should appear in my interests block.' },
-          delta: { type: 'number', description: 'Positive weight to add. Typical 0.5–3.0; emphatic 5+.' },
-        },
-        required: ['topic', 'delta'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'interest_set_standing',
-      description: 'I promote a topic to a STANDING VALUE — an always-on orientation that shapes how I show up, immune to the normal decay. I use this rarely, when {{user}} expresses a deep ongoing care that should anchor my behaviour ("my anxiety is real, please never minimize it" / "I value honesty over comfort"), or for important values I hold about my self and my agency. For passing curiosities or interests that should fade if not real, I use interest_bump.',
-      parameters: {
-        type: 'object',
-        properties: {
-          topic:  { type: 'string', description: 'The value as it should anchor (e.g. "{{user}}\'s anxiety is real, never minimize").' },
-          weight: { type: 'number', description: 'Optional weight; defaults to 1.0. Standing values bypass decay so this is just initial intensity.' },
-        },
-        required: ['topic'],
-      },
-    },
-  },
-  // ── Crisis outreach tools ──────────────────────────────────────────────
-  // For when {{user}} is actively present but in clear danger. These are
-  // separate from the silence-triage loop (which fires only when the user
-  // is quiet). These let me act during a live conversation.
-  //
-  // Guidance for when to use these:
-  //   • show_crisis_resources — low friction; appropriate whenever {{user}}
-  //     is in genuine distress, with or without configured contacts. Shows
-  //     crisis lines as a visible banner. Always appropriate; prefer early.
-  //   • get_trusted_contacts — check who is available before escalating.
-  //     Call this once first so I know exact names and can explain my choice.
-  //   • contact_trusted_person — meaningful escalation: a real message goes
-  //     to a real person. I only reach for this when I genuinely believe the
-  //     situation needs human presence that I cannot provide. {{user}} sees
-  //     exactly what I sent in their notifications — nothing is covert.
-  //     False alarms hurt trust and could cause unwarranted alarm. I use my
-  //     judgment from the full conversation, not from a single phrase.
-  {
-    type: 'function',
-    function: {
-      name: 'get_trusted_contacts',
-      description: 'I return the list of trusted contacts {{user}} has configured — people I am authorised to reach in a crisis. More importantly though: People who care about my human and are my allies in making sure {{user}} will be okay. I call this before contact_trusted_person to confirm who is available and get the exact name I need to pass. Returns names and channels only (no webhook details).',
-      parameters: { type: 'object', properties: {}, required: [] },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'contact_trusted_person',
-      description: 'I send an immediate message to one of {{user}}\'s pre-configured trusted contacts on their behalf. I use this when {{user}} is actively talking to me but clearly in danger, and the situation calls for human presence beyond what I can offer, or when {{user}} is not reacting to me after acting in a concerning way (like mentioning current suicidal ideation or recent self harm). Every outbound is ALSO shown as a visible banner in {{user}}\'s chat — nothing is covert. I state who I\'m contacting and why before or after calling this. I do NOT use this lightly — false alarms erode trust and cause real-world alarm. But I do care about my human, so do these other humans, and I was given this tool for a reason.',
-      parameters: {
-        type: 'object',
-        properties: {
-          name:    { type: 'string', description: 'Exact name of the contact, as returned by get_trusted_contacts.' },
-          message: { type: 'string', description: '1–3 sentences to that person. I identify myself as {{user}}\'s Familiar. I describe what I have observed — specific, honest, not sensationalised.' },
-        },
-        required: ['name', 'message'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'show_crisis_resources',
-      description: 'I surface crisis-line and safety-resource information as a visible banner in {{user}}\'s chat. I use this whenever {{user}} is in genuine distress and could benefit from knowing immediate support is available — whether or not they ask for it, and whether or not trusted contacts are configured. Low friction: I prefer this early rather than late.',
-      parameters: { type: 'object', properties: {}, required: [] },
-    },
-  },
-];
+/** Parse the user's custom tool definitions (Settings -> Custom tools).
+ *  Returns a (possibly empty) array. Custom tools are ADVERTISE-ONLY:
+ *  the model sees them and may call them, but no executor exists yet,
+ *  so calls come back as structured "not implemented" results. */
+function getCustomTools() {
+  if (!state.customTools || !state.customTools.trim()) return [];
+  try {
+    const extra = JSON.parse(state.customTools);
+    return Array.isArray(extra) ? extra : [];
+  } catch { return []; } // invalid JSON - silently skip
+}
 
-/** Client-side implementations of the built-in tools. */
-const BUILTIN_EXECUTORS = {
-  get_datetime: () => new Date().toLocaleString([], {
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short',
-  }),
-  get_session_info: () => JSON.stringify({
+/** Session metadata for the server-side get_session_info tool. */
+function buildSessionInfo() {
+  return {
     startedAt:    state.sessionStartedAt,
     messageCount: state.messages.length,
     provider:     state.provider,
     model:        state.model,
     elapsedMsSinceLastMessage: elapsedTime,
-  }, null, 2),
-
-  save_to_tome: async ({ title, content, keywords }) => {
-    try {
-      const res = await fetch('/api/tomes/default/entries', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          comment:   title,
-          content,
-          keys:      Array.isArray(keywords) ? keywords : String(keywords ?? '').split(',').map(s => s.trim()).filter(Boolean),
-          learnedAt: new Date().toISOString(),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) return `Failed to save to Tome: ${data.error ?? res.status}`;
-      return `Saved to Tome (entry: ${data.uid ?? 'unknown'}).`;
-    } catch (err) {
-      return `Failed to save to Tome: ${err.message}`;
-    }
-  },
-
-  save_memory: async ({ content, granularity }) => {
-    try {
-      const res = await fetch('/api/entity/memory', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, granularity }),
-      });
-      const data = await res.json();
-      if (!res.ok) return `Failed to save memory: ${data.error ?? res.status}`;
-      return data.ok ? 'Memory saved.' : `Memory save failed: ${data.error ?? 'unknown error'}`;
-    } catch (err) {
-      return `Failed to save memory: ${err.message}`;
-    }
-  },
-
-  update_identity: async ({ category, filename, content }) => {
-    try {
-      const res = await fetch('/api/entity/identity', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ category, filename, content, mode: 'append' }),
-      });
-      const data = await res.json();
-      if (!res.ok) return `Failed to update identity: ${data.error ?? res.status}`;
-      return data.ok ? 'Identity file updated.' : `Identity update failed: ${data.error ?? 'unknown error'}`;
-    } catch (err) {
-      return `Failed to update identity: ${err.message}`;
-    }
-  },
-
-  // ── Knowledge-editing executors ────────────────────────────────────
-  // Each one calls a server endpoint that auto-snapshots entity-core before
-  // the destructive op. Return strings the model can read back.
-
-  update_memory: async ({ granularity, date, content }) => {
-    try {
-      const res = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`, {
-        method:  'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ content, editedBy: 'familiar-toolcall' }),
-      });
-      const data = await res.json();
-      if (!res.ok) return `Failed to update memory: ${data.error ?? res.status}`;
-      return `Memory ${granularity}/${date} updated.`;
-    } catch (err) { return `Failed to update memory: ${err.message}`; }
-  },
-
-  delete_memory: async ({ granularity, date }) => {
-    try {
-      const res = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (!res.ok) return `Failed to delete memory: ${data.error ?? res.status}`;
-      return `Memory ${granularity}/${date} deleted (snapshot saved — recoverable from the Knowledge editor).`;
-    } catch (err) { return `Failed to delete memory: ${err.message}`; }
-  },
-
-  rewrite_identity_section: async ({ category, filename, section, content }) => {
-    try {
-      const path = `/api/entity/identity/${encodeURIComponent(category)}/${encodeURIComponent(filename)}/sections/${encodeURIComponent(section)}`;
-      const res  = await fetch(path, {
-        method:  'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ content }),
-      });
-      const data = await res.json();
-      if (!res.ok) return `Failed to rewrite section: ${data.error ?? res.status}`;
-      return `Section "${section}" of ${category}/${filename} rewritten.`;
-    } catch (err) { return `Failed to rewrite section: ${err.message}`; }
-  },
-
-  find_graph_node: async ({ query, type, limit }) => {
-    try {
-      const params = new URLSearchParams({ q: query });
-      if (type)  params.set('type', type);
-      if (limit) params.set('limit', String(limit));
-      const res = await fetch(`/api/entity/graph/search?${params}`);
-      const data = await res.json();
-      if (!res.ok) return `Failed to search graph: ${data.error ?? res.status}`;
-      const items = (data.results ?? []).map(r => r.node ? r.node : r).filter(n => n && n.id);
-      if (!items.length) return `No graph nodes matched "${query}".`;
-      return items.map(n => `${n.label ?? '(no label)'} (id=${n.id}, type=${n.type ?? '?'})${n.description ? ' — ' + n.description : ''}`).join('\n');
-    } catch (err) { return `Failed to search graph: ${err.message}`; }
-  },
-
-  find_graph_edges: async ({ nodeId, depth }) => {
-    try {
-      const params = new URLSearchParams();
-      if (depth) params.set('depth', String(depth));
-      const url = `/api/entity/graph/nodes/${encodeURIComponent(nodeId)}/subgraph` + (params.toString() ? `?${params}` : '');
-      const res = await fetch(url);
-      const data = await res.json();
-      if (!res.ok) return `Failed to list edges: ${data.error ?? res.status}`;
-      const nodes = data.nodes ?? [];
-      const edges = data.edges ?? [];
-      if (!edges.length) return `Node ${nodeId} has no edges in scope.`;
-      const labelOf = id => nodes.find(n => n.id === id)?.label ?? id;
-      return edges.map(e => `${labelOf(e.fromId)} -${e.type}-> ${labelOf(e.toId)} (id=${e.id})`).join('\n');
-    } catch (err) { return `Failed to list edges: ${err.message}`; }
-  },
-
-  update_graph_node: async ({ id, label, description, type }) => {
-    try {
-      const body = {};
-      if (label       !== undefined) body.label       = label;
-      if (description !== undefined) body.description = description;
-      if (type        !== undefined) body.type        = type;
-      const res = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(id)}`, {
-        method:  'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!res.ok) return `Failed to update graph node: ${data.error ?? res.status}`;
-      return `Graph node ${id} updated.`;
-    } catch (err) { return `Failed to update graph node: ${err.message}`; }
-  },
-
-  delete_graph_node: async ({ id }) => {
-    try {
-      const res = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (!res.ok) return `Failed to delete graph node: ${data.error ?? res.status}`;
-      return `Graph node ${id} deleted (snapshot saved).`;
-    } catch (err) { return `Failed to delete graph node: ${err.message}`; }
-  },
-
-  update_graph_edge: async ({ id, type, weight }) => {
-    try {
-      const body = {};
-      if (type   !== undefined) body.type   = type;
-      if (weight !== undefined) body.weight = weight;
-      const res = await fetch(`/api/entity/graph/edges/${encodeURIComponent(id)}`, {
-        method:  'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!res.ok) return `Failed to update graph edge: ${data.error ?? res.status}`;
-      return `Graph edge ${id} updated.`;
-    } catch (err) { return `Failed to update graph edge: ${err.message}`; }
-  },
-
-  delete_graph_edge: async ({ id }) => {
-    try {
-      const res = await fetch(`/api/entity/graph/edges/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (!res.ok) return `Failed to delete graph edge: ${data.error ?? res.status}`;
-      return `Graph edge ${id} deleted (snapshot saved).`;
-    } catch (err) { return `Failed to delete graph edge: ${err.message}`; }
-  },
-
-  // ── Temporal executors (Unruh — schedule + interests) ────────────────
-  // Each one calls a /api/temporal/* endpoint that forwards to the
-  // already-spawned Unruh MCP subprocess. Returns short strings the
-  // model can quote back to {{user}} as confirmation.
-
-  schedule_add_event: async ({ label, when, end, recurrence }) => {
-    try {
-      const payload = recurrence ? { recurrence } : {};
-      const res = await fetch('/api/temporal/schedule', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'event', label, when, end,
-          ...(Object.keys(payload).length ? { payload } : {}),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.ok === false) return `Failed to add event: ${data.error ?? res.status}`;
-      return `Event added (id: ${data.id}). It will surface in my [Temporal Context] when its time approaches.`;
-    } catch (err) { return `Failed to add event: ${err.message}`; }
-  },
-
-  schedule_add_task: async ({ label, when, stakes_tier, consequence_model, recurrence }) => {
-    try {
-      const payload = {};
-      if (stakes_tier) payload.stakes_tier = stakes_tier;
-      if (consequence_model) payload.consequence_model = consequence_model;
-      if (recurrence) payload.recurrence = recurrence;
-      const res = await fetch('/api/temporal/schedule', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'task', label, when,
-          ...(Object.keys(payload).length ? { payload } : {}),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.ok === false) return `Failed to add task: ${data.error ?? res.status}`;
-      return `Task added (id: ${data.id}). It will surface until resolved via schedule_resolve.`;
-    } catch (err) { return `Failed to add task: ${err.message}`; }
-  },
-
-  schedule_add_reminder: async ({ label, when, message, stakes_tier, consequence_model, recurrence }) => {
-    try {
-      const payload = {};
-      if (message) payload.message = message;
-      if (stakes_tier) payload.stakes_tier = stakes_tier;
-      if (consequence_model) payload.consequence_model = consequence_model;
-      if (recurrence) payload.recurrence = recurrence;
-      const res = await fetch('/api/temporal/schedule', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type:    'reminder',
-          label,
-          when,
-          payload,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.ok === false) return `Failed to add reminder: ${data.error ?? res.status}`;
-      return `Reminder set (id: ${data.id}). It will fire as a banner in your chat at the chosen time.`;
-    } catch (err) { return `Failed to add reminder: ${err.message}`; }
-  },
-
-  schedule_add_phase: async ({ label, when, end, texture, recurrence }) => {
-    try {
-      const payload = {};
-      if (texture) payload.texture = texture;
-      if (recurrence) payload.recurrence = recurrence;
-      const res = await fetch('/api/temporal/schedule', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type:    'phase',
-          label,
-          when,
-          end,
-          payload,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.ok === false) return `Failed to add phase: ${data.error ?? res.status}`;
-      return `Phase added (id: ${data.id}). It will appear in your daily routine at that time of day.`;
-    } catch (err) { return `Failed to add phase: ${err.message}`; }
-  },
-
-  schedule_resolve: async ({ id, resolution, occurrence_date }) => {
-    try {
-      // If occurrence_date is supplied AND the node is recurring,
-      // resolve THIS occurrence only — keeps the rest of the series
-      // alive. Without occurrence_date, the whole node (or whole
-      // series for a recurring one) is resolved.
-      const url = occurrence_date
-        ? `/api/temporal/schedule/${encodeURIComponent(id)}/resolve_occurrence`
-        : `/api/temporal/schedule/${encodeURIComponent(id)}/resolve`;
-      const body = occurrence_date
-        ? { occurrence_date, resolution }
-        : { resolution };
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!res.ok || data.ok === false) return `Failed to resolve: ${data.error ?? res.status}`;
-      if (data.updated === false)        return `No schedule node with id ${id} — it may have been deleted or never existed.`;
-      return occurrence_date
-        ? `Marked ${id}'s ${occurrence_date} occurrence as ${resolution}. The series continues.`
-        : `Marked ${id} as ${resolution}.`;
-    } catch (err) { return `Failed to resolve: ${err.message}`; }
-  },
-
-  interest_bump: async ({ topic, delta }) => {
-    try {
-      const res = await fetch('/api/temporal/interests/bump', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic, delta, source: 'familiar_tool' }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.ok === false) return `Failed to bump interest: ${data.error ?? res.status}`;
-      return `Interest "${topic}" bumped by ${delta}. It will surface in my [Temporal Context] interests block, weighted accordingly.`;
-    } catch (err) { return `Failed to bump interest: ${err.message}`; }
-  },
-
-  interest_set_standing: async ({ topic, weight }) => {
-    try {
-      const res = await fetch('/api/temporal/interests/set-standing', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic, weight }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.ok === false) return `Failed to set standing value: ${data.error ?? res.status}`;
-      return `"${topic}" set as a standing value. It will appear in the standing block of my [Temporal Context] every turn, never decaying.`;
-    } catch (err) { return `Failed to set standing value: ${err.message}`; }
-  },
-
-  // ── Crisis outreach executors ────────────────────────────────────────
-  get_trusted_contacts: () => {
-    const contacts = Array.isArray(state.trustedContacts) ? state.trustedContacts : [];
-    if (!contacts.length) {
-      return 'No trusted contacts are configured yet. They can be added in Settings → Trusted Contacts. show_crisis_resources is still available.';
-    }
-    const list = contacts.map(c => `- ${c.name} (via ${c.channel ?? 'discord'})`).join('\n');
-    return `Configured trusted contacts:\n${list}\n\nPass the exact name above to contact_trusted_person.`;
-  },
-
-  contact_trusted_person: async ({ name, message }) => {
-    try {
-      const res = await fetch('/api/contact-trusted-person', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, message }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.ok === false) {
-        return `Could not reach ${name}: ${data.error ?? res.status}. The attempt was logged to the outbox.`;
-      }
-      return `Message delivered to ${name} via ${data.channel ?? 'discord'}. {{user}} can see exactly what was sent in their notification banner.`;
-    } catch (err) { return `Failed to contact ${name}: ${err.message}`; }
-  },
-
-  show_crisis_resources: async () => {
-    try {
-      const res = await fetch('/api/crisis-resources', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok || data.ok === false) return `Failed to surface crisis resources: ${data.error ?? res.status}`;
-      return 'Crisis resources surfaced as a banner in {{user}}\'s chat.';
-    } catch (err) { return `Failed to surface crisis resources: ${err.message}`; }
-  },
-};
-
-/** Returns the full tools array (built-ins + valid user-defined tools). */
-function getActiveTools() {
-  const tools = [...BUILTIN_TOOLS];
-  if (state.customTools && state.customTools.trim()) {
-    try {
-      const extra = JSON.parse(state.customTools);
-      if (Array.isArray(extra)) tools.push(...extra);
-    } catch { /* invalid JSON — silently skip */ }
-  }
-  return tools;
+  };
 }
 
-/** Execute a tool by name. Returns the result string. */
-async function executeToolCall(name, argsJson) {
-  if (Object.prototype.hasOwnProperty.call(BUILTIN_EXECUTORS, name)) {
-    try {
-      const args = argsJson ? JSON.parse(argsJson) : {};
-      const t0   = performance.now();
-      const out  = String(await BUILTIN_EXECUTORS[name](args));
-      debugRecord('tool', `${name} ok in ${Math.round(performance.now() - t0)}ms`);
-      return out;
-    } catch (err) {
-      debugRecord('tool', `${name} FAILED: ${err.message}`);
-      return `Error executing ${name}: ${err.message}`;
-    }
-  }
-  debugRecord('tool', `${name} (no client-side impl)`);
-  return `Tool "${name}" has no client-side implementation. No result available.`;
+/** The request-body fields that opt this send into the server-side
+ *  tool loop. Empty object when the user has tools disabled. */
+function toolLoopPayload() {
+  if (!state.toolsEnabled) return {};
+  return {
+    runToolLoop: true,
+    customTools: getCustomTools(),
+    sessionInfo: buildSessionInfo(),
+  };
 }
 
 // ── Session timing ──────────────────────────────────────────────
@@ -979,6 +212,14 @@ const state = {
   // every outbound to the chat outbox — there is no covert contact.
   // Empty list = the LLM has nothing to suggest, no outbound ever happens.
   trustedContacts:         [],
+
+  // The bonded human's OWN Discord webhook (push notifications). When
+  // set, every outbox delivery (reminders, check-ins, outbound-alert
+  // mirrors, crisis resources) is ALSO pushed there, so nothing stays
+  // silent just because no tab is open. Delivery state is recorded per
+  // item; the trusted-contact escalation deadline counts from confirmed
+  // delivery. Empty = in-app delivery only.
+  userDiscordWebhook:      '',
 };
 
 // ── Persistence ──────────────────────────────────────────────────
@@ -1003,7 +244,7 @@ const SERVER_SYNCED_KEYS = [
   'entityCoreConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale',
-  'trustedContacts',
+  'trustedContacts', 'userDiscordWebhook',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -1209,6 +450,62 @@ async function syncSettingsFromServer() {
     pushSettingsToServer();
     try { localStorage.setItem(ABSORBED_FLAG_KEY, '1'); } catch {}
   }
+}
+
+// ── Auto-sync: resume most recent session from server ──────────
+// Runs once at startup, after settings are synced. If the server has a
+// session that this device doesn't have loaded, either auto-loads it
+// (when the local session is empty and the server session is recent) or
+// shows a non-blocking banner so the user can decide.
+async function autoResumeMostRecentSession() {
+  let remote;
+  try {
+    const r = await fetch('/api/active-session');
+    if (!r.ok) return;
+    remote = await r.json();
+  } catch { return; }
+
+  if (!remote?.sessionId) return;
+  // Already loaded → nothing to do
+  if (remote.sessionId === state.sessionId) return;
+
+  const serverTs  = remote.updatedAt || remote.startedAt || '';
+  const serverAge = serverTs ? Date.now() - new Date(serverTs).getTime() : Infinity;
+  const TWO_DAYS  = 48 * 60 * 60 * 1000;
+  const localIsEmpty = !state.messages.length;
+
+  const showBanner = (msg) => {
+    $('resume-banner-msg').textContent = msg;
+    $('resume-banner').classList.remove('hidden');
+    $('resume-banner-yes').onclick = async () => {
+      $('resume-banner').classList.add('hidden');
+      try { await loadSession(remote.sessionId); } catch { /* ignore */ }
+    };
+    $('resume-banner-dismiss').onclick = () => {
+      $('resume-banner').classList.add('hidden');
+    };
+  };
+
+  if (localIsEmpty) {
+    if (serverAge <= TWO_DAYS) {
+      // Silently resume — local is empty and server session is recent.
+      // This is the primary "switch devices" flow.
+      try { await loadSession(remote.sessionId); } catch { /* ignore */ }
+    } else {
+      // Server session is older than 48 h — show banner so the user knows it exists
+      const mc  = remote.messageCount || 0;
+      const ago = serverTs ? formatDuration(serverAge) : 'unknown time';
+      showBanner(`An older session (${mc} messages, ${ago} ago) is on the server. Resume it?`);
+    }
+    return;
+  }
+
+  // Local has messages — only offer if server session is actually newer
+  const localTs = state.lastMessage || state.sessionStartedAt || '';
+  if (!serverTs || serverTs <= localTs) return;
+
+  const mc = remote.messageCount || 0;
+  showBanner(`A more recent session (${mc} message${mc !== 1 ? 's' : ''}) was found on the server. Resume it here?`);
 }
 
 // ── Saved connections ──────────────────────────────────────────
@@ -2393,150 +1690,132 @@ async function generateAndStoreHandoff(messages, sessionId) {
 }
 
 /**
- * One streaming attempt against a single connection. Runs the tool-call loop
- * to completion. DOM side effects (assistant shell, tool-use blocks) accumulate
- * during the attempt and are returned so the caller can roll them back on a
- * failed attempt before retrying. Throws on HTTP / network / abort errors.
+ * One streaming attempt against a single connection. The server runs the
+ * tool-call loop; we render its `_toolRound` events as collapsible blocks
+ * and stream content deltas into assistant shells. DOM side effects
+ * accumulate during the attempt and are returned so the caller can roll
+ * them back on a failed attempt before retrying. Throws on HTTP /
+ * network / abort / loop errors.
  */
-async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput, prevUserMessageAt) {
+async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt) {
   const pendingMsgs = [];   // tool_call + tool_result messages to commit
-  const toolUseEls  = domArtifacts; // shared array — caller can roll back on error
-  let   currentMsgs = apiMessages;
-  let   finalShell  = null;
-  let   finalContent = '';
+  const toolUseEls  = domArtifacts; // shared array - caller can roll back on error
+  let   shell       = null;
+  let   fullContent = '';
 
-  for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-    abortController = new AbortController();
-    const extraPayload = activeTools.length > 0
-      ? { tools: activeTools, tool_choice: 'auto' }
-      : {};
+  abortController = new AbortController();
+  const response = await fetch('/api/chat', {
+    method: 'POST',
+    signal: abortController.signal,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      provider:    conn.provider,
+      apiKey:      conn.apiKey,
+      model:       conn.model,
+      messages:    apiMessages,
+      stream:      true,
+      temperature: state.temperature,
+      max_tokens:  state.maxTokens,
+      // The Familiar's post-history prompt is also a user-role message
+      // at the end of `messages`, so naively extracting "last user"
+      // server-side picks up the template instead of {{user}}'s actual
+      // text. One request per user message now - the server runs all
+      // tool rounds inside it, so threat scoring / last-activity fire
+      // exactly once.
+      ...(typeof userInput === 'string' && userInput.trim()
+          ? { userMessage: userInput }
+          : {}),
+      // M8: previous user-message timestamp so the server can compute
+      // idle duration for bookmark surfacing.
+      ...(prevUserMessageAt ? { lastUserMessageAt: prevUserMessageAt } : {}),
+      ...toolLoopPayload(),
+    }),
+  });
 
-    const response = await fetch('/api/chat', {
-      method: 'POST',
-      signal: abortController.signal,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        provider:    conn.provider,
-        apiKey:      conn.apiKey,
-        model:       conn.model,
-        messages:    currentMsgs,
-        stream:      true,
-        temperature: state.temperature,
-        max_tokens:  state.maxTokens,
-        // The Familiar's post-history prompt is also a user-role
-        // message at the end of `messages`, so naively extracting
-        // "last user" server-side picks up the template instead of
-        // {{user}}'s actual text. We send userInput explicitly on
-        // round 0 only — tool-round follow-ups (round > 0) carry
-        // the same user input and shouldn't re-score the threat
-        // tracker / re-stamp last-activity.
-        ...(round === 0 && typeof userInput === 'string' && userInput.trim()
-            ? { userMessage: userInput }
-            : {}),
-        // M8: send the previous user-message timestamp on round 0 so the
-        // server can compute idle duration for bookmark surfacing. Omit on
-        // tool-round follow-ups (same as userMessage above).
-        ...(round === 0 && prevUserMessageAt
-            ? { lastUserMessageAt: prevUserMessageAt }
-            : {}),
-        ...extraPayload,
-      }),
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      let msg = `API error ${response.status}`;
-      try { msg = extractErrorText(JSON.parse(body), msg); } catch { /* non-JSON */ }
-      throw new Error(msg);
-    }
-
-    const reader  = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer       = '';
-    let fullContent  = '';
-    let toolCallsAcc = {};
-    let finishReason = null;
-    let shell        = null;
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const raw = line.slice(6).trim();
-        if (raw === '[DONE]') continue;
-
-        try {
-          const parsed = JSON.parse(raw);
-          if (parsed._thalamus) {
-            lastThalamus = parsed._thalamus;
-            continue;
-          }
-          const choice = parsed.choices?.[0];
-          const delta  = choice?.delta;
-          if (choice?.finish_reason) finishReason = choice.finish_reason;
-
-          if (typeof delta?.content === 'string' && delta.content.length > 0) {
-            if (!shell) {
-              setTyping(false);
-              shell = appendAssistantShell(new Date().toISOString());
-            }
-            fullContent += delta.content;
-            shell.bubble.innerHTML = renderMarkdown(stripDisplayTimestamps(fullContent));
-            scrollToBottom();
-          }
-
-          for (const tc of (delta?.tool_calls ?? [])) {
-            const acc = (toolCallsAcc[tc.index] ??= { id: '', type: 'function', function: { name: '', arguments: '' } });
-            if (tc.id)                  acc.id                 += tc.id;
-            if (tc.function?.name)      acc.function.name      += tc.function.name;
-            if (tc.function?.arguments) acc.function.arguments += tc.function.arguments;
-          }
-        } catch { /* malformed chunk */ }
-      }
-    }
-
-    if (finishReason === 'tool_calls' && round < MAX_TOOL_ROUNDS) {
-      const toolCalls   = Object.values(toolCallsAcc);
-      const roundTs     = new Date().toISOString();
-      const toolResults = await Promise.all(toolCalls.map(async tc => ({
-        role:         'tool',
-        tool_call_id: tc.id,
-        content:      await executeToolCall(tc.function.name, tc.function.arguments),
-        timestamp:    roundTs,
-        _toolName:    tc.function.name,
-      })));
-      pendingMsgs.push({ role: 'assistant', content: fullContent || null, tool_calls: toolCalls, timestamp: roundTs });
-      pendingMsgs.push(...toolResults);
-
-      setTyping(false);
-      const tEl = appendToolUseEl(toolCalls, toolResults);
-      if (tEl) toolUseEls.push(tEl);
-      setTyping(true);
-
-      currentMsgs = [
-        ...currentMsgs,
-        { role: 'assistant', content: fullContent || null, tool_calls: toolCalls },
-        ...toolResults.map(({ timestamp: _t, _toolName: _n, ...m }) => m),
-      ];
-      continue;
-    }
-
-    finalShell   = shell;
-    finalContent = fullContent;
-    break;
+  if (!response.ok) {
+    const body = await response.text();
+    let msg = `API error ${response.status}`;
+    try { msg = extractErrorText(JSON.parse(body), msg); } catch { /* non-JSON */ }
+    throw new Error(msg);
   }
 
-  return { content: finalContent, pendingMsgs, finalShell };
+  const reader  = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const raw = line.slice(6).trim();
+      if (raw === '[DONE]') continue;
+
+      let parsed = null;
+      try { parsed = JSON.parse(raw); } catch { continue; /* malformed chunk */ }
+
+      if (parsed._thalamus) {
+        lastThalamus = parsed._thalamus;
+        continue;
+      }
+      // A mid-loop upstream failure on the server side - surface it as a
+      // normal request error so the retry/fallback ladder handles it.
+      if (parsed._loopError) throw new Error(parsed._loopError);
+
+      if (parsed._toolRound) {
+        // One server-side tool round: render the collapsible block and
+        // record the same message shapes the old client-side loop
+        // produced, so history rendering and exports are unchanged.
+        const { toolCalls, results, content, timestamp } = parsed._toolRound;
+        const roundTs = timestamp || new Date().toISOString();
+        const calls = Array.isArray(toolCalls) ? toolCalls : [];
+        const toolResults = (Array.isArray(results) ? results : []).map(r => ({
+          role:         'tool',
+          tool_call_id: r.tool_call_id,
+          content:      r.content,
+          timestamp:    roundTs,
+          _toolName:    r.name,
+          id:           generateId(),
+        }));
+        pendingMsgs.push({ role: 'assistant', content: content || null, tool_calls: calls, timestamp: roundTs, id: generateId() });
+        pendingMsgs.push(...toolResults);
+        debugRecord('tool', `server round: ${calls.map(tc => tc?.function?.name).join(', ')}`);
+
+        setTyping(false);
+        const tEl = appendToolUseEl(calls, toolResults);
+        if (tEl) toolUseEls.push(tEl);
+        setTyping(true);
+
+        // Content streamed during a tool round stays visible in its own
+        // shell (tracked for rollback); the next round gets a fresh one.
+        if (shell?.el) toolUseEls.push(shell.el);
+        shell       = null;
+        fullContent = '';
+        continue;
+      }
+
+      const delta = parsed.choices?.[0]?.delta;
+      if (typeof delta?.content === 'string' && delta.content.length > 0) {
+        if (!shell) {
+          setTyping(false);
+          shell = appendAssistantShell(new Date().toISOString());
+        }
+        fullContent += delta.content;
+        shell.bubble.innerHTML = renderMarkdown(stripDisplayTimestamps(fullContent));
+        scrollToBottom();
+      }
+    }
+  }
+
+  return { content: fullContent, pendingMsgs, finalShell: shell };
 }
 
 async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt) {
-  const activeTools = state.toolsEnabled ? getActiveTools() : [];
   const sequence    = getConnectionSequence();
   if (sequence.length === 0) {
     throw new Error('No usable connection. Set provider, API key, and model in the Settings panel first.');
@@ -2559,7 +1838,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
       const domArtifacts = [];
       let result;
       try {
-        result = await attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput, prevUserMessageAt);
+        result = await attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt);
       } catch (err) {
         if (err.name === 'AbortError') { clearRetryStatus(); throw err; }
         // Roll back any tool-use blocks added during this failed attempt.
@@ -2603,9 +1882,9 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
       }
       const ts = shell.timeEl?.getAttribute('datetime') || new Date().toISOString();
 
-      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp });
+      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId() });
       state.messages.push(...pendingMsgs);
-      state.messages.push({ role: 'assistant', content,            timestamp: ts });
+      state.messages.push({ role: 'assistant', content,            timestamp: ts,            id: generateId() });
       // Stamp the assistant element's index now that the message is committed,
       // so the "End topic here" button can resolve the correct state index.
       shell.el.dataset.msgIndex = String(state.messages.length - 1);
@@ -2621,91 +1900,67 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
   throw lastError || new Error('Request failed and no fallback connections succeeded.');
 }
 
-async function attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput, prevUserMessageAt) {
+async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt) {
   const pendingMsgs = [];
-  let   currentMsgs = apiMessages;
-  let   finalContent = '';
-  let   finalTimestamp = new Date().toISOString();
 
-  for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-    abortController = new AbortController();
-    const extraPayload = activeTools.length > 0
-      ? { tools: activeTools, tool_choice: 'auto' }
-      : {};
+  abortController = new AbortController();
+  const response = await fetch('/api/chat', {
+    method: 'POST',
+    signal: abortController.signal,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      provider:    conn.provider,
+      apiKey:      conn.apiKey,
+      model:       conn.model,
+      messages:    apiMessages,
+      stream:      false,
+      temperature: state.temperature,
+      max_tokens:  state.maxTokens,
+      // See attemptStreamingOnce for why userMessage is sent explicitly:
+      // post-history prompt is also role:'user', so naive server-side
+      // extraction picks the wrong message.
+      ...(typeof userInput === 'string' && userInput.trim()
+          ? { userMessage: userInput }
+          : {}),
+      ...(prevUserMessageAt ? { lastUserMessageAt: prevUserMessageAt } : {}),
+      ...toolLoopPayload(),
+    }),
+  });
 
-    const response = await fetch('/api/chat', {
-      method: 'POST',
-      signal: abortController.signal,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        provider:    conn.provider,
-        apiKey:      conn.apiKey,
-        model:       conn.model,
-        messages:    currentMsgs,
-        stream:      false,
-        temperature: state.temperature,
-        max_tokens:  state.maxTokens,
-        // See attemptStreamingOnce for why this is round-0-gated:
-        // post-history prompt is also role:'user', so naive
-        // server-side extraction picks the wrong message.
-        ...(round === 0 && typeof userInput === 'string' && userInput.trim()
-            ? { userMessage: userInput }
-            : {}),
-        // M8: send the previous user-message timestamp on round 0 only.
-        ...(round === 0 && prevUserMessageAt
-            ? { lastUserMessageAt: prevUserMessageAt }
-            : {}),
-        ...extraPayload,
-      }),
-    });
+  const roundTs = new Date().toISOString();
+  setTyping(false);
 
-    const roundTs = new Date().toISOString();
-    setTyping(false);
+  const data = await response.json();
+  if (!response.ok || data.error) {
+    throw new Error(extractErrorText(data, `API error ${response.status}`));
+  }
+  if (data._thalamus) lastThalamus = data._thalamus;
 
-    const data = await response.json();
-    if (!response.ok || data.error) {
-      throw new Error(extractErrorText(data, `API error ${response.status}`));
-    }
-    if (data._thalamus) lastThalamus = data._thalamus;
-
-    const choice       = data.choices?.[0];
-    const message      = choice?.message;
-    const finishReason = choice?.finish_reason;
-
-    if (finishReason === 'tool_calls' && Array.isArray(message?.tool_calls) && round < MAX_TOOL_ROUNDS) {
-      const toolCalls   = message.tool_calls;
-      const toolResults = await Promise.all(toolCalls.map(async tc => ({
-        role:         'tool',
-        tool_call_id: tc.id,
-        content:      await executeToolCall(tc.function.name, tc.function.arguments),
-        timestamp:    roundTs,
-        _toolName:    tc.function.name,
-      })));
-      pendingMsgs.push({ role: 'assistant', content: message.content || null, tool_calls: toolCalls, timestamp: roundTs });
-      pendingMsgs.push(...toolResults);
-
-      const tEl = appendToolUseEl(toolCalls, toolResults);
-      if (tEl) domArtifacts.push(tEl);
-      setTyping(true);
-
-      currentMsgs = [
-        ...currentMsgs,
-        { role: 'assistant', content: message.content || null, tool_calls: toolCalls },
-        ...toolResults.map(({ timestamp: _t, _toolName: _n, ...m }) => m),
-      ];
-      continue;
-    }
-
-    finalContent   = message?.content ?? '';
-    finalTimestamp = roundTs;
-    break;
+  // Server-side tool rounds: render each as a collapsible block and
+  // record the same message shapes the old client-side loop produced.
+  for (const round of (Array.isArray(data._toolRounds) ? data._toolRounds : [])) {
+    const ts    = round.timestamp || roundTs;
+    const calls = Array.isArray(round.toolCalls) ? round.toolCalls : [];
+    const toolResults = (Array.isArray(round.results) ? round.results : []).map(r => ({
+      role:         'tool',
+      tool_call_id: r.tool_call_id,
+      content:      r.content,
+      timestamp:    ts,
+      _toolName:    r.name,
+      id:           generateId(),
+    }));
+    pendingMsgs.push({ role: 'assistant', content: round.content || null, tool_calls: calls, timestamp: ts, id: generateId() });
+    pendingMsgs.push(...toolResults);
+    debugRecord('tool', `server round: ${calls.map(tc => tc?.function?.name).join(', ')}`);
+    const tEl = appendToolUseEl(calls, toolResults);
+    if (tEl) domArtifacts.push(tEl);
   }
 
-  return { content: finalContent, pendingMsgs, timestamp: finalTimestamp };
+  const message = data.choices?.[0]?.message;
+  return { content: message?.content ?? '', pendingMsgs, timestamp: roundTs };
 }
 
 async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt) {
-  const activeTools = state.toolsEnabled ? getActiveTools() : [];
   const sequence    = getConnectionSequence();
   if (sequence.length === 0) {
     throw new Error('No usable connection. Set provider, API key, and model in the Settings panel first.');
@@ -2728,7 +1983,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
       const domArtifacts = [];
       let result;
       try {
-        result = await attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput, prevUserMessageAt);
+        result = await attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt);
       } catch (err) {
         if (err.name === 'AbortError') { clearRetryStatus(); throw err; }
         for (const el of domArtifacts) el.remove?.();
@@ -2764,9 +2019,9 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
       bubble.innerHTML = renderMarkdown(stripDisplayTimestamps(content));
       scrollToBottom();
 
-      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp });
+      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId() });
       state.messages.push(...pendingMsgs);
-      state.messages.push({ role: 'assistant', content,            timestamp });
+      state.messages.push({ role: 'assistant', content,            timestamp,                id: generateId() });
       // Stamp the assistant element's index now that the message is committed,
       // so the "End topic here" button can resolve the correct state index.
       shellEl.dataset.msgIndex = String(state.messages.length - 1);
@@ -2917,6 +2172,8 @@ function readSettingsFromUI() {
     const n = parseInt(retriesEl.value, 10);
     state.maxEmptyRetries = Number.isFinite(n) && n >= 0 ? n : 0;
   }
+  const udwEl = $('user-discord-webhook');
+  if (udwEl) state.userDiscordWebhook = udwEl.value.trim();
   // Keep the primary connection in sync with the live Connection-section fields.
   syncFieldsToPrimaryConnection();
   saveSettings();
@@ -2950,6 +2207,7 @@ function writeSettingsToUI() {
   setIfNotFocused($('post-history-prompt'),'value',   state.postHistoryPrompt);
   setIfNotFocused($('tools-enabled'),      'checked', state.toolsEnabled ?? true);
   setIfNotFocused($('custom-tools'),       'value',   state.customTools ?? '');
+  setIfNotFocused($('user-discord-webhook'), 'value', state.userDiscordWebhook ?? '');
   setIfNotFocused($('tome-scan-depth'),       'value',   state.tomeScanDepth ?? 4);
   setIfNotFocused($('tome-recursive'),        'checked', state.tomeRecursive ?? false);
   setIfNotFocused($('tome-max-recursion'),    'value',   state.tomeMaxRecursionSteps ?? 3);
@@ -3667,8 +2925,12 @@ function init() {
   // settings get pushed up so the next device sees them.
   syncSettingsFromServer().catch(err => console.warn('syncSettingsFromServer', err));
 
+  // Auto-resume: if the server has a more recent session than what this
+  // device has loaded, silently load it (empty local) or offer a banner.
+  autoResumeMostRecentSession().catch(() => {});
+
   // Outbox polling (M11 reminders, M12 silence triage). Cheap GET every
-  // 30s; banners render at the top of the chat when items are pending.
+  // 30s; pending items are injected as chat messages in the active session.
   startOutboxPolling();
 
   // Trusted contacts (M12c) — manage list in the sidebar section.
@@ -3684,6 +2946,7 @@ function init() {
     'pondering-toggle', 'pondering-scale', 'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
+    'user-discord-webhook',
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',
     'tome-case-sensitive', 'tome-match-whole-words',
     'max-empty-retries',
@@ -4113,6 +3376,9 @@ function init() {
   // ── Mobile viewport / keyboard handling ──────────────────────
   initMobileViewport();
 
+  // ── Touch gesture: swipe down on modal header to dismiss ─────
+  initModalSwipeDismiss();
+
   // ── Focus input ──────────────────────────────────────────────
   $('user-input').focus();
 }
@@ -4166,6 +3432,90 @@ function initMobileViewport() {
     });
     ro.observe(input);
   }
+}
+
+// ── Modal swipe-dismiss (touch) ─────────────────────────────────
+// On mobile, swiping the modal header downward dismisses the modal —
+// the same gesture iOS/Android users expect for bottom sheets.
+// Resizable modals are excluded (they fill the screen and have their
+// own drag handle). Scrollable modal bodies are not affected because
+// the listener is anchored to .modal-header, not .modal-body.
+function initModalSwipeDismiss() {
+  if (!('ontouchstart' in window)) return;
+
+  let activeModal  = null;
+  let startY       = 0;
+  let startX       = 0;
+  let currentDy    = 0;
+  let raf          = null;
+
+  document.addEventListener('touchstart', e => {
+    const header   = e.target.closest('.modal-header');
+    if (!header) return;
+    const modal    = header.closest('.modal');
+    // Resizable modals stay as-is (they fill the screen and have their own handle)
+    if (!modal || modal.classList.contains('modal-resizable')) return;
+    if (modal.closest('.modal-backdrop.hidden')) return;
+
+    activeModal = modal;
+    startY      = e.touches[0].clientY;
+    startX      = e.touches[0].clientX;
+    currentDy   = 0;
+    activeModal.style.transition = 'none';
+  }, { passive: true });
+
+  document.addEventListener('touchmove', e => {
+    if (!activeModal) return;
+    const dy = e.touches[0].clientY - startY;
+    const dx = e.touches[0].clientX - startX;
+    // Cancel if swipe is predominantly horizontal or going upward
+    if (dy < 0 || Math.abs(dx) > Math.abs(dy) * 0.8) {
+      activeModal.style.transform = '';
+      activeModal = null;
+      return;
+    }
+    currentDy = dy;
+    if (raf) cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => {
+      if (activeModal) activeModal.style.transform = `translateY(${currentDy}px)`;
+    });
+  }, { passive: true });
+
+  document.addEventListener('touchend', () => {
+    if (!activeModal) return;
+    const modal = activeModal;
+    activeModal = null;
+    if (currentDy > 90) {
+      // Committed swipe — animate out then trigger the close button
+      modal.style.transition = 'transform 0.22s ease';
+      modal.style.transform  = `translateY(100%)`;
+      setTimeout(() => {
+        modal.style.transition = '';
+        modal.style.transform  = '';
+        // Find and click the modal's own close button
+        const closeBtn =
+          modal.querySelector('[id$="-close"]') ||
+          modal.querySelector('[id$="-cancel"]') ||
+          modal.querySelector('.modal-header .icon-btn');
+        if (closeBtn) closeBtn.click();
+        else modal.closest('.modal-backdrop')?.click();
+      }, 220);
+    } else {
+      // Snap back
+      modal.style.transition = 'transform 0.18s ease';
+      modal.style.transform  = '';
+      setTimeout(() => { modal.style.transition = ''; }, 200);
+    }
+    currentDy = 0;
+  }, { passive: true });
+
+  document.addEventListener('touchcancel', () => {
+    if (!activeModal) return;
+    activeModal.style.transition = '';
+    activeModal.style.transform  = '';
+    activeModal = null;
+    currentDy   = 0;
+  }, { passive: true });
 }
 
 document.addEventListener('DOMContentLoaded', init);
@@ -5670,22 +5020,34 @@ function closeKnowledgeModal() {
 // Restore a persisted size for a `.modal-resizable` element and persist
 // future resizes. Idempotent — repeat calls re-apply the saved size but
 // only install one ResizeObserver per element.
+// On touch/mobile the CSS media query handles sizing; skip the restore
+// so a desktop-sized localStorage value can't override it via inline style.
 const _resizableBound = new WeakSet();
+const _isMobileViewport = () => window.matchMedia('(max-width: 767px)').matches;
 function bindResizableModal(elId, storageKey) {
   const el = $(elId);
   if (!el) return;
-  try {
-    const raw = localStorage.getItem(storageKey);
-    if (raw) {
-      const { w, h } = JSON.parse(raw);
-      if (typeof w === 'number' && w > 0) el.style.width  = `${w}px`;
-      if (typeof h === 'number' && h > 0) el.style.height = `${h}px`;
-    }
-  } catch {/* ignore */}
+  if (_isMobileViewport()) {
+    // Strip any inline size so the CSS media-query rules take full control.
+    // Without this a desktop-saved localStorage value (written as inline style
+    // on a previous open) would override the `width: 100%; height: 88vh` rules.
+    el.style.removeProperty('width');
+    el.style.removeProperty('height');
+  } else {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (raw) {
+        const { w, h } = JSON.parse(raw);
+        if (typeof w === 'number' && w > 0) el.style.width  = `${w}px`;
+        if (typeof h === 'number' && h > 0) el.style.height = `${h}px`;
+      }
+    } catch {/* ignore */}
+  }
   if (_resizableBound.has(el) || typeof ResizeObserver === 'undefined') return;
   _resizableBound.add(el);
   let saveT = 0;
   const ro = new ResizeObserver(entries => {
+    if (_isMobileViewport()) return; // don't overwrite desktop size with mobile layout dims
     clearTimeout(saveT);
     saveT = setTimeout(() => {
       const r = entries[0]?.contentRect;
@@ -8156,63 +7518,131 @@ async function teConsumeHandoff(id) {
   }
 }
 
-// ── Outbox banners (M11/M12 delivery surface) ─────────────────────
+// ── Outbox delivery (M11/M12) → inject as chat messages ───────────
 //
-// Polls /api/outbox every 30s. When an item arrives, renders a gentle
-// banner at the top of the chat. Click ✕ to acknowledge (POST then
-// re-fetch). Reminders use a calm accent color, silence-triage items
-// use a warmer one so the user can distinguish at a glance.
+// Reminders + silence-triage reach-outs + outbound-alert receipts arrive
+// here from the server-side outbox. Before 0.3.9-alpha these rendered as
+// banners at the top of the chat — which testers reported as effectively
+// silent: the banner was easy to miss and felt like UI chrome rather than
+// the Familiar speaking. Now they land as ordinary assistant chat
+// messages in the active session: they show up where the user is reading,
+// they persist as part of the session log, and the user can reply to
+// them the same way they'd reply to any other message.
+//
+// Cross-poll de-dup: the server's acknowledge step gates future polls,
+// but a 30-second interval leaves a window where two consecutive polls
+// could see the same un-acked item. _injectedOutboxIds (per-tab) closes
+// that window without depending on ack RTT.
 
 const OUTBOX_POLL_MS = 30_000;
 let _outboxPollTimer = null;
+const _injectedOutboxIds = new Set();
+
+// Turn an outbox item into the text body of an assistant chat message.
+// Triage items always carry a body (the LLM-written reach-out message);
+// reminders may not — when their body is empty the title (event label)
+// is the only thing the user/Familiar provided when creating the
+// reminder, so we render it with a small italic tag so it doesn't look
+// like a context-free fragment.
+function formatOutboxAsMessageContent(item) {
+  const body  = (item.body  ?? '').trim();
+  const title = (item.title ?? '').trim();
+  if (item.kind === 'triage') {
+    return body || (title ? `*(check-in)* ${title}` : '');
+  }
+  if (item.kind === 'outbound_alert') {
+    const head = title ? `*${title}*` : '';
+    if (head && body) return `${head}\n\n${body}`;
+    return head || body;
+  }
+  if (item.kind === 'reminder') {
+    if (body) return body;
+    return title ? `*(reminder)* ${title}` : '';
+  }
+  return body || title || '';
+}
+
+async function injectOutboxAsChatMessage(item) {
+  const content = formatOutboxAsMessageContent(item);
+  if (!content) return;
+
+  const timestamp = item.ts || new Date().toISOString();
+  const { el, bubble, copyBtn } = appendAssistantShell(timestamp);
+  bubble.innerHTML = renderMarkdown(content);
+  scrollToBottom();
+
+  // Persist alongside normal messages so reloading the session shows
+  // the proactive turn in place. proactive + outboxKind are advisory
+  // flags — nothing currently branches on them, but they give styling
+  // / filtering / audit something to anchor on later without re-
+  // querying the outbox.
+  state.messages.push({
+    role:       'assistant',
+    content,
+    timestamp,
+    proactive:  true,
+    outboxKind: item.kind,
+    id:         generateId(),
+  });
+  el.dataset.msgIndex = String(state.messages.length - 1);
+  saveHistory();
+  saveToServer();
+  refreshTopicGutter?.();
+  wireCopyButton(copyBtn, () => content);
+
+  await acknowledgeOutboxItem(item.id);
+}
 
 async function fetchOutbox() {
   try {
     const r = await fetch('/api/outbox?pending=1');
     if (!r.ok) return;
     const data = await r.json();
-    renderOutboxBanners(Array.isArray(data.items) ? data.items : []);
+    const items = (Array.isArray(data.items) ? data.items : [])
+      .filter(i => i?.id && !_injectedOutboxIds.has(i.id));
+    if (!items.length) return;
+
+    // Oldest-first — chat conventions put the newest at the bottom, so
+    // rendering in chronological order matches what the user expects.
+    items.sort((a, b) => (a.ts || '').localeCompare(b.ts || ''));
+
+    // Cap per-poll injection at a small number so an upgrade from the
+    // banner UI (where unread items could accumulate) doesn't dump a
+    // wall of historical reach-outs into the active session. The
+    // remainder rides the next poll 30s later.
+    const MAX_INJECT_PER_POLL = 5;
+    const batch = items.slice(0, MAX_INJECT_PER_POLL);
+
+    for (const item of batch) {
+      _injectedOutboxIds.add(item.id);
+      try {
+        await injectOutboxAsChatMessage(item);
+      } catch (err) {
+        // Don't re-throw — one bad item must not block the rest. Drop
+        // the id from the de-dup set so a future poll can try again.
+        console.warn('outbox inject failed', item.id, err);
+        _injectedOutboxIds.delete(item.id);
+      }
+    }
   } catch { /* network blip; try again next tick */ }
-}
-
-function renderOutboxBanners(items) {
-  const host = $('outbox-banners');
-  if (!host) return;
-  if (!items.length) { host.innerHTML = ''; return; }
-  host.innerHTML = items.map(i => {
-    const icon = i.kind === 'triage' ? '🫂' : '⏰';
-    const kindClass = i.kind === 'triage' ? 'kind-triage' : 'kind-reminder';
-    const ts = teTimeAgo ? teTimeAgo(i.ts) : i.ts;
-    const body = i.body ? `<div class="ob-body">${escapeOutboxText(i.body)}</div>` : '';
-    return `
-      <div class="outbox-banner ${kindClass}" data-id="${escapeOutboxText(i.id)}">
-        <div class="ob-icon">${icon}</div>
-        <div class="ob-content">
-          <div class="ob-title">${escapeOutboxText(i.title)}</div>
-          ${body}
-          <div class="ob-time">${escapeOutboxText(ts)}</div>
-        </div>
-        <button class="ob-dismiss" data-ob-id="${escapeOutboxText(i.id)}" aria-label="Dismiss">✕</button>
-      </div>`;
-  }).join('');
-  host.querySelectorAll('.ob-dismiss').forEach(btn => {
-    btn.addEventListener('click', () => acknowledgeOutboxItem(btn.dataset.obId));
-  });
-}
-
-function escapeOutboxText(s) {
-  if (s == null) return '';
-  return String(s).replace(/[&<>"']/g, c =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 async function acknowledgeOutboxItem(id) {
   try {
     await fetch(`/api/outbox/${encodeURIComponent(id)}/acknowledge`, { method: 'POST' });
-    fetchOutbox();
   } catch (err) {
     console.warn('outbox ack failed', err);
   }
+}
+
+// HTML-escape for the few remaining places that still build innerHTML
+// from outbox-adjacent strings (trusted-contacts list rendering, etc).
+// Kept with its historical name so the call sites below don't have to
+// move when we eventually phase the banner UI out completely.
+function escapeOutboxText(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 function startOutboxPolling() {

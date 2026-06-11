@@ -151,6 +151,12 @@ export async function recordSurfaceOffers(
         confidence:     c.confidence,
         offered_at:     nowMs,
         state_snapshot: { ...stateSnapshot },
+        // Did I actually say something about this task in the turn it
+        // was offered? Tagged post-turn by tagRaisedOutcomes (pure-code
+        // response scan). null = not yet tagged. Distinct from
+        // `outcome`, which tracks how the TASK eventually closed.
+        raised:         null,
+        raised_at:      null,
         outcome:        null,
         outcome_at:     null,
       });
@@ -162,19 +168,68 @@ export async function recordSurfaceOffers(
 // ── Dedup lookup ─────────────────────────────────────────────────
 
 /**
- * Return { taskId → most-recent offer ms } for the dedup gate.
- * Read-only — no lock needed.
+ * Return { taskId → { at, raised } } for the most-recent offer of each
+ * task. `raised` is true only when the post-turn scan found I actually
+ * mentioned the task (true | false | null = untagged). The dedup gate
+ * uses it to give a raised task the long suppression window and an
+ * un-raised one a short window — staying quiet never buys long
+ * suppression. Read-only — no lock needed.
  */
-export async function getRecentOfferTimes(tomesDir = DEFAULT_TOMES_DIR) {
+export async function getRecentOfferInfo(tomesDir = DEFAULT_TOMES_DIR) {
   const store = await loadSurfaceEvents(tomesDir);
   const map = {};
   for (const e of store.events ?? []) {
     if (!e?.task_id) continue;
     const t = e.offered_at;
     if (typeof t !== 'number') continue;
-    if (map[e.task_id] == null || t > map[e.task_id]) map[e.task_id] = t;
+    if (map[e.task_id] == null || t > map[e.task_id].at) {
+      map[e.task_id] = { at: t, raised: e.raised ?? null };
+    }
   }
   return map;
+}
+
+// ── Raised tagger ────────────────────────────────────────────────
+
+/**
+ * After a chat turn completes, scan my response text for the tasks
+ * that were offered this turn and tag each offer raised / not raised.
+ * Pure code, zero LLM calls — the same accepted-imprecision pattern as
+ * the M8 bookmark outcome scan: a paraphrase I didn't catch counts as
+ * not-raised, which only means the task comes back to me sooner. The
+ * safe direction.
+ *
+ * `tasks` is the surfacedTasks array from enrich(): [{ id, label }].
+ * Only the most recent untagged offer per task is touched, so a
+ * re-offer in a later turn gets its own fresh tag.
+ */
+export async function tagRaisedOutcomes({ responseText, tasks, now = Date.now(), tomesDir = DEFAULT_TOMES_DIR } = {}) {
+  if (!responseText || !Array.isArray(tasks) || tasks.length === 0) {
+    return { raised: 0, notRaised: 0 };
+  }
+  const lower = String(responseText).toLowerCase();
+  return withLock(tomesDir, async () => {
+    const store = await loadSurfaceEvents(tomesDir);
+    if (!store.events?.length) return { raised: 0, notRaised: 0 };
+
+    let raised = 0, notRaised = 0, mutated = false;
+    for (const task of tasks) {
+      if (!task?.id) continue;
+      let latest = null;
+      for (const e of store.events) {
+        if (e.task_id !== task.id || e.raised != null) continue;
+        if (!latest || e.offered_at > latest.offered_at) latest = e;
+      }
+      if (!latest) continue; // offer write hadn't landed — harmless no-op
+      const wasRaised = !!task.label && lower.includes(String(task.label).toLowerCase());
+      latest.raised    = wasRaised;
+      latest.raised_at = now;
+      mutated = true;
+      if (wasRaised) raised += 1; else notRaised += 1;
+    }
+    if (mutated) await saveSurfaceEvents(store, tomesDir);
+    return { raised, notRaised };
+  });
 }
 
 // ── Outcome tagger ───────────────────────────────────────────────

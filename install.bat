@@ -25,10 +25,54 @@ REM
 REM Shortcut creation is idempotent and runs in both modes — it skips
 REM each .lnk if it already exists, so update mode no longer silently
 REM leaves shortcuts missing.
+REM
+REM Robustness wrapper (added 0.3.2-alpha): the first invocation
+REM re-execs self with all output teed to .proto-familiar-install.log
+REM and pops a Windows MessageBox at the end with status + log path.
+REM This way "logs are empty" stops being a failure mode — even if the
+REM user closes the console immediately, the log file + popup persist.
+
+REM ── Robustness wrapper: tee output + final MessageBox ──────────────
+if not "%PF_INSTALL_TEED%"=="1" (
+  setlocal EnableDelayedExpansion
+  set "PF_INSTALL_LOG=%~dp0.proto-familiar-install.log"
+  set "PF_INSTALL_TEED=1"
+  echo. >> "!PF_INSTALL_LOG!" 2>nul
+  echo ========== Install run %date% %time% ========== >> "!PF_INSTALL_LOG!" 2>nul
+  echo.
+  echo Running Proto-Familiar installer. Output is being captured to:
+  echo   !PF_INSTALL_LOG!
+  echo.
+  echo This may take 30 to 60 seconds. To watch live, open the log
+  echo file above in Notepad ^(it updates as the install runs^).
+  echo.
+  call "%~f0" %* >> "!PF_INSTALL_LOG!" 2>&1
+  set "PF_INSTALL_EXIT=!errorlevel!"
+  type "!PF_INSTALL_LOG!" 2>nul | more
+  call :wrapperShowResult !PF_INSTALL_EXIT! "!PF_INSTALL_LOG!"
+  endlocal & exit /b %PF_INSTALL_EXIT%
+)
 
 setlocal EnableDelayedExpansion
 set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+
+REM ── Pre-flight: OneDrive sync detection ───────────────────────────
+REM OneDrive locks files mid-write while syncing them to the cloud,
+REM which kills npm install (which writes thousands of small files).
+REM Detect the most common failure case before it cascades into an
+REM opaque error mid-install. We shell out to PowerShell here because
+REM batch's path-prefix matching is too fragile for case-insensitive
+REM compare against three possible env vars.
+for /f "delims=" %%R in ('powershell -NoProfile -Command "$od = @($env:OneDrive, $env:OneDriveCommercial, $env:OneDriveConsumer) ^| Where-Object { $_ }; if ($od ^| Where-Object { '%SCRIPT_DIR%'.StartsWith($_, [System.StringComparison]::OrdinalIgnoreCase) }) { 'fail' } else { 'ok' }" 2^>nul') do set "ONEDRIVE_CHECK=%%R"
+if "%ONEDRIVE_CHECK%"=="fail" (
+  echo [ERROR] Proto-Familiar is installed under OneDrive:
+  echo         %SCRIPT_DIR%
+  echo         OneDrive locks files during sync, which prevents npm install
+  echo         from completing here. Move Proto-Familiar out of OneDrive
+  echo         ^(for example to C:\Proto-Familiar^) and re-run install.bat.
+  exit /b 1
+)
 for %%I in ("%SCRIPT_DIR%\..") do set "PARENT_DIR=%%~fI"
 REM Resolve the entity-core sibling checkout. New installs land in
 REM `entity-core\`; older installs from before the rename used
@@ -137,20 +181,17 @@ if errorlevel 1 (
     if errorlevel 1 (
       echo [ERROR] Node.js install ran but node still isn't on PATH.
       echo         Close this window, open a new one, and re-run install.bat.
-      pause
       exit /b 1
     )
   ) else (
     echo [ERROR] Node.js is not installed and winget is unavailable.
     echo         Install Node 18+ from https://nodejs.org/ and re-run install.bat.
-    pause
     exit /b 1
   )
 )
 for /f "tokens=1 delims=." %%v in ('node -p "process.versions.node"') do set NODE_MAJOR=%%v
 if !NODE_MAJOR! LSS 18 (
   echo [ERROR] Node.js !NODE_MAJOR! detected. Proto-Familiar needs Node 18 or newer.
-  pause
   exit /b 1
 )
 for /f %%v in ('node -v') do echo Node.js %%v found.
@@ -206,7 +247,6 @@ call npm install
 if errorlevel 1 (
   popd
   echo [ERROR] npm install failed.
-  pause
   exit /b 1
 )
 popd
@@ -374,9 +414,6 @@ echo   Start:     start.bat   ^(double-click^)
 echo   Stop:      stop.bat    ^(double-click^)
 echo   Trouble?   see docs\troubleshooting.md
 echo.
-REM When run by update.bat, let the updater own the final pause so its
-REM "restart Proto-Familiar" message is the last thing on screen.
-if not "%PF_FROM_UPDATER%"=="1" pause
 endlocal
 goto :eof
 
@@ -397,4 +434,21 @@ for %%I in ("!BACKUP_DIR!\%~2") do set "DEST_DIR=%%~dpI"
 if not exist "!DEST_DIR!" mkdir "!DEST_DIR!" >nul 2>nul
 copy /y "%~1" "!BACKUP_DIR!\%~2" >nul
 set "ANYTHING_BACKED_UP=1"
+goto :eof
+
+REM --- Helper: pop a final MessageBox so a user who closes the console
+REM     before the install finishes still sees the outcome + the log
+REM     path. Called from the top-of-file wrapper after the inner
+REM     install run returns. Args: %1=exit code, %2=log file path.
+:wrapperShowResult
+set "RC=%~1"
+set "WLOG=%~2"
+if "%RC%"=="0" (
+  set "WMSG=Proto-Familiar install completed successfully."
+  set "WICN=Information"
+) else (
+  set "WMSG=Proto-Familiar install FAILED with exit code %RC%."
+  set "WICN=Error"
+)
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop; [System.Windows.Forms.MessageBox]::Show('%WMSG%' + [Environment]::NewLine + [Environment]::NewLine + 'Log: %WLOG%', 'Proto-Familiar install', 'OK', '%WICN%') | Out-Null } catch {}" >nul 2>nul
 goto :eof

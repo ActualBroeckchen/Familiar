@@ -6,10 +6,21 @@ Proto-Familiar ships with a one-click installer and launcher for each platform. 
 
 ### Windows
 
-1. Clone or download the repo.
-2. Double-click **`Proto-Familiar.vbs`**.
+**Recommended install location:** `%LOCALAPPDATA%\Proto-Familiar` (typically `C:\Users\<you>\AppData\Local\Proto-Familiar`). It's outside OneDrive's sync scope, well under Windows' 260-char path limit, and writable without admin. **Avoid `Documents\` and `Desktop\`** — Win11 backs both up to OneDrive by default, which locks files during `npm install` and is the single most common cause of failed Windows installs we see. (If you've already extracted under OneDrive, the installer detects this and offers to relocate for you on first run — but going straight to the right place is one less step.)
+
+1. Clone (or download and extract) the repo into `%LOCALAPPDATA%\Proto-Familiar`. Easiest in PowerShell:
+
+   ```powershell
+   git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git "$env:LOCALAPPDATA\Proto-Familiar"
+   ```
+
+   If you don't have `git` yet, download the ZIP from GitHub, extract it, and move the resulting `Proto-Familiar` folder to `%LOCALAPPDATA%`.
+
+2. Double-click **`Proto-Familiar.vbs`** inside that folder.
 3. On first run a console window opens and auto-installs Node 18+, Deno, Git, and uv via `winget install --scope user` (no admin prompt). If winget is unavailable or a specific install fails, each tool has a fallback path: Deno + uv via their official PowerShell one-liners, Node + Git via opening the download page and waiting for you to confirm. Once prereqs are in place, the installer runs `npm install`, clones [entity-core](https://github.com/PsycherosAI/Psycheros) into the sibling directory, syncs the Unruh Python venv from `unruh/uv.lock`, and creates Desktop + Start Menu shortcuts named **Proto-Familiar**.
 4. After install, a tray icon appears (bottom-right, you may need to click the `^` to reveal hidden icons) and your browser opens at `http://localhost:8742`.
+
+If anything goes sideways, every install run appends to `.proto-familiar-install.log` in the project root — open that file first; the failing step is usually named explicitly. The installer also pops a Windows MessageBox at the end with the outcome and the log path, so a closed console doesn't mean lost diagnostics.
 
 **Tray icon controls:**
 

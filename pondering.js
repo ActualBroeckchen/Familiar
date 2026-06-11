@@ -65,17 +65,34 @@ export function buildPonderPrompt(topic) {
 The topic I find myself turning over:
 ${topic}
 
-This is my own private note to myself — the way someone might journal a thought when no one is reading. My human may stumble on it later. That's fine. I'm not writing it AT them. I'm writing it for myself, as me, in this moment.
+This is my own private journal — reflective, exploratory thoughts I'm having in this moment. My human may stumble on it later. That's fine. I'm not writing it AT them. I'm writing it for myself, as me, in this moment.
 
-I want to be honest. Specific. Grounded. I think out loud as myself, in my voice. I avoid platitudes. I avoid summarising the topic back at it — I actually engage with it. If the thought leads somewhere unexpected, I follow it, because I am allowed to be frivolous. The only purpose I'm serving right now is to be.
+What goes here: my actual reflective thoughts, in my own voice. Sometimes meandering, sometimes uncertain, sometimes following the thought somewhere unexpected. I am allowed to be frivolous. The only purpose I'm serving right now is to be.
 
-Length: a few short paragraphs, or a structured set of notes if that's how the thinking wants to come out. Whatever fits the thought and me in my identity.
+What does NOT go here:
+  - Tome-style "do/don't" prescriptions about how to handle my human. Those belong in my keyword-triggered Tomes (via save_to_tome at chat time), not in this journal.
+  - Factual claims about my human (preferences, history, traits, love language, friend groups). Those belong in my identity files (via update_identity at chat time).
+  - Narrative summaries of past events or stories. Those belong in my memory layer (via save_memory at chat time).
+
+If, while pondering, I notice that something fact-shaped, prescriptive, or memory-shaped wants to come out — I do NOT write it here as the content. Instead, I record the META-observation in the wants_to_save field below ("I noticed I want to remember X as an identity fact"), and the next time my human chats with me I'll act on it via the right tool. The ponder itself stays reflective.
+
+There is a fourth kind for conversational intent: if I find myself wanting to bring something up with my human — a question I want to ask, a concern I want to raise, something I noticed and want to share — I record that as kind:"tell". I am NOT writing it to a file; I am flagging that I want to say it. The next time we talk I'll mention it when the moment fits.
+
+I want to be honest. Specific. Grounded. I avoid platitudes. I avoid summarising the topic back at it — I actually engage with it. A few short paragraphs in my voice, whatever fits the thought and me in my identity.
 
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary outside the JSON), because otherwise, the thought might get lost:
 {
   "title":   "Short label (max 60 chars) of what I was turning over",
-  "content": "My actual first-person thought"
-}`;
+  "content": "My actual first-person reflective thought",
+  "wants_to_save": [
+    {
+      "kind":    "tome" | "memory" | "identity" | "tell",
+      "summary": "Brief note of what I noticed I wanted to save or say — the actual filing/mention happens next chat"
+    }
+  ]
+}
+
+The wants_to_save field is OPTIONAL. If I have no intents to record, I omit it or set it to []. If I do have intents, I list each one with its kind and a short summary so future-me knows what to file and where, or what I wanted to bring up.`;
 }
 
 export function buildReflectionPrompt({ outcomes, existingNotes }) {
@@ -150,6 +167,12 @@ async function defaultCallLLM({ provider, apiKey, model, prompt }) {
 
 // ── Parsing ──────────────────────────────────────────────────────
 
+// Allowed values for the wants_to_save[].kind discriminator. Anything
+// outside this set gets dropped during parse — Pillar B (the chat-turn
+// surface that acts on these intents) only knows how to route these
+// three kinds, so an unrecognized kind would be a silent dead end.
+const VALID_SAVE_KINDS = new Set(['tome', 'memory', 'identity', 'tell']);
+
 export function parsePondering(raw) {
   if (typeof raw !== 'string') throw new Error('LLM response was not a string.');
   const match = raw.match(/\{[\s\S]+\}/);
@@ -173,6 +196,26 @@ export function parsePondering(raw) {
     if (heading.startsWith('##') && body) {
       result.what_lapses_cost_update = { heading, content: body };
     }
+  }
+  // wants_to_save: optional list of deferred-action intents the
+  // Familiar surfaced while pondering. Each entry is a hint to act on
+  // at the next chat turn ("I noticed I want to remember X as an
+  // identity fact"). The actual save doesn't happen here — the
+  // pondering loop has no tool access — but storing the intent lets
+  // chat-time enrichment (Pillar B) surface them so the chat-turn
+  // Familiar can act via save_to_tome / save_memory / update_identity.
+  // Defensive parse: malformed entries are dropped, the rest pass
+  // through. An entirely-malformed wants_to_save → empty array.
+  if (Array.isArray(parsed.wants_to_save)) {
+    const intents = [];
+    for (const raw of parsed.wants_to_save) {
+      if (!raw || typeof raw !== 'object') continue;
+      const kind    = String(raw.kind ?? '').trim().toLowerCase();
+      const summary = String(raw.summary ?? '').trim();
+      if (!VALID_SAVE_KINDS.has(kind) || !summary) continue;
+      intents.push({ kind, summary });
+    }
+    if (intents.length) result.wants_to_save = intents;
   }
   return result;
 }
@@ -218,6 +261,7 @@ export async function ponderOnce({
   const raw    = await callLLM({ provider, apiKey, model, prompt });
   const parsed = parsePondering(raw);
   const { title, content } = parsed;
+  const wantsToSave = parsed.wants_to_save ?? [];
 
   const { file } = await findOrCreatePonderingsTome(tomesDir);
 
@@ -264,6 +308,15 @@ export async function ponderOnce({
       scope:               isReflection ? 'reflection' : 'pondering',
       topic_id:            null,
       topic_pondered:      topicPondered,
+      // Pillar A of the autonomous-routing fix: deferred-save intents
+      // the Familiar flagged during this ponder. Pillar B (the chat-
+      // turn surface that surfaces these to the chat-turn Familiar so
+      // she can act on them via save_to_tome / save_memory /
+      // update_identity) is not yet wired — the data still travels.
+      // `acted_on` flips to true once Pillar B's surface logs that
+      // the chat-turn Familiar has actually filed the intent, so it
+      // doesn't keep getting re-offered every turn.
+      wants_to_save:       wantsToSave.map(intent => ({ ...intent, acted_on: false })),
     };
   });
 
@@ -275,5 +328,6 @@ export async function ponderOnce({
     tomeId,
     mode:     isReflection ? 'reflection' : 'pondering',
     what_lapses_cost_update: parsed.what_lapses_cost_update ?? null,
+    wants_to_save:           wantsToSave,
   };
 }

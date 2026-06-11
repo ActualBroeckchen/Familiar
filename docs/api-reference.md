@@ -35,8 +35,13 @@ Proxies a chat completion request to the selected LLM provider. Supports both st
 | `stream` | boolean | No | `true` for SSE streaming, `false` (default) for full response |
 | `temperature` | number | No | Sampling temperature |
 | `max_tokens` | number | No | Maximum response tokens |
-| `tools` | array | No | OpenAI function-calling tool definitions |
-| `tool_choice` | string/object | No | Tool choice directive (e.g. `"auto"`) |
+| `tools` | array | No | OpenAI function-calling tool definitions — **legacy passthrough for direct callers**: forwarded verbatim, single round, results are the caller's responsibility. Ignored when `runToolLoop` is set. |
+| `tool_choice` | string/object | No | Tool choice directive (e.g. `"auto"`). Legacy passthrough, as above. |
+| `runToolLoop` | boolean | No | Opt into the **server-side tool loop** (what the app sends when tool use is enabled). The server composes the tools array (built-in registry from `cerebellum.js` + `customTools`), executes calls, and re-calls the provider up to 5 rounds inside this one request. Internal re-calls don't count against the rate limit. |
+| `customTools` | array | No | User-defined tool definitions appended to the built-ins (loop mode only). Advertise-only — calls return a "not implemented" notice. |
+| `sessionInfo` | object | No | `{ startedAt, messageCount, provider, model, elapsedMsSinceLastMessage }` — backs the `get_session_info` tool (loop mode only). |
+| `userMessage` | string | No | What the user actually typed. The post-history prompt is also `role:'user'`, so the server uses this field (not "last user message") for crisis-signal scoring, last-activity stamping, and the RAG query. |
+| `lastUserMessageAt` | string | No | ISO timestamp of the *previous* user message — feeds the `[Now]` time anchor and idle-duration bookmark surfacing. |
 | `enrich` | boolean/string | No | Enrichment mode. `true`/omitted = full (identity + memory + graph + temporal, and consume any surfaced session handoff); `"static"` = persona/identity only (no memory/temporal, no handoff consumption — used by the handoff summariser so its note is in character without the dynamic context); `false` = none. |
 
 **Enrichment:** Before forwarding, the server calls `thalamus.js:enrich()`, which returns the entity-core + Unruh context split into two parts for prompt-cache efficiency (see [`architecture.md`](architecture.md#prompt-cache-aware-assembly)):
@@ -58,11 +63,19 @@ data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}
 data: [DONE]
 ```
 
-The envelope shape is `{ static, dynamic, depth, injectedAt }`: the two context blocks plus the depth used and the actual index the dynamic block landed at (so the prompt inspector can render both regions in their real positions). Clients should route on the presence of `_thalamus` and skip the normal `choices` parsing for that line.
+The envelope shape is `{ static, dynamic, depth, injectedAt, timeAnchor }`: the two context blocks, the depth used, the actual index the dynamic block landed at (so the prompt inspector can render both regions in their real positions), and the `[Now]` time-anchor block appended as the final system message. Clients should route on the presence of `_thalamus` and skip the normal `choices` parsing for that line.
+
+**Tool-loop events (loop mode, streaming):** between rounds the server emits
+
+```
+data: {"_toolRound":{"toolCalls":[...],"results":[{"tool_call_id":"c1","name":"save_memory","content":"Memory saved."}],"content":null,"timestamp":"2026-06-11T..."}}
+```
+
+one per executed round (up to 5), interleaved with the pass-through content deltas. A mid-loop upstream failure is surfaced as `data: {"_loopError": "<message>"}` followed by stream end; clients should treat it as a failed request. `data: [DONE]` is emitted exactly once, at the true end of the final round.
 
 **Non-streaming response (`stream: false`):**
 
-Returns the provider's JSON response with the provider's original HTTP status code. On a successful response the server parses the JSON and attaches a top-level `_thalamus: { static, dynamic, depth, injectedAt }` field (omitted when `enrich()` returned nothing or the upstream body wasn't JSON).
+Returns the provider's JSON response with the provider's original HTTP status code. On a successful response the server parses the JSON and attaches a top-level `_thalamus: { static, dynamic, depth, injectedAt, timeAnchor }` field (omitted when `enrich()` returned nothing or the upstream body wasn't JSON). In loop mode, executed tool rounds are attached as a top-level `_toolRounds` array (same per-round shape as the streaming `_toolRound` events); the `choices` in the body are the FINAL round's.
 
 **Error responses:**
 
@@ -238,6 +251,26 @@ Deletes the session log file for the given UUID.
 
 ---
 
+### `GET /api/active-session`
+
+Returns metadata for the most-recently-updated session log, or `null` when no logs exist. This powers the auto-sync flow: on startup the client compares this against its locally loaded session and either silently resumes it (empty local chat + server session less than 48 h old) or offers a resume banner (local chat has messages, or the server session is older).
+
+Metadata only — no message content is read or returned, so the call stays cheap enough to run on every page load.
+
+**Response:**
+
+```json
+{
+  "sessionId":    "8f14e45f-…",
+  "startedAt":    "2026-06-11T09:12:00.000Z",
+  "endedAt":      null,
+  "updatedAt":    "2026-06-11T11:47:23.000Z",
+  "messageCount": 42
+}
+```
+
+---
+
 ### `GET /api/triage-events`
 
 Returns the full history of silence-triage decisions, newest first. Each entry is one tick of the 5-minute triage loop, regardless of whether the Familiar acted. Stored as newline-delimited JSON at `logs/triage-events.jsonl`; returns an empty array when the file doesn't exist yet.
@@ -280,7 +313,7 @@ This is the audit trail for debugging the silence-triage system — you can see 
 | `llm_said_wait` | LLM deliberated and chose not to reach out this tick |
 | `acted` / (empty `reason` with `acted: true`) | The Familiar reached out |
 
-**`decision`** is `null` for ticks where the LLM wasn't called (low_threat / no_activity / too_recent / reached_out). For LLM-driven ticks it contains at minimum `{ action: "wait" | "reach_out", message }`. When the LLM proposed a deferred trusted-contact escalation, `decision.meta.pendingContact` holds `{ name, message, channel }` and `decision.meta.contactDeadlineTs` is the UNIX ms deadline.
+**`decision`** is `null` for ticks where the LLM wasn't called (low_threat / no_activity / too_recent / reached_out). For LLM-driven ticks it contains at minimum `{ action: "wait" | "reach_out", message }`. When the LLM proposed a deferred trusted-contact escalation, `decision.meta.pendingContact` holds `{ name, message, channel }` and `decision.meta.contactDelayMs` is the acknowledgement window in ms — the deadline clock starts at confirmed push delivery of the check-in, falling back to enqueue time (see `contactDeadlineFor` in cerebellum.js). Events logged before 0.4.0-alpha carry the old precomputed `contactDeadlineTs` instead.
 
 ---
 
@@ -292,7 +325,7 @@ These two endpoints back the crisis outreach tools — invoked by the Familiar d
 
 Immediately delivers a message to one of the user's configured trusted contacts. Unlike the silence-triage deferred escalation path, delivery is not conditional on the user's acknowledgement — it is intended for situations where the Familiar has judged, during a live exchange, that human presence is needed now.
 
-Every delivery (and every failed attempt) is also written to the outbox as an `outbound_alert` banner so the user can see exactly what was sent.
+Every delivery (and every failed attempt) is also written to the outbox as an `outbound_alert` — injected into the user’s chat and pushed to their own Discord webhook when configured — so the user can see exactly what was sent.
 
 **Request body:**
 
@@ -319,7 +352,7 @@ Even on delivery failure the attempt is recorded in the outbox.
 
 ### `POST /api/crisis-resources`
 
-Enqueues a `crisis_resources` outbox banner containing international crisis-line and safety-resource links. The banner appears in the user's chat the next time the outbox is polled.
+Enqueues a `crisis_resources` outbox item containing international crisis-line and safety-resource links. It appears in the user's chat as an assistant message the next time the outbox is polled (and is pushed to their Discord webhook when configured).
 
 Deduplicated by a 1-hour bucket key — repeated calls within the same hour return the existing item's id without creating a duplicate.
 
@@ -331,7 +364,7 @@ Deduplicated by a 1-hour bucket key — repeated calls within the same hour retu
 { "ok": true, "id": "<uuid>", "deduped": false }
 ```
 
-`deduped: true` means an identical unacknowledged banner was already in the queue; `id` is the existing item's id.
+`deduped: true` means an identical unacknowledged item was already in the queue; `id` is the existing item's id.
 
 ---
 
@@ -724,12 +757,14 @@ The endpoints below back the **Knowledge editor** modal in the sidebar and the L
 
 #### Memory
 
+The `:date` segment accepts what `memory_list` actually returns: a plain date (`YYYY-MM-DD`, `YYYY-MM`, `YYYY`, or `YYYY-Www`) — or, for **significant** memories, the composite key `YYYY-MM-DD_slug` (one named file per milestone, e.g. `2026-06-11_why-melian-trusts-me`). The server splits the composite into the separate `date` + `slug` parameters entity-core's read/update/delete tools expect (since 0.4.1-alpha; before that, slugged keys were rejected with `invalid date format`).
+
 | Method & path | Purpose | Body / query |
 |---|---|---|
 | `GET /api/entity/memories` | List memories. Query: `granularity` (optional, one of the five tiers), `limit` (1–100, default 50) | — |
 | `GET /api/entity/memories/:granularity/:date` | Read one memory | — |
 | `PUT /api/entity/memories/:granularity/:date` | Overwrite the memory's content (auto-snapshots) | `{ "content": "…", "editedBy": "user-edit" }` (≤ 16 KB) |
-| `DELETE /api/entity/memories/:granularity/:date` | Delete the memory (auto-snapshots). Query: `instanceId`, `slug` (optional) | — |
+| `DELETE /api/entity/memories/:granularity/:date` | Delete the memory (auto-snapshots). Query: `instanceId`, `slug` (optional; an explicit `?slug=` wins over the composite key's slug) | — |
 | `POST /api/entity/memories/supersede` | Write a new dated memory contradicting an old one, prefixed with `[supersedes <granularity>/<date>]`. Preserves history; recency-decay demotes the stale entry | `{ "content": "…", "granularity": "daily", "supersedes": { "granularity": "daily", "date": "2026-05-15" } }` |
 
 #### Identity

@@ -11,6 +11,89 @@ that's useful to paste into a bug report.
 
 ---
 
+## Install failed on Windows (or appears to do nothing)
+
+Every Windows install run appends to `.proto-familiar-install.log` in
+the project root via PowerShell's `Start-Transcript`. Open that file in
+Notepad first — the failing step is usually named explicitly, with the
+underlying error on the line below.
+
+If the log file doesn't exist at all, the installer never got to run.
+The most common cause is **PowerShell scripts being blocked by Group
+Policy** (AppLocker, WDAC, or Constrained Language Mode — common on
+work-issued laptops). The launcher (`Proto-Familiar.vbs`) detects this
+and pops a MessageBox explaining the situation. Workarounds:
+
+- Run `install.bat` from a Command Prompt instead — it does most of
+  what `install.ps1` does without needing PowerShell COM access.
+- Ask IT to allow PowerShell scripts in the Proto-Familiar folder.
+- Install on a personal machine; copy the working install over later.
+
+### "Proto-Familiar is under OneDrive — relocate?"
+
+The installer detected the install folder is being synced by OneDrive.
+OneDrive locks files mid-sync, which breaks `npm install`. New Win11
+installs back up `Documents` and `Desktop` to OneDrive by default, so
+this trips up most users by accident.
+
+Click **Yes** at the prompt — the installer copies the folder to
+`%LOCALAPPDATA%\Proto-Familiar` (outside OneDrive, short path,
+user-writable) and re-launches itself there. The original folder is
+left in place with a `RELOCATED_TO.txt` marker; delete it manually
+once the new install is verified working.
+
+### Pre-flight warnings about unreachable hosts
+
+The installer probes `github.com`, `registry.npmjs.org`, `deno.land`,
+`astral.sh`, and `pypi.org` over TCP 443 before doing anything. Each
+unreachable host adds a line to the final summary MessageBox. The
+usual culprit is a corporate firewall (ZScaler / Netskope / etc.)
+doing TLS interception with an internal CA that the downstream tools
+(Deno, uv) don't trust. Routes to a "ask IT for a proxy bypass" or
+"install Proto-Familiar on a non-corporate machine" path.
+
+### Install log is empty / "logs are empty"
+
+Same diagnostic loop as above: open `.proto-familiar-install.log`. If
+it doesn't exist, PowerShell is blocked — see the AppLocker section
+above. If the log exists but is empty, `Start-Transcript` was blocked
+(some AV configurations strip it). Try `install.bat` instead — it
+captures output via a different mechanism.
+
+---
+
+## Windows: update doesn't take effect / version stays the same
+
+Symptom: you ran `update.bat` (or pulled and re-ran `install.bat`), but
+the new version isn't running — the version badge in the sidebar
+footer still shows the old number, and new features aren't there.
+
+Cause: a previous `node.exe` from Proto-Familiar is still running.
+`robocopy` (used by `update.bat`) silently fails to overwrite source
+files that the running process has open, so the on-disk update is
+partial. On the next launch the tray sees the orphan on port 8742 and
+adopts it as "running" — that orphan is still serving the old code.
+
+Through 0.3.6-alpha there was a bug in `tray.ps1` / `start.bat` /
+`stop.bat` where the orphan detection filtered Win32 processes by a
+project-root path that never actually appeared in their command line.
+Quit / Stop / Restart all silently killed nothing, leaving node.exe
+to linger across updates. **Fixed in 0.3.7-alpha** — the launchers now
+use the PID file as the canonical signal and fall back to taskkill-ing
+the port owner if it looks like Proto-Familiar.
+
+If you're on 0.3.7-alpha or newer and still hitting this, run
+`stop.bat`; it now reports each PID it kills so the failure mode is
+visible. If `stop.bat` says "Port 8742 held by PID X but it doesn't
+look like Proto-Familiar", another app on your machine grabbed the
+port — stop that app, or run with `set PROTO_FAMILIAR_PORT=<other>`
+before `start.bat`.
+
+To unstick by hand on an older build: Task Manager → Details tab →
+sort by Name → find `node.exe` → End task. Then run the update.
+
+---
+
 ## Knowledge editor / graph
 
 ### "Failed to load graph: entity-core not connected"
@@ -156,6 +239,27 @@ the current viewport, the rendered size gets clamped and the
 ResizeObserver eventually overwrites the saved value with the clamped
 one — self-correcting within one resize cycle. If it's stuck, clear
 the storage key from DevTools (`localStorage.removeItem('pf-knowledge-modal-size')`).
+
+---
+
+## Knowledge editor — memories
+
+### Significant memory shows "⚠ invalid date format" when clicked
+
+Affects builds before **0.4.1-alpha**. Significant memories are stored
+one named file per milestone (`2026-06-11_why-melian-trusts-me.md`),
+and entity-core's listing returns that composite `date_slug` key — but
+the read/edit/delete endpoints only accepted plain dates, so clicking
+a slugged entry failed validation. Saving worked the whole time; only
+viewing/editing from the Knowledge editor was broken.
+
+Fixed in 0.4.1-alpha: the composite key is accepted everywhere and
+split into the separate `date` + `slug` parameters entity-core
+expects. Update Proto-Familiar; the existing files need no migration.
+The Familiar's own `update_memory` / `delete_memory` tools take the
+same composite key for significant memories (it's included in
+`save_memory`'s confirmation, e.g.
+`Memory saved (significant/2026-06-11_why-melian-trusts-me).`).
 
 ---
 

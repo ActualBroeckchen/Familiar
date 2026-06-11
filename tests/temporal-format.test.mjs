@@ -169,8 +169,9 @@ test('open tasks (no when_ts, no resolution) get a {{user}}-bonded header', () =
     ]},
   });
   // Header that primes the Familiar to feel them as commitments their
-  // bonded human is counting on them to hold, not background noise.
-  assert.match(out, /Open tasks I'm keeping on my radar for \{\{user\}\}/);
+  // bonded human is counting on them to ACT on — to remember AND to
+  // raise — not background noise.
+  assert.match(out, /Open tasks I'm holding for \{\{user\}\} — mine to remember and to raise/);
   assert.match(out, /- file taxes/);
   assert.match(out, /- review the report/);
 });
