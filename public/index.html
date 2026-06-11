@@ -356,6 +356,20 @@
           </div>
         </div>
 
+        <!-- Village (Village Support) -->
+        <div class="sidebar-section collapsible collapsed" id="section-village">
+          <button class="section-label collapse-toggle" aria-expanded="false" aria-controls="content-village">
+            Village
+            <span class="chevron">▾</span>
+          </button>
+          <div class="section-content" id="content-village">
+            <p class="field-hint">Manage the people in your Familiar's social safety net — trust categories, villagers with platform aliases, and locations.</p>
+            <div class="action-row" style="margin-top:4px">
+              <button id="village-btn" class="btn-secondary">🏘 Open Village editor</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Temporal editor (Unruh) -->
         <div class="sidebar-section collapsible collapsed" id="section-temporal">
           <button class="section-label collapse-toggle" aria-expanded="false" aria-controls="content-temporal">
@@ -1067,6 +1081,72 @@
             <span id="te-handoff-summary" class="field-hint" style="margin-left:auto"></span>
           </div>
           <div class="ke-list" id="te-handoff-list" style="height: calc(100% - 40px); overflow:auto"></div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Village editor modal (Village Support V1) -->
+  <div class="modal-backdrop hidden" id="village-modal" role="dialog" aria-modal="true" aria-labelledby="village-modal-title">
+    <div class="modal modal-wide modal-resizable" id="village-modal-inner">
+      <div class="modal-header">
+        <h2 class="modal-title" id="village-modal-title">Village</h2>
+        <button class="icon-btn modal-close" id="village-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="ke-tabs" role="tablist">
+        <button class="ke-tab ke-tab-active" data-village-tab="people"     role="tab">People</button>
+        <button class="ke-tab"               data-village-tab="categories" role="tab">Categories</button>
+        <button class="ke-tab"               data-village-tab="locations"  role="tab">Locations</button>
+      </div>
+      <div class="modal-body ke-body">
+
+        <!-- PEOPLE PANE -->
+        <div class="ke-pane ke-pane-active" id="vl-pane-people">
+          <div class="ke-toolbar">
+            <button id="vl-people-refresh" class="btn-ghost">Refresh</button>
+            <button id="vl-people-add" class="btn-secondary" style="margin-left:auto">+ Add person</button>
+          </div>
+          <div class="vl-split">
+            <div class="vl-card-grid" id="vl-people-grid">
+              <p class="logs-loading" style="grid-column:1/-1">Loading…</p>
+            </div>
+            <div class="vl-detail" id="vl-people-detail">
+              <p style="color:var(--text-dim);font-size:0.85rem">Select a person or click &ldquo;+ Add person&rdquo;.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- CATEGORIES PANE -->
+        <div class="ke-pane" id="vl-pane-categories">
+          <div class="ke-toolbar">
+            <button id="vl-cat-refresh" class="btn-ghost">Refresh</button>
+            <button id="vl-cat-add" class="btn-secondary" style="margin-left:auto">+ Add category</button>
+          </div>
+          <div class="vl-split">
+            <div class="vl-card-grid" id="vl-cat-grid">
+              <p class="logs-loading" style="grid-column:1/-1">Loading…</p>
+            </div>
+            <div class="vl-detail" id="vl-cat-detail">
+              <p style="color:var(--text-dim);font-size:0.85rem">Select a category to view or edit.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- LOCATIONS PANE -->
+        <div class="ke-pane" id="vl-pane-locations">
+          <div class="ke-toolbar">
+            <button id="vl-loc-refresh" class="btn-ghost">Refresh</button>
+            <button id="vl-loc-add" class="btn-secondary" style="margin-left:auto">+ Add location</button>
+          </div>
+          <div class="vl-split">
+            <div class="vl-loc-list" id="vl-loc-list">
+              <p class="logs-loading">Loading…</p>
+            </div>
+            <div class="vl-detail" id="vl-loc-detail">
+              <p style="color:var(--text-dim);font-size:0.85rem">Select a location to view or edit.</p>
+            </div>
+          </div>
         </div>
 
       </div>

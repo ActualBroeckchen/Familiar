@@ -3156,6 +3156,21 @@ function init() {
   document.querySelectorAll('.ke-tab').forEach(el => {
     el.addEventListener('click', () => keSwitchTab(el.dataset.tab));
   });
+  // Village editor (Village Support V1)
+  if ($('village-btn')) {
+    $('village-btn').addEventListener('click', openVillageModal);
+    $('village-modal-close').addEventListener('click', closeVillageModal);
+    document.querySelectorAll('[data-village-tab]').forEach(el => {
+      el.addEventListener('click', () => vlSwitchTab(el.dataset.villageTab));
+    });
+    $('vl-people-refresh').addEventListener('click', () => vlLoadPeople());
+    $('vl-people-add').addEventListener('click', vlStartNewPerson);
+    $('vl-cat-refresh').addEventListener('click', () => vlLoadCategories());
+    $('vl-cat-add').addEventListener('click', vlStartNewCategory);
+    $('vl-loc-refresh').addEventListener('click', () => vlLoadLocations());
+    $('vl-loc-add').addEventListener('click', vlStartNewLocation);
+  }
+
   // Temporal editor (Unruh) — M9
   if ($('temporal-btn')) {
     $('temporal-btn').addEventListener('click', openTemporalModal);
@@ -7698,6 +7713,561 @@ function removeTrustedContact(idx) {
   state.trustedContacts = (state.trustedContacts || []).filter((_, i) => i !== idx);
   saveSettings();
   renderTrustedContacts();
+}
+
+// ── Village editor (Village Support V1) ──────────────────────────────────────
+//
+// Three-tab card editor: People · Categories · Locations.
+// Left of each tab: responsive card grid. Right: slide-in detail/edit panel.
+// All mutations go through /api/village/* and invalidate the local cache.
+
+const VL_STRANGERS = 'strangers';
+const VL_EMERGENCY = 'emergency-contacts';
+const VL_TABS      = ['people', 'categories', 'locations'];
+
+let _vlReg  = null;   // local registry cache; null = needs reload
+let _vlSelP = null;   // selected villager id
+let _vlSelC = null;   // selected category id
+let _vlSelL = null;   // selected location key
+
+function openVillageModal() {
+  $('village-modal').classList.remove('hidden');
+  bindResizableModal('village-modal-inner', 'pf-village-modal-size');
+  vlSwitchTab('people');
+}
+function closeVillageModal() { $('village-modal').classList.add('hidden'); }
+
+function vlSwitchTab(tab) {
+  for (const t of VL_TABS) {
+    $(`vl-pane-${t}`)?.classList.toggle('ke-pane-active', t === tab);
+  }
+  document.querySelectorAll('[data-village-tab]').forEach(el => {
+    el.classList.toggle('ke-tab-active', el.dataset.villageTab === tab);
+  });
+  if (tab === 'people')     vlLoadPeople();
+  if (tab === 'categories') vlLoadCategories();
+  if (tab === 'locations')  vlLoadLocations();
+}
+
+async function vlFetch(force = false) {
+  if (_vlReg && !force) return _vlReg;
+  const r = await fetch('/api/village');
+  if (!r.ok) throw new Error(await vlErrMsg(r));
+  _vlReg = await r.json();
+  return _vlReg;
+}
+async function vlErrMsg(r) {
+  try { const j = await r.json(); if (j?.error) return String(j.error); } catch {}
+  return `HTTP ${r.status}`;
+}
+function vlErr(msg) {
+  return `<p class="logs-error" style="padding:12px">⚠ ${esc(String(msg?.message ?? msg))}</p>`;
+}
+
+// ── People ──
+
+async function vlLoadPeople() {
+  const grid = $('vl-people-grid');
+  grid.innerHTML = '<p class="logs-loading" style="grid-column:1/-1">Loading…</p>';
+  try {
+    vlRenderPeopleGrid(await vlFetch(true));
+  } catch (err) { grid.innerHTML = vlErr(err); }
+}
+
+function vlRenderPeopleGrid(reg) {
+  const grid = $('vl-people-grid');
+  if (!reg.villagers.length) {
+    grid.innerHTML = '<p class="vl-chip-dim" style="grid-column:1/-1;padding:12px">No villagers yet. Click "+ Add person".</p>';
+    return;
+  }
+  const catMap = new Map(reg.categories.map(c => [c.id, c]));
+  grid.innerHTML = reg.villagers.map(v => {
+    const chips = (v.categoryIds ?? []).map(cid => {
+      const c = catMap.get(cid);
+      return c ? `<span class="vl-chip${c.builtin ? ' vl-chip-green' : ''}">${esc(c.name)}</span>` : '';
+    }).join('');
+    const aliasSub = v.aliases?.length
+      ? `<div class="vl-card-sub">${v.aliases.map(a => esc(a.platform)).join(' · ')}</div>` : '';
+    return `<div class="vl-card${_vlSelP === v.id ? ' vl-sel' : ''}" data-vid="${esc(v.id)}" tabindex="0" role="button" aria-label="${esc(v.name)}">
+      <div class="vl-card-name" title="${esc(v.name)}">${esc(v.name)}</div>
+      <div class="vl-chips">${chips || '<span class="vl-chip-dim">unregistered</span>'}</div>
+      ${aliasSub}
+    </div>`;
+  }).join('');
+  grid.querySelectorAll('.vl-card').forEach(el => {
+    el.addEventListener('click', () => vlSelectPerson(el.dataset.vid));
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); vlSelectPerson(el.dataset.vid); }
+    });
+  });
+}
+
+function vlSelectPerson(id) {
+  _vlSelP = id;
+  $('vl-people-grid').querySelectorAll('.vl-card').forEach(el => {
+    el.classList.toggle('vl-sel', el.dataset.vid === id);
+  });
+  vlRenderPersonDetail(_vlReg?.villagers.find(v => v.id === id) ?? null);
+  vlOpenDetail('vl-people-detail');
+}
+
+function vlStartNewPerson() {
+  _vlSelP = null;
+  $('vl-people-grid').querySelectorAll('.vl-card').forEach(el => el.classList.remove('vl-sel'));
+  vlRenderPersonDetail(null);
+  vlOpenDetail('vl-people-detail');
+}
+
+function vlRenderPersonDetail(villager) {
+  const detail = $('vl-people-detail');
+  const reg = _vlReg;
+  if (!reg) return;
+  const isNew = !villager;
+  const selIds = new Set(villager?.categoryIds ?? []);
+  const nonStrangerCats = reg.categories.filter(c => c.id !== VL_STRANGERS);
+
+  const catToggles = nonStrangerCats.map(c =>
+    `<button class="vl-cat-toggle${selIds.has(c.id) ? ' vl-on' : ''}" data-cid="${esc(c.id)}" type="button">${esc(c.name)}</button>`
+  ).join('');
+
+  const aliasRows = (villager?.aliases ?? []).map((a, i) => vlAliasRowHtml(i, a.platform, a.id, a.handle ?? '')).join('');
+
+  detail.innerHTML = `
+    <div class="vl-detail-head">${isNew ? 'Add person' : esc(villager.name)}</div>
+    <div>
+      <div class="vl-field-label">Name</div>
+      <input type="text" id="vl-p-name" value="${isNew ? '' : esc(villager.name)}" placeholder="e.g. Chen" style="width:100%">
+    </div>
+    <div>
+      <div class="vl-field-label">Categories <span class="field-hint">(can overlap)</span></div>
+      <div class="vl-cat-toggles" id="vl-p-cat-toggles">${catToggles || '<span class="vl-chip-dim">No categories defined yet.</span>'}</div>
+    </div>
+    <div>
+      <div class="vl-field-label">Platform aliases <span class="field-hint">(matched by stable ID, not handle)</span></div>
+      <div id="vl-p-aliases" style="display:flex;flex-direction:column;gap:5px">${aliasRows}</div>
+      <div class="vl-add-row"><button class="btn-ghost" id="vl-p-alias-add" type="button" style="font-size:0.8rem">+ Alias</button></div>
+    </div>
+    <div>
+      <div class="vl-field-label">Connection note</div>
+      <input type="text" id="vl-p-conn" value="${isNew ? '' : esc(villager.connection ?? '')}" placeholder="How do you know them?" style="width:100%">
+    </div>
+    <div class="vl-actions">
+      <button class="btn-send" id="vl-p-save" type="button">${isNew ? 'Add person' : 'Save'}</button>
+      ${!isNew ? `<button class="btn-danger" id="vl-p-del" type="button">Delete</button>` : ''}
+      <button class="btn-ghost vl-detail-back" id="vl-p-back" type="button" style="display:none">← Back</button>
+    </div>
+    <div class="vl-status" id="vl-p-status"></div>
+  `;
+
+  detail.querySelectorAll('.vl-cat-toggle').forEach(btn =>
+    btn.addEventListener('click', () => btn.classList.toggle('vl-on'))
+  );
+  $('vl-p-alias-add').addEventListener('click', () => {
+    const container = $('vl-p-aliases');
+    const i = container.querySelectorAll('.vl-alias-row').length;
+    const div = document.createElement('div');
+    div.innerHTML = vlAliasRowHtml(i, '', '', '');
+    const row = div.firstElementChild;
+    row.querySelector('.vl-alias-rm').addEventListener('click', () => row.remove());
+    container.appendChild(row);
+  });
+  detail.querySelectorAll('.vl-alias-rm').forEach(btn =>
+    btn.addEventListener('click', () => btn.closest('.vl-alias-row').remove())
+  );
+  $('vl-p-save').addEventListener('click', () => vlSavePerson(villager?.id ?? null));
+  $('vl-p-del')?.addEventListener('click', () => vlDeletePerson(villager.id));
+  vlBindBackBtn('vl-p-back', 'vl-people-detail');
+}
+
+function vlAliasRowHtml(i, platform, id, handle) {
+  return `<div class="vl-alias-row" data-aidx="${i}">
+    <input type="text" placeholder="platform" value="${esc(platform)}" class="vl-alias-plat">
+    <input type="text" placeholder="stable id" value="${esc(id)}" class="vl-alias-id">
+    <input type="text" placeholder="handle" value="${esc(handle)}" class="vl-alias-hdl">
+    <button class="btn-ghost vl-alias-rm" type="button" title="Remove" style="padding:2px 7px">×</button>
+  </div>`;
+}
+
+async function vlSavePerson(id) {
+  const status = $('vl-p-status');
+  const name = $('vl-p-name').value.trim();
+  if (!name) { status.textContent = 'Name is required.'; return; }
+  const categoryIds = [...document.querySelectorAll('#vl-p-cat-toggles .vl-cat-toggle.vl-on')].map(b => b.dataset.cid);
+  const aliases = [...document.querySelectorAll('#vl-p-aliases .vl-alias-row')]
+    .map(row => ({
+      platform: row.querySelector('.vl-alias-plat')?.value.trim() ?? '',
+      id:       row.querySelector('.vl-alias-id')?.value.trim() ?? '',
+      handle:   row.querySelector('.vl-alias-hdl')?.value.trim() || undefined,
+    }))
+    .filter(a => a.platform && a.id);
+  const connection = $('vl-p-conn').value.trim();
+  status.textContent = 'Saving…';
+  try {
+    const r = await fetch(
+      id ? `/api/village/villagers/${encodeURIComponent(id)}` : '/api/village/villagers',
+      { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, categoryIds, aliases, connection }) },
+    );
+    if (!r.ok) throw new Error(await vlErrMsg(r));
+    const saved = await r.json();
+    status.textContent = '✓ Saved';
+    _vlReg = null;
+    const reg = await vlFetch(true);
+    _vlSelP = saved.id;
+    vlRenderPeopleGrid(reg);
+    vlRenderPersonDetail(reg.villagers.find(v => v.id === saved.id) ?? null);
+    setTimeout(() => { const s = $('vl-p-status'); if (s) s.textContent = ''; }, 2000);
+  } catch (err) { status.textContent = `Error: ${err.message}`; }
+}
+
+async function vlDeletePerson(id) {
+  const v = _vlReg?.villagers.find(x => x.id === id);
+  if (!v || !confirm(`Remove ${v.name} from your village?`)) return;
+  const status = $('vl-p-status');
+  status.textContent = 'Deleting…';
+  try {
+    const r = await fetch(`/api/village/villagers/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error(await vlErrMsg(r));
+    _vlReg = null; _vlSelP = null;
+    $('vl-people-detail').innerHTML = '<p style="color:var(--text-dim);font-size:0.85rem;padding:4px">Select a person or click &ldquo;+ Add person&rdquo;.</p>';
+    vlCloseDetail('vl-people-detail');
+    vlRenderPeopleGrid(await vlFetch(true));
+  } catch (err) { status.textContent = `Error: ${err.message}`; }
+}
+
+// ── Categories ──
+
+async function vlLoadCategories() {
+  const grid = $('vl-cat-grid');
+  grid.innerHTML = '<p class="logs-loading" style="grid-column:1/-1">Loading…</p>';
+  try {
+    vlRenderCatGrid(await vlFetch(true));
+  } catch (err) { grid.innerHTML = vlErr(err); }
+}
+
+function vlRenderCatGrid(reg) {
+  const grid = $('vl-cat-grid');
+  grid.innerHTML = reg.categories.map(c => {
+    const grants = Object.entries(c.grants ?? {});
+    const grantHtml = grants.length
+      ? grants.map(([k, v]) =>
+          `<span class="${typeof v === 'string' ? 'vl-grant-chip vl-grant-chip-str' : 'vl-grant-chip'}">${esc(typeof v === 'string' ? `${k}: ${v}` : k)}</span>`
+        ).join('')
+      : `<span class="vl-grant-none">no grants</span>`;
+    const badge = c.id === VL_STRANGERS ? ' 🔒' : c.builtin ? ' ⚙' : '';
+    return `<div class="vl-card${_vlSelC === c.id ? ' vl-sel' : ''}" data-cid="${esc(c.id)}" tabindex="0" role="button" aria-label="${esc(c.name)}">
+      <div class="vl-card-name" title="${esc(c.name)}">${esc(c.name)}${badge}</div>
+      <div class="vl-grant-chips">${grantHtml}</div>
+    </div>`;
+  }).join('');
+  grid.querySelectorAll('.vl-card').forEach(el => {
+    el.addEventListener('click', () => vlSelectCategory(el.dataset.cid));
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); vlSelectCategory(el.dataset.cid); }
+    });
+  });
+}
+
+function vlSelectCategory(id) {
+  _vlSelC = id;
+  $('vl-cat-grid').querySelectorAll('.vl-card').forEach(el =>
+    el.classList.toggle('vl-sel', el.dataset.cid === id)
+  );
+  vlRenderCatDetail(_vlReg?.categories.find(c => c.id === id) ?? null);
+  vlOpenDetail('vl-cat-detail');
+}
+
+function vlStartNewCategory() {
+  _vlSelC = null;
+  $('vl-cat-grid').querySelectorAll('.vl-card').forEach(el => el.classList.remove('vl-sel'));
+  vlRenderCatDetail(null);
+  vlOpenDetail('vl-cat-detail');
+}
+
+function vlRenderCatDetail(cat) {
+  const detail = $('vl-cat-detail');
+  const isNew    = !cat;
+  const isLocked = cat?.id === VL_STRANGERS;
+  const isBuiltin = cat?.builtin && !isNew;
+
+  const grantRows = Object.entries(cat?.grants ?? {}).map(([k, v], i) =>
+    vlGrantRowHtml(i, k, typeof v === 'string' ? 'str' : 'bool', typeof v === 'string' ? v : (v ? 'true' : 'false'), isLocked)
+  ).join('');
+
+  detail.innerHTML = `
+    <div class="vl-detail-head">${isNew ? 'New category' : esc(cat.name)}</div>
+    ${isLocked ? `<p class="vl-note">🔒 The floor — everyone unrecognized resolves here. Grants are permanently locked to empty.</p>` : ''}
+    <div>
+      <div class="vl-field-label">Name${isBuiltin ? ' <span class="vl-lock">(fixed)</span>' : ''}</div>
+      <input type="text" id="vl-c-name" value="${isNew ? '' : esc(cat.name)}" placeholder="e.g. Close Friends" style="width:100%"${isBuiltin ? ' disabled' : ''}>
+    </div>
+    <div>
+      <div class="vl-field-label">Grants <span class="field-hint">(what this category lets someone know or see)</span></div>
+      <div id="vl-c-grants" style="display:flex;flex-direction:column;gap:5px">${grantRows}</div>
+      ${!isLocked ? `<div class="vl-add-row"><button class="btn-ghost" id="vl-c-grant-add" type="button" style="font-size:0.8rem">+ Grant</button></div>` : ''}
+    </div>
+    ${!isLocked ? `
+    <div class="vl-actions">
+      <button class="btn-send" id="vl-c-save" type="button">${isNew ? 'Create' : 'Save'}</button>
+      ${!isNew && !cat.builtin ? `<button class="btn-danger" id="vl-c-del" type="button">Delete</button>` : ''}
+      <button class="btn-ghost vl-detail-back" id="vl-c-back" type="button" style="display:none">← Back</button>
+    </div>` : ''}
+    <div class="vl-status" id="vl-c-status"></div>
+  `;
+
+  if (!isLocked) {
+    $('vl-c-grant-add').addEventListener('click', () => {
+      const container = $('vl-c-grants');
+      const i = container.querySelectorAll('.vl-grant-row').length;
+      const div = document.createElement('div');
+      div.innerHTML = vlGrantRowHtml(i, '', 'bool', 'true', false);
+      const row = div.firstElementChild;
+      row.querySelector('.vl-grant-rm')?.addEventListener('click', () => row.remove());
+      container.appendChild(row);
+    });
+    detail.querySelectorAll('.vl-grant-rm').forEach(btn =>
+      btn.addEventListener('click', () => btn.closest('.vl-grant-row').remove())
+    );
+    $('vl-c-save').addEventListener('click', () => vlSaveCategory(cat?.id ?? null, isBuiltin));
+    $('vl-c-del')?.addEventListener('click', () => vlDeleteCategory(cat.id));
+    vlBindBackBtn('vl-c-back', 'vl-cat-detail');
+  }
+}
+
+function vlGrantRowHtml(i, key, type, val, disabled) {
+  const d = disabled ? ' disabled' : '';
+  return `<div class="vl-grant-row" data-gidx="${i}">
+    <input type="text" placeholder="grant key" value="${esc(key)}" class="vl-grant-key"${d}>
+    <select class="vl-grant-type"${d}>
+      <option value="bool"${type === 'bool' ? ' selected' : ''}>bool</option>
+      <option value="str"${type === 'str' ? ' selected' : ''}>string</option>
+    </select>
+    <input type="text" placeholder="true / value" value="${esc(val)}" class="vl-grant-val"${d}>
+    ${!disabled ? `<button class="btn-ghost vl-grant-rm" type="button" title="Remove" style="padding:2px 7px">×</button>` : '<span></span>'}
+  </div>`;
+}
+
+function vlReadGrants() {
+  const grants = {};
+  document.querySelectorAll('#vl-c-grants .vl-grant-row').forEach(row => {
+    const key = row.querySelector('.vl-grant-key')?.value.trim();
+    const type = row.querySelector('.vl-grant-type')?.value;
+    const val  = row.querySelector('.vl-grant-val')?.value.trim();
+    if (!key) return;
+    grants[key] = type === 'str' ? val : (val.toLowerCase() !== 'false' && val !== '0');
+  });
+  return grants;
+}
+
+async function vlSaveCategory(id, nameDisabled) {
+  const status = $('vl-c-status');
+  const nameVal = $('vl-c-name')?.value.trim();
+  if (!id && !nameVal) { status.textContent = 'Name is required.'; return; }
+  const grants = vlReadGrants();
+  const body = id
+    ? { grants, ...(nameDisabled ? {} : { name: nameVal }) }
+    : { name: nameVal, grants };
+  status.textContent = 'Saving…';
+  try {
+    const r = await fetch(
+      id ? `/api/village/categories/${encodeURIComponent(id)}` : '/api/village/categories',
+      { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+    );
+    if (!r.ok) throw new Error(await vlErrMsg(r));
+    const saved = await r.json();
+    status.textContent = '✓ Saved';
+    _vlReg = null;
+    const reg = await vlFetch(true);
+    _vlSelC = saved.id;
+    vlRenderCatGrid(reg);
+    vlRenderCatDetail(reg.categories.find(c => c.id === saved.id) ?? null);
+    setTimeout(() => { const s = $('vl-c-status'); if (s) s.textContent = ''; }, 2000);
+  } catch (err) { status.textContent = `Error: ${err.message}`; }
+}
+
+async function vlDeleteCategory(id) {
+  const cat = _vlReg?.categories.find(c => c.id === id);
+  if (!cat) return;
+  const wouldBeEmpty = (_vlReg?.villagers ?? []).filter(v =>
+    v.categoryIds?.includes(id) && v.categoryIds.filter(x => x !== id).length === 0
+  );
+  let reassignTo = null;
+  if (wouldBeEmpty.length > 0) {
+    const others = (_vlReg?.categories ?? []).filter(c => c.id !== id);
+    const pick = prompt(
+      `${wouldBeEmpty.length} person(s) only have this category.\n\nEnter the name of a category to move them to (or leave blank for Strangers):\n\n${others.map(c => c.name).join(', ')}`,
+    );
+    if (pick === null) return;
+    const target = pick.trim() ? others.find(c => c.name.toLowerCase() === pick.trim().toLowerCase()) : null;
+    if (pick.trim() && !target) { alert('Category not found.'); return; }
+    reassignTo = target?.id ?? VL_STRANGERS;
+  } else if (!confirm(`Delete "${cat.name}"?`)) return;
+
+  const status = $('vl-c-status');
+  status.textContent = 'Deleting…';
+  try {
+    const qs = reassignTo ? `?reassignTo=${encodeURIComponent(reassignTo)}` : '';
+    const r = await fetch(`/api/village/categories/${encodeURIComponent(id)}${qs}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error(await vlErrMsg(r));
+    _vlReg = null; _vlSelC = null;
+    $('vl-cat-detail').innerHTML = '<p style="color:var(--text-dim);font-size:0.85rem;padding:4px">Select a category to view or edit.</p>';
+    vlCloseDetail('vl-cat-detail');
+    vlRenderCatGrid(await vlFetch(true));
+  } catch (err) { status.textContent = `Error: ${err.message}`; }
+}
+
+// ── Locations ──
+
+async function vlLoadLocations() {
+  const list = $('vl-loc-list');
+  list.innerHTML = '<p class="logs-loading">Loading…</p>';
+  try {
+    vlRenderLocList(await vlFetch(true));
+  } catch (err) { list.innerHTML = vlErr(err); }
+}
+
+function vlRenderLocList(reg) {
+  const list = $('vl-loc-list');
+  if (!reg.locations.length) {
+    list.innerHTML = '<p class="vl-chip-dim" style="padding:12px">No locations yet. Click "+ Add location".</p>';
+    return;
+  }
+  const catMap = new Map(reg.categories.map(c => [c.id, c]));
+  list.innerHTML = reg.locations.map(l => {
+    const cat = catMap.get(l.assignedCategoryId);
+    const chip = cat ? `<span class="vl-chip${cat.builtin ? ' vl-chip-green' : ''}" style="flex-shrink:0">${esc(cat.name)}</span>` : '';
+    return `<div class="vl-loc-card${_vlSelL === l.key ? ' vl-sel' : ''}" data-lkey="${esc(l.key)}" tabindex="0" role="button">
+      <div class="vl-loc-label" title="${esc(l.label)}">${esc(l.label)}</div>
+      <div class="vl-loc-key"   title="${esc(l.key)}">${esc(l.key)}</div>
+      ${chip}
+    </div>`;
+  }).join('');
+  list.querySelectorAll('.vl-loc-card').forEach(el => {
+    el.addEventListener('click', () => vlSelectLocation(el.dataset.lkey));
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); vlSelectLocation(el.dataset.lkey); }
+    });
+  });
+}
+
+function vlSelectLocation(key) {
+  _vlSelL = key;
+  $('vl-loc-list').querySelectorAll('.vl-loc-card').forEach(el =>
+    el.classList.toggle('vl-sel', el.dataset.lkey === key)
+  );
+  vlRenderLocDetail(_vlReg?.locations.find(l => l.key === key) ?? null);
+  vlOpenDetail('vl-loc-detail');
+}
+
+function vlStartNewLocation() {
+  _vlSelL = null;
+  $('vl-loc-list').querySelectorAll('.vl-loc-card').forEach(el => el.classList.remove('vl-sel'));
+  vlRenderLocDetail(null);
+  vlOpenDetail('vl-loc-detail');
+}
+
+function vlRenderLocDetail(loc) {
+  const detail = $('vl-loc-detail');
+  const reg = _vlReg;
+  if (!reg) return;
+  const isNew = !loc;
+  const catOpts = reg.categories.map(c =>
+    `<option value="${esc(c.id)}"${loc?.assignedCategoryId === c.id ? ' selected' : ''}>${esc(c.name)}</option>`
+  ).join('');
+
+  detail.innerHTML = `
+    <div class="vl-detail-head">${isNew ? 'Add location' : esc(loc.label)}</div>
+    <div>
+      <div class="vl-field-label">Key <span class="field-hint">(unique, e.g. discord:guild:123:channel:456)</span></div>
+      <input type="text" id="vl-l-key" value="${isNew ? '' : esc(loc.key)}" placeholder="discord:guild:…" style="width:100%"${!isNew ? ' readonly' : ''}>
+    </div>
+    <div>
+      <div class="vl-field-label">Label</div>
+      <input type="text" id="vl-l-label" value="${isNew ? '' : esc(loc.label)}" placeholder="e.g. #general in Chen's server" style="width:100%">
+    </div>
+    <div>
+      <div class="vl-field-label">Trust ceiling <span class="field-hint">(anyone here is treated as at most this)</span></div>
+      <select id="vl-l-cat" style="width:100%">${catOpts}</select>
+    </div>
+    <div>
+      <div class="vl-field-label">Rate limit (messages/hour, optional)</div>
+      <input type="number" id="vl-l-rate" value="${loc?.rateLimit?.perHour ?? ''}" placeholder="unlimited" min="0" step="1" style="width:100%">
+    </div>
+    <div class="vl-actions">
+      <button class="btn-send" id="vl-l-save" type="button">${isNew ? 'Add location' : 'Save'}</button>
+      ${!isNew ? `<button class="btn-danger" id="vl-l-del" type="button">Delete</button>` : ''}
+      <button class="btn-ghost vl-detail-back" id="vl-l-back" type="button" style="display:none">← Back</button>
+    </div>
+    <div class="vl-status" id="vl-l-status"></div>
+  `;
+
+  $('vl-l-save').addEventListener('click', () => vlSaveLocation(loc?.key ?? null));
+  $('vl-l-del')?.addEventListener('click', () => vlDeleteLocation(loc.key));
+  vlBindBackBtn('vl-l-back', 'vl-loc-detail');
+}
+
+async function vlSaveLocation(key) {
+  const status = $('vl-l-status');
+  const locKey  = $('vl-l-key').value.trim();
+  if (!locKey) { status.textContent = 'Key is required.'; return; }
+  const label  = $('vl-l-label').value.trim() || locKey;
+  const assignedCategoryId = $('vl-l-cat').value;
+  const rateRaw = $('vl-l-rate').value.trim();
+  const rateLimit = rateRaw ? { perHour: parseInt(rateRaw, 10) } : null;
+  status.textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/village/locations', {
+      method: key ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: locKey, label, assignedCategoryId, rateLimit }),
+    });
+    if (!r.ok) throw new Error(await vlErrMsg(r));
+    const saved = await r.json();
+    status.textContent = '✓ Saved';
+    _vlReg = null;
+    const reg = await vlFetch(true);
+    _vlSelL = saved.key;
+    vlRenderLocList(reg);
+    vlRenderLocDetail(reg.locations.find(l => l.key === saved.key) ?? null);
+    setTimeout(() => { const s = $('vl-l-status'); if (s) s.textContent = ''; }, 2000);
+  } catch (err) { status.textContent = `Error: ${err.message}`; }
+}
+
+async function vlDeleteLocation(key) {
+  if (!confirm(`Delete location "${key}"?`)) return;
+  const status = $('vl-l-status');
+  status.textContent = 'Deleting…';
+  try {
+    const r = await fetch('/api/village/locations', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key }),
+    });
+    if (!r.ok) throw new Error(await vlErrMsg(r));
+    _vlReg = null; _vlSelL = null;
+    $('vl-loc-detail').innerHTML = '<p style="color:var(--text-dim);font-size:0.85rem;padding:4px">Select a location to view or edit.</p>';
+    vlCloseDetail('vl-loc-detail');
+    vlRenderLocList(await vlFetch(true));
+  } catch (err) { status.textContent = `Error: ${err.message}`; }
+}
+
+// ── Mobile detail-panel helpers ──
+
+function vlOpenDetail(id) {
+  const el = $(id);
+  if (!el) return;
+  el.classList.add('vl-open');
+  // Show back button only on mobile
+  el.querySelectorAll('.vl-detail-back').forEach(b => {
+    b.style.display = window.matchMedia('(max-width: 767px)').matches ? '' : 'none';
+  });
+}
+function vlCloseDetail(id) { $(id)?.classList.remove('vl-open'); }
+function vlBindBackBtn(btnId, panelId) {
+  const btn = $(btnId);
+  if (!btn) return;
+  btn.style.display = window.matchMedia('(max-width: 767px)').matches ? '' : 'none';
+  btn.addEventListener('click', () => vlCloseDetail(panelId));
 }
 
 

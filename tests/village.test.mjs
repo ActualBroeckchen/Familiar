@@ -60,11 +60,20 @@ test('normalizeRegistry restores missing builtins', () => {
   assert.ok(reg.categories.some(c => c.id === CATEGORY_STRANGERS));
 });
 
-test('villager with dangling categoryId is reassigned to strangers (narrow, never widen)', () => {
+test('villager with dangling categoryIds is reassigned to strangers (narrow, never widen)', () => {
   const reg = normalizeRegistry({
-    villagers: [{ id: 'v1', name: 'Chen', categoryId: 'deleted-category' }],
+    villagers: [{ id: 'v1', name: 'Chen', categoryIds: ['deleted-category'] }],
   });
-  assert.equal(reg.villagers[0].categoryId, CATEGORY_STRANGERS);
+  assert.deepEqual(reg.villagers[0].categoryIds, [CATEGORY_STRANGERS]);
+});
+
+test('villager with legacy scalar categoryId is migrated to array', () => {
+  const reg = normalizeRegistry({
+    categories: [{ id: CATEGORY_EMERGENCY, name: 'Emergency Contacts', grants: {} }],
+    villagers: [{ id: 'v1', name: 'Chen', categoryId: CATEGORY_EMERGENCY }],
+  });
+  assert.deepEqual(reg.villagers[0].categoryIds, [CATEGORY_EMERGENCY]);
+  assert.equal('categoryId' in reg.villagers[0], false);
 });
 
 test('location with dangling/absent assignedCategoryId falls to strangers', () => {
@@ -116,14 +125,23 @@ test('builtin emergency-contacts: grants editable, name fixed, not deletable', a
   await assert.rejects(() => deleteCategory({ id: CATEGORY_EMERGENCY }, { filePath }), /built-in/);
 });
 
-test('deleting a category with members requires reassignTo', async () => {
+test('deleting a category with sole-category members requires reassignTo', async () => {
   const cat = await upsertCategory({ name: 'Family', grants: {} }, { filePath });
-  await upsertVillager({ name: 'Mum', categoryId: cat.id }, { filePath });
+  await upsertVillager({ name: 'Mum', categoryIds: [cat.id] }, { filePath });
   await assert.rejects(() => deleteCategory({ id: cat.id }, { filePath }), /reassignTo/);
   const res = await deleteCategory({ id: cat.id, reassignTo: CATEGORY_STRANGERS }, { filePath });
   assert.equal(res.reassigned, 1);
   const reg = await getRegistry({ filePath });
-  assert.equal(reg.villagers[0].categoryId, CATEGORY_STRANGERS);
+  assert.deepEqual(reg.villagers[0].categoryIds, [CATEGORY_STRANGERS]);
+});
+
+test('deleting a category from a multi-category villager does not require reassignTo', async () => {
+  const cat = await upsertCategory({ name: 'Family', grants: {} }, { filePath });
+  await upsertVillager({ name: 'Mum', categoryIds: [cat.id, CATEGORY_EMERGENCY] }, { filePath });
+  const res = await deleteCategory({ id: cat.id }, { filePath });
+  assert.equal(res.reassigned, 0);
+  const reg = await getRegistry({ filePath });
+  assert.deepEqual(reg.villagers[0].categoryIds, [CATEGORY_EMERGENCY]);
 });
 
 test('deleting a category drops dependent location ceilings to strangers', async () => {
@@ -138,17 +156,30 @@ test('deleting a category drops dependent location ceilings to strangers', async
 
 test('create villager defaults to strangers when no category given', async () => {
   const v = await upsertVillager({ name: 'Rando' }, { filePath });
-  assert.equal(v.categoryId, CATEGORY_STRANGERS);
+  assert.deepEqual(v.categoryIds, [CATEGORY_STRANGERS]);
 });
 
 test('villager with unknown category is rejected', async () => {
-  await assert.rejects(() => upsertVillager({ name: 'X', categoryId: 'nope' }, { filePath }), /unknown category/);
+  await assert.rejects(() => upsertVillager({ name: 'X', categoryIds: ['nope'] }, { filePath }), /unknown category/);
+});
+
+test('villager can belong to multiple categories (overlapping)', async () => {
+  const cat = await upsertCategory({ name: 'Close Friends', grants: { location: true } }, { filePath });
+  const v = await upsertVillager({ name: 'Chen', categoryIds: [CATEGORY_EMERGENCY, cat.id] }, { filePath });
+  assert.ok(v.categoryIds.includes(CATEGORY_EMERGENCY));
+  assert.ok(v.categoryIds.includes(cat.id));
+  assert.equal(v.categoryIds.length, 2);
+});
+
+test('legacy scalar categoryId accepted and stored as array', async () => {
+  const v = await upsertVillager({ name: 'Chen', categoryId: CATEGORY_EMERGENCY }, { filePath });
+  assert.deepEqual(v.categoryIds, [CATEGORY_EMERGENCY]);
 });
 
 test('alias resolution matches platform + stable id, not handle', async () => {
   await upsertVillager({
     name: 'Chen',
-    categoryId: CATEGORY_EMERGENCY,
+    categoryIds: [CATEGORY_EMERGENCY],
     aliases: [{ platform: 'Discord', id: '123456789', handle: 'chen_draws' }],
   }, { filePath });
 
@@ -169,12 +200,12 @@ test('aliases without a stable id are dropped at sanitization', async () => {
   assert.equal(v.aliases[0].id, '42');
 });
 
-test('update villager: move category, clear triage', async () => {
+test('update villager: move categories, clear triage', async () => {
   const cat = await upsertCategory({ name: 'Family', grants: {} }, { filePath });
-  const v = await upsertVillager({ name: 'Mum', categoryId: CATEGORY_EMERGENCY, triage: { webhook: 'https://example.test/hook' } }, { filePath });
+  const v = await upsertVillager({ name: 'Mum', categoryIds: [CATEGORY_EMERGENCY], triage: { webhook: 'https://example.test/hook' } }, { filePath });
   assert.ok(v.triage);
-  const updated = await upsertVillager({ id: v.id, categoryId: cat.id, triage: null }, { filePath });
-  assert.equal(updated.categoryId, cat.id);
+  const updated = await upsertVillager({ id: v.id, categoryIds: [cat.id], triage: null }, { filePath });
+  assert.deepEqual(updated.categoryIds, [cat.id]);
   assert.equal(updated.triage, undefined);
 });
 
@@ -215,7 +246,7 @@ test('trustedContacts migrate into Emergency Contacts, idempotently', async () =
   const reg = await getRegistry({ filePath });
   assert.equal(reg.villagers.length, 2);
   for (const v of reg.villagers) {
-    assert.equal(v.categoryId, CATEGORY_EMERGENCY);
+    assert.deepEqual(v.categoryIds, [CATEGORY_EMERGENCY]);
     assert.ok(v.triage?.webhook);
   }
 });
@@ -266,7 +297,7 @@ test('bootSync: canonical newer overwrites mirror', async () => {
     pull: async () => ({
       updatedAt: future,
       categories: [],
-      villagers: [{ id: 'v-canon', name: 'CanonChen', categoryId: CATEGORY_EMERGENCY }],
+      villagers: [{ id: 'v-canon', name: 'CanonChen', categoryIds: [CATEGORY_EMERGENCY] }],
       locations: [],
     }),
   });

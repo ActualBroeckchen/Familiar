@@ -92,6 +92,12 @@ function sanitizeGrants(grants) {
   return out;
 }
 
+function normalizeCategoryIds(raw, byId) {
+  const valid = (Array.isArray(raw) ? raw : [])
+    .filter(id => typeof id === 'string' && byId.has(id));
+  return valid.length > 0 ? [...new Set(valid)] : [CATEGORY_STRANGERS];
+}
+
 function sanitizeAliases(aliases) {
   if (!Array.isArray(aliases)) return [];
   return aliases
@@ -136,8 +142,12 @@ export function normalizeRegistry(raw) {
     .map(v => ({
       id: v.id,
       name: v.name.trim(),
-      // Dangling category → strangers. Narrow, never widen.
-      categoryId: byId.has(v.categoryId) ? v.categoryId : CATEGORY_STRANGERS,
+      // Accepts both categoryIds[] (new) and legacy categoryId scalar.
+      // Dangling / empty → [strangers]. Narrow, never widen.
+      categoryIds: normalizeCategoryIds(
+        v.categoryIds ?? (v.categoryId ? [v.categoryId] : []),
+        byId,
+      ),
       aliases: sanitizeAliases(v.aliases),
       connection: typeof v.connection === 'string' ? v.connection : '',
       ...(v.triage && typeof v.triage === 'object' && typeof v.triage.webhook === 'string'
@@ -315,36 +325,61 @@ export async function deleteCategory({ id, reassignTo }, { filePath = DEFAULT_VI
     const cat = reg.categories.find(c => c.id === id);
     if (!cat) throw new Error(`unknown category: ${id}`);
     if (cat.builtin) throw new Error('built-in categories cannot be deleted');
-    const members = reg.villagers.filter(v => v.categoryId === id);
-    if (members.length > 0) {
-      const target = reg.categories.find(c => c.id === reassignTo);
-      if (!target) throw new Error(`category has ${members.length} member(s) — pass reassignTo with a valid category id`);
-      for (const v of members) v.categoryId = target.id;
+
+    // Villagers whose categoryIds list would become empty after removing this id.
+    const wouldBeEmpty = reg.villagers.filter(v =>
+      v.categoryIds.includes(id) && v.categoryIds.filter(x => x !== id).length === 0,
+    );
+    let reassignTarget = null;
+    if (wouldBeEmpty.length > 0) {
+      reassignTarget = reg.categories.find(c => c.id === reassignTo);
+      if (!reassignTarget) throw new Error(
+        `${wouldBeEmpty.length} villager(s) would have no category — pass reassignTo with a valid category id`,
+      );
     }
+
+    let reassigned = 0;
+    for (const v of reg.villagers) {
+      if (!v.categoryIds.includes(id)) continue;
+      v.categoryIds = v.categoryIds.filter(x => x !== id);
+      if (v.categoryIds.length === 0) {
+        v.categoryIds = reassignTarget ? [reassignTarget.id] : [CATEGORY_STRANGERS];
+        reassigned++;
+      }
+    }
+
     reg.categories = reg.categories.filter(c => c.id !== id);
     // Locations whose ceiling pointed here fall to the floor.
     for (const l of reg.locations) {
       if (l.assignedCategoryId === id) l.assignedCategoryId = CATEGORY_STRANGERS;
     }
-    return { ok: true, reassigned: members.length };
+    return { ok: true, reassigned };
   });
 }
 
 // ── Villager CRUD ─────────────────────────────────────────────────
 
-export async function upsertVillager({ id, name, categoryId, aliases, connection, triage }, { filePath = DEFAULT_VILLAGE_PATH } = {}) {
+export async function upsertVillager({ id, name, categoryIds, categoryId, aliases, connection, triage }, { filePath = DEFAULT_VILLAGE_PATH } = {}) {
   return mutate(filePath, (reg) => {
-    const resolveCategory = (cid) => {
-      if (cid === undefined) return undefined;
-      if (!reg.categories.some(c => c.id === cid)) throw new Error(`unknown category: ${cid}`);
-      return cid;
+    // Accept categoryIds (array, new) or categoryId (scalar, legacy).
+    const rawIds = categoryIds !== undefined ? categoryIds
+      : (categoryId !== undefined ? [categoryId] : undefined);
+
+    const resolveCategories = (raw) => {
+      if (raw === undefined) return undefined;
+      const ids = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+      for (const cid of ids) {
+        if (!reg.categories.some(c => c.id === cid)) throw new Error(`unknown category: ${cid}`);
+      }
+      return ids.length > 0 ? [...new Set(ids)] : [CATEGORY_STRANGERS];
     };
+
     if (id) {
       const v = reg.villagers.find(x => x.id === id);
       if (!v) throw new Error(`unknown villager: ${id}`);
       if (typeof name === 'string' && name.trim()) v.name = name.trim();
-      const cid = resolveCategory(categoryId);
-      if (cid !== undefined) v.categoryId = cid;
+      const cids = resolveCategories(rawIds);
+      if (cids !== undefined) v.categoryIds = cids;
       if (aliases !== undefined) v.aliases = sanitizeAliases(aliases);
       if (connection !== undefined) v.connection = typeof connection === 'string' ? connection : '';
       if (triage !== undefined) {
@@ -357,11 +392,11 @@ export async function upsertVillager({ id, name, categoryId, aliases, connection
       return v;
     }
     if (typeof name !== 'string' || !name.trim()) throw new Error('name (string) is required');
-    const cid = resolveCategory(categoryId) ?? CATEGORY_STRANGERS;
+    const cids = resolveCategories(rawIds) ?? [CATEGORY_STRANGERS];
     const v = {
       id: randomUUID(),
       name: name.trim(),
-      categoryId: cid,
+      categoryIds: cids,
       aliases: sanitizeAliases(aliases),
       connection: typeof connection === 'string' ? connection : '',
       ...(triage && typeof triage.webhook === 'string' && triage.webhook.trim()
@@ -437,7 +472,7 @@ export async function migrateTrustedContacts(contacts, { filePath = DEFAULT_VILL
       reg.villagers.push({
         id: randomUUID(),
         name,
-        categoryId: CATEGORY_EMERGENCY,
+        categoryIds: [CATEGORY_EMERGENCY],
         aliases: [],
         connection: 'imported from trusted contacts',
         ...(typeof c.webhook === 'string' && c.webhook.trim()

@@ -2133,14 +2133,14 @@ app.delete('/api/village/categories/:id', async (req, res) => {
 });
 
 app.post('/api/village/villagers', async (req, res) => {
-  const { name, categoryId, aliases, connection, triage } = req.body ?? {};
-  try { res.json(await upsertVillager({ name, categoryId, aliases, connection, triage })); }
+  const { name, categoryIds, categoryId, aliases, connection, triage } = req.body ?? {};
+  try { res.json(await upsertVillager({ name, categoryIds, categoryId, aliases, connection, triage })); }
   catch (err) { villageError(res, err); }
 });
 
 app.patch('/api/village/villagers/:id', async (req, res) => {
-  const { name, categoryId, aliases, connection, triage } = req.body ?? {};
-  try { res.json(await upsertVillager({ id: req.params.id, name, categoryId, aliases, connection, triage })); }
+  const { name, categoryIds, categoryId, aliases, connection, triage } = req.body ?? {};
+  try { res.json(await upsertVillager({ id: req.params.id, name, categoryIds, categoryId, aliases, connection, triage })); }
   catch (err) { villageError(res, err); }
 });
 
