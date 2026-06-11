@@ -1109,7 +1109,7 @@ import {
 } from './surface-context.js';
 import {
   recordSurfaceOffers,
-  getRecentOfferTimes,
+  getRecentOfferInfo,
   tagOutcomes,
 } from './surface-events.js';
 
@@ -1628,7 +1628,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
           const routinePhaseLabel = temporalPayload?.schedule?.phase?.label || '';
           const lapsesFile = (id.custom ?? []).find(f => f.filename === 'what_lapses_cost.md');
           const personModel = lapsesFile?.content?.trim() ?? '';
-          const surfacingHistory = await getRecentOfferTimes();
+          const surfacingHistory = await getRecentOfferInfo();
           const nowMs = Date.now();
 
           const candidates = await selectSurfaceCandidates({

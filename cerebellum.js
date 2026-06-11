@@ -493,7 +493,7 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   let candidateTasksBlock = '';
   try {
     const { selectSurfaceCandidates } = await import('./surface-context.js');
-    const { getRecentOfferTimes }     = await import('./surface-events.js');
+    const { getRecentOfferInfo }      = await import('./surface-events.js');
     // I already have temporal_context loaded as part of enrich() in
     // many call sites, but triage is async + standalone here, so
     // fetch a fresh window directly. Cheap — no LLM call.
@@ -506,7 +506,7 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
         && (item.type === 'task' || item.type === 'event' || item.type === 'reminder')
         && !item.resolution);
     if (openItems.length > 0) {
-      const surfacingHistory = await getRecentOfferTimes();
+      const surfacingHistory = await getRecentOfferInfo();
       const candidates = await selectSurfaceCandidates({
         openTasks: openItems,
         threat,
@@ -997,7 +997,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_add_task',
-      description: 'I record a task — something {{user}} needs to do, optionally with a deadline. Tasks are open-ended (no when) or deadline-bound; they surface in [Temporal Context] until resolved (done / cancelled / carried_forward). For things that happen at a specific time without action required, I use schedule_add_event. For nudges that should land in the chat at a chosen moment, schedule_add_reminder. Choosing the right type is important to make sure my human receives the correct support!',
+      description: 'I record a task — something {{user}} needs to do, optionally with a deadline. Recording it is a commitment, not just a note: the task stays on my radar in [Temporal Context] and returns to me as a surface candidate until it is resolved (done / cancelled / carried_forward) — I am the one who brings it back up with {{user}} when a moment fits, because a task I never raise often becomes a task that never happens. For things that happen at a specific time without action required, I use schedule_add_event. For nudges that should land in the chat at a chosen moment, schedule_add_reminder. Choosing the right type is important to make sure my human receives the correct support!',
       parameters: {
         type: 'object',
         properties: {

@@ -622,7 +622,9 @@ temporalPayload.schedule.window   ←  open tasks/events/reminders
    ── HARD GATES (pure code, no LLM) ──
    threat tier (severe → none; high → external_obligation only)
    routine phase (quiet_routine pattern → external_obligation only)
-   dedup window (6h, bypassed by external_obligation)
+   dedup window (6h if the last offer was actually RAISED in the
+   response; 90min if not — staying quiet never buys long
+   suppression. Bypassed by external_obligation.)
                 │
                 ▼
    ── CONTEXT ASSEMBLY (per candidate) ──
@@ -640,8 +642,18 @@ temporalPayload.schedule.window   ←  open tasks/events/reminders
                 ▼
    ── EVENT RECORD (fire-and-forget) ──
    Append to tomes/.surface-events.json with full event record
-   (state_snapshot, stakes_tier, confidence, outcome=null). The
-   tagger fills in outcome later when the schedule resolves.
+   (state_snapshot, stakes_tier, confidence, raised=null,
+   outcome=null). Two taggers fill the record in later:
+                │
+                ▼
+   ── RAISED TAG (post-turn, pure code) ──
+   tagRaisedOutcomes scans the final response text for each offered
+   task's label (same accepted-imprecision pattern as the M8 bookmark
+   outcome scan; four call sites in server.js — both tool-loop paths
+   and both plain paths) and tags the offer raised=true/false. The
+   dedup gate reads it via getRecentOfferInfo: only a raised offer
+   earns the 6h window. The outcome tagger separately fills in
+   `outcome` when the schedule resolves.
 ```
 
 **Triggers** (all rides, zero new LLM calls):
@@ -705,6 +717,10 @@ LLM returns:
 | unresolved + < 24h | left null, re-checked next turn |
 
 Once tagged, an event's `outcome` is immutable — the LLM later reasons about a stable record, not a moving target.
+
+**`raised` tagging** is a separate, earlier tag on the same event: did the Familiar actually *say* something about the task in the turn it was offered? Tagged post-turn by `tagRaisedOutcomes` (pure-code response-text scan, zero LLM calls). It drives the differentiated dedup window (raised → 6h rest; un-raised → back in 90min) and flows into reflection automatically — "offered N times, never raised" is itself a pattern the reflection loop can learn from, since reflection events carry the field.
+
+**Prompt stance:** the `[Surface candidates]` header frames holding tasks as part of the Familiar's care and names BOTH costs at equal weight (interrupting the moment vs. a task quietly slipping). It deliberately contains no bias-toward-quiet language — see CLAUDE.md's proactivity section; a regression test in `tests/surface-context.test.mjs` guards against its return.
 
 **Storage decision:** event records and reflection metadata live in `tomes/.surface-events.json` (per-embodiment, like ponderings). Identity-layer *insights* derived from them ("Eury crashes within 4h of skipping meals") get lifted to entity-core's `custom/what_lapses_cost.md` only after the reflection LLM judges the pattern strong enough. The raw event stream belongs to Proto-Familiar; the durable knowledge belongs to the entity.
 

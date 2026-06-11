@@ -186,10 +186,11 @@ export function formatTemporalContext(payload) {
     }
     if (openTasks.length) {
       // Framing here matters: bare labels read as informational
-      // background. Named under "open" with the bonded-human marker
-      // primes the Familiar to feel them as commitments {{user}} is
-      // counting on them to hold.
-      schedLines.push("Open tasks I'm keeping on my radar for {{user}} (no completion confirmed):");
+      // background. Named as something I'm actively holding — mine to
+      // remember AND to raise — primes the Familiar to feel them as
+      // commitments {{user}} is counting on them to act on, not a
+      // passive list to perceive.
+      schedLines.push("Open tasks I'm holding for {{user}} — mine to remember and to raise when a moment fits (no completion confirmed):");
       for (const item of openTasks) {
         schedLines.push(`  - ${item.label ?? item.id ?? ''}`);
       }

@@ -42,6 +42,7 @@ import {
   shouldReflectNow,
   getNewOutcomesSinceLastReflection,
   markReflected,
+  tagRaisedOutcomes,
 } from './surface-events.js';
 import { getRecentPonderings, deletePondering, markIntentActedOn } from './recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
@@ -434,10 +435,18 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         if (thalamusEnvelope) data._thalamus = thalamusEnvelope;
         if (toolRounds.length > 0) data._toolRounds = toolRounds;
         // M8 idle-mode outcome reporting: fire-and-forget after response sent.
-        if (enriched.surfacedBookmarks?.length > 0) {
+        {
           const responseText = data.choices?.[0]?.message?.content ?? '';
-          reportSurfacingOutcomes({ responseText, bookmarks: enriched.surfacedBookmarks })
-            .catch(err => console.error('[server] reportSurfacingOutcomes failed:', err?.message ?? err));
+          if (enriched.surfacedBookmarks?.length > 0) {
+            reportSurfacingOutcomes({ responseText, bookmarks: enriched.surfacedBookmarks })
+              .catch(err => console.error('[server] reportSurfacingOutcomes failed:', err?.message ?? err));
+          }
+          // Surface-candidate raised/not-raised tagging — same pure-code
+          // response-scan pattern; feeds the differentiated dedup window.
+          if (enriched.surfacedTasks?.length > 0 && responseText) {
+            tagRaisedOutcomes({ responseText, tasks: enriched.surfacedTasks })
+              .catch(err => console.error('[server] tagRaisedOutcomes failed:', err?.message ?? err));
+          }
         }
         return res.json(data);
       } catch (err) {
@@ -579,6 +588,10 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       reportSurfacingOutcomes({ responseText: finalText, bookmarks: streamBookmarksLoop })
         .catch(err => console.error('[server] reportSurfacingOutcomes (streaming) failed:', err?.message ?? err));
     }
+    if (enriched.surfacedTasks?.length > 0 && finalText) {
+      tagRaisedOutcomes({ responseText: finalText, tasks: enriched.surfacedTasks })
+        .catch(err => console.error('[server] tagRaisedOutcomes (streaming) failed:', err?.message ?? err));
+    }
     return;
   }
 
@@ -618,10 +631,14 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         const parsed = JSON.parse(text);
         parsed._thalamus = thalamusEnvelope;
         // M8 idle-mode outcome reporting: fire-and-forget after response sent.
+        const responseText = parsed.choices?.[0]?.message?.content ?? '';
         if (enriched.surfacedBookmarks?.length > 0) {
-          const responseText = parsed.choices?.[0]?.message?.content ?? '';
           reportSurfacingOutcomes({ responseText, bookmarks: enriched.surfacedBookmarks })
             .catch(err => console.error('[server] reportSurfacingOutcomes failed:', err?.message ?? err));
+        }
+        if (enriched.surfacedTasks?.length > 0 && responseText) {
+          tagRaisedOutcomes({ responseText, tasks: enriched.surfacedTasks })
+            .catch(err => console.error('[server] tagRaisedOutcomes failed:', err?.message ?? err));
         }
         return res.send(JSON.stringify(parsed));
       } catch { /* upstream returned non-JSON — pass through unchanged */ }
@@ -652,8 +669,10 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
 
   // M8 idle-mode outcome reporting (streaming path): accumulate the full
   // response text in memory as SSE chunks arrive, then report outcomes
-  // after the stream closes. Only active when bookmarks were surfaced.
+  // after the stream closes. Only active when bookmarks or surface
+  // candidates were offered this turn.
   const streamBookmarks = enriched.surfacedBookmarks ?? [];
+  const streamTasks     = enriched.surfacedTasks ?? [];
   let accumulatedText = '';
 
   const reader = upstream.body.getReader();
@@ -667,6 +686,10 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
           reportSurfacingOutcomes({ responseText: accumulatedText, bookmarks: streamBookmarks })
             .catch(err => console.error('[server] reportSurfacingOutcomes (streaming) failed:', err?.message ?? err));
         }
+        if (streamTasks.length > 0 && accumulatedText) {
+          tagRaisedOutcomes({ responseText: accumulatedText, tasks: streamTasks })
+            .catch(err => console.error('[server] tagRaisedOutcomes (streaming) failed:', err?.message ?? err));
+        }
         break;
       }
       const chunk = Buffer.from(value);
@@ -674,7 +697,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       // Extract text content from SSE delta chunks for outcome detection.
       // Each chunk may contain multiple `data: {...}\n\n` events. We only
       // need the assistant text, so parse each line's `choices[0].delta.content`.
-      if (streamBookmarks.length > 0) {
+      if (streamBookmarks.length > 0 || streamTasks.length > 0) {
         const chunkStr = chunk.toString('utf8');
         for (const line of chunkStr.split('\n')) {
           if (!line.startsWith('data: ')) continue;

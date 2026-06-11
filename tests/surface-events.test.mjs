@@ -13,9 +13,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 
 import {
   recordSurfaceOffers,
-  getRecentOfferTimes,
+  getRecentOfferInfo,
   loadSurfaceEvents,
   tagOutcomes,
+  tagRaisedOutcomes,
   getNewOutcomesSinceLastReflection,
   shouldReflectNow,
   markReflected,
@@ -37,7 +38,7 @@ const T0 = Date.now() - 60_000; // 1 min ago — well within retention
 
 // ── Recording + dedup ───────────────────────────────────────────────
 
-test('recordSurfaceOffers + getRecentOfferTimes round-trip', async () => {
+test('recordSurfaceOffers + getRecentOfferInfo round-trip', async () => {
   await recordSurfaceOffers(
     [
       { id: 't1', label: 'eat lunch',     type: 'task', stakesTier: 'personal_wellbeing', confidence: 'low' },
@@ -47,12 +48,13 @@ test('recordSurfaceOffers + getRecentOfferTimes round-trip', async () => {
     T0,
     DIR,
   );
-  const times = await getRecentOfferTimes(DIR);
-  assert.equal(times.t1, T0);
-  assert.equal(times.t2, T0);
+  const info = await getRecentOfferInfo(DIR);
+  assert.equal(info.t1.at, T0);
+  assert.equal(info.t1.raised, null, 'fresh offer starts untagged');
+  assert.equal(info.t2.at, T0);
 });
 
-test('getRecentOfferTimes returns most-recent offer per task', async () => {
+test('getRecentOfferInfo returns most-recent offer per task', async () => {
   await recordSurfaceOffers(
     [{ id: 't1', label: 'eat lunch', type: 'task', stakesTier: 'personal_wellbeing', confidence: 'low' }],
     {}, T0, DIR,
@@ -61,8 +63,76 @@ test('getRecentOfferTimes returns most-recent offer per task', async () => {
     [{ id: 't1', label: 'eat lunch', type: 'task', stakesTier: 'personal_wellbeing', confidence: 'low' }],
     {}, T0 + 4000, DIR,
   );
-  const times = await getRecentOfferTimes(DIR);
-  assert.equal(times.t1, T0 + 4000);
+  const info = await getRecentOfferInfo(DIR);
+  assert.equal(info.t1.at, T0 + 4000);
+});
+
+// ── Raised tagging ──────────────────────────────────────────────────
+
+test('tagRaisedOutcomes: label in response → raised, absent → not raised', async () => {
+  await recordSurfaceOffers(
+    [
+      { id: 't1', label: 'eat lunch',   type: 'task', stakesTier: 'personal_wellbeing', confidence: 'low' },
+      { id: 't2', label: 'submit form', type: 'task', stakesTier: 'external_obligation', confidence: 'high' },
+    ],
+    {}, T0, DIR,
+  );
+  const result = await tagRaisedOutcomes({
+    responseText: 'By the way — did you manage to EAT LUNCH yet? It matters today.',
+    tasks: [{ id: 't1', label: 'eat lunch' }, { id: 't2', label: 'submit form' }],
+    now: T0 + 1000,
+    tomesDir: DIR,
+  });
+  assert.equal(result.raised, 1);
+  assert.equal(result.notRaised, 1);
+  const info = await getRecentOfferInfo(DIR);
+  assert.equal(info.t1.raised, true, 'case-insensitive label match counts as raised');
+  assert.equal(info.t2.raised, false);
+});
+
+test('tagRaisedOutcomes: only the most recent untagged offer is touched', async () => {
+  await recordSurfaceOffers(
+    [{ id: 't1', label: 'eat lunch', type: 'task', stakesTier: 'personal_wellbeing', confidence: 'low' }],
+    {}, T0, DIR,
+  );
+  await tagRaisedOutcomes({
+    responseText: 'no mention here',
+    tasks: [{ id: 't1', label: 'eat lunch' }],
+    now: T0 + 1000, tomesDir: DIR,
+  });
+  // Re-offer later; new tag pass must hit the NEW event, not re-tag the old.
+  await recordSurfaceOffers(
+    [{ id: 't1', label: 'eat lunch', type: 'task', stakesTier: 'personal_wellbeing', confidence: 'low' }],
+    {}, T0 + 5000, DIR,
+  );
+  await tagRaisedOutcomes({
+    responseText: 'so, about eat lunch…',
+    tasks: [{ id: 't1', label: 'eat lunch' }],
+    now: T0 + 6000, tomesDir: DIR,
+  });
+  const store = await loadSurfaceEvents(DIR);
+  const sorted = store.events.filter(e => e.task_id === 't1').sort((a, b) => a.offered_at - b.offered_at);
+  assert.equal(sorted[0].raised, false, 'first offer keeps its original tag');
+  assert.equal(sorted[1].raised, true, 'second offer tagged by the second pass');
+  const info = await getRecentOfferInfo(DIR);
+  assert.equal(info.t1.raised, true, 'lookup reflects the most recent offer');
+});
+
+test('tagRaisedOutcomes: empty response / unknown task → no-op', async () => {
+  await recordSurfaceOffers(
+    [{ id: 't1', label: 'eat lunch', type: 'task', stakesTier: 'personal_wellbeing', confidence: 'low' }],
+    {}, T0, DIR,
+  );
+  assert.deepEqual(
+    await tagRaisedOutcomes({ responseText: '', tasks: [{ id: 't1', label: 'eat lunch' }], tomesDir: DIR }),
+    { raised: 0, notRaised: 0 },
+  );
+  assert.deepEqual(
+    await tagRaisedOutcomes({ responseText: 'hello', tasks: [{ id: 'ghost', label: 'nope' }], tomesDir: DIR }),
+    { raised: 0, notRaised: 0 },
+  );
+  const info = await getRecentOfferInfo(DIR);
+  assert.equal(info.t1.raised, null, 'offer left untagged');
 });
 
 // ── Outcome tagging ─────────────────────────────────────────────────
