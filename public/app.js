@@ -7843,6 +7843,126 @@ async function vlLoadPeople() {
   try {
     vlRenderPeopleGrid(await vlFetch(true));
   } catch (err) { grid.innerHTML = vlErr(err); }
+  vlLoadKnocks();
+}
+
+// ── Knock list (V4.x) ──
+// Unregistered people who DMed / @-mentioned the Familiar on Discord.
+// The gateway captured their stable platform ID so registration is one
+// click instead of a Developer-Mode ID hunt. Binding is always the
+// ward's explicit act here — knocking grants nothing.
+
+async function vlLoadKnocks() {
+  const box = $('vl-knocks');
+  if (!box) return;
+  try {
+    const r = await fetch('/api/village/knocks');
+    vlRenderKnocks(r.ok ? await r.json() : []);
+  } catch { box.classList.add('hidden'); }
+}
+
+function vlRenderKnocks(knocks) {
+  const box = $('vl-knocks');
+  if (!box) return;
+  if (!Array.isArray(knocks) || !knocks.length) {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  const villagers = _vlReg?.villagers ?? [];
+  box.classList.remove('hidden');
+  box.innerHTML = `<div class="vl-knocks-head">🚪 Knocked on the door <span class="field-hint">— unregistered people who DMed or @-mentioned your Familiar. They stay Strangers until you bind them.</span></div>`
+    + knocks.map((k, i) => {
+      const who = esc(k.displayName || k.handle || k.id);
+      const sub = [
+        k.handle && k.displayName ? `@${esc(k.handle)}` : '',
+        esc(k.platform ?? ''),
+        k.context === 'guild' ? 'in a server' : 'via DM',
+        `${k.count ?? 1}×, last ${k.lastSeenAt ? new Date(k.lastSeenAt).toLocaleString() : '?'}`,
+      ].filter(Boolean).join(' · ');
+      const options = ['<option value="">+ New person…</option>']
+        .concat(villagers.map(v => `<option value="${esc(v.id)}">${esc(v.name)}</option>`))
+        .join('');
+      return `<div class="vl-knock" data-ki="${i}">
+        <div class="vl-knock-info">
+          <div class="vl-knock-name">${who} <span class="vl-knock-id">${esc(k.id)}</span></div>
+          <div class="vl-knock-sub">${sub}</div>
+        </div>
+        <div class="vl-knock-actions">
+          <select class="vl-knock-target" aria-label="Register as">${options}</select>
+          <button class="btn-secondary vl-knock-bind" type="button">Register</button>
+          <button class="btn-ghost vl-knock-me" type="button" title="This is my own Discord account">This is me</button>
+          <button class="btn-ghost vl-knock-x" type="button" title="Dismiss (they can knock again — nothing is blocked)">×</button>
+        </div>
+      </div>`;
+    }).join('');
+
+  box.querySelectorAll('.vl-knock').forEach(row => {
+    const k = knocks[Number(row.dataset.ki)];
+    row.querySelector('.vl-knock-bind').addEventListener('click', () => {
+      const targetId = row.querySelector('.vl-knock-target').value;
+      if (targetId) vlAttachKnock(k, targetId);
+      else vlStartNewPersonFromKnock(k);
+    });
+    row.querySelector('.vl-knock-me').addEventListener('click', () => vlClaimKnockAsWard(k));
+    row.querySelector('.vl-knock-x').addEventListener('click', () => vlDismissKnock(k));
+  });
+}
+
+async function vlDismissKnock(k, { silent = false } = {}) {
+  if (!silent && !confirm(`Dismiss ${k.handle || k.id}? They can knock again — nothing is blocked.`)) return;
+  try {
+    await fetch(`/api/village/knocks/${encodeURIComponent(k.platform)}/${encodeURIComponent(k.id)}`, { method: 'DELETE' });
+  } catch { /* best-effort */ }
+  vlLoadKnocks();
+}
+
+/** "New person…" — open the detail panel prefilled with the knock's
+ *  name + alias. The knock auto-clears on save (server reconciles
+ *  knocks against new aliases). */
+function vlStartNewPersonFromKnock(k) {
+  vlStartNewPerson();
+  const nameEl = $('vl-p-name');
+  if (nameEl) nameEl.value = k.displayName || k.handle || '';
+  const container = $('vl-p-aliases');
+  if (container) {
+    const div = document.createElement('div');
+    div.innerHTML = vlAliasRowHtml(container.querySelectorAll('.vl-alias-row').length, k.platform, k.id, k.handle ?? '');
+    const row = div.firstElementChild;
+    row.querySelector('.vl-alias-rm').addEventListener('click', () => row.remove());
+    container.appendChild(row);
+  }
+}
+
+/** Attach the knock's alias to an existing villager. */
+async function vlAttachKnock(k, villagerId) {
+  const v = _vlReg?.villagers.find(x => x.id === villagerId);
+  if (!v) return;
+  if (!confirm(`Attach this Discord account to ${v.name}? Their messages will then carry ${v.name}'s access.`)) return;
+  const aliases = [
+    ...(v.aliases ?? []),
+    { platform: k.platform, id: k.id, ...(k.handle ? { handle: k.handle } : {}) },
+  ];
+  try {
+    const r = await fetch(`/api/village/villagers/${encodeURIComponent(villagerId)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ aliases }),
+    });
+    if (!r.ok) throw new Error(await vlErrMsg(r));
+    _vlReg = null;
+    vlRenderPeopleGrid(await vlFetch(true));
+    vlLoadKnocks();
+  } catch (err) { alert(`Error: ${err.message}`); }
+}
+
+/** "This is me" — claim the knock as the ward's own Discord account. */
+async function vlClaimKnockAsWard(k) {
+  if (!confirm(`Set ${k.handle || k.id} as YOUR Discord account? Your Familiar will treat DMs from this ID as you, with full private context.`)) return;
+  state.discordWardUserId = k.id;
+  saveSettings();
+  const el = $('discord-ward-user-id');
+  if (el) el.value = k.id;
+  await vlDismissKnock(k, { silent: true });
 }
 
 function vlRenderPeopleGrid(reg) {

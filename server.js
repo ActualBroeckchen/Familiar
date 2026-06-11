@@ -87,6 +87,7 @@ import {
 } from './village.js';
 import { resolveAudience, WARD_PRIVATE } from './audience.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus } from './discord-gateway.js';
+import { listKnocks, dismissKnock } from './knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -2133,6 +2134,19 @@ app.get('/api/discord/status', (_req, res) => {
   res.json(getDiscordStatus());
 });
 
+// Knock list (V4.x) — contact attempts from unregistered people,
+// captured by the gateway so the ward can register villagers without
+// hunting platform IDs by hand. Metadata only; never message content.
+app.get('/api/village/knocks', async (_req, res) => {
+  res.json(await listKnocks());
+});
+
+app.delete('/api/village/knocks/:platform/:id', async (req, res) => {
+  const result = await dismissKnock({ platform: req.params.platform, id: req.params.id });
+  if (!result.ok) return res.status(result.error === 'knock not found' ? 404 : 400).json({ error: result.error });
+  res.json({ ok: true });
+});
+
 app.get('/api/village', async (_req, res) => {
   try { res.json(await getVillageRegistry()); }
   catch (err) { res.status(500).json({ error: err.message }); }
@@ -2155,15 +2169,33 @@ app.delete('/api/village/categories/:id', async (req, res) => {
   catch (err) { villageError(res, err); }
 });
 
+// A saved villager's aliases settle any matching knocks — the person
+// is registered now, so the "knocked on the door" entry has served its
+// purpose. Fire-and-forget; a missed dismissal just leaves a stale row
+// the ward can dismiss by hand.
+function reconcileKnocks(villager) {
+  for (const a of villager?.aliases ?? []) {
+    dismissKnock({ platform: a.platform, id: a.id }).catch(() => {});
+  }
+}
+
 app.post('/api/village/villagers', async (req, res) => {
   const { name, categoryIds, categoryId, aliases, connection, triage } = req.body ?? {};
-  try { res.json(await upsertVillager({ name, categoryIds, categoryId, aliases, connection, triage })); }
+  try {
+    const saved = await upsertVillager({ name, categoryIds, categoryId, aliases, connection, triage });
+    reconcileKnocks(saved);
+    res.json(saved);
+  }
   catch (err) { villageError(res, err); }
 });
 
 app.patch('/api/village/villagers/:id', async (req, res) => {
   const { name, categoryIds, categoryId, aliases, connection, triage } = req.body ?? {};
-  try { res.json(await upsertVillager({ id: req.params.id, name, categoryIds, categoryId, aliases, connection, triage })); }
+  try {
+    const saved = await upsertVillager({ id: req.params.id, name, categoryIds, categoryId, aliases, connection, triage });
+    reconcileKnocks(saved);
+    res.json(saved);
+  }
   catch (err) { villageError(res, err); }
 });
 

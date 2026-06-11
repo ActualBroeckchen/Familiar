@@ -500,3 +500,18 @@ the gate.
    conversation map persists in `tomes/.discord-map.json`.
    Observability: `GET /api/discord/status` + the Settings panel
    status line.
+8. **Knock list (0.5.1-alpha).** Unregistered people who DM the
+   Familiar or @-mention them in a guild are still ignored / floored —
+   but the contact attempt is captured (`knocks.js`,
+   `tomes/.village-knocks.json`) so the Village editor's People tab can
+   offer one-click registration: bind to a new villager (prefilled
+   detail panel), attach as an alias to an existing villager, claim as
+   the ward's own account ("This is me" → sets `discordWardUserId`), or
+   dismiss. Saving a villager auto-settles knocks matching their
+   aliases. Privacy: a knock stores identity metadata ONLY (platform,
+   stable id, handle, when, where, count) — never message content;
+   these are people who haven't consented to an AI keeping notes on
+   them (the V7 stranger-data-minimization value starts here). The list
+   is capped at 50, least-recently-seen evicted, so spam can't grow it
+   unboundedly. Knocking grants nothing — binding is always the ward's
+   explicit act in the UI.

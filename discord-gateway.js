@@ -41,6 +41,7 @@ import { PROVIDER_URLS } from './providers.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
 import { recordUserActivity } from './last-activity.js';
+import { recordKnock } from './knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOGS_DIR  = path.join(__dirname, 'logs');
@@ -561,6 +562,24 @@ function onDispatch(t, d) {
           botUserId: gw.botUserId,
           wardUserId: (settings.discordWardUserId ?? '').trim(),
         });
+        // Knock capture: unregistered people who deliberately contacted
+        // me (DMed, or @-mentioned me in a guild) get their identity
+        // METADATA recorded — platform id + handle, never message
+        // content — so the ward can register them with one click in the
+        // Village editor instead of hunting IDs through Developer Mode.
+        // Fire-and-forget; recording grants nothing.
+        const isUnknownGuildSpeaker = decision.action === 'respond'
+          && decision.kind === 'guild' && !decision.isWard && !decision.villager;
+        if (decision.reason === 'unregistered-dm' || isUnknownGuildSpeaker) {
+          recordKnock({
+            platform: 'discord',
+            id: d.author?.id,
+            handle: d.author?.username,
+            displayName: d.author?.global_name,
+            context: d.guild_id ? 'guild' : 'dm',
+            locationKey: discordLocationKey(d),
+          }).catch(() => { /* best-effort */ });
+        }
         if (decision.action !== 'respond') return;
         await enqueueTurn(decision.locationKey, () => handleTurn(gw, d, decision));
       } catch (err) {

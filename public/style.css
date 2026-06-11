@@ -2893,6 +2893,43 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
 .vl-note { font-size: 0.78rem; color: var(--text-dim); line-height: 1.5; }
 .vl-status { font-size: 0.82rem; min-height: 1.1em; }
 
+/* Knock list (V4.x) — pending unregistered contacts above the grid */
+.vl-knocks {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-alt, rgba(128, 128, 128, 0.06));
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.vl-knocks.hidden { display: none; }
+.vl-knocks-head { font-size: 0.82rem; font-weight: 600; }
+.vl-knock {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.vl-knock-info { flex: 1 1 14em; min-width: 0; }
+.vl-knock-name { font-size: 0.86rem; font-weight: 600; overflow-wrap: anywhere; }
+.vl-knock-id   { font-size: 0.72rem; font-weight: 400; color: var(--text-dim); }
+.vl-knock-sub  { font-size: 0.74rem; color: var(--text-dim); }
+.vl-knock-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.vl-knock-actions select { font-size: 0.78rem; max-width: 11em; }
+.vl-knock-actions .btn-secondary,
+.vl-knock-actions .btn-ghost { font-size: 0.78rem; padding: 3px 9px; }
+
 @media (max-width: 767px) {
   .vl-split {
     grid-template-columns: 1fr;

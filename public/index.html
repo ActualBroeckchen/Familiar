@@ -1151,6 +1151,10 @@
             <button id="vl-people-refresh" class="btn-ghost">Refresh</button>
             <button id="vl-people-add" class="btn-secondary" style="margin-left:auto">+ Add person</button>
           </div>
+          <!-- Knock list: unregistered people who DMed / @-mentioned the
+               Familiar on Discord. Identity metadata only — binding is
+               always the ward's explicit act. Hidden when empty. -->
+          <div id="vl-knocks" class="vl-knocks hidden"></div>
           <div class="vl-split">
             <div class="vl-card-grid" id="vl-people-grid">
               <p class="logs-loading" style="grid-column:1/-1">Loading…</p>
