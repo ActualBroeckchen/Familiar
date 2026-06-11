@@ -1112,6 +1112,7 @@ import {
   getRecentOfferInfo,
   tagOutcomes,
 } from './surface-events.js';
+import { WARD_PRIVATE, isGranted, stripGatedSections, fetchEligibility } from './audience.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
 function sortFiles(files, order) {
@@ -1183,7 +1184,7 @@ function identitySection(files, order) {
  * @param {string} userMessage
  * @returns {Promise<{ static: string, dynamic: string, surfacedBookmarks: any[] }>}
  */
-export async function enrich(userMessage, { liveTurn = false, staticOnly = false, lastUserMessageAt = null } = {}) {
+export async function enrich(userMessage, { liveTurn = false, staticOnly = false, lastUserMessageAt = null, audience = WARD_PRIVATE } = {}) {
   const EMPTY = { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
   await startThalamus();
   if (!mcpClient && !unruhClient) return EMPTY;
@@ -1211,16 +1212,34 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // one of them must not prevent the others from being injected.
     // Promise.allSettled never rejects. Unruh is queried alongside
     // entity-core; either or both may be absent and the rest still works.
-    if (mcpClient) console.log(`[thalamus] → entity-core: identity_get_all${staticOnly ? '' : ', memory_search, graph_node_search'}`);
-    if (unruhClient && !staticOnly) console.log('[thalamus] → unruh: temporal_context');
+    // V3 knowledge gate: determine which fetches are permitted for this
+    // session's audience. WARD_PRIVATE means no gating (today's behavior).
+    // Absent grant = denied → skip the fetch entirely (gate-before-fetch).
+    // fetchEligibility holds the fail-closed ladder rules: 'shared'
+    // memories and 'coarse' schedule gate OFF until their narrowing
+    // machinery (audience-tagged memories / coarse renderer) exists.
+    const eligibility = fetchEligibility(audience);
+    const gated = !eligibility.wardPrivate;
+    const doMemory   = eligibility.memory;
+    const doGraph    = eligibility.graph;
+    const doTemporal = eligibility.temporal;
+
+    if (mcpClient) {
+      const extras = staticOnly ? '' : [
+        doMemory  ? 'memory_search'      : null,
+        doGraph   ? 'graph_node_search'  : null,
+      ].filter(Boolean).join(', ');
+      console.log(`[thalamus] → entity-core: identity_get_all${extras ? `, ${extras}` : ''}${gated ? ' [gated]' : ''}`);
+    }
+    if (unruhClient && !staticOnly && doTemporal) console.log('[thalamus] → unruh: temporal_context');
     const entityCorePromises = mcpClient ? [
       mcpClient.callTool({ name: 'identity_get_all', arguments: {} }),
-      staticOnly ? Promise.reject(new Error('skipped (staticOnly)'))
+      (staticOnly || !doMemory) ? Promise.reject(new Error(staticOnly ? 'skipped (staticOnly)' : 'skipped (ungated: memories)'))
         : mcpClient.callTool({
             name: 'memory_search',
             arguments: { query: userMessage, instanceId: 'proto-familiar', maxResults: 5 },
           }),
-      staticOnly ? Promise.reject(new Error('skipped (staticOnly)'))
+      (staticOnly || !doGraph) ? Promise.reject(new Error(staticOnly ? 'skipped (staticOnly)' : 'skipped (ungated: graph)'))
         : mcpClient.callTool({
             name: 'graph_node_search',
             arguments: { query: userMessage, limit: 10, minScore: 0.3 },
@@ -1252,7 +1271,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     }
     if (isIdle) console.log(`[thalamus] idle mode active (last user msg: ${lastUserMessageAt})`);
     const unruhArgs = { now: nowTs, ...(isIdle ? { mode: 'idle' } : {}) };
-    const unruhPromise = (unruhClient && !staticOnly)
+    const unruhPromise = (unruhClient && !staticOnly && doTemporal)
       ? Promise.race([
           unruhClient.callTool({ name: 'temporal_context', arguments: unruhArgs }),
           new Promise((_, reject) => setTimeout(
@@ -1260,7 +1279,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
             UNRUH_CALL_TIMEOUT_MS,
           ).unref?.()),
         ])
-      : Promise.reject(new Error(staticOnly ? 'skipped (staticOnly)' : 'unruh not connected'));
+      : Promise.reject(new Error(staticOnly ? 'skipped (staticOnly)' : (!doTemporal ? 'skipped (ungated: schedule)' : 'unruh not connected')));
 
     const [idSettled, memSettled, graphSettled, temporalSettled] = await Promise.allSettled([
       ...entityCorePromises,
@@ -1270,12 +1289,18 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (idSettled.status       === 'fulfilled') console.log('[thalamus] ← entity-core: identity_get_all — ok');
     else if (mcpClient)                         console.error('[thalamus] identity_get_all failed:', idSettled.reason?.message ?? idSettled.reason);
     if (!staticOnly) {
-      if (memSettled.status      === 'fulfilled') console.log('[thalamus] ← entity-core: memory_search — ok');
-      else if (mcpClient)                        console.error('[thalamus] memory_search failed:', memSettled.reason?.message ?? memSettled.reason);
-      if (graphSettled.status    === 'fulfilled') console.log('[thalamus] ← entity-core: graph_node_search — ok');
-      else if (mcpClient)                        console.error('[thalamus] graph_node_search failed:', graphSettled.reason?.message ?? graphSettled.reason);
-      if (temporalSettled.status === 'fulfilled') console.log('[thalamus] ← unruh: temporal_context — ok');
-      else if (unruhClient)                      console.error('[thalamus] temporal_context failed:', temporalSettled.reason?.message ?? temporalSettled.reason);
+      if (doMemory) {
+        if (memSettled.status === 'fulfilled') console.log('[thalamus] ← entity-core: memory_search — ok');
+        else if (mcpClient)                   console.error('[thalamus] memory_search failed:', memSettled.reason?.message ?? memSettled.reason);
+      }
+      if (doGraph) {
+        if (graphSettled.status === 'fulfilled') console.log('[thalamus] ← entity-core: graph_node_search — ok');
+        else if (mcpClient)                      console.error('[thalamus] graph_node_search failed:', graphSettled.reason?.message ?? graphSettled.reason);
+      }
+      if (doTemporal) {
+        if (temporalSettled.status === 'fulfilled') console.log('[thalamus] ← unruh: temporal_context — ok');
+        else if (unruhClient)                       console.error('[thalamus] temporal_context failed:', temporalSettled.reason?.message ?? temporalSettled.reason);
+      }
     }
 
     const idResult       = idSettled.status       === 'fulfilled' ? idSettled.value       : null;
@@ -1303,12 +1328,22 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         : '';
       const selfFiles = (id.self ?? []).filter(f => f.filename !== 'base_instructions.md');
       selfContent = identitySection(selfFiles, SELF_ORDER);
-      userContent = identitySection(id.user ?? [], USER_ORDER);
-      relContent  = identitySection(id.relationship ?? [], RELATIONSHIP_ORDER);
-      // village-registry.md is the canonical Village registry (routing +
-      // gating data synced from village.js) — machine state, not identity
-      // prose. It must never render into the prompt.
-      custContent = identitySection((id.custom ?? []).filter(f => f.filename !== 'village-registry.md'), []);
+      // V3 identity gate: user/rel/custom files are ward-private by default.
+      // identityBasic grant admits the unmarked sections; section markers
+      // (<!-- gate: CLASS --> ... <!-- /gate -->) gate sensitive sub-sections.
+      // Absent or not-granted identityBasic → these layers are entirely blank.
+      if (!gated || isGranted('identityBasic', audience)) {
+        const applyMarkers = files => files.map(f => ({
+          ...f,
+          content: stripGatedSections(f.content ?? '', audience),
+        }));
+        userContent = identitySection(applyMarkers(id.user ?? []), USER_ORDER);
+        relContent  = identitySection(applyMarkers(id.relationship ?? []), RELATIONSHIP_ORDER);
+        // village-registry.md is the canonical Village registry (routing +
+        // gating data synced from village.js) — machine state, not identity
+        // prose. It must never render into the prompt.
+        custContent = identitySection(applyMarkers((id.custom ?? []).filter(f => f.filename !== 'village-registry.md')), []);
+      }
     } catch (err) {
       console.error('[thalamus] identity assembly failed (defaulting to empty):', err?.message ?? err);
     }
@@ -1550,7 +1585,9 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // Best-effort, never blocks: a bad read or missing tome silently
     // contributes nothing. Skipped on staticOnly the same as the other
     // dynamic sources, so handoff-summary turns stay lean.
-    const ponderings = staticOnly
+    // Ward-private only: the Familiar's inner life is not shared in gated
+    // sessions — ponderings are per-embodiment thoughts, not public data.
+    const ponderings = (staticOnly || gated)
       ? []
       : await getRecentPonderings().catch(err => {
           console.error('[thalamus] getRecentPonderings failed:', err?.message ?? err);
@@ -1563,8 +1600,9 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // cycles but hasn't yet acted on. Only on live turns so debug-prompt
     // previews and handoff summaries don't consume the dedup state.
     // Best-effort; failure → silent omission.
+    // Ward-private only: task surface candidates are the ward's own task list.
     let deferredIntentsBlock = '';
-    if (liveTurn && !staticOnly) {
+    if (liveTurn && !staticOnly && !gated) {
       try {
         const intents = await getUnactedIntents({ limit: 5 });
         deferredIntentsBlock = formatDeferredIntentsBlock(intents);
@@ -1583,7 +1621,9 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // ("if it fits"). Crisis-resource line is added at severe tier only.
     // Best-effort; failure → silent omission, same posture as the rest of
     // enrich(). Skipped on staticOnly.
-    const threat = staticOnly
+    // careState is ward-private (never grantable per design) — skip for
+    // any non-ward audience.
+    const threat = (staticOnly || gated)
       ? { weight: 0, tier: 'calm', disabled: false }
       : await getThreat().catch(err => {
           console.error('[thalamus] getThreat failed:', err?.message ?? err);
@@ -1601,12 +1641,14 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     //
     //    Skipped on staticOnly (handoff-summary turns don't surface
     //    candidates — wrong context, wrong moment).
+    //    Ward-private only: surface candidates are the ward's task list,
+    //    never shared in gated sessions.
     // surfacedTasks is hoisted at function scope so the outer catch
     // can surface it; reset to [] here in case a previous turn's value
     // leaked through (it can't — this is fresh per call — but defensive).
     let surfaceCandidatesBlock = '';
     surfacedTasks = [];
-    if (!staticOnly) {
+    if (!staticOnly && !gated) {
       try {
         const windowItems = Array.isArray(temporalPayload?.schedule?.window)
           ? temporalPayload.schedule.window

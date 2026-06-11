@@ -9,6 +9,7 @@ import {
   upsertVillager, deleteVillager,
   upsertLocation, deleteLocation,
   findVillagerByAlias, migrateTrustedContacts,
+  seedDefaultCategories,
   initVillageSync, bootSync,
   CATEGORY_EMERGENCY, CATEGORY_STRANGERS,
 } from '../village.js';
@@ -249,6 +250,46 @@ test('trustedContacts migrate into Emergency Contacts, idempotently', async () =
     assert.deepEqual(v.categoryIds, [CATEGORY_EMERGENCY]);
     assert.ok(v.triage?.webhook);
   }
+});
+
+// ── Default category seeding ───────────────────────────────────────
+
+test('fresh registry includes the three default categories', async () => {
+  const reg = await getRegistry({ filePath });
+  const names = reg.categories.map(c => c.name);
+  assert.ok(names.includes('Close Friends'));
+  assert.ok(names.includes('Acquaintances'));
+  assert.ok(names.includes('Care Network'));
+});
+
+test('seedDefaultCategories is idempotent — no duplicate on re-run', async () => {
+  const first  = await seedDefaultCategories({ filePath });
+  assert.equal(first.added, 0); // already seeded by emptyRegistry via getRegistry above
+  const second = await seedDefaultCategories({ filePath });
+  assert.equal(second.added, 0);
+  const reg = await getRegistry({ filePath });
+  const closeFriends = reg.categories.filter(c => c.name === 'Close Friends');
+  assert.equal(closeFriends.length, 1);
+});
+
+test('seedDefaultCategories back-fills categories missing from an existing registry', async () => {
+  // Write a registry that only has the builtins.
+  const { promises: fsp2 } = await import('node:fs');
+  await fsp2.writeFile(filePath, JSON.stringify({
+    updatedAt: new Date().toISOString(),
+    syncPending: false,
+    categories: [
+      { id: CATEGORY_EMERGENCY, name: 'Emergency Contacts', grants: {} },
+      { id: CATEGORY_STRANGERS, name: 'Strangers', grants: {} },
+    ],
+    villagers: [],
+    locations: [],
+  }), 'utf8');
+  const result = await seedDefaultCategories({ filePath });
+  assert.equal(result.added, 3);
+  const reg = await getRegistry({ filePath });
+  assert.ok(reg.categories.some(c => c.name === 'Close Friends'));
+  assert.ok(reg.categories.some(c => c.name === 'Care Network'));
 });
 
 // ── Sync semantics ─────────────────────────────────────────────────

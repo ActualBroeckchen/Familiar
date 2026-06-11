@@ -1,9 +1,8 @@
 # Village Support — design
 
-> Status: DESIGN — not yet implemented. This document is the contract for
-> the 0.5 milestone. Read it before touching any Village code; update it
-> in the same commit as any architectural change (same rule as
-> architecture.md).
+> Status: V1–V4 implemented (0.5.0-alpha). V5+ remain design-phase.
+> Read this before touching any Village code; update it in the same commit
+> as any architectural change (same rule as architecture.md).
 
 ## What it is
 
@@ -361,8 +360,8 @@ landing; sub-features inside it bump patch.
 |---|---|---|
 | **V1** | Village registry: `village.js` module (local mirror + entity-core write-through sync + boot pull), `/api/village/*` CRUD, Village UI tab, built-in categories, trustedContacts migration | No behavior change yet — pure data layer + UI |
 | **V2** | Session schema: location + participants fields, audience resolution module + tests, conversation-map (location→session), web-session audience selector ("Chen is sitting next to me") | Existing sessions untouched (absent fields = ward-private) |
-| **V3** | Thalamus knowledge gate: `audience` option on enrich(), gate-before-fetch for every knowledge class, two-tier identity gating with section markers, ward-only blocks, heavy test coverage incl. fail-closed and intersection tests | **Safety-critical: human sign-off on the gate semantics before merge** |
-| **V4** | Discord gateway adapter: bot connect/resume, router, DM policy, guild mention-reply, per-location sessions end-to-end | The testbed the rest was built for |
+| **V3** ✅ | Thalamus knowledge gate: `audience` option on enrich(), gate-before-fetch for every knowledge class, two-tier identity gating with section markers, ward-only blocks, heavy test coverage incl. fail-closed and intersection tests | Human sign-off obtained 2026-06-11; shipped 0.4.21-alpha |
+| **V4** ✅ | Discord gateway adapter: bot connect/resume, router, DM policy, guild mention-reply, per-location sessions end-to-end | Shipped 0.5.0-alpha (the milestone landing — Village Support is live end-to-end) |
 | **V5** | Per-location connections + rate limits | Small, additive |
 | **V6** | Village actions: `relay_message`, check-on-ward requests outside triage, ward double-check flows for commitments | Touches outreach surface — sign-off rule applies |
 | **V7** | Stranger data minimization (memorization profiles by audience) | Optional / flagged |
@@ -383,3 +382,121 @@ sequencing mistake this design exists to prevent.
    can loosen specific locations.
 4. **Web-session audience: yes, in V2.** The ward can mark a browser
    session as having villagers present, applying the same gates.
+
+### V3 gate decisions (human-approved 2026-06-11, shipped 0.4.21-alpha)
+
+5. **Fail-closed sentinel.** `WARD_PRIVATE = null` is the sentinel for
+   "no audience" (today's behavior). Distinct from `{}` (strangers floor
+   → everything denied). The empty-audience → ward-private rule means all
+   existing sessions with no participants are unchanged.
+6. **Intersection/union rule.** Multi-category villager → union of their
+   category grants (most-permissive per key). Room audience → intersection
+   across all participants (most-restrictive per key). Scalar grants
+   (memories/schedule/contacts) use ordered ladders; unknown values snap to
+   the floor.
+7. **Section markers.** In-file `<!-- gate: CLASS -->` … `<!-- /gate -->`
+   blocks gate sub-sections without file fragmentation. Known classes:
+   `sensitive` → `identitySensitive`, `health` → `health`,
+   `location` → `location`. Unknown class → fail-closed (strip).
+   Markers are stripped server-side before the LLM sees them; in ward-private
+   sessions they appear as inert HTML comments. No conflict with entity-core
+   memory/node/edge creation (markers are in identity files, not in anything
+   that feeds memorization prompts).
+8. **Full grant vocabulary.** `identityBasic`, `identitySensitive`,
+   `health`, `location`, `memories` (none/shared/all), `graph`,
+   `schedule` (none/coarse/full), `wardPresence`, `contacts`
+   (none/care-visible/all). `careState` is hardcoded never-grantable —
+   it never appears in category grants, and ponderings/deferredIntents/
+   surfaceCandidates/careCheck blocks are skipped for any gated session.
+9. **Gate-before-fetch.** Ungranted classes are never queried —
+   `memory_search`, `graph_node_search`, and `temporal_context` are skipped
+   entirely when the audience doesn't grant them. Content never enters the
+   process, can't leak via formatting bugs, and we don't pay tokens for it.
+   Identity user/rel/custom files are excluded entirely if `identityBasic`
+   is absent, with per-section stripping applied inside when it is present.
+
+### Section marker convention for identity files
+
+To gate a section in an identity file, wrap it:
+```
+<!-- gate: health -->
+Medical details, diagnosis history, treatment notes, etc.
+<!-- /gate -->
+```
+
+```
+<!-- gate: sensitive -->
+Legal name, orientation, gender identity, other sensitive personal data.
+<!-- /gate -->
+```
+
+```
+<!-- gate: location -->
+Physical address, frequent locations, daily movement patterns.
+<!-- /gate -->
+```
+
+Multiple markers may appear in the same file. Content outside any marker
+is controlled by `identityBasic` (the whole-file gate).
+
+### Fail-closed ladder values (V4 hardening, 2026-06-11)
+
+Intermediate ladder values gate their fetch **off** until the narrowing
+machinery they describe actually exists (`audience.fetchEligibility` is
+the single enforcement point):
+
+- `memories: 'shared'` → memory_search is **not** called. Memories carry
+  no audience tags yet, so a 'shared' grant firing the full fetch would
+  hand the audience ALL memories — the exact leak the grant exists to
+  prevent. Only `memories: true` fetches today. When audience tags land
+  (deferred-memorization work below), 'shared' starts filtering instead
+  of denying.
+- `schedule: 'coarse'` → temporal_context is **not** called. No coarse
+  renderer ("busy until evening") exists yet; only `'full'` fetches.
+
+The seeded Acquaintances (`memories: 'shared'`) and Care Network
+(`schedule: 'coarse'`) categories therefore currently behave as if those
+grants were absent — strictly narrower than the ward configured, never
+wider. Widening happens by implementing the machinery, not by loosening
+the gate.
+
+### V4 decisions (shipped 0.5.0-alpha, 2026-06-11)
+
+1. **Transport: gateway bot token** (ward decision — same model as
+   Eury's OpenClaw incarnation). The push-only webhook channel
+   (`userDiscordWebhook`) is unchanged and coexists. Native WebSocket
+   (Node ≥ 22); no new dependencies. Settings: `discordEnabled`,
+   `discordBotToken`, `discordWardUserId` (server-synced; the gateway
+   supervisor re-reads Settings every 30s, so no restart is needed).
+2. **DM policy.** Ward's user id → ward-private full context (and the
+   message stamps last-activity + runs crisis-signal scoring, `source:
+   'discord'` — the caring spine follows the human across windows).
+   Registered villager → gated turn; the DM's audience is the villager's
+   own grants (participants are fully enumerable in a DM), honoring a
+   location ceiling only if the ward registered that DM as a location.
+   Unregistered users → silently ignored.
+3. **Guild policy.** Reply only when @-mentioned or directly
+   replied-to. The audience ALWAYS includes the location key — an
+   unassigned room resolves to Strangers (fail-closed rule 1 from
+   "Audience resolution"). Participants accumulate per session and the
+   audience is re-resolved each turn, so a stranger speaking once
+   tightens the room from then on.
+4. **No tools on Discord turns.** The V3 gate bounds what the Familiar
+   *knows* in a room; the absent tool surface bounds what a prompt
+   injection from a third party could *do*. Tool access from gated
+   sessions is a V6-adjacent question (it needs its own grant class)
+   and is deliberately not smuggled in here.
+5. **No handoff consumption, no surface dedup burn.** Discord turns run
+   `enrich(..., { liveTurn: false })` — they read context but never
+   consume the web session's handoff or burn surfacing dedup budgets.
+6. **Memorization of Discord sessions is DEFERRED.** Sessions land in
+   `logs/` (visible in the UI like any session) but are not enqueued
+   for memorization yet: memories created without audience tags from a
+   public room would enter the ward-private RAG pool and leak back out
+   through any `memories: true` audience. Tagging-at-creation is the
+   prerequisite (it also unlocks `memories: 'shared'`); that work is
+   the natural V4.x follow-up.
+7. **One location = one session**, rotated after 6h idle; the
+   conversation map persists in `tomes/.discord-map.json`.
+   Observability: `GET /api/discord/status` + the Settings panel
+   status line.

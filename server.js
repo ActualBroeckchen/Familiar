@@ -82,8 +82,11 @@ import {
   upsertCategory as upsertVillageCategory, deleteCategory as deleteVillageCategory,
   upsertVillager, deleteVillager,
   upsertLocation as upsertVillageLocation, deleteLocation as deleteVillageLocation,
-  migrateTrustedContacts, initVillageSync, bootSync as villageBootSync,
+  migrateTrustedContacts, seedDefaultCategories,
+  initVillageSync, bootSync as villageBootSync,
 } from './village.js';
+import { resolveAudience, WARD_PRIVATE } from './audience.js';
+import { startDiscordGateway, stopDiscordGateway, getDiscordStatus } from './discord-gateway.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -195,7 +198,7 @@ function chatRateLimit(req, res, next) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo } = req.body;
+  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience } = req.body;
   // runToolLoop: the app sends true when the user has tools enabled.
   // The server then composes the tool list (built-ins + custom) and runs
   // the multi-round tool-call loop HERE — executing via cerebellum —
@@ -282,13 +285,26 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         .catch(err => console.error('[threat]   record threw:', err?.message ?? err));
     }
   }
+  // V3: resolve session audience to an effective grants object before
+  // enrichment. Fail-closed: any error defaults to WARD_PRIVATE (no gating)
+  // rather than blocking the chat. Audience only applies on the full path.
+  let audienceGrants = WARD_PRIVATE;
+  if (enrichMode === 'full' && sessionAudience && typeof sessionAudience === 'object') {
+    try {
+      const registry = await getVillageRegistry();
+      audienceGrants = resolveAudience(sessionAudience, registry);
+    } catch (err) {
+      console.error('[server] audience resolution failed (defaulting to ward-private):', err?.message ?? err);
+    }
+  }
+
   // liveTurn: only the full chat path may reconcile state (consume the
   // surfaced session handoff, demote standing values whose entity-core
   // anchor vanished). 'static' fetches persona only (handoff summariser);
   // 'none' skips enrichment entirely. debug-prompt calls enrich() with no
   // options, so it stays read-only.
   const enriched =
-      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null })
+      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null, audience: audienceGrants })
     : enrichMode === 'static' ? await enrich(userText, { staticOnly: true })
     : { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
 
@@ -2110,6 +2126,13 @@ const villageError = (res, err) => {
   res.status(status).json({ error: msg });
 };
 
+// GET /api/discord/status — gateway observability (Village V4).
+// Lets the ward see connection state, the bot identity, the last
+// error, and turn/failure counters without reading server logs.
+app.get('/api/discord/status', (_req, res) => {
+  res.json(getDiscordStatus());
+});
+
 app.get('/api/village', async (_req, res) => {
   try { res.json(await getVillageRegistry()); }
   catch (err) { res.status(500).json({ error: err.message }); }
@@ -2200,6 +2223,8 @@ async function startVillageSync() {
   });
   try {
     await villageBootSync();
+    const { added } = await seedDefaultCategories();
+    if (added > 0) console.log(`[village] seeded ${added} default category/categories`);
     const reg = await getVillageRegistry();
     if (reg.villagers.length === 0) {
       const contacts = readSettingsSync()?.trustedContacts;
@@ -2243,6 +2268,10 @@ const httpServer = app.listen(PORT, HOST, async () => {
   startRemindersScheduler();
   startSilenceTriage();
   startVillageSync();
+  // Discord gateway (Village V4). Supervisor idles until the ward sets
+  // a bot token + enables the toggle in Settings; follows settings
+  // changes within 30s. Hard off-switch: PROTO_FAMILIAR_DISCORD_DISABLED=1.
+  startDiscordGateway();
 });
 
 // ── Autonomous pondering loop (step 4a) ─────────────────────────────
@@ -2478,6 +2507,7 @@ async function handleSignal(signal) {
   try { await stopPonderingLoop(); } catch { /* already stopped */ }
   try { await stopRemindersLoop(); } catch { /* already stopped */ }
   try { await stopSilenceTriageLoop(); } catch { /* already stopped */ }
+  try { stopDiscordGateway(); } catch { /* already stopped */ }
   try { shutdownEntityCore(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }
   // Give the close handshakes a tiny window, then exit.

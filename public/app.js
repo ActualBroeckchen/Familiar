@@ -220,6 +220,20 @@ const state = {
   // item; the trusted-contact escalation deadline counts from confirmed
   // delivery. Empty = in-app delivery only.
   userDiscordWebhook:      '',
+
+  // Discord presence (Village V4 — gateway bot). The Familiar joins
+  // Discord as a bot: ward DMs get full context, registered villagers
+  // get gated context, guild replies only when @-mentioned. The token
+  // is server-synced so the gateway (which runs server-side) can read it.
+  discordEnabled:    false,
+  discordBotToken:   '',
+  discordWardUserId: '',
+
+  // Session audience (Village Support V2).
+  // Tracks who is physically present during this session so the Familiar
+  // can reference them and (in V3) gate knowledge appropriately.
+  // Ephemeral: not synced to the server, cleared on new session.
+  sessionAudience: { location: null, participants: [] },
 };
 
 // ── Persistence ──────────────────────────────────────────────────
@@ -245,6 +259,7 @@ const SERVER_SYNCED_KEYS = [
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale',
   'trustedContacts', 'userDiscordWebhook',
+  'discordEnabled', 'discordBotToken', 'discordWardUserId',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -1728,6 +1743,11 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
       // M8: previous user-message timestamp so the server can compute
       // idle duration for bookmark surfacing.
       ...(prevUserMessageAt ? { lastUserMessageAt: prevUserMessageAt } : {}),
+      // V3: session audience for knowledge gating. Only sent when there
+      // are actual participants or a location set.
+      ...((state.sessionAudience?.participants?.length || state.sessionAudience?.location)
+          ? { sessionAudience: state.sessionAudience }
+          : {}),
       ...toolLoopPayload(),
     }),
   });
@@ -1923,6 +1943,9 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
           ? { userMessage: userInput }
           : {}),
       ...(prevUserMessageAt ? { lastUserMessageAt: prevUserMessageAt } : {}),
+      ...((state.sessionAudience?.participants?.length || state.sessionAudience?.location)
+          ? { sessionAudience: state.sessionAudience }
+          : {}),
       ...toolLoopPayload(),
     }),
   });
@@ -2174,6 +2197,12 @@ function readSettingsFromUI() {
   }
   const udwEl = $('user-discord-webhook');
   if (udwEl) state.userDiscordWebhook = udwEl.value.trim();
+  const denEl = $('discord-enabled');
+  if (denEl) state.discordEnabled = denEl.checked;
+  const dbtEl = $('discord-bot-token');
+  if (dbtEl) state.discordBotToken = dbtEl.value.trim();
+  const dwuEl = $('discord-ward-user-id');
+  if (dwuEl) state.discordWardUserId = dwuEl.value.trim();
   // Keep the primary connection in sync with the live Connection-section fields.
   syncFieldsToPrimaryConnection();
   saveSettings();
@@ -2208,6 +2237,9 @@ function writeSettingsToUI() {
   setIfNotFocused($('tools-enabled'),      'checked', state.toolsEnabled ?? true);
   setIfNotFocused($('custom-tools'),       'value',   state.customTools ?? '');
   setIfNotFocused($('user-discord-webhook'), 'value', state.userDiscordWebhook ?? '');
+  setIfNotFocused($('discord-enabled'),      'checked', state.discordEnabled === true);
+  setIfNotFocused($('discord-bot-token'),    'value', state.discordBotToken ?? '');
+  setIfNotFocused($('discord-ward-user-id'), 'value', state.discordWardUserId ?? '');
   setIfNotFocused($('tome-scan-depth'),       'value',   state.tomeScanDepth ?? 4);
   setIfNotFocused($('tome-recursive'),        'checked', state.tomeRecursive ?? false);
   setIfNotFocused($('tome-max-recursion'),    'value',   state.tomeMaxRecursionSteps ?? 3);
@@ -2291,6 +2323,7 @@ function startNewSession() {
   state.sessionEndedAt   = null;
   state.messages         = [];
   state.topics           = [];
+  state.sessionAudience  = { location: null, participants: [] };
   lastMessage            = null;
   state.lastMessage      = null;
   elapsedTime            = 0;
@@ -2299,6 +2332,7 @@ function startNewSession() {
   $('messages').innerHTML = '';
   updateTopicStrip();
   refreshTopicGutter();
+  updateAudienceBtn();
 }
 
 /**
@@ -2939,6 +2973,26 @@ function init() {
     renderTrustedContacts();
   }
 
+  // Discord presence (Village V4) — show live gateway status when the
+  // section is opened. Cheap GET; failures render as a quiet dash.
+  const discordSection = document.querySelector('#section-discord .collapse-toggle');
+  if (discordSection) {
+    discordSection.addEventListener('click', async () => {
+      const el = $('discord-status');
+      if (!el) return;
+      try {
+        const s = await (await fetch('/api/discord/status')).json();
+        const bits = [];
+        bits.push(s.connected ? `🟢 Connected as ${s.botUser ?? 'bot'}` : (s.running ? '🟡 Starting / reconnecting…' : '⚪ Not running'));
+        if (s.turns) bits.push(`${s.turns} replies this boot`);
+        if (s.lastError) bits.push(`Last error: ${s.lastError}`);
+        el.textContent = bits.join(' · ');
+      } catch {
+        el.textContent = '—';
+      }
+    });
+  }
+
   // ── Settings field listeners ─────────────────────────────────
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
@@ -2947,6 +3001,7 @@ function init() {
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
     'user-discord-webhook',
+    'discord-enabled', 'discord-bot-token', 'discord-ward-user-id',
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',
     'tome-case-sensitive', 'tome-match-whole-words',
     'max-empty-retries',
@@ -3156,6 +3211,22 @@ function init() {
   document.querySelectorAll('.ke-tab').forEach(el => {
     el.addEventListener('click', () => keSwitchTab(el.dataset.tab));
   });
+  // Session audience (Village Support V2)
+  if ($('audience-btn')) {
+    $('audience-btn').addEventListener('click', toggleAudiencePopover);
+    $('audience-popover-close').addEventListener('click', closeAudiencePopover);
+    $('audience-add-btn').addEventListener('click', audienceAddFromInput);
+    $('audience-search').addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); audienceAddFromInput(); }
+      if (e.key === 'Escape') closeAudiencePopover();
+    });
+    document.addEventListener('click', e => {
+      const wrap = $('audience-wrap');
+      if (wrap && !wrap.contains(e.target)) closeAudiencePopover();
+    });
+    updateAudienceBtn();
+  }
+
   // Village editor (Village Support V1)
   if ($('village-btn')) {
     $('village-btn').addEventListener('click', openVillageModal);
@@ -8268,6 +8339,122 @@ function vlBindBackBtn(btnId, panelId) {
   if (!btn) return;
   btn.style.display = window.matchMedia('(max-width: 767px)').matches ? '' : 'none';
   btn.addEventListener('click', () => vlCloseDetail(panelId));
+}
+
+// ── Session audience (Village Support V2) ────────────────────────────────────
+//
+// Tracks who is physically present during the session. The Familiar is aware
+// of them (referenced in context) and V3 will use the list for knowledge
+// gating. State lives in `state.sessionAudience` and is cleared on new session.
+
+let _audienceReg = null; // cached village registry for the popover
+
+function toggleAudiencePopover() {
+  const popover = $('audience-popover');
+  if (!popover) return;
+  if (popover.classList.contains('hidden')) openAudiencePopover();
+  else closeAudiencePopover();
+}
+
+function openAudiencePopover() {
+  const popover = $('audience-popover');
+  if (!popover) return;
+  popover.classList.remove('hidden');
+  $('audience-btn').setAttribute('aria-expanded', 'true');
+  $('audience-btn').classList.add('active');
+  audiencePopulateDatalist();
+  renderAudienceChips();
+  $('audience-search').focus();
+}
+
+function closeAudiencePopover() {
+  const popover = $('audience-popover');
+  if (!popover) return;
+  popover.classList.add('hidden');
+  $('audience-btn').setAttribute('aria-expanded', 'false');
+  $('audience-btn').classList.remove('active');
+}
+
+async function audiencePopulateDatalist() {
+  try {
+    if (!_audienceReg) {
+      const r = await fetch('/api/village');
+      if (r.ok) _audienceReg = await r.json();
+    }
+    const dl = $('audience-datalist');
+    if (!dl || !_audienceReg) return;
+    dl.innerHTML = (_audienceReg.villagers ?? []).map(v =>
+      `<option value="${esc(v.name)}">`
+    ).join('');
+  } catch { /* network blip — datalist stays empty, free-text still works */ }
+}
+
+function audienceAddFromInput() {
+  const input = $('audience-search');
+  const name  = input?.value.trim();
+  if (!name) return;
+
+  // Resolve to a villager id if the name matches; else store the raw name.
+  const villager = (_audienceReg?.villagers ?? []).find(v => v.name.toLowerCase() === name.toLowerCase());
+  const id = villager?.id ?? null;
+
+  const audience = state.sessionAudience ?? { location: null, participants: [] };
+  const already  = audience.participants.some(p => (typeof p === 'string' ? p : p.id) === (id ?? name));
+  if (already) { input.value = ''; return; }
+
+  audience.participants = [...audience.participants, id ? { id, name: villager.name } : { id: null, name }];
+  state.sessionAudience = audience;
+  saveSettings();
+  renderAudienceChips();
+  updateAudienceBtn();
+  input.value = '';
+}
+
+function audienceRemove(identifier) {
+  const audience = state.sessionAudience ?? { location: null, participants: [] };
+  audience.participants = audience.participants.filter(p => {
+    const key = (typeof p === 'string' ? p : p.name);
+    return key !== identifier;
+  });
+  state.sessionAudience = audience;
+  saveSettings();
+  renderAudienceChips();
+  updateAudienceBtn();
+}
+
+function renderAudienceChips() {
+  const container = $('audience-participants');
+  if (!container) return;
+  const participants = state.sessionAudience?.participants ?? [];
+  if (!participants.length) {
+    container.innerHTML = '<span style="font-size:0.76rem;color:var(--text-dim)">No one added yet.</span>';
+    return;
+  }
+  container.innerHTML = participants.map(p => {
+    const name = typeof p === 'string' ? p : p.name;
+    return `<div class="audience-chip">
+      <span>${esc(name)}</span>
+      <button data-name="${esc(name)}" title="Remove" aria-label="Remove ${esc(name)}">×</button>
+    </div>`;
+  }).join('');
+  container.querySelectorAll('button[data-name]').forEach(btn =>
+    btn.addEventListener('click', () => audienceRemove(btn.dataset.name))
+  );
+}
+
+function updateAudienceBtn() {
+  const btn = $('audience-btn');
+  const label = $('audience-label');
+  if (!btn || !label) return;
+  const participants = state.sessionAudience?.participants ?? [];
+  if (!participants.length) {
+    label.textContent = 'Present';
+    btn.classList.remove('active');
+    return;
+  }
+  const names = participants.map(p => (typeof p === 'string' ? p : p.name));
+  label.textContent = names.length <= 2 ? names.join(', ') : `${names[0]} +${names.length - 1}`;
+  btn.classList.add('active');
 }
 
 
