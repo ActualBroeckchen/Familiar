@@ -55,7 +55,7 @@ if (Test-Path $entityCoreDirNew) {
 }
 # Release page: https://github.com/PsycherosAI/Psycheros/releases/tag/<tag>
 $entityCoreRepo = "https://github.com/PsycherosAI/Psycheros.git"
-$entityCoreTag  = "entity-core-v0.3.2"
+$entityCoreTag  = "entity-core-v0.4.0"
 $backupRoot    = Join-Path $projectRoot ".pf-backups"
 
 # ── Install log + run state ────────────────────────────────────────

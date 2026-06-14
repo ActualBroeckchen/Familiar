@@ -90,7 +90,7 @@ Project wiki pages are available in [`/wiki`](wiki/):
 |---|---|
 | **Providers** | NanoGPT (OpenAI-compatible) · Z.ai Standard API · Z.ai Coding Plan |
 | **Saved connections** | Multiple named provider/key/model combos in the Connections sidebar. Mark one **Primary**, any others **fallback** (ordered list, tried when primary returns empty), and one **entity-core** — its API key is passed to the entity-core child as `ENTITY_CORE_LLM_API_KEY` so its consolidator can call out for embeddings / weekly summaries. Changing the designation re-spawns entity-core automatically, no restart needed |
-| **Entity-core enrichment** | Automatically grounds every request in a local [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.3.2) MCP server. The context is split for prompt-cache efficiency: a **static** block (full identity layer, XML-wrapped) is prepended to the system message, while a **dynamic** block (RAG memories + knowledge-graph excerpt + temporal context) is depth-injected so per-turn churn doesn't invalidate the cached prefix. Depth is the `thalamusDynamicDepth` setting (default 4) |
+| **Entity-core enrichment** | Automatically grounds every request in a local [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.4.0) MCP server. The context is split for prompt-cache efficiency: a **static** block (full identity layer, XML-wrapped) is prepended to the system message, while a **dynamic** block (RAG memories + knowledge-graph excerpt + temporal context) is depth-injected so per-turn churn doesn't invalidate the cached prefix. Depth is the `thalamusDynamicDepth` setting (default 4) |
 | **Temporal context (Unruh)** | Sibling Python MCP module (`unruh/`, alpha — see [`docs/unruh-design.md`](docs/unruh-design.md)) that adds a `[Temporal Context]` block with three layers: **schedule** (current phase + upcoming events/tasks/reminders, with **recurrence** — daily / weekly / monthly / yearly, plus advanced patterns like "last Friday of every month" via `bysetpos`+`byweekday`, plus per-occurrence resolution so this week's cleaning done doesn't kill next week's), **interests** (standing values that always surface + live interests that accrue weight from chat engagement and decay over days), and **session handoff** (at session end the conversation is summarised into an intent + open threads, surfaced at the top of the next session so the Familiar resumes mid-thought). The handoff summary is opt-out via the **Session handoff** setting. When you've been quiet for **30 minutes**, the next message enters *idle mode*: up to 3 due bookmarks surface in `[Temporal Context]` for the Familiar to weave in naturally; each surfacing outcome is tracked (engaged / ignored) and resurface intervals adapt automatically (engaged → longer; ignored → shorter; 3+ consecutive ignores → topic weight decay). Every timestamped surface (schedule items, RAG memories, ponderings, handoff) renders through `relative-time.js` so the Familiar reads "tomorrow at 10am" / "yesterday at 4pm" / "in 30 minutes" rather than ISO arithmetic; a `[Now]` block lands at the very tail of every prompt (after chat history + post-history prompt) anchoring current wall-clock time + how long since the last user message |
 | **Autonomous pondering** | The Familiar wakes on its own cadence during idle periods, picks an interest with weight-proportional sampling, ponders it via the LLM, and writes a real timestamped entry to the **Familiar's Ponderings** tome. Cadence (30 min – 6 hr) shortens when interest weight is high; ponderings get injected into chat context the next time you talk, so the Familiar can reference its own real thoughts honestly. Toggle in Settings → "Autonomous pondering"; stretch intervals via "Pondering interval scale"; hard-disable with `PROTO_FAMILIAR_PONDERING_DISABLED=1`. See [`docs/caring-spine-build-plan.md`](docs/caring-spine-build-plan.md) |
 | **Threat detection & care check** | A pattern-based crisis-signal detector scores every user message into five tiers (severe / high / moderate / mild / safety). The score feeds a decaying scalar tracker (3-day half-life, capped, audit history); elevated tiers shorten pondering cadence and inject a `[CARE CHECK]` block into chat context that asks the Familiar to be more present (at severe: with 988 / Samaritans / findahelpline.com references visible). **Heuristic, not clinical** — never a substitute for human care. Three off-switches: Settings reset button, `PROTO_FAMILIAR_THREAT_DISABLED=1` env var, or just leave it on. See [`docs/threat-detection.md`](docs/threat-detection.md) |
@@ -466,7 +466,7 @@ Feed the temporal-context layer. `/api/interest/engage` records a turn's engagem
 
 ### Entity-Core Identity Layer
 
-Familiar optionally connects to a local [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) MCP server to ground every LLM request in persistent identity and memory. This is wired through `thalamus.js`.
+Familiar optionally connects to a local [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.4.0) MCP server to ground every LLM request in persistent identity and memory. This is wired through `thalamus.js`.
 
 #### How it works
 
@@ -518,9 +518,9 @@ To see exactly what was sent to the LLM on the previous turn — including the f
 
 #### Setup
 
-1. Clone [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) as a sibling directory at the release tag:
+1. Clone [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.4.0) as a sibling directory at the release tag:
    ```bash
-   git clone --depth 1 --branch entity-core-v0.2.2 https://github.com/PsycherosAI/Psycheros.git ../entity-core
+   git clone --depth 1 --branch entity-core-v0.4.0 https://github.com/PsycherosAI/Psycheros.git ../entity-core
    ```
 2. Follow its README to populate `data/` with identity files and memories.
 3. Start Familiar normally — `thalamus.js` spawns entity-core automatically.
@@ -682,5 +682,5 @@ SillyTavern's universal adapter architecture. Chat Completions API (OpenAI-compa
 
 ## Acknowledgements
 
-Huge thanks to **[zarilewis](https://github.com/zarilewis)** for creating [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) — the MCP server that powers Familiar's identity and memory layer. entity-core provides the persistent self-model, RAG memory, and knowledge graph that make it possible for Familiar to maintain consistent character values, voice, and relational context across conversations. None of the identity injection work in this project would exist without it.
+Huge thanks to **[zarilewis](https://github.com/zarilewis)** for creating [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.4.0) — the MCP server that powers Familiar's identity and memory layer. entity-core provides the persistent self-model, RAG memory, and knowledge graph that make it possible for Familiar to maintain consistent character values, voice, and relational context across conversations. None of the identity injection work in this project would exist without it.
 

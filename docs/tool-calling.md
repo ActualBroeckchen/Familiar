@@ -14,7 +14,7 @@ The **Enable tool use** checkbox in the sidebar **Tools** section controls wheth
 
 ## Built-in Tools
 
-Twenty-five tools are always available when tool use is enabled: six read/append tools (including the deferred-intent acknowledger), two read-only lookups for resolving graph names to ids, seven editing tools for correcting stale entity-core state, seven temporal tools (schedule + interests, backed by Unruh), and three crisis outreach tools for when the Familiar needs to help a user who is in danger during a live conversation. Every destructive tool (delete / rewrite / replace) auto-snapshots entity-core before the call — recovery is one click in the **Snapshots** tab of the Knowledge editor.
+Twenty-nine tools are always available when tool use is enabled: eight read/write tools (including the deferred-intent acknowledger and two on-demand memory-read tools), four graph-lookup and graph-creation tools, seven editing tools for correcting stale entity-core state, seven temporal tools (schedule + interests, backed by Unruh), and three crisis outreach tools for when the Familiar needs to help a user who is in danger during a live conversation. Every destructive tool (delete / rewrite / replace) auto-snapshots entity-core before the call — recovery is one click in the **Snapshots** tab of the Knowledge editor.
 
 | Tool | Description | Returns |
 |---|---|---|
@@ -26,6 +26,10 @@ Twenty-five tools are always available when tool use is enabled: six read/append
 | `acknowledge_deferred_intent` | Mark a `wants_to_save` intent from the [Deferred intents] block as filed, so it stops resurfacing (see the deferred-action pattern in [`architecture.md`](architecture.md)) | Confirmation string |
 | `find_graph_node` | Look up the graph id(s) for an entity by name. Use before `update_graph_node` / `delete_graph_node` when the entity isn't in the graph block's ids legend | One line per match: `<label> (id=…, type=…) — <description>` |
 | `find_graph_edges` | List a node's 1-hop edges with their ids. Use before `update_graph_edge` / `delete_graph_edge` when the edge isn't in the graph block's ids legend | One line per edge: `<from> -<rel>-> <to> (id=…)` |
+| `list_memories` | Browse stored memories at a given tier, most recent first — for surveying recent entries or finding the key of an entry to update/delete. No arguments required; `granularity` and `limit` are optional | One line per entry: `<tier>/<key> — <title or first 80 chars>` |
+| `read_memory` | Read the full contents of one memory entry by its exact address. Use when a summary isn't enough and you need the verbatim body before quoting or updating it. Significant memories use the composite key `YYYY-MM-DD_slug` | Full entry body, or a "not found" string |
+| `create_graph_node` | Add a new entity (person, place, project, pet, organisation, …) to the knowledge graph. Returns the new node's id for immediate edge-wiring | `"Graph node created: \"<label>\" (id=…)."` or an error string |
+| `create_graph_edge` | Record a relationship between two existing graph nodes. Both endpoints must exist first (resolve or create with `find_graph_node` / `create_graph_node`) | `"Graph edge created: <fromId> -<type>-> <toId> (id=…)."` or an error string |
 | `update_memory` | Overwrite an existing memory entry to correct an inaccuracy. Replaces the entry whole — include everything you want kept | Status string |
 | `delete_memory` | Permanently delete a memory entry. Use only when the entry is fully wrong / obsolete; prefer `save_memory` (with today's date, contradicting the stale entry) when the change has historical value | Status string + snapshot note |
 | `rewrite_identity_section` | Replace one section of an identity file. Use when an existing section is misleading and a clean rewrite serves future-you better than appending a correction | Status string |
@@ -57,7 +61,7 @@ edges:
   Eury -protects-> Chen = 1747389234877-e1f9b3c4
 ```
 
-For entities or edges not in the active block, `find_graph_node` and `find_graph_edges` resolve names → ids on demand.
+For entities or edges not in the active block, `find_graph_node` and `find_graph_edges` resolve names → ids on demand. For entities not yet in the graph, `create_graph_node` adds them and returns an id ready for `create_graph_edge`.
 
 ### Editing principles surfaced to the model
 
@@ -122,6 +126,45 @@ Calls `graph_node_search` server-side. Returns one match per line in the form `<
 | `depth`  | number | No  | Traversal depth 1–3 (default 1) |
 
 Calls `graph_subgraph` server-side. Returns one edge per line as `<from> -<rel>-> <to> (id=…)`, ready to paste into `update_graph_edge` / `delete_graph_edge`.
+
+#### `list_memories`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `granularity` | enum | No | `daily` \| `weekly` \| `monthly` \| `yearly` \| `significant` — omit to list across all tiers |
+| `limit` | number | No | Max entries to return (default 50, max 200) |
+
+Calls `memory_list` server-side. Useful for browsing recent entries or locating an entry's date/key before calling `update_memory` or `delete_memory`. Does not require a search query.
+
+#### `read_memory`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `granularity` | enum | Yes | `daily` \| `weekly` \| `monthly` \| `yearly` \| `significant` |
+| `date` | string | Yes | Date of the entry (`YYYY-MM-DD` for daily/weekly/monthly/yearly). **Significant memories use the composite key `YYYY-MM-DD_slug`** — the same format `save_memory` returns and `list_memories` shows. |
+
+Calls `memory_read` server-side. Returns the full verbatim body of the entry. Use this before quoting, updating, or carefully reasoning over a specific entry's contents; for topic-based recall the `[Memory]` block in context already surfaces relevant excerpts.
+
+#### `create_graph_node`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `label` | string | Yes | Display name of the entity, e.g. `"Dr. Okafor"`, `"the allotment"`, `"Aria (cat)"` |
+| `type` | string | No | Entity type, e.g. `"person"`, `"place"`, `"project"`, `"pet"`, `"organisation"` |
+| `description` | string | No | Short note on who/what this is, in first-person voice |
+
+Check `find_graph_node` first to avoid creating a duplicate with a slightly different label. Returns the new node's id; use it immediately with `create_graph_edge` to wire relationships.
+
+#### `create_graph_edge`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `fromId` | string | Yes | Graph id of the source node (the relationship's subject) |
+| `toId` | string | Yes | Graph id of the target node (the relationship's object) |
+| `type` | string | Yes | Relationship type as a short verb phrase, e.g. `"is_therapist_of"`, `"lives_in"`, `"works_with"` |
+| `weight` | number | No | Confidence/strength in [0, 1] |
+
+Both endpoints must already exist — resolve or create them with `find_graph_node` / `create_graph_node` first. For a relationship that has ended, delete or re-type the edge rather than leaving a false one standing.
 
 #### `update_memory`
 

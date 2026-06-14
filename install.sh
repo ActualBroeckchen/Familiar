@@ -45,7 +45,7 @@ else
 fi
 # The release lives at https://github.com/PsycherosAI/Psycheros/releases/tag/<tag>
 ENTITY_CORE_REPO="https://github.com/PsycherosAI/Psycheros.git"
-ENTITY_CORE_TAG="entity-core-v0.3.2"
+ENTITY_CORE_TAG="entity-core-v0.4.0"
 BACKUP_ROOT="$SCRIPT_DIR/.pf-backups"
 
 say() { printf '\033[1;36m==> %s\033[0m\n' "$*"; }
