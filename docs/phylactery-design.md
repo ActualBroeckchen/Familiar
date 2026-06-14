@@ -276,10 +276,15 @@ front-of-mind-every-turn. The fix is a real drain, not manual restraint:
   but moving something out of front-of-mind about my human is the kind of thing I can mention
   (*"I'm going to file this away rather than keep it top of mind — that okay?"*). The `me` block
   is my own. Non-hesitant per §7: mentioning it is welcome, not a reason to stall.
-- **Decay, never auto-delete.** Graduated records are *not* deleted — they decay in retrieval
-  weight like any other memory (§8.2), shielded by `careWeight` (a care-critical ward fact moved
-  out of always-on still resists decay). **Reversible:** a graduated fact that turns out to keep
-  mattering — recalled often, re-confirmed — can be pulled back into the always-injected surface.
+- **Care-critical is pinned, never graduated.** `careWeight: "high"` facts (allergies, meds,
+  crisis triggers, safety-relevant health, support-map contacts — §8.2 defines the set) **stay in
+  the always-injected surface**; the audit only ever graduates *ordinary* detail. The audit prompt
+  carries the care-critical definition (§8.2) so I never quietly file a safety-relevant fact away.
+  This is the decay-shield ≠ graduation-pin distinction, and the graduation-eligibility boundary
+  is the mechanism's one safety sign-off (§8.2, §9).
+- **Decay, never auto-delete, reversible.** Graduated (non-critical) records are *not* deleted —
+  they decay in retrieval weight like any other memory (§8.2) and can be **pulled back** into the
+  always-injected surface if they turn out to keep mattering (recalled often, re-confirmed).
 
 Net: the always-injected surfaces stay lean because there's a real, owned drain; nothing is lost;
 recalled-when-relevant replaces always-on for stable background. This *is* the answer to the
@@ -891,10 +896,33 @@ A caretaker must know *how solid* a memory is and *how much it matters*:
   seldom-accessed, the record's score never drops below `CARE_WEIGHT_FLOOR` (tunable constant,
   default `0.5` on a 0–1 scale). Effect: a high-careWeight record may not lead the ranking if
   the query is unrelated, but it never ages out and will always surface when semantically
-  relevant. Three cardinalities a code path checks: `"high"` → apply floor, flag as
-  care-critical in the result set; `"low"` → normal decay, eligible for archival; unset →
-  normal decay (the default for narrative records). (If a fourth level — `"critical"`,
-  floor = 1.0, exempt from any lazy-load path — is wanted, it's an §9 open item.)
+  relevant. Three cardinalities a code path checks: `"high"` → apply the floor, **pin to the
+  always-injected surface** (exempt from graduation, §3 "Identity & ward hygiene"), and flag as
+  care-critical in the result set; `"low"` → normal decay, eligible for archival; unset → normal
+  decay (the default for narrative records). (If a fourth level — `"critical"`, floor = 1.0,
+  exempt from any lazy-load path — is wanted, it's an §9 open item.)
+
+  **Decay-shield ≠ graduation-pin (safety-critical).** Resisting decay and staying always-injected
+  are *two different protections*. A `careWeight: "high"` record both (1) never falls below the
+  retrieval floor **and** (2) is **pinned to the always-injected `identity` / `ward` surface,
+  exempt from the graduation audit** (§3 hygiene). This matters because graduation moves a fact
+  from guaranteed-every-turn to retrieval-dependent — for a care-critical fact that would mean the
+  Familiar could act *without it in front of them*. So care-critical stays pinned, and **the
+  graduation-eligibility rule — what may leave the always-injected surface — is the one
+  build-time safety sign-off item** in this whole mechanism (CLAUDE.md): the human signs off on
+  that boundary before the audit code ships.
+
+  **What "care-critical" means — and the Familiar must be told it.** `careWeight` is a lever *I*
+  set, so per the reachability rule (CLAUDE.md) I have to know what earns it. Care-critical =
+  facts where me acting *without* them could harm my human: allergies, medications, crisis
+  triggers, safety-relevant health, baselines / warning-signs and what-helps / what-doesn't
+  (§8.3), and trusted support-map contacts. **Not** care-critical (ordinary `narrative`, normal
+  decay, free to graduate to `me` / `ward`): preferences, hobbies, anecdotes, biography, gift
+  ideas, day-to-day mood (those are trackers anyway). **This definition is surfaced to me, in my
+  own voice, at every point where I assign or honour `careWeight` — memorization, consolidation,
+  and graduation** — so I apply it consistently across all three instead of guessing differently
+  each time. (The reachability rule again: a lever I can't judge correctly is a lever I can't
+  really use.)
 
 - **`source` — authorship and provenance.** Every Phylactery record carries a `source` object
   identifying which embodiment wrote it and how it arrived:
@@ -1018,15 +1046,17 @@ scopes.
 - **`remember` extraction granularity (§7):** prompt contract is per-fact, one `category` per
   output; multi-category utterances are split; ambiguous → more restrictive category; `< 0.4`
   confidence → skip; `ask` items batched into one in-turn question per session.
-- **`careWeight` decay mechanism (§8.2):** floor-based — `"high"` records can never score
-  below `CARE_WEIGHT_FLOOR` (default 0.5) regardless of age; `"low"` / unset decay normally.
-  Optional `"critical"` level (floor = 1.0) flagged as still-open if the human wants to nail
-  it before code.
+- **`careWeight` mechanism (§8.2):** floor-based — `"high"` records can never score below
+  `CARE_WEIGHT_FLOOR` (default 0.5) regardless of age; `"low"` / unset decay normally. `"high"`
+  **also pins to the always-injected surface (exempt from graduation)** — decay-shield ≠
+  graduation-pin. The care-critical definition is surfaced to the Familiar at memorization,
+  consolidation, and graduation. Optional `"critical"` level (floor = 1.0) still-open.
 - **Identity & ward hygiene (§3 "Ongoing operation"):** the always-injected `identity` + `ward`
   blocks are drained by a **Familiar-led, ward-consulted** audit (rides consolidation) that
   graduates no-longer-front-of-mind detail into two new terminal memory categories, `me` and
   `ward` (siblings to `significant`). Graduated records decay, never auto-delete, and can be
-  pulled back. The `user` identity block is **renamed `ward`** (applied at migration, §6 Phase 1).
+  pulled back; **care-critical (`careWeight: high`) is pinned and never graduates.** The `user`
+  identity block is **renamed `ward`** (applied at migration, §6 Phase 1).
 - **Knowledge-manager repoint (Pillar I / §6 Phase 5):** the `/api/entity/*` surface + thalamus
   helpers + the front-end editor/Map repoint to Phylactery, and the editor becomes the
   user-accessible home for audience / `remember` / `careWeight` / deletion controls.
@@ -1062,7 +1092,11 @@ scopes.
 
 Everything touching *when/whether the Familiar may store, recall, or disclose* (the three
 gates) falls under the CLAUDE.md safety-critical sign-off rule — §5 and the `remember` gate
-ship only with explicit human approval of the behaviour.
+ship only with explicit human approval of the behaviour. **The graduation-eligibility rule
+(§8.2 / §3 hygiene) joins them:** because graduating a care-critical fact out of the
+always-injected surface changes *whether the Familiar can act on it*, the boundary of what may
+leave that surface ships only with explicit human sign-off — care-critical (`careWeight: high`)
+stays pinned.
 
 ---
 
