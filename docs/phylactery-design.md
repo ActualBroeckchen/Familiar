@@ -165,7 +165,9 @@ thalamus exactly as entity-core was:
 - **MCP tool surface** (covers entity-core's surface, audience-aware): identity get/set,
   `graph_*` (node/edge create/update/merge/search), `mem_search(query, audienceTag, k)`,
   `mem_create(content, audience, …)`, `mem_list`, `mem_read`, `mem_delete(id)` /
-  `mem_purge_by_villager` / `mem_purge_by_topic` (deletion — see "Ongoing operation"), snapshots,
+  `mem_purge_by_villager` / `mem_purge_by_topic` (deletion — bulk paths are two-call:
+  preview returns a manifest + `purgeToken`, commit requires the token; see "Ongoing operation"),
+  snapshots,
   and a filter-support query for the outgoing gate (`mem_search_restricted(draft, roomTag)` →
   records above the room's level that semantically match a drafted reply).
   **Every record a recall or search returns carries its `id`** (the way entity-core's
@@ -315,6 +317,23 @@ Three purge paths, each mapped to an MCP tool:
 - **By topic / category** (`mem_purge_by_topic(villagerId?, category)`) — "forget Nici's health
   information." Deletes records matching a villagerId + `remember` category combo; finer-grained
   than the full-villager purge.
+
+**Mandatory preview on the two bulk paths.** A `villagerId` or `topic` match is a *set* — fuzzy
+at the edges and irreversible once committed — so neither bulk tool deletes on its first call.
+The first call is a **preview**: it returns the *full manifest* of what would be deleted
+(every record as a thin projection — `id` + one-line + category + `lastConfirmedAt`/`source`,
+the same shape recall returns) plus a `purgeToken` that pins that exact record set, and deletes
+nothing. The Familiar relays the whole manifest to the ward in its own voice — *"Here is
+everything I'd let go of about Nici. If anything in here shouldn't go, say so and I'll delete just
+the rest one at a time instead."* — and only the **second** call, carrying the `purgeToken`,
+commits. The token is bound to the previewed id set and its count: if the set changed between
+preview and commit (a new record landed, one already went), the token is stale and the commit is
+refused, so the ward never green-lights one manifest and has a different one deleted out from under
+them. The escape hatch is always the by-id path: cancel the bulk purge, keep what was meant to
+stay, and `mem_delete` the specific records the ward actually named. (The single-record by-id path
+needs no token — its preview *is* the search → confirm → delete flow above.) This makes the
+preview unskippable by construction: there is no way to obtain a `purgeToken` without first
+receiving the manifest it pins.
 
 All three paths are **hard deletes**, not soft-flag. The request is a consent revocation; it
 must be honored as written, not silently retained as "remembered as deleted." Cascades:
