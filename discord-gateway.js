@@ -44,6 +44,7 @@ import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
 import { recordUserActivity } from './last-activity.js';
 import { recordKnock, recordLocationKnock } from './knocks.js';
+import { filterOutgoingReply } from './outgoing-filter.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOGS_DIR  = path.join(__dirname, 'logs');
@@ -475,7 +476,25 @@ async function handleTurn(gw, msg, decision) {
     { role: 'user', content: userContent },
   ];
 
-  const reply = await callChat({ conn, messages: apiMessages, settings });
+  const rawReply = await callChat({ conn, messages: apiMessages, settings });
+
+  // Pillar D: semantic outgoing gate. Ward-private sessions (the ward's own DM)
+  // fast-path immediately. All other rooms run the filter before delivery.
+  let reply = rawReply;
+  if (audienceTag !== 'ward-private' && rawReply) {
+    const filtered = await filterOutgoingReply({
+      draftText:    rawReply,
+      audienceTag,
+      callUpstream: async (msgs) => callChat({ conn, messages: msgs, settings }),
+      baseMessages: apiMessages,
+    }).catch(err => {
+      console.error('[discord] outgoing filter failed (passing through):', err?.message ?? err);
+      return { text: rawReply, blocked: false };
+    });
+    reply = filtered.text;
+    if (filtered.blocked)       console.log(`[discord] outgoing filter exhausted budget — safe refusal sent (audience=${audienceTag})`);
+    else if (reply !== rawReply) console.log(`[discord] outgoing filter rewrote reply (audience=${audienceTag})`);
+  }
 
   await sendChannelMessage(gw.config.token, msg.channel_id, reply);
 

@@ -18,7 +18,7 @@ from typing import Any
 
 from phylactery.db import get_conn, new_id, now_iso
 from phylactery.snapshot import auto_snapshot
-from phylactery.audience import audience_filter_sql
+from phylactery.audience import audience_filter_sql, WARD_PRIVATE
 
 VALID_GRANULARITIES = {"daily", "weekly", "monthly", "yearly", "significant"}
 
@@ -391,6 +391,57 @@ def drop_pending(ids: list[str], conn: sqlite3.Connection | None = None) -> dict
         for rid in rec_ids:
             _delete_embedding(conn, rid)
         return {"ok": True, "dropped": len(rec_ids)}
+    finally:
+        if own_conn:
+            conn.close()
+
+
+# ── Restricted-content search (Pillar D) ─────────────────────────────────────
+
+def search_restricted(
+    query: str,
+    room_audience: str,
+    threshold: float = 0.70,
+    max_results: int = 3,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    """Find ward-private memories semantically close to query.
+
+    Returns {hit: True, topic, score} if any ward-private memory matches above
+    threshold in a non-ward-private room. Returns {hit: False} when the room is
+    ward-private (no restriction applies) or no match exceeds threshold.
+
+    Always fails open — a vector-search error returns {hit: False} so the
+    outgoing filter never blocks a reply on a search failure.
+    """
+    if room_audience == WARD_PRIVATE:
+        return {"hit": False}
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        try:
+            from phylactery.embed import embed_text
+            q_vec = embed_text(query[:2000])
+            rows = conn.execute("""
+                SELECT m.id, m.content, v.distance
+                FROM memory_vecs v
+                JOIN memories m ON m.id = v.memory_id
+                WHERE v.embedding MATCH ? AND k = ?
+                  AND m.audience = 'ward-private'
+                  AND m.kind = 'narrative'
+                ORDER BY v.distance
+                LIMIT ?
+            """, [q_vec, max_results * 2, max_results]).fetchall()
+            for r in rows:
+                dist = r["distance"] if "distance" in r.keys() else 2.0
+                score = max(0.0, 1.0 - dist / 2.0)
+                if score >= threshold:
+                    topic = (r["content"] or "")[:80].split("\n")[0].strip()
+                    return {"hit": True, "topic": topic, "score": round(score, 4)}
+        except Exception:
+            pass  # vector search unavailable — fail open
+        return {"hit": False}
     finally:
         if own_conn:
             conn.close()

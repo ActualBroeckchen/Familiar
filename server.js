@@ -85,7 +85,8 @@ import {
   migrateTrustedContacts, seedDefaultCategories,
   initVillageSync, bootSync as villageBootSync,
 } from './village.js';
-import { resolveAudience, WARD_PRIVATE } from './audience.js';
+import { resolveAudience, audienceTagFor, WARD_PRIVATE } from './audience.js';
+import { filterOutgoingReply } from './outgoing-filter.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus } from './discord-gateway.js';
 import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock } from './knocks.js';
 
@@ -289,11 +290,14 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // V3: resolve session audience to an effective grants object before
   // enrichment. Fail-closed: any error defaults to WARD_PRIVATE (no gating)
   // rather than blocking the chat. Audience only applies on the full path.
+  // audienceTag (Pillar D): durable room label used by the outgoing filter.
   let audienceGrants = WARD_PRIVATE;
+  let audienceTag    = 'ward-private';
   if (enrichMode === 'full' && sessionAudience && typeof sessionAudience === 'object') {
     try {
       const registry = await getVillageRegistry();
       audienceGrants = resolveAudience(sessionAudience, registry);
+      audienceTag    = audienceTagFor(sessionAudience, registry);
     } catch (err) {
       console.error('[server] audience resolution failed (defaulting to ward-private):', err?.message ?? err);
     }
@@ -415,6 +419,22 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       timeAnchor,
     } : null;
 
+    // Pillar D: upstream caller for filter retries — bare text round-trip,
+    // no tool calls (tools are not needed for rewrite nudges).
+    const filterCallUpstream = async (msgs) => {
+      const r = await fetch(upstreamUrl, {
+        method:  'POST',
+        headers: authHeaders,
+        body:    JSON.stringify({ model: payload.model, messages: msgs, stream: false }),
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(`upstream ${r.status}: ${t.slice(0, 200)}`);
+      }
+      const d = await r.json();
+      return d?.choices?.[0]?.message?.content ?? '';
+    };
+
     // ── Non-streaming loop ─────────────────────────────────────────
     if (!stream) {
       try {
@@ -458,6 +478,27 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         req.off('close', onClientClose);
         if (thalamusEnvelope) data._thalamus = thalamusEnvelope;
         if (toolRounds.length > 0) data._toolRounds = toolRounds;
+        // Pillar D: semantic outgoing gate. Non-ward-private rooms only;
+        // ward-private fast-paths immediately. Mutates data.choices[0].message
+        // in-place when the filter rewrites or replaces the reply.
+        if (audienceTag !== 'ward-private') {
+          const draftText = data.choices?.[0]?.message?.content ?? '';
+          if (draftText) {
+            const filtered = await filterOutgoingReply({
+              draftText, audienceTag,
+              callUpstream: filterCallUpstream,
+              baseMessages: enrichedMessages,
+            }).catch(err => {
+              console.error('[server] outgoing filter failed (passing through):', err?.message ?? err);
+              return { text: draftText, blocked: false };
+            });
+            if (filtered.text !== draftText && data.choices?.[0]?.message) {
+              data.choices[0].message.content = filtered.text;
+              if (filtered.blocked) console.log(`[server] outgoing filter exhausted budget — safe refusal sent (audience=${audienceTag})`);
+              else                  console.log(`[server] outgoing filter rewrote reply (audience=${audienceTag})`);
+            }
+          }
+        }
         // M8 idle-mode outcome reporting: fire-and-forget after response sent.
         {
           const responseText = data.choices?.[0]?.message?.content ?? '';

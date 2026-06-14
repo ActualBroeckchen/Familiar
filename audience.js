@@ -195,9 +195,10 @@ export function resolveAudience(sessionAudience, registry) {
 //     full readership isn't enumerable from who has spoken, so its
 //     ceiling still caps the room (unassigned → strangers floor).
 //
-// This is the building block the fetchEligibility 'shared' ladder waits
-// on (see the note there): once memories carry this tag, a 'shared'
-// grant can filter to same-audience memories instead of gating OFF.
+// This tag feeds the fetchEligibility 'shared' ladder (Pillar E): when a
+// room has memories='shared', memory_search is gated to records whose
+// audience matches the room tag. The outgoing filter (Pillar D) then
+// guards what leaves, completing the loop.
 export const AUDIENCE_TAG_WARD_PRIVATE = 'ward-private';
 
 // Permission score for a grant set: higher = more access. Used only to
@@ -286,16 +287,15 @@ export function isGranted(grantKey, grants) {
 /**
  * Decide which enrich() fetches may run for this audience.
  *
- * IMPORTANT fail-closed rule: intermediate ladder values gate the fetch
- * OFF until their narrowing machinery actually exists:
- *   - memories: 'shared' requires audience-tagged memories to filter by.
- *     No tags exist yet → a 'shared' grant must NOT trigger memory_search,
- *     or the audience would receive ALL memories (leak). Only `true`
- *     (memories: all) permits the fetch today.
+ * Fail-closed rules for intermediate ladder values:
+ *   - memories: 'shared' — audience-tagged memories landed in Pillar C; the
+ *     outgoing filter (Pillar D) guards what leaves. Pillar E unlocks this
+ *     so 'shared' grants now permit memory_search, filtered to same-audience
+ *     records at query time.
  *   - schedule: 'coarse' requires a coarse renderer ("busy until evening").
  *     None exists yet → only 'full' (or boolean true) permits the
  *     temporal_context fetch today.
- * When tagging / coarse rendering land, this is the single place to widen.
+ * When coarse rendering lands, this is the single place to widen.
  *
  * @param {object|null} audience effective grants or WARD_PRIVATE
  * @returns {{ wardPrivate: boolean, memory: boolean, graph: boolean, temporal: boolean }}
@@ -307,7 +307,7 @@ export function fetchEligibility(audience) {
   const g = audience ?? {};
   return {
     wardPrivate: false,
-    memory:   g.memories === true,
+    memory:   g.memories === true || g.memories === 'shared',
     graph:    g.graph === true,
     temporal: g.schedule === 'full' || g.schedule === true,
   };

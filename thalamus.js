@@ -1884,6 +1884,25 @@ export async function dropPendingMemories(ids) {
 }
 
 /**
+ * Pillar D outgoing filter: check a draft reply for restricted content.
+ * Returns { hit: boolean, topic?: string, score?: number }.
+ * Always resolves (never rejects) — fails open with { hit: false }.
+ */
+export async function searchMemoryRestricted({ query, roomAudience, threshold = 0.70 }) {
+  try {
+    return await callTool('memory_search_restricted', {
+      query,
+      roomAudience,
+      threshold,
+      maxResults: 3,
+    });
+  } catch (err) {
+    console.warn('[thalamus] searchMemoryRestricted failed (failing open):', err?.message ?? err);
+    return { hit: false };
+  }
+}
+
+/**
  * Append content to a Phylactery identity file.
  * @param {{ category: string, filename: string, content: string }} opts
  * @returns {Promise<{ ok: boolean, error?: string }>}

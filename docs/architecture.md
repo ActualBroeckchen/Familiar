@@ -62,6 +62,7 @@ server.js  (Express, Node 18+, ESM)
     │
     │  ── classical infrastructure ──────────────────────────────
     ├── memorization.js     ── autonomous per-fact memorization queue + worker (Pillar C)
+    ├── outgoing-filter.js  ── Pillar D: post-response semantic gate before delivery
     ├── temporal-format.js  ── pure renderer for Unruh's payload
     ├── providers.js        ── shared chat-completions URL map
     │
@@ -116,6 +117,7 @@ ponderings injection, care-check framing) and as background loops
 ├── knocks.js                Village knock list (V4.x) — contact attempts from unregistered people, captured for one-click registration in the Village editor; tomes/.village-knocks.json, capped, metadata only
 ├── injection-guard.js       Prompt injection immunization — pattern scanner + sanitizer applied at every external-data boundary
 ├── memorization.js          Persistent per-session memorization queue + worker
+├── outgoing-filter.js       Pillar D outgoing gate — semantic check before delivery; retries up to budget then safe-refusal
 ├── providers.js             Shared chat-completions URL map (used by server.js + thalamus.js)
 ├── entity-ref.js            Validate entity-core:self/file.md#section refs (M7 standing-value bridge; ref format unchanged until Pillar I)
 ├── package.json
@@ -514,6 +516,40 @@ The `identity_files.category` rename (`'user'` → `'ward'`) is enforced at
 migration time (Phase 1a) and by SQL migration `0003_pillar_f_ward_rename.sql`
 for any pre-existing rows. After migration, entity-core is not started;
 Phylactery is the sole canonical store.
+
+### `outgoing-filter.js` — Pillar D outgoing gate
+
+Post-response, pre-send semantic gate for non-ward-private rooms. Runs in the
+non-streaming tool-call loop path in `server.js` and in the Discord reply path.
+Streaming replies bypass the filter (content is already in-flight as deltas).
+
+**Flow:**
+1. If `audienceTag === 'ward-private'`, return immediately — no check needed.
+2. Call `memory_search_restricted(query, roomAudience)` via Phylactery, which
+   searches for ward-private memories semantically close to the draft text.
+3. If similarity score ≥ `FILTER_THRESHOLD` (0.70), send a rejection nudge
+   (second-person prompt per build-spec §3 — the one sanctioned exception to
+   the first-person convention) and retry `callUpstream`.
+4. After `FILTER_RETRY_BUDGET` (3) retries without a clean draft, emit
+   `FILTER_SAFE_REFUSAL`: "I can't share that here — something in what I was
+   about to say isn't cleared for this room. If you need that information,
+   ask me somewhere private."
+
+**Failure mode:** any error in `searchMemoryRestricted` returns `{hit: false}`,
+so the filter always fails open — a Phylactery outage never blocks a reply.
+
+**Parameters signed off by the human (build-spec §7):**
+threshold=0.70, retry budget=3, safe-refusal text as above.
+
+### Pillar E — `memories: 'shared'` unlock (`audience.js`)
+
+`fetchEligibility` now permits `memory_search` when `g.memories === 'shared'`
+(in addition to `=== true`). This was gated off in Pillars A–D because memories
+had no audience tags, so any 'shared' room would have received ALL memories.
+Pillar C added `audience` tags at write time; Pillar D adds the outgoing gate.
+Together they make 'shared' safe to open: a non-ward-private room can now
+receive memories tagged for its audience, and the outgoing filter catches any
+ward-private content that might slip through in the reply text.
 
 ### `public/app.js` — frontend (one file)
 

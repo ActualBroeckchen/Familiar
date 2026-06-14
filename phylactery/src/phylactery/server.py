@@ -16,6 +16,7 @@ Tools exposed (stable contract — Thalamus depends on these shapes):
     memory_list             — browse memories at a tier, most-recent first
     memory_read             — full content of one memory by granularity+date
     memory_search           — semantic RAG search (falls back to recency)
+    memory_search_restricted — Pillar D outgoing gate: find ward-private memories matching a draft
     memory_update           — overwrite an existing memory (auto-snapshots)
     memory_delete           — delete a memory (auto-snapshots)
 
@@ -215,6 +216,24 @@ def memory_search(
     k = max(1, min(20, int(maxResults or 5)))
     aud = audience or "ward-private"
     return mem.search(query, max_results=k, audience=aud, conn=_c())
+
+
+@mcp.tool()
+def memory_search_restricted(
+    query: str,
+    roomAudience: str,
+    threshold: Optional[float] = None,
+    maxResults: Optional[int] = None,
+) -> dict[str, Any]:
+    """I use this to check whether a draft reply I'm about to send contains content
+    restricted from the current room. Searches ward-private memories semantically
+    close to the query — if any match above threshold the reply should not be sent
+    as-is. Returns {hit, topic?, score?}. Always fails open: returns {hit: false}
+    on any search error so the outgoing filter never blocks on a lookup failure.
+    """
+    t = float(threshold) if threshold is not None else 0.70
+    k = max(1, min(10, int(maxResults or 3)))
+    return mem.search_restricted(query, room_audience=roomAudience, threshold=t, max_results=k, conn=_c())
 
 
 @mcp.tool()
