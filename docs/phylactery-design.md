@@ -20,6 +20,15 @@ relational graph, and all memory. It follows the Unruh precedent (a name with ch
 not a literal brain region) and fits the entity-as-subject stance. Module at
 `./phylactery/`.
 
+**Attribution:** Phylactery is an original design by **Zari Lewis**, developed within the
+[Psycheros](https://github.com/PsycherosAI/Psycheros) project and implemented here in
+Proto-Familiar. The entity-as-subject philosophy this milestone expresses originates with
+Psycheros — see
+[Psycheros PHILOSOPHY.md](https://github.com/PsycherosAI/Psycheros/blob/main/PHILOSOPHY.md).
+
+See also: [`docs/phylactery-build-spec.md`](phylactery-build-spec.md) — the lean build
+instruction for implementers (this doc is the rationale; the spec is the action list).
+
 ---
 
 ## 1. The decision

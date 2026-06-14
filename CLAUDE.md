@@ -138,8 +138,11 @@ The Familiar is one persistent entity, potentially across multiple interfaces:
 
 > **⚠️ In transition — the canonical store is being replaced.** The human has decided that
 > Proto-Familiar will **own its entire canonical self** in a new in-tree MCP service,
-> **Phylactery**, which fully replaces entity-core (identity + graph + all memory tiers,
-> converted to a new audience-aware format). See [`docs/phylactery-design.md`](docs/phylactery-design.md).
+> **Phylactery** (original design by [Zari Lewis](https://github.com/PsycherosAI/Psycheros),
+> developed within the [Psycheros](https://github.com/PsycherosAI/Psycheros) project), which
+> fully replaces entity-core (identity + graph + all memory tiers, converted to a new
+> audience-aware format). See [`docs/phylactery-design.md`](docs/phylactery-design.md) (rationale)
+> and [`docs/phylactery-build-spec.md`](docs/phylactery-build-spec.md) (build instruction).
 > **Until Phylactery lands, entity-core remains canonical and every rule below holds as
 > written.** When it lands, "entity-core" becomes "Phylactery" throughout this section, the
 > diagram's top box becomes the PF-owned store, and entity-core is retired (migration converts

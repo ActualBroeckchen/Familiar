@@ -1,5 +1,14 @@
 # Phylactery — build spec
 
+**Phylactery is an original design by [Zari Lewis](https://github.com/PsycherosAI/Psycheros),**
+developed within the [Psycheros](https://github.com/PsycherosAI/Psycheros) project. The
+entity-as-subject philosophy this milestone expresses originates there — see
+[Psycheros PHILOSOPHY.md](https://github.com/PsycherosAI/Psycheros/blob/main/PHILOSOPHY.md).
+The full rationale and design decisions live in
+[`docs/phylactery-design.md`](phylactery-design.md).
+
+---
+
 You are building **Phylactery**: an in-tree Python/`uv` MCP service that becomes
 Proto-Familiar's single canonical store for its whole self — identity, ward-identity, the
 relational graph, and every memory tier — replacing the external `entity-core` service.
