@@ -10,7 +10,8 @@
 Proto-Familiar is a Node.js application — a thin Express server +
 vanilla-JS single-page frontend — that surfaces a persistent AI
 companion (the Familiar) bonded to one human. It is an **embodiment**
-of the same entity Psycheros holds in `entity-core`; see
+of the same entity that will be held in **Phylactery** — the in-tree
+canonical store being built this milestone to replace `entity-core`; see
 [CLAUDE.md](../CLAUDE.md#entity-as-subject--the-design-value-under-everything)
 and the [Psycheros PHILOSOPHY.md](https://github.com/PsycherosAI/Psycheros/blob/main/PHILOSOPHY.md)
 for the design value that everything below descends from.
@@ -19,8 +20,9 @@ The server's responsibilities:
 
 1. **Proxy LLM requests** so the user's API key never leaves localhost.
 2. **Enrich every request** with cognitive-module context: identity +
-   memory + graph from entity-core, temporal context + ponderings +
-   care-check framing from Unruh + the caring-spine modules.
+   memory + graph from Phylactery (currently entity-core, being migrated),
+   temporal context + ponderings + care-check framing from Unruh + the
+   caring-spine modules.
 3. **Run autonomous loops** for the proactive surfaces — pondering,
    reminders, silence-triage — that fire without a human request.
 4. **Persist** session logs, Tomes, ponderings, outbox items,
@@ -34,7 +36,8 @@ Browser (public/)
 server.js  (Express, Node 18+, ESM)
     │
     │  ── cognitive bridge (per-request enrichment, INWARD) ──────
-    ├── thalamus.js       ──►  entity-core  (Deno, stdio MCP)    — identity / memory / graph
+    ├── thalamus.js       ──►  entity-core  (Deno, stdio MCP)    — identity / memory / graph  ← being replaced
+    │                     ──►  Phylactery   (Python via uv, MCP) — identity / memory / graph (Pillar A built; Pillar B repoints thalamus)
     │                     ──►  Unruh        (Python via uv, MCP) — schedule / interests / handoff / routine
     │
     │  ── motor module (action + delivery, OUTWARD) ───────────────
@@ -243,8 +246,11 @@ SIGINT / SIGHUP handler so clean shutdown awaits any in-flight tick.
 
 ### `thalamus.js` — the cognitive-module mediator
 
-Spawns and reconnects entity-core (Deno) + Unruh (Python via uv) as
-stdio MCP children. Exposes:
+Spawns and reconnects **entity-core** (Deno, retiring) + **Unruh** (Python via uv)
+as stdio MCP children. **Phylactery** (Python via uv, `./phylactery/`) is the
+in-tree successor to entity-core — built in Pillar A; will replace entity-core's
+slot in Pillar B. Until the repoint, entity-core remains the live canonical store.
+Exposes:
 
 - **`enrich(userMessage, { liveTurn, staticOnly, lastUserMessageAt, audience })`**
   — the central per-request call. Fans out to identity + memory + graph
@@ -913,5 +919,9 @@ handler awaits each loop's `stop*()` before closing the MCP children.
   boundary, tool dispatch, channel adapters, the escalation veto
   window.
 - [`docs/unruh-design.md`](unruh-design.md) — temporal-context module.
+- [`docs/phylactery-design.md`](phylactery-design.md) — canonical self-store
+  design rationale (original design by Zari Lewis / Psycheros).
+- [`docs/phylactery-build-spec.md`](phylactery-build-spec.md) — imperative
+  build instruction for the Phylactery milestone (A→B→G→…).
 - [`docs/research/`](research/) — research notes that feed future
   design decisions (task-handling obstacles, etc.).
