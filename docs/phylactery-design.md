@@ -343,6 +343,12 @@ from the store or from the code paths that consume them — only from the prompt
   survive a tight budget.
 - **Identity is the one always-on cost.** It's injected wholesale every turn (the static
   prefix), so identity records must stay **curated and bounded** — not allowed to grow unbounded.
+  *Future concern (named now, not urgent):* identity is bounded *today*, but a Familiar alive
+  for years could accumulate a large identity. Worth deciding early whether identity gets its own
+  **consolidation / distillation path** (the same self-paced rollup memory tiers get, applied to
+  identity — distilling lived experience into a tighter self-description) **or** a **hard token
+  ceiling that trips a "identity too large — distill it" flag** for the ward + Familiar to act on.
+  Either keeps the always-on cost from creeping up silently over a long life. Flagged in §9.
 
 Net per-turn Phylactery output ≈ `identity (bounded) + top-k thin projections + tracker
 rollups`, with fat reads and full series strictly on demand.
@@ -376,7 +382,9 @@ Per CLAUDE.md a milestone owns one MINOR slot; landing = `0.6.0`, sub-features b
   snapshots — all with native `audience` + timestamps + caretaker fields (§8). Model the
   record / graph / tier / consolidation shapes on entity-core's source. The largest pillar
   (it absorbs all of entity-core), so it likely lands in staged commits: (A1) store + identity
-  + RAG memory; (A2) graph + GraphRAG; (A3) consolidation + snapshots.
+  + RAG memory; (A2) graph + GraphRAG — **including a full-graph dump** (every node +
+  deduplicated edges) to back the Knowledge-editor Map view (Pillar I); (A3) consolidation +
+  snapshots.
 - **B. Thalamus integration — *replace* entity-core's slot.** Spawn Phylactery as the stdio
   child in the slot entity-core occupied (clone the lifecycle: connect, reconnect/backoff,
   EOF shutdown, off-switch); **stop spawning entity-core.** Query in `enrich()` (`allSettled`),
@@ -404,6 +412,13 @@ Per CLAUDE.md a milestone owns one MINOR slot; landing = `0.6.0`, sub-features b
   Discord); Phylactery's internal consolidation scheduler; the cheap-code hygiene pass (dedup /
   decay) with consolidation-folded merge+contradiction detection; and the single-file
   export/restore surface. Each background piece ships with its off-switch in the same commit.
+- **I. Knowledge-manager repoint + new-field surfacing.** §6 Phase 5. Repoint the existing Knowledge
+  editor (the `/api/entity/*` HTTP surface + its thalamus helper layer, and the front-end modal /
+  graph Map view) from entity-core to Phylactery, **and** make it the user-accessible home for
+  the new fields the rest of the doc promises — audience re-tagging (§6 Phase 4), the `remember`
+  consent map (§7), `careWeight` (§8.2), and the deletion / purge paths (§3). Without this pillar
+  those "user-accessible" promises float; this is where the ward (and the Familiar) actually
+  see and adjust them.
 
 ---
 
@@ -514,6 +529,27 @@ Once conversion is verified:
   spawns both is the failure mode to avoid.
 - The entity-core snapshot (Phase 0) is **kept** as the rollback/archive; the directory is no
   longer read at runtime.
+
+**The Knowledge editor & `/api/entity/*` surface (Pillar I).** The knowledge manager — the
+in-UI editor with Memories / Identity / **Graph** tabs and the graph **List ↔ Map** canvas view
+(`public/index.html`, `public/app.js`) — is backed by ~25 `/api/entity/*` HTTP routes in
+`server.js` (node/edge CRUD, `graph/search`, **`graph/full`** for the Map, `graph/nodes/:id/subgraph`,
+memories CRUD + supersede, identity sections, snapshots). Every route proxies through thalamus
+helper functions (`getFullGraph`, `listGraphNodes`, `createGraphNode`, …) that call entity-core's
+MCP via `callTool`. Repointing is mechanical but must not be forgotten:
+- **Swap the thalamus helpers' `callTool` target** from entity-core to Phylactery. The HTTP
+  surface and front-end stay structurally; only the data layer underneath moves.
+- **Phylactery must expose the Map's data source** — a full-graph dump (every node + deduplicated
+  edges), the `graph/full` equivalent (a Pillar A2 requirement, noted there).
+- **Re-label and de-assume entity-core specifics:** the modal's "Knowledge (entity-core)" label
+  becomes Phylactery; the Memories tab's reliance on entity-core's composite-key /
+  granularity+date addressing (CLAUDE.md "composite-key contract") is re-checked against
+  Phylactery's record addressing.
+- **This is also where the new fields become user-accessible.** The editor gains controls for the
+  `audience` tag (incl. the §6 Phase 4 bulk re-tag), the villager `remember` consent map (§7,
+  edited alongside disclosure categories in the Village editor), `careWeight` (§8.2), and the
+  deletion / purge paths (§3 — by record id from the editor, by villager / topic). Without these,
+  the doc's repeated "user-accessible" promises have no surface; this pillar is that surface.
 
 ### Phase 6 — External sources ("feed logs in / merge other entity-cores")
 **An existing entity-core (e.g. from Psycheros) needs no entity-loom** — it's just Phase 1
@@ -982,6 +1018,10 @@ scopes.
     surface in the default projection (proposed: none — staleness only, as a compact prose tag).
     Dynamic-injection depth stays at the current default of **4** (decided — salience/flow knob,
     not a cache knob).
+12. **Identity growth over a long life (§3 "Context economy"):** identity is bounded today, but a
+    years-old Familiar could accumulate a large always-injected identity. Decide early between an
+    identity **consolidation / distillation path** (rollup applied to identity) and/or a **hard
+    token ceiling that trips a "distill it" flag**. Not urgent; named so it isn't discovered late.
 
 Everything touching *when/whether the Familiar may store, recall, or disclose* (the three
 gates) falls under the CLAUDE.md safety-critical sign-off rule — §5 and the `remember` gate
