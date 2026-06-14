@@ -75,12 +75,6 @@ There is **one** canonical store, **never** two copies of one fact. Migration (�
 **one-time conversion** out of entity-core, after which entity-core is retired — not a live
 mirror.
 
-> *History note: an earlier draft of this doc ("B′") split memory between Phylactery and a
-> still-canonical entity-core, with a one-directional "promotion" path between them. The
-> human chose full replacement instead — one store, no seam. That split design is gone; this
-> section is the decided shape. The only reason it's mentioned is so a reader who saw the
-> old draft knows it was deliberately superseded.*
-
 **Costs, named honestly (robust > cheap) — real and accepted:**
 
 1. **We reimplement *all* of entity-core**, not just memory — the graph + GraphRAG, the
