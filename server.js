@@ -398,7 +398,14 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // limiter — one user message costs one request against the limit no
   // matter how many tool rounds it takes.
   if (loopMode) {
-    const toolCtx     = { sessionInfo: sessionInfo && typeof sessionInfo === 'object' ? sessionInfo : null };
+    // wardPrivate gates the Village tools: full disclosure (incl. private
+    // notes) and mutations only when it's just the ward in the room. The
+    // audience tag defaults to 'ward-private' and only becomes a room tag
+    // when the session carries an audience, so this is the right signal.
+    const toolCtx     = {
+      sessionInfo: sessionInfo && typeof sessionInfo === 'object' ? sessionInfo : null,
+      wardPrivate: audienceTag === 'ward-private',
+    };
     const upstreamUrl = url;
     const authHeaders = {
       'Content-Type':  'application/json',
@@ -1364,8 +1371,14 @@ app.post('/api/tomes/default/entries', async (req, res) => {
   }
 });
 
-// Hand the tome-storage capability to cerebellum's save_to_tome executor.
-initCerebellumTools({ addDefaultTomeEntry });
+// Hand the tome-storage capability + Village read/write to cerebellum's
+// executors. Village mutations from the tool path push through the same
+// write-through sync wired in startVillageSync() (mirror → Phylactery).
+initCerebellumTools({
+  addDefaultTomeEntry,
+  getVillageRegistry,
+  upsertVillager,
+});
 
 // ── Memorization queue endpoints ────────────────────────────────
 
@@ -2295,10 +2308,10 @@ function reconcileLocationKnock(location) {
 
 app.post('/api/village/villagers', async (req, res) => {
   const { name, categoryIds, categoryId, aliases, connection, triage,
-    pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, graphNodeId, remember } = req.body ?? {};
+    pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember } = req.body ?? {};
   try {
     const saved = await upsertVillager({ name, categoryIds, categoryId, aliases, connection, triage,
-      pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, graphNodeId, remember });
+      pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember });
     reconcileKnocks(saved);
     res.json(saved);
   }
@@ -2307,10 +2320,10 @@ app.post('/api/village/villagers', async (req, res) => {
 
 app.patch('/api/village/villagers/:id', async (req, res) => {
   const { name, categoryIds, categoryId, aliases, connection, triage,
-    pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, graphNodeId, remember } = req.body ?? {};
+    pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember } = req.body ?? {};
   try {
     const saved = await upsertVillager({ id: req.params.id, name, categoryIds, categoryId, aliases, connection, triage,
-      pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, graphNodeId, remember });
+      pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember });
     reconcileKnocks(saved);
     res.json(saved);
   }

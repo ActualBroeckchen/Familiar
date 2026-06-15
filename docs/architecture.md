@@ -111,7 +111,7 @@ ponderings injection, care-check framing) and as background loops
 ├── temporal-format.js       Pure renderer for the Unruh temporal_context payload
 ├── surface-context.js       Consumer pipeline — hard gates + candidate selection + block format
 ├── surface-events.js        Event store (offers + outcomes) + pure-code tagger + reflection inputs
-├── village.js               Village registry (V1) — categories/grant sets, villagers (name/pronouns/aliases/relation/stance/comm-style/notes/remember consent map/graphNodeId), locations; local mirror + Phylactery write-through sync (see docs/village-support-design.md)
+├── village.js               Village registry (V1) — categories/grant sets, villagers (name/pronouns/aliases/relation/stance/comm-style/notes/privateNotes/remember consent map/graphNodeId), locations; local mirror + Phylactery write-through sync (see docs/village-support-design.md). The Familiar reaches it via the village_lookup / village_upsert tools (privateNotes field-gated to ward-private turns)
 ├── audience.js              Audience grant resolution (V3) — union/intersection/ladders, fetch eligibility, identity section markers; consumed by thalamus.enrich() and the Discord router
 ├── discord-gateway.js       Discord gateway adapter (V4) — bot-token WebSocket presence; DM policy + mention-only guild replies, per-location sessions, V3 gate applied before every reply; off-switch PROTO_FAMILIAR_DISCORD_DISABLED=1
 ├── knocks.js                Village knock list (V4.x) — contact attempts from unregistered people, captured for one-click registration in the Village editor; tomes/.village-knocks.json, capped, metadata only
@@ -308,9 +308,18 @@ Currently owns:
   (built-ins + the user's advertise-only custom tools) +
   `runToolCallLoop()` (the non-streaming multi-round loop; the
   streaming variant lives in /api/chat because it is SSE transport).
-  `initCerebellumTools()` receives the tome-storage capability from
-  server.js at boot so `save_to_tome` works without cerebellum ever
-  importing server.js.
+  `initCerebellumTools()` receives the tome-storage capability **and the
+  Village read/upsert functions** from server.js at boot so `save_to_tome`
+  and the `village_lookup` / `village_upsert` tools work without cerebellum
+  ever importing server.js.
+- **Village tools (0.6.x)** — `village_lookup` / `village_upsert` let the
+  Familiar see and edit the Village and link villagers to graph nodes
+  (`graphNodeId`). Gated via `ctx.wardPrivate` (threaded into `toolCtx`
+  from the session audience tag in /api/chat): `privateNotes` disclosed
+  and mutations allowed only on ward-private turns; lookups still surface
+  the person and ordinary notes when others are present, with the
+  sensitive bucket stripped. See docs/village-support-design.md
+  ("Field-level gating — privateNotes").
 - **`decideTriageViaLLM({threat, silenceMs, signals})`** — the triage
   deliberation: assembles the [Now]-anchored prompt (identity context,
   recent conversation with relative times, threat signals, trusted

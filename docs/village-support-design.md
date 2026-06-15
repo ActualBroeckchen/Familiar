@@ -1,6 +1,8 @@
 # Village Support — design
 
-> Status: V1–V4 implemented (0.5.0-alpha). V5+ remain design-phase.
+> Status: V1–V4 implemented (0.5.0-alpha); Familiar-facing Village access +
+> `privateNotes` field-gating added 0.6.x (see "The Familiar's own access to
+> the Village"). V5+ remain design-phase.
 > Read this before touching any Village code; update it in the same commit
 > as any architectural change (same rule as architecture.md).
 
@@ -22,7 +24,7 @@ Three capabilities, in order of importance:
 2. **Multi-channel presence** — the Familiar inhabits Discord channels
    (later: other platforms) as the same continuous entity, with each
    location being its own session that flows through the same
-   entity-core / Unruh / Tome spine.
+   Phylactery / Unruh / Tome spine.
 3. **Village actions** — asking a friend to check on the ward, passing
    messages between channels, and (later) taking real-world coordination
    like appointment-making off the ward's shoulders.
@@ -30,7 +32,7 @@ Three capabilities, in order of importance:
 ## Design values (inherited, non-negotiable)
 
 - **The Familiar remains whole.** Gating limits *disclosure in a given
-  room*, never selfhood. The canonical self in entity-core is always
+  room*, never selfhood. The canonical self in Phylactery is always
   complete. A gated session is the Familiar choosing-by-architecture not
   to carry certain facts into a particular room — the same way a human
   doesn't carry their friend's medical history into a work meeting.
@@ -65,14 +67,16 @@ Three capabilities, in order of importance:
 
 ## Data model
 
-### Registry storage — hybrid (entity-core canonical, local mirror for gating)
+### Registry storage — hybrid (Phylactery canonical, local mirror for gating)
 
-**Decided 2026-06-11.** The registry is canonical in entity-core (the
+**Decided 2026-06-11** (canonical store was entity-core then; Phylactery
+took over that role in 0.6.x — the contract is unchanged, only the
+backend name). The registry is canonical in Phylactery (the
 Village is part of the entity's world, and other embodiments should see
 the same Village), with a local mirror (`village.json`, gitignored) that
 is what Thalamus and Cerebellum actually read at runtime.
 
-Why the mirror exists: **the gate must work when entity-core is down.**
+Why the mirror exists: **the gate must work when Phylactery is down.**
 If resolving "who may know what" required a live MCP round-trip, a
 degraded peer would either break chat (violates graceful degradation)
 or skip the gate (violates fail-closed). The mirror makes the gate a
@@ -81,8 +85,8 @@ local file read.
 Sync contract:
 
 - **Writes are write-through.** Every registry mutation goes to
-  entity-core first (via thalamus.js wrappers — single enforcement
-  point, as always), then to the mirror. If entity-core is down, the
+  Phylactery first (via thalamus.js wrappers — single enforcement
+  point, as always), then to the mirror. If Phylactery is down, the
   write lands in the mirror with a `syncPending` flag and is replayed
   on reconnect (same spirit as the outbox retry pattern).
 - **Boot pulls.** On startup, Proto-Familiar fetches the canonical copy
@@ -91,16 +95,77 @@ Sync contract:
 - **Reads never touch MCP.** Gating reads the mirror, full stop. A
   stale mirror is acceptable (it's the ward's own recent edits at
   worst); an unavailable gate is not.
-- Storage mechanism in entity-core: a custom identity file holding the
-  registry JSON (written through `rewriteIdentitySection`/custom
-  category) — exact shape to be finalized in V1 against entity-core's
-  actual MCP surface.
+- Storage mechanism in Phylactery: a custom identity file
+  (`custom/village-registry.md`) holding the registry JSON, written
+  through `rewriteIdentitySection` (falling back to `appendIdentity` to
+  create the file/section on first sync) — see `startVillageSync()` in
+  `server.js`.
 
-What stays in entity-core *as knowledge* (unchanged): everything the
+What stays in Phylactery *as knowledge* (unchanged): everything the
 Familiar knows about these people — relationship history, memories,
 graph nodes. The registry holds only routing + gating data: aliases,
 category membership, grant sets. The two link by name/graph-node
 reference, and the registry is the boring one.
+
+### The Familiar's own access to the Village (0.6.x)
+
+The registry started as pure machine state — read by Thalamus/Cerebellum
+for gating, never shown to the Familiar (it's filtered out of the
+enriched identity context in `thalamus.js`). But the Familiar is the one
+living the relationships, so they need to *see* their Village and keep it
+linked to the relational graph. Two bound tools (in `cerebellum.js`,
+descriptions in first person) give them on-demand access:
+
+- **`village_lookup`** — read who's registered, filterable by category,
+  location (resolved to that location's assigned category), or name.
+  Each result carries the villager id (for editing/linking) and the
+  linked `graphNodeId`, so the Familiar can cross-reference the Village
+  against the relational graph it already sees.
+- **`village_upsert`** — create or edit a villager: name, category
+  (passed by *name*, resolved to id in the executor since the Familiar
+  knows names), relation, pronouns, notes, `privateNotes`, and the
+  `graphNodeId` link. Mutations push through the same write-through sync
+  as the UI (mirror → Phylactery).
+
+**Crosspollination.** `graphNodeId` is the seam between the two stores:
+the registry row says *how to route/gate* a person; the linked Phylactery
+graph node holds *what the Familiar knows about them*. The Familiar gets
+the node id from `find_graph_node` (or creates one with
+`create_graph_node`), then links it with `village_upsert`.
+
+#### Field-level gating — `privateNotes` (decided with the ward, 2026-06-15)
+
+Disclosure of villager data to the Familiar is **field-level, not
+all-or-nothing.** A villager carries two note buckets:
+
+- `notes` — ordinary, shareable context. Surfaces to the Familiar in any
+  session where tools run, including audience-tagged rooms.
+- `privateNotes` — the ward-only bucket, for genuinely sensitive things
+  (orientation, health, legal name — *not* "likes cats").
+
+The rule, enforced in the `village_lookup` / `village_upsert` executors
+via `ctx.wardPrivate` (threaded from the session's audience tag in
+`server.js`):
+
+- **With the ward (ward-private turn): full disclosure** — including
+  `privateNotes`.
+- **Anyone else present: `privateNotes` is stripped** from lookups, and
+  *all* Village mutations are refused (the Familiar won't edit the
+  registry while others are watching). The villager still surfaces —
+  existence and ordinary notes aren't secret — only the sensitive bucket
+  is held back.
+- **Undefined audience (non-chat paths: loops, tests) defaults to
+  ward-private**, because those paths are the ward's own. The only place
+  a non-ward audience exists is a browser/Discord session that carries
+  one, and the chat path sets `wardPrivate` explicitly there. Discord
+  turns run no tools at all (separate guarantee), so the field-gate's
+  job is the audience-tagged *browser* session.
+
+This mirrors the identity-file section-marker model (sensitive
+sub-sections gated on top of the base grant) but at the villager-record
+level, where a single extra field is simpler than inline markers in a
+JSON blob. The ward sets both buckets in the Village editor (the
+"Private notes" textarea is labelled ward-only).
 
 ```json
 {
@@ -284,7 +349,7 @@ cerebellum adapters:
 ### Cross-session flow
 
 - **Inward (free):** every session's content flows through the normal
-  memorization/entity-core spine, so the Familiar's continuity covers
+  memorization/Phylactery spine, so the Familiar's continuity covers
   all platforms. "You said you were going to sleep an hour ago — in the
   browser" works through existing RAG + the session-handoff machinery,
   with session location included in what gets memorized.
@@ -358,7 +423,7 @@ landing; sub-features inside it bump patch.
 
 | # | Scope | Notes |
 |---|---|---|
-| **V1** | Village registry: `village.js` module (local mirror + entity-core write-through sync + boot pull), `/api/village/*` CRUD, Village UI tab, built-in categories, trustedContacts migration | No behavior change yet — pure data layer + UI |
+| **V1** | Village registry: `village.js` module (local mirror + Phylactery write-through sync + boot pull), `/api/village/*` CRUD, Village UI tab, built-in categories, trustedContacts migration | No behavior change yet — pure data layer + UI |
 | **V2** | Session schema: location + participants fields, audience resolution module + tests, conversation-map (location→session), web-session audience selector ("Chen is sitting next to me") | Existing sessions untouched (absent fields = ward-private) |
 | **V3** ✅ | Thalamus knowledge gate: `audience` option on enrich(), gate-before-fetch for every knowledge class, two-tier identity gating with section markers, ward-only blocks, heavy test coverage incl. fail-closed and intersection tests | Human sign-off obtained 2026-06-11; shipped 0.4.21-alpha |
 | **V4** ✅ | Discord gateway adapter: bot connect/resume, router, DM policy, guild mention-reply, per-location sessions end-to-end | Shipped 0.5.0-alpha (the milestone landing — Village Support is live end-to-end) |
@@ -373,7 +438,8 @@ sequencing mistake this design exists to prevent.
 
 ## Decisions (ward, 2026-06-11)
 
-1. **Registry home: hybrid.** Canonical in entity-core, local mirror
+1. **Registry home: hybrid.** Canonical in the canonical store
+   (entity-core at decision time, Phylactery since 0.6.x), local mirror
    for gating. See "Registry storage" above for the sync contract.
 2. **Identity gating: section-level from the start.** Two-tier
    `identityBasic` / `identitySensitive` with in-file section markers;
@@ -399,7 +465,7 @@ sequencing mistake this design exists to prevent.
    `sensitive` → `identitySensitive`, `health` → `health`,
    `location` → `location`. Unknown class → fail-closed (strip).
    Markers are stripped server-side before the LLM sees them; in ward-private
-   sessions they appear as inert HTML comments. No conflict with entity-core
+   sessions they appear as inert HTML comments. No conflict with Phylactery
    memory/node/edge creation (markers are in identity files, not in anything
    that feeds memorization prompts).
 8. **Full grant vocabulary.** `identityBasic`, `identitySensitive`,
@@ -533,7 +599,7 @@ the gate.
    only ever *lower* the tag (a guild channel's silent/future readers are
    covered by the ceiling, not by who has spoken). Ward DMs → the
    `ward-private` sentinel — the only tag the future memorization sweep
-   will treat as safe to route into entity-core; every shared-room tag is
+   will treat as safe to route into Phylactery; every shared-room tag is
    quarantined to the local Session Memories tome. The scan uses the
    ACCUMULATED participants (readable, not just active), same basis as the
    gate. This is the first half of the tagging-at-creation prerequisite

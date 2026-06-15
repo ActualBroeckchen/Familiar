@@ -14,15 +14,15 @@ The **Enable tool use** checkbox in the sidebar **Tools** section controls wheth
 
 ## Built-in Tools
 
-Twenty-nine tools are always available when tool use is enabled: eight read/write tools (including the deferred-intent acknowledger and two on-demand memory-read tools), four graph-lookup and graph-creation tools, seven editing tools for correcting stale entity-core state, seven temporal tools (schedule + interests, backed by Unruh), and three crisis outreach tools for when the Familiar needs to help a user who is in danger during a live conversation. Every destructive tool (delete / rewrite / replace) auto-snapshots entity-core before the call — recovery is one click in the **Snapshots** tab of the Knowledge editor.
+Thirty-two tools are always available when tool use is enabled: eight read/write tools (including the deferred-intent acknowledger and two on-demand memory-read tools), four graph-lookup and graph-creation tools, seven editing tools for correcting stale Phylactery state, eight temporal tools (schedule + interests, backed by Unruh), two Village tools (look up who's in the ward's Village and add/edit people, with sensitive notes gated to private turns), and three crisis outreach tools for when the Familiar needs to help a user who is in danger during a live conversation. Every destructive tool (delete / rewrite / replace) auto-snapshots Phylactery before the call — recovery is one click in the **Snapshots** tab of the Knowledge editor.
 
 | Tool | Description | Returns |
 |---|---|---|
 | `get_datetime` | Current local date, time, and timezone | Human-readable locale string (e.g. `"Tuesday, May 13, 2026 at 02:30:00 PM CEST"`) |
 | `get_session_info` | Metadata about the current session | JSON with `startedAt`, `messageCount`, `provider`, `model`, `elapsedMsSinceLastMessage` |
 | `save_to_tome` | Save a fact or piece of knowledge into the persistent Tome knowledge base, with trigger keywords | Confirmation string with the assigned entry UID |
-| `save_memory` | Write a new time-stamped memory entry to entity-core at a chosen granularity (`daily` \| `weekly` \| `monthly` \| `yearly` \| `significant`) | `"Memory saved."` or an error string |
-| `update_identity` | Append a durable fact to an entity-core identity file (`user` or `relationship` category) | `"Identity file updated."` or an error string |
+| `save_memory` | Write a new time-stamped memory entry to Phylactery at a chosen granularity (`daily` \| `weekly` \| `monthly` \| `yearly` \| `significant`) | `"Memory saved."` or an error string |
+| `update_identity` | Append a durable fact to a Phylactery identity file (`user` or `relationship` category) | `"Identity file updated."` or an error string |
 | `acknowledge_deferred_intent` | Mark a `wants_to_save` intent from the [Deferred intents] block as filed, so it stops resurfacing (see the deferred-action pattern in [`architecture.md`](architecture.md)) | Confirmation string |
 | `find_graph_node` | Look up the graph id(s) for an entity by name. Use before `update_graph_node` / `delete_graph_node` when the entity isn't in the graph block's ids legend | One line per match: `<label> (id=…, type=…) — <description>` |
 | `find_graph_edges` | List a node's 1-hop edges with their ids. Use before `update_graph_edge` / `delete_graph_edge` when the edge isn't in the graph block's ids legend | One line per edge: `<from> -<rel>-> <to> (id=…)` |
@@ -48,6 +48,8 @@ Twenty-nine tools are always available when tool use is enabled: eight read/writ
 | `get_trusted_contacts` | Return the names and channels of any trusted contacts configured in Settings. Call this before `contact_trusted_person` to confirm who is available and get the exact name to pass. | Plain-text list, or a note that none are configured |
 | `contact_trusted_person` | Immediately send a message to one of the user's trusted contacts (Discord webhook). Intended for live conversations where the user is actively present but in genuine danger. Every outbound is also mirrored into the user's chat (and pushed to their own webhook when configured) — nothing is covert. | Confirmation string, or an error string on failure |
 | `show_crisis_resources` | Surface international crisis-line and safety-resource links as a chat message (and push). Low friction — call early rather than late. No contacts required. | Confirmation string |
+| `village_lookup` | See who's in the ward's Village; filter by `category`, `location`, or `name`. Returns each villager's id, relation, notes, and linked graph node. `privateNotes` are disclosed only on ward-private turns and withheld whenever others are present | Plain-text list, or a "no one matches" note |
+| `village_upsert` | Add or edit a villager (name, category, relation, pronouns, notes, `privateNotes`, and the `graphNodeId` link to a Phylactery node). Resolves a category name to its id. **Ward-private turns only** — refuses to mutate the registry when others are present | Confirmation string |
 
 ### Graph ids in the prompt
 
@@ -97,7 +99,7 @@ Entries are saved to the first enabled Tome (auto-creates "General" if none exis
 | `granularity` | enum | Yes | `daily` \| `weekly` \| `monthly` \| `yearly` \| `significant` |
 | `title` | string | Required for `significant`, ignored otherwise | Short human-readable label (e.g. `"first meeting"`). Used to slug-name the file so each significant memory gets its own `YYYY-MM-DD_slug.md` and does not overwrite previous ones. |
 
-Requires entity-core to be running. Degrades gracefully (returns an error string) if entity-core is unavailable. For `significant`, the server auto-derives a slug from the title (or from `content`'s first line if the title is missing) before forwarding to entity-core, and the confirmation string includes the composite key (`Memory saved (significant/2026-06-11_why-melian-trusts-me).`) — that key is how the entry is addressed later in `update_memory` / `delete_memory`.
+Requires Phylactery to be running. Degrades gracefully (returns an error string) if Phylactery is unavailable. For `significant`, the server auto-derives a slug from the title (or from `content`'s first line if the title is missing) before forwarding to Phylactery, and the confirmation string includes the composite key (`Memory saved (significant/2026-06-11_why-melian-trusts-me).`) — that key is how the entry is addressed later in `update_memory` / `delete_memory`.
 
 #### `update_identity`
 
@@ -107,7 +109,7 @@ Requires entity-core to be running. Degrades gracefully (returns an error string
 | `filename` | string | Yes | Target file, e.g. `user_notes.md` or `relationship_notes.md` |
 | `content` | string | Yes | Text to append to the file |
 
-Requires entity-core. Appends to the end of the specified file.
+Requires Phylactery. Appends to the end of the specified file.
 
 #### `find_graph_node`
 
@@ -175,7 +177,7 @@ Both endpoints must already exist — resolve or create them with `find_graph_no
 | `date`        | string | Yes | Date of the entry, in the format it was stored (e.g. `YYYY-MM-DD` for daily). **Significant memories use the composite key `YYYY-MM-DD_slug`** (as returned by `save_memory` and shown in memory listings) so the right milestone file is targeted. |
 | `content`     | string | Yes | Full new contents — REPLACES the entry |
 
-Auto-snapshots entity-core, then calls `memory_update` (the composite key is split into separate `date` + `slug` parameters). Use to correct an inaccuracy. To record a change that has historical value, use `save_memory` instead so the old version is preserved.
+Auto-snapshots Phylactery, then calls `memory_update` (the composite key is split into separate `date` + `slug` parameters). Use to correct an inaccuracy. To record a change that has historical value, use `save_memory` instead so the old version is preserved.
 
 #### `delete_memory`
 

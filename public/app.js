@@ -8244,8 +8244,12 @@ function vlRenderPersonDetail(villager) {
       <input type="text" id="vl-p-comm" value="${isNew ? '' : esc(villager.commStyleNotes ?? '')}" placeholder="e.g. direct, uses sarcasm, prefers short messages" style="width:100%">
     </div>
     <div>
-      <div class="vl-field-label">Notes <span class="field-hint">(optional)</span></div>
+      <div class="vl-field-label">Notes <span class="field-hint">(optional — shareable; the Familiar may use these even when others are present)</span></div>
       <textarea id="vl-p-notes" placeholder="Anything else worth knowing…" style="width:100%;min-height:3.5em;resize:vertical">${isNew ? '' : esc(villager.notes ?? '')}</textarea>
+    </div>
+    <div>
+      <div class="vl-field-label">Private notes <span class="field-hint">(ward-only — for sensitive things like orientation, health, or a legal name. The Familiar sees these only when it's just you two; held back automatically when anyone else is present. Not for trivia.)</span></div>
+      <textarea id="vl-p-private-notes" placeholder="Sensitive context, for you and the Familiar only…" style="width:100%;min-height:3.5em;resize:vertical">${isNew ? '' : esc(villager.privateNotes ?? '')}</textarea>
     </div>
     <div>
       <div class="vl-field-label">Memory consent <span class="field-hint">(what I may store about this person — for my human's own settings, see Knowledge → Identity → ward → Remember settings)</span></div>
@@ -8315,6 +8319,7 @@ async function vlSavePerson(id) {
   const relationToFamiliar = $('vl-p-rel-fam')?.value || 'unaware';
   const commStyleNotes = $('vl-p-comm')?.value.trim() || undefined;
   const notes = $('vl-p-notes')?.value.trim() || undefined;
+  const privateNotes = $('vl-p-private-notes')?.value.trim() || undefined;
   const remember = {};
   document.querySelectorAll('#vl-p-remember .vl-rem-btn.vl-rem-on').forEach(btn => {
     const rawVal = btn.dataset.val;
@@ -8326,7 +8331,7 @@ async function vlSavePerson(id) {
       id ? `/api/village/villagers/${encodeURIComponent(id)}` : '/api/village/villagers',
       { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, categoryIds, aliases, connection,
-          pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, remember }) },
+          pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, remember }) },
     );
     if (!r.ok) throw new Error(await vlErrMsg(r));
     const saved = await r.json();

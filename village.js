@@ -209,6 +209,12 @@ export function normalizeRegistry(raw) {
         ...(typeof v.relationToWard === 'string' && v.relationToWard.trim() ? { relationToWard: v.relationToWard.trim() } : {}),
         ...(typeof v.commStyleNotes === 'string' && v.commStyleNotes.trim() ? { commStyleNotes: v.commStyleNotes.trim() } : {}),
         ...(typeof v.notes === 'string' && v.notes.trim() ? { notes: v.notes.trim() } : {}),
+        // privateNotes: the ward-only bucket. Disclosed in full to the
+        // Familiar in ward-private turns; STRIPPED when anyone else is
+        // present. For genuinely sensitive things (orientation, health,
+        // legal name) — not trivia. Gating happens at read time in
+        // cerebellum; storing it here keeps the registry the single home.
+        ...(typeof v.privateNotes === 'string' && v.privateNotes.trim() ? { privateNotes: v.privateNotes.trim() } : {}),
         ...(typeof v.graphNodeId === 'string' && v.graphNodeId.trim() ? { graphNodeId: v.graphNodeId.trim() } : {}),
         ...(rem ? { remember: rem } : {}),
         ...(v.triage && typeof v.triage === 'object' && typeof v.triage.webhook === 'string'
@@ -443,7 +449,7 @@ function sanitizeRemember(raw) {
 
 export async function upsertVillager({
   id, name, categoryIds, categoryId, aliases, connection, triage,
-  pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, graphNodeId, remember,
+  pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember,
 }, { filePath = DEFAULT_VILLAGE_PATH } = {}) {
   return mutate(filePath, (reg) => {
     // Accept categoryIds (array, new) or categoryId (scalar, legacy).
@@ -489,6 +495,7 @@ export async function upsertVillager({
       }
       applyOptStr(v, 'commStyleNotes', commStyleNotes);
       applyOptStr(v, 'notes', notes);
+      applyOptStr(v, 'privateNotes', privateNotes);
       applyOptStr(v, 'graphNodeId', graphNodeId);
       if (remember !== undefined) {
         const rem = sanitizeRemember(remember);
@@ -512,6 +519,7 @@ export async function upsertVillager({
       ...(typeof relationToWard === 'string' && relationToWard.trim() ? { relationToWard: relationToWard.trim() } : {}),
       ...(typeof commStyleNotes === 'string' && commStyleNotes.trim() ? { commStyleNotes: commStyleNotes.trim() } : {}),
       ...(typeof notes === 'string' && notes.trim() ? { notes: notes.trim() } : {}),
+      ...(typeof privateNotes === 'string' && privateNotes.trim() ? { privateNotes: privateNotes.trim() } : {}),
       ...(typeof graphNodeId === 'string' && graphNodeId.trim() ? { graphNodeId: graphNodeId.trim() } : {}),
       ...(rem ? { remember: rem } : {}),
       ...(triage && typeof triage.webhook === 'string' && triage.webhook.trim()
