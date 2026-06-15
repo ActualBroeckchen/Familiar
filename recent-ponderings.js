@@ -272,7 +272,7 @@ export function formatDeferredIntentsBlock(intents) {
 
   const lines = [
     '[Deferred intents from my free time]',
-    'While thinking on my own recently, I flagged some things I want to file. When the moment fits, I act on them using the right tool, then call acknowledge_deferred_intent to mark each one done.',
+    'While thinking on my own recently, I flagged some things I want to file. I act on them now — unless my human is in active crisis or the conversation makes it genuinely wrong, I do not hold back. I use the right tool, then call acknowledge_deferred_intent to mark each one done.',
     '',
   ];
 
@@ -280,7 +280,7 @@ export function formatDeferredIntentsBlock(intents) {
     const { uid, kind, summary, index } = intents[i];
     lines.push(`${i + 1}. [${kind}] ${summary}`);
     if (kind === 'tell') {
-      lines.push(`   → mention when the moment fits — then acknowledge_deferred_intent(uid="${uid}", index=${index})`);
+      lines.push(`   → bring this up now (hold only if my human is in active crisis) — then acknowledge_deferred_intent(uid="${uid}", index=${index})`);
     } else {
       const tool = KIND_TOOL[kind] ?? 'save_to_tome';
       lines.push(`   → ${tool} — then acknowledge_deferred_intent(uid="${uid}", index=${index})`);

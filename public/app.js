@@ -448,6 +448,13 @@ async function syncSettingsFromServer() {
   for (const k of SERVER_SYNCED_KEYS) {
     if (k in effective) state[k] = effective[k];
   }
+  // Migrate field rename from 0.6.x: entityCoreConnectionId → phylacteryConnectionId.
+  // settings.json written before the rename still has the old key; the server handles
+  // it server-side too, but the UI needs its own copy so the connection picker renders.
+  if (!state.phylacteryConnectionId && effective?.entityCoreConnectionId) {
+    state.phylacteryConnectionId = effective.entityCoreConnectionId;
+    pushSettingsToServer(); // persist the renamed field immediately
+  }
   if (!Array.isArray(state.connections))           state.connections = [];
   if (!Array.isArray(state.fallbackConnectionIds)) state.fallbackConnectionIds = [];
   migrateLegacyConnection();
