@@ -52,7 +52,7 @@ import {
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
 } from './thalamus.js';
-import { markIntentActedOn } from './recent-ponderings.js';
+import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
 import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta } from './outbox.js';
 import { buildTimeAnchorBlock, relativeTime, plainInterval } from './relative-time.js';
@@ -820,6 +820,22 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'snooze_deferred_intent',
+      description: 'I call this when my human asks me to come back to a deferred intent later. It snoozes the intent so it stops appearing for now and automatically resurfaces after the given number of minutes. I do not call this on my own initiative — only when my human explicitly asks to defer.',
+      parameters: {
+        type: 'object',
+        properties: {
+          uid:     { type: 'string', description: 'UUID of the pondering entry (shown in the deferred-intents block).' },
+          index:   { type: 'number', description: 'Index of the intent within that entry\'s wants_to_save array (shown in the deferred-intents block).' },
+          minutes: { type: 'number', description: 'How long to snooze in minutes. Default 60. Max 10080 (one week).' },
+        },
+        required: ['uid', 'index'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'acknowledge_deferred_intent',
       description: 'I call this after I have filed a deferred intent from my free time — one that appeared in the [Deferred intents from my free time] block — using save_to_tome, save_memory, or update_identity. It marks the intent as acted on so it stops appearing in my working context. I call this once per intent, right after the filing tool call.',
       parameters: {
@@ -1385,6 +1401,21 @@ export const TOOL_EXECUTORS = {
       const result = await appendIdentity({ category, filename, content: content.trim() });
       return result.ok ? 'Identity file updated.' : `Identity update failed: ${result.error ?? 'unknown error'}`;
     } catch (err) { return `Failed to update identity: ${err.message}`; }
+  },
+
+  snooze_deferred_intent: async ({ uid, index, minutes = 60 }) => {
+    if (typeof uid !== 'string' || !UUID_RE.test(uid)) return 'Failed to snooze intent: uid must be a valid UUID.';
+    const idx = Number(index);
+    if (!Number.isFinite(idx) || !Number.isInteger(idx) || idx < 0) {
+      return 'Failed to snooze intent: index must be a non-negative integer.';
+    }
+    try {
+      const data = await snoozeIntent({ uid, index: idx, minutes: Number(minutes) || 60 });
+      if (data.alreadyDone) return 'Intent was already filed — nothing to snooze.';
+      return data.ok
+        ? `Intent snoozed until ${data.snooze_until} — it will resurface after that.`
+        : `Snooze failed: ${data.error ?? 'unknown error'}`;
+    } catch (err) { return `Failed to snooze intent: ${err.message}`; }
   },
 
   acknowledge_deferred_intent: async ({ uid, index }) => {

@@ -200,6 +200,7 @@ export async function getUnactedIntents({
   catch { return []; }
   if (!tome?.entries) return [];
 
+  const now = Date.now();
   const flat = [];
   for (const entry of Object.values(tome.entries)) {
     if (!Array.isArray(entry?.wants_to_save)) continue;
@@ -207,6 +208,10 @@ export async function getUnactedIntents({
     for (let idx = 0; idx < entry.wants_to_save.length; idx++) {
       const intent = entry.wants_to_save[idx];
       if (!intent || intent.acted_on !== false) continue;
+      if (intent.snooze_until) {
+        const snoozeMs = Date.parse(intent.snooze_until);
+        if (Number.isFinite(snoozeMs) && now < snoozeMs) continue;
+      }
       flat.push({
         uid:        entry.uid,
         entryTitle: entry.comment ?? '',
@@ -261,6 +266,43 @@ export async function markIntentActedOn({ uid, index, tomesDir = DEFAULT_TOMES_D
 }
 
 /**
+ * Snooze one deferred intent for `minutes` minutes. The intent stays
+ * unacted but won't resurface until the snooze expires. Called by the
+ * snooze_deferred_intent LLM tool when the human asks to get to it later.
+ */
+export async function snoozeIntent({ uid, index, minutes = 60, tomesDir = DEFAULT_TOMES_DIR }) {
+  if (!uid || typeof uid !== 'string') return { ok: false, error: 'uid required' };
+  if (typeof index !== 'number' || !Number.isInteger(index) || index < 0) {
+    return { ok: false, error: 'index must be a non-negative integer' };
+  }
+
+  const targetFile = await findPonderingsTomeFile(tomesDir);
+  if (!targetFile) return { ok: false, error: 'ponderings tome not found' };
+
+  return withLock(targetFile, async () => {
+    let tome;
+    try { tome = JSON.parse(await fsp.readFile(targetFile, 'utf8')); }
+    catch { return { ok: false, error: 'tome unreadable' }; }
+
+    const entry = tome.entries?.[uid];
+    if (!entry) return { ok: false, error: 'entry not found' };
+
+    const intents = entry.wants_to_save;
+    if (!Array.isArray(intents) || index >= intents.length) {
+      return { ok: false, error: 'intent index out of range' };
+    }
+    if (intents[index]?.acted_on === true) return { ok: true, alreadySnoozed: false, alreadyDone: true };
+
+    const mins = Math.max(1, Math.min(Number(minutes) || 60, 10080)); // 1min–1week cap
+    intents[index].snooze_until = new Date(Date.now() + mins * 60 * 1000).toISOString();
+    const tmp = targetFile + '.tmp';
+    await fsp.writeFile(tmp, JSON.stringify(tome, null, 2), 'utf8');
+    await fsp.rename(tmp, targetFile);
+    return { ok: true, snooze_until: intents[index].snooze_until };
+  });
+}
+
+/**
  * Render unacted deferred intents as a prompt-injection block.
  *
  * Each entry shows the kind, the summary, the tool to use, and the
@@ -272,7 +314,7 @@ export function formatDeferredIntentsBlock(intents) {
 
   const lines = [
     '[Deferred intents from my free time]',
-    'While thinking on my own recently, I flagged some things I want to file. I act on them now — unless my human is in active crisis or the conversation makes it genuinely wrong, I do not hold back. I use the right tool, then call acknowledge_deferred_intent to mark each one done.',
+    'While thinking on my own recently, I thought of some things I want to file or talk about. Unless it\'s wildly inappropriate — like during an active crisis — I bring these up now. For filing intents, I ask my human for consent or clarifications. For things I want to say, I say them. I trust my human to tell me if now isn\'t the right time.',
     '',
   ];
 
@@ -280,7 +322,7 @@ export function formatDeferredIntentsBlock(intents) {
     const { uid, kind, summary, index } = intents[i];
     lines.push(`${i + 1}. [${kind}] ${summary}`);
     if (kind === 'tell') {
-      lines.push(`   → bring this up now (hold only if my human is in active crisis) — then acknowledge_deferred_intent(uid="${uid}", index=${index})`);
+      lines.push(`   → write this out in my response — then acknowledge_deferred_intent(uid="${uid}", index=${index})`);
     } else {
       const tool = KIND_TOOL[kind] ?? 'save_to_tome';
       lines.push(`   → ${tool} — then acknowledge_deferred_intent(uid="${uid}", index=${index})`);

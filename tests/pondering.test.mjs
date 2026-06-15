@@ -557,7 +557,7 @@ test('formatDeferredIntentsBlock: tell renders as conversational hint, not tool 
   ]);
   // tell: no tool name, just the conversational instruction
   assert.match(block, /\[tell\].*ask how the DnD session went/);
-  assert.match(block, /mention when the moment fits/);
+  assert.match(block, /write this out in my response/);
   assert.doesNotMatch(block, /save_to_tome.*index=0/);
   assert.doesNotMatch(block, /save_memory.*index=0/);
   assert.doesNotMatch(block, /update_identity.*index=0/);
