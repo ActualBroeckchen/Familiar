@@ -24,6 +24,10 @@ VALID_GRANULARITIES = {"daily", "weekly", "monthly", "yearly", "significant"}
 
 _INSTANCE_ID = "proto-familiar"
 
+# Retrieval-decay constants (signed off: 180d half-life, careWeight:high floor=0.5).
+_DECAY_HALF_LIFE_DAYS = 180.0
+_DECAY_FLOOR_HIGH_CARE = 0.5
+
 
 def _derive_slug(title: str | None, content: str) -> str:
     source = (title or content[:80]).strip()
@@ -57,6 +61,31 @@ def _row_to_list_item(row: sqlite3.Row) -> dict:
     }
 
 
+# ── Retrieval-decay ───────────────────────────────────────────────────────────
+
+def _decay_weight(last_recalled_at: str | None, care_weight: str | None) -> float:
+    """Compute the retrieval-decay multiplier for a single memory record.
+
+    Formula (signed off): weight = 0.5 ^ (days_since_recall / 180)
+    - Never-recalled records get weight=1.0 (no penalty for fresh/unvisited records).
+    - careWeight:high floor=0.5 (high-care facts can never decay below half weight).
+    - Multiplied into the similarity score; never used as a filter cutoff.
+    """
+    if last_recalled_at is None:
+        weight = 1.0
+    else:
+        try:
+            ts = last_recalled_at.rstrip("Z").split("+")[0]
+            recalled = datetime.fromisoformat(ts)
+            days = max(0.0, (datetime.utcnow() - recalled).total_seconds() / 86400.0)
+            weight = 0.5 ** (days / _DECAY_HALF_LIFE_DAYS)
+        except Exception:
+            weight = 1.0
+    if care_weight == "high":
+        weight = max(weight, _DECAY_FLOOR_HIGH_CARE)
+    return weight
+
+
 # ── Search (RAG) ──────────────────────────────────────────────────────────────
 
 def search(
@@ -76,6 +105,7 @@ def search(
             # KNN via sqlite-vec.
             rows = conn.execute(f"""
                 SELECT m.id, m.granularity, m.date_key, m.content, m.audience,
+                       m.care_weight, m.last_recalled_at,
                        v.distance
                 FROM memory_vecs v
                 JOIN memories m ON m.id = v.memory_id
@@ -83,16 +113,18 @@ def search(
                   AND {aud_clause}
                 ORDER BY v.distance
             """, [q_vec, max_results * 2] + aud_params).fetchall()
-            # Normalise distance to score in [0,1] (lower distance = higher score).
-            # sqlite-vec returns L2 distance for float vectors; cosine approximation:
-            # score = max(0, 1 - distance/2) for unit vectors.
-            results = []
-            for r in rows[:max_results]:
+            # Convert distance → similarity, apply retrieval-decay, re-sort.
+            # score = similarity × decay_weight (down-rank only; never a filter cutoff).
+            scored = []
+            for r in rows:
                 dist = r["distance"] if "distance" in r.keys() else 0.0
-                score = max(0.0, 1.0 - dist / 2.0)
-                thin = {"id": r["id"], "granularity": r["granularity"], "date": r["date_key"],
-                        "excerpt": (r["content"] or "")[:300], "score": round(score, 4)}
-                results.append(thin)
+                similarity = max(0.0, 1.0 - dist / 2.0)
+                dw = _decay_weight(r["last_recalled_at"], r["care_weight"])
+                score = similarity * dw
+                scored.append({"id": r["id"], "granularity": r["granularity"], "date": r["date_key"],
+                               "excerpt": (r["content"] or "")[:300], "score": round(score, 4)})
+            scored.sort(key=lambda x: x["score"], reverse=True)
+            results = scored[:max_results]
         except Exception:
             # Vector search unavailable (fastembed/sqlite-vec not ready) — degrade to recency.
             rows = conn.execute(f"""
