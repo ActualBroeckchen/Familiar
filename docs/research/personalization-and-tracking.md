@@ -1,5 +1,7 @@
 # Personalisation & Tracking — Research Foundation
 
+> **Historical note:** this document predates the Phylactery milestone (0.6.x). References to "entity-core" describe the canonical store as it was at design time; that role is now Phylactery. The design reasoning is preserved as-is.
+
 > Companion to [task-handling-obstacles.md](task-handling-obstacles.md).
 > Where that doc collects *what makes tasks stick for humans*, this
 > one collects *how to track and learn what helps a SPECIFIC human

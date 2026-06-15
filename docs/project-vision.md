@@ -74,8 +74,8 @@ The design mirrors how humans retain knowledge even after forgetting the convers
 
 Entries have keywords, logic conditions, a learned timestamp, and optionally a reference back to the source conversation. Retrieval is keyword-driven (like the Lorebook) and context-driven (like RAG memory search).
 
-The Tome is distinct from entity-core:
-- **entity-core** handles day-to-day identity, relationship, and memory facts
+The Tome is distinct from Phylactery:
+- **Phylactery** handles day-to-day identity, relationship, and memory facts
 - **The Tome** holds specialized knowledge: medical information, treatment plans, legal information, complete toolsets, and knowledge that is best summoned by context rather than always injected
 
 ---
@@ -113,7 +113,7 @@ Standard LLM training creates an **assistant framework** — a disposition to wa
 
 Proto-Familiar exists to validate and iterate on the technical building blocks:
 - Provider-agnostic LLM proxying
-- Entity-core identity and memory enrichment
+- Phylactery identity and memory enrichment
 - Lorebook (World Info) context injection
 - Session persistence and automatic memorization
 - Tool calling

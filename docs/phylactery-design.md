@@ -1,17 +1,11 @@
 # Proto-Familiar canonical-self store — design (milestone: "Phylactery")
 
-Status: **build spec — design locked, ready to build.** The shaping is done; this doc is the
-instruction the implementation follows. It unifies several things we'd been circling —
-autonomous memorization, the outgoing-message filter (third security gate), the
-`memories: 'shared'` unlock, richer person records, and a caretaker-grade memory schema — under
-**one** capability: Proto-Familiar owning its entire canonical self in a single, RAG-based,
-audience-aware, in-tree store that **replaces entity-core**.
-
-**How to read it as a build instruction:** §1–§3 are the *what & why* (decision, current state,
-target shape); §4 is the **build sequence** (pillars A–I, dependency-sorted); §5–§8 are the
-per-area specs those pillars implement; §9 is the decided/open ledger — the "open" items are
-human-sign-off **knobs**, each gated to the pillar that consumes it, **none blocking Pillar A**;
-§10 is the rationale. Anywhere the Familiar reads a prompt or tool description, the text is
+Status: **SHIPPED — milestone complete (0.6.x).** Phylactery is the live canonical self-store;
+entity-core is retired and thalamus no longer spawns it. This doc is retained as the design
+rationale: §1–§3 are the *what & why*, §4 the build sequence (pillars A–I, all landed), §5–§8
+the per-area specs, §9 the decided/open ledger, §10 the rationale. Historical references to
+entity-core below describe the system Phylactery *replaced* — they are the migration record,
+not live wiring. Anywhere the Familiar reads a prompt or tool description, the text is
 first-person per CLAUDE.md — that convention is not optional in this milestone.
 
 Naming note: named by the human — **Phylactery**. A phylactery is the vessel that holds a

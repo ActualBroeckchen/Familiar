@@ -28,9 +28,9 @@ milestone-by-milestone build history)
   summarizer pick it or only the user, and does it affect activation
   (e.g. weight or scope) or only display.
 
-## Entity-Core
+## Phylactery (canonical store)
 
-Implemented (see [Knowledge editor](features.md#knowledge-editor-entity-core)
+Implemented (see [Knowledge editor](features.md#knowledge-editor-phylactery)
 and [Tool Calling](tool-calling.md#built-in-tools)): a Knowledge editor
 modal with Memories / Graph / Identity / Snapshots tabs, plus the seven
 LLM-callable editing tools (`update_memory`, `delete_memory`,

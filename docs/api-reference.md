@@ -681,9 +681,9 @@ Cancel a pending job. Jobs already in `processing` cannot be cancelled.
 
 ---
 
-## Entity-core
+## Identity & memory (Phylactery)
 
-These endpoints write through to the Phylactery MCP subprocess via `thalamus.js` (the `/api/entity/*` route prefix is unchanged from the retired entity-core backend). They are exposed for the built-in `save_memory` and `update_identity` tools and degrade gracefully (`502`) when Phylactery is unavailable.
+These endpoints write through to the Phylactery MCP subprocess via `thalamus.js`. The `/api/entity/*` route prefix is a legacy name kept stable for client compatibility — it predates the retired entity-core backend and was not renamed when Phylactery replaced it. They are exposed for the built-in `save_memory` and `update_identity` tools and degrade gracefully (`502`) when Phylactery is unavailable.
 
 ### `POST /api/entity/memory`
 

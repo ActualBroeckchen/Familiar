@@ -9,11 +9,15 @@ The full rationale and design decisions live in
 
 ---
 
-You are building **Phylactery**: an in-tree Python/`uv` MCP service that becomes
+> **Status: SHIPPED (0.6.x).** Phylactery is built, live, and canonical; entity-core is
+> retired. This spec is kept as the build record — the action list the implementation
+> followed. References to entity-core describe the system it replaced, not current wiring.
+
+**Phylactery** is an in-tree Python/`uv` MCP service that is now
 Proto-Familiar's single canonical store for its whole self — identity, ward-identity, the
 relational graph, and every memory tier — replacing the external `entity-core` service.
 
-This document is your build instruction. It is the **what and the in-what-order**. For the
+This document is the build instruction it followed. It is the **what and the in-what-order**. For the
 **why** behind any decision, read [`docs/phylactery-design.md`](phylactery-design.md) — it is
 the authoritative rationale and the source this spec compresses. Where this spec and the design
 doc agree, build it. Where you think they disagree, the design doc wins and you flag it.
