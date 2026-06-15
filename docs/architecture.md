@@ -10,8 +10,8 @@
 Proto-Familiar is a Node.js application — a thin Express server +
 vanilla-JS single-page frontend — that surfaces a persistent AI
 companion (the Familiar) bonded to one human. It is an **embodiment**
-of the same entity that will be held in **Phylactery** — the in-tree
-canonical store being built this milestone to replace `entity-core`; see
+of the same entity held in **Phylactery** — the in-tree
+canonical store (Phylactery milestone complete as of 0.6.x); see
 [CLAUDE.md](../CLAUDE.md#entity-as-subject--the-design-value-under-everything)
 and the [Psycheros PHILOSOPHY.md](https://github.com/PsycherosAI/Psycheros/blob/main/PHILOSOPHY.md)
 for the design value that everything below descends from.

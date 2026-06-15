@@ -250,7 +250,7 @@ export async function ponderOnce({
   // { mode: 'reflection', outcomes, existingNotes } (reflection mode).
   // Both produce a pondering written to the tome; reflection mode
   // additionally may carry a what_lapses_cost_update for the caller
-  // to write to entity-core.
+  // to write to Phylactery.
   const isReflection = topic && typeof topic === 'object' && topic.mode === 'reflection';
   if (!isReflection && (!topic || typeof topic !== 'string')) {
     throw new Error('topic is required.');

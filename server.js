@@ -168,7 +168,7 @@ app.use(express.json({ limit: '4mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Provider chat-completions URLs live in providers.js so thalamus.js can
-// share them when it builds the env block for entity-core. See that file
+// share them when it builds the env block for Phylactery. See that file
 // for the rationale and how to add a new provider.
 import { PROVIDER_URLS } from './providers.js';
 // Tome / state-file coordination is owned by thalamus — every writer
@@ -234,7 +234,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     return res.status(400).json({ error: 'Messages array is required and must not be empty.' });
   }
 
-  // Enrich with entity-core + Unruh context. Split into a static
+  // Enrich with Phylactery + Unruh context. Split into a static
   // prefix (identity + base instructions; stable across turns so the
   // upstream LLM's prefix cache hits) and a dynamic block (RAG
   // memories, graph excerpts, temporal context; varies per turn so
@@ -306,7 +306,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   }
 
   // liveTurn: only the full chat path may reconcile state (consume the
-  // surfaced session handoff, demote standing values whose entity-core
+  // surfaced session handoff, demote standing values whose Phylactery
   // anchor vanished). 'static' fetches persona only (handoff summariser);
   // 'none' skips enrichment entirely. debug-prompt calls enrich() with no
   // options, so it stays read-only.
@@ -787,10 +787,10 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
  * POST /api/debug-prompt
  * Body: { messages }
  * Returns the full message array that would be sent to the LLM for a given
- * messages payload — including entity-core enrichment prepended to the system
+ * messages payload — including Phylactery enrichment prepended to the system
  * message. Does NOT call any upstream LLM.
  *
- * WARNING: This endpoint returns entity-core enriched context (personal memory /
+ * WARNING: This endpoint returns Phylactery enriched context (personal memory /
  * identity data) with no authentication. Keep it disabled or firewalled in any
  * deployment outside localhost.
  */
@@ -1427,7 +1427,7 @@ app.delete('/api/memorize/:id', async (req, res) => {
 // VALID_FILENAME_RE / deriveMemorySlug are imported from cerebellum.js —
 // one source of truth shared by these routes and the tool executors.
 
-// POST /api/entity/memory — write a new memory entry to entity-core
+// POST /api/entity/memory — write a new memory entry to Phylactery
 app.post('/api/entity/memory', async (req, res) => {
   const { content, granularity = 'daily', date, title } = req.body;
   if (!content || typeof content !== 'string' || !content.trim())
@@ -1439,7 +1439,7 @@ app.post('/api/entity/memory', async (req, res) => {
 
   // Significant memories MUST be uniquely slugged or they collide with
   // each other (and with restored backups) on the date-only filename
-  // and entity-core's merge step destroys them. Derive from the title
+  // and Phylactery's merge step destroys them. Derive from the title
   // if the Familiar provided one, otherwise from the content's first
   // line. Last resort: a timestamp suffix so a save never silently
   // fails for lack of slugable characters.
@@ -1449,11 +1449,11 @@ app.post('/api/entity/memory', async (req, res) => {
   }
 
   const result = await createMemory({ content: content.trim(), granularity, date, slug });
-  if (!result.ok) return res.status(502).json({ error: result.error ?? 'entity-core unavailable' });
+  if (!result.ok) return res.status(502).json({ error: result.error ?? 'phylactery unavailable' });
   res.json({ ok: true });
 });
 
-// POST /api/entity/identity — append to or update a section of an entity-core identity file
+// POST /api/entity/identity — append to or update a section of a Phylactery identity file
 app.post('/api/entity/identity', async (req, res) => {
   const { category, filename, heading, content, mode = 'append' } = req.body;
   if (!VALID_IDENTITY_CATEGORIES.has(category))
@@ -1474,14 +1474,14 @@ app.post('/api/entity/identity', async (req, res) => {
     result = await appendIdentity({ category, filename, content: content.trim() });
   }
 
-  if (!result.ok) return res.status(502).json({ error: result.error ?? 'entity-core unavailable' });
+  if (!result.ok) return res.status(502).json({ error: result.error ?? 'phylactery unavailable' });
   res.json({ ok: true });
 });
 
-// ── Entity-core editing endpoints (Knowledge editor UI + LLM write tools) ──
+// ── Phylactery editing endpoints (Knowledge editor UI + LLM write tools) ──
 //
 // All destructive ops auto-snapshot on the thalamus side via snapshot_create
-// before calling the entity-core tool, so the Snapshots tab in the UI lets
+// before calling the Phylactery tool, so the Snapshots tab in the UI lets
 // the user roll back if something goes sideways.
 
 const VALID_GRAPH_ID_RE    = /^[\w-]{1,128}$/;
@@ -1489,14 +1489,14 @@ const VALID_SECTION_RE     = /^[\w\s\-()&'?!,.:/]{1,200}$/; // markdown headings
 const VALID_SNAPSHOT_ID_RE = /^[\w.\-:]{1,200}$/;
 
 function badRequest(res, message) { return res.status(400).json({ error: message }); }
-function gatewayDown(res, err)    { return res.status(502).json({ error: err ?? 'entity-core unavailable' }); }
+function gatewayDown(res, err)    { return res.status(502).json({ error: err ?? 'phylactery unavailable' }); }
 
 // ── Memory ────────────────────────────────────────────────────────────────
 // The :date param accepts what memory_list actually returns: a plain
 // date (daily/weekly/monthly/yearly) OR the composite `YYYY-MM-DD_slug`
 // key that significant memories list as (one named file per milestone).
 // cerebellum.parseMemoryKey splits the composite into the separate
-// date + slug parameters entity-core's read/update/delete tools expect.
+// date + slug parameters Phylactery's read/update/delete tools expect.
 app.get('/api/entity/memories', async (req, res) => {
   const { granularity, limit } = req.query;
   if (granularity && !VALID_MEMORY_GRANULARITIES.has(granularity))
@@ -1558,7 +1558,7 @@ app.post('/api/entity/memories/supersede', async (req, res) => {
     ? `[supersedes ${supersedes.granularity ?? 'memory'}/${supersedes.date ?? '?'}]\n${content.trim()}`
     : content.trim();
   // Same slug rule as POST /api/entity/memory — significant memories
-  // need a unique filename or entity-core's merge step destroys them.
+  // need a unique filename or Phylactery's merge step destroys them.
   let slug;
   if (granularity === 'significant') {
     slug = deriveMemorySlug(title) ?? deriveMemorySlug(content) ?? `memory-${Date.now()}`;
@@ -2213,7 +2213,7 @@ app.post('/api/crisis-resources', async (_req, res) => {
 // ── Village registry (V1 of Village Support) ────────────────────────
 // CRUD for categories / villagers / locations. The registry's local
 // mirror (village.json) is what gating will read; mutations write
-// through to entity-core (canonical) via the sync wired in
+// through to Phylactery (canonical) via the sync wired in
 // startVillageSync() below. Validation errors surface as 400s.
 
 const villageError = (res, err) => {
@@ -2349,9 +2349,9 @@ app.delete('/api/village/locations', async (req, res) => {
   catch (err) { villageError(res, err); }
 });
 
-// Wires the hybrid sync (entity-core canonical, local mirror) and runs
+// Wires the hybrid sync (Phylactery canonical, local mirror) and runs
 // the boot reconciliation + trusted-contacts migration. Degrades
-// gracefully: entity-core down → mirror stays authoritative for
+// gracefully: Phylactery down → mirror stays authoritative for
 // gating, writes accumulate as syncPending and replay on next boot.
 async function startVillageSync() {
   initVillageSync({
@@ -2396,7 +2396,7 @@ async function startVillageSync() {
   }
 }
 
-// Start the MCP children (entity-core + Unruh) at server boot rather
+// Start the MCP children (Phylactery + Unruh) at server boot rather
 // than as a thalamus.js import side-effect. Tests and other importers
 // of thalamus's coordination helpers (withLock, modifyTomeFile, etc.)
 // don't need — and shouldn't trigger — Deno/Python spawning just to
@@ -2641,7 +2641,7 @@ function startSilenceTriage() {
 // Graceful shutdown — fires on SIGTERM (stop.sh / stop.bat / docker
 // stop), SIGINT (Ctrl-C), and SIGHUP (terminal closes). Without this,
 // the memorization setIntervals would keep the event loop alive past
-// httpServer.close(), and the MCP children (entity-core, Unruh) would
+// httpServer.close(), and the MCP children (Phylactery, Unruh) would
 // be left to die from stdin EOF — which works on Unix but can be slow
 // on Windows. With this handler:
 //   1. Stop accepting new HTTP connections.

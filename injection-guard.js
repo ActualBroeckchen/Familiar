@@ -3,7 +3,7 @@
  *
  * Scans and sanitizes externally-sourced text before it is interpolated
  * into LLM prompts. Used at every inbound data boundary: memories from
- * entity-core, schedule labels from Unruh, knowledge-graph content,
+ * Phylactery, schedule labels from Unruh, knowledge-graph content,
  * outbox message bodies, and any future external-channel content.
  *
  * Two functions are exported:

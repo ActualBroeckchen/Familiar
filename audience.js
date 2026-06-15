@@ -185,7 +185,7 @@ export function resolveAudience(sessionAudience, registry) {
 //
 //   - No audience set (ward-private session) → 'ward-private'. This is
 //     the only tag the memorization sweep treats as safe to route into
-//     entity-core; everything else stays in the local tome.
+//     Phylactery; everything else stays in the local tome.
 //   - Otherwise: each participant resolves to the category that
 //     represents their access (their most-permissive category, since
 //     multi-category membership unions). Unknown users fall to the

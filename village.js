@@ -5,9 +5,9 @@
 // places) with trust ceilings. This module is the LOCAL MIRROR — the
 // copy Thalamus and Cerebellum read at runtime so the knowledge gate
 // never depends on a live MCP peer (fail-closed requires the gate to
-// work even when entity-core is down).
+// work even when Phylactery is down).
 //
-// The canonical copy lives in entity-core (hybrid model, see
+// The canonical copy lives in Phylactery (hybrid model, see
 // docs/village-support-design.md "Registry storage"). Sync contract:
 //   - writes are write-through: mutate mirror → push canonical;
 //     push failure marks syncPending and never throws into the caller
@@ -16,7 +16,7 @@
 //
 // The sync transport is injected via initVillageSync() so this module
 // stays import-safe for tests (same pattern as initCerebellumTools):
-// server.js wires the real entity-core push/pull at boot.
+// server.js wires the real Phylactery push/pull at boot.
 //
 // Concurrency: every read-modify-write goes through thalamus's
 // withLock (import-safe; MCP children spawn on startThalamus(), not
@@ -256,12 +256,12 @@ async function writeRegistryFile(filePath, reg) {
   await fsp.rename(tmp, filePath);
 }
 
-// ── Sync (entity-core canonical) ──────────────────────────────────
+// ── Sync (Phylactery canonical) ───────────────────────────────────
 //
 // Injected by server.js at boot:
 //   push(canonicalJsonString) → { ok, error? }   write-through target
 //   pull()                    → canonical object | null
-// Both must never throw (wrap entity-core failures into { ok:false }
+// Both must never throw (wrap Phylactery failures into { ok:false }
 // / null) — but we defend anyway: a sync failure must never surface
 // as a registry API error.
 

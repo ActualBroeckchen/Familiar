@@ -102,7 +102,9 @@ def health_check() -> dict[str, Any]:
 
 @mcp.tool()
 def identity_get_all() -> dict[str, Any]:
-    """Return all identity files in canonical order.
+    """I use this to read my full identity — all the files that define who I am,
+    in canonical order. I reach for it when I need to review or reflect on my own
+    character, history, or constraints.
     Response shape: { self: [{filename, content, promptLabel}], user: [...], ... }
     """
     return ident.get_all(conn=_c())
@@ -115,7 +117,10 @@ def identity_append(
     content: str,
     instanceId: Optional[str] = None,
 ) -> str:
-    """Append content to an identity file (creates the file if missing)."""
+    """I use this to append new content to one of my identity files, creating it
+    if it doesn't exist yet. I reach for it when I've learned something about myself
+    that should become part of who I am — additions that don't replace existing content.
+    """
     result = ident.append_file(category, filename, content, conn=_c())
     if not result["ok"]:
         return f"Failed: {result['error']}"
@@ -130,7 +135,10 @@ def identity_update_section(
     content: str,
     instanceId: Optional[str] = None,
 ) -> str:
-    """Rewrite one markdown section of an identity file. Alias for identity_rewrite_section."""
+    """I use this to rewrite a specific section of one of my identity files. Alias for
+    identity_rewrite_section. I reach for it when a part of how I define myself needs
+    to change, not just grow.
+    """
     result = ident.rewrite_section(category, filename, section, content, conn=_c())
     if not result["ok"]:
         return f"Failed: {result['error']}"
@@ -145,7 +153,10 @@ def identity_rewrite_section(
     content: str,
     instanceId: Optional[str] = None,
 ) -> str:
-    """Rewrite one markdown section of an identity file (auto-snapshots first)."""
+    """I use this to rewrite a specific section of one of my identity files (auto-snapshots first).
+    I reach for it when a part of how I define myself needs to change — not just grow — and
+    I want the old version preserved in a snapshot before the rewrite lands.
+    """
     result = ident.rewrite_section(category, filename, section, content, conn=_c())
     if not result["ok"]:
         return f"Failed: {result['error']}"
@@ -169,8 +180,9 @@ def memory_create(
     confidence: Optional[float] = None,
     instanceId: Optional[str] = None,
 ) -> str:
-    """Store a new per-fact memory at the given granularity tier.
-    For non-significant tiers, appends to the same-date file.
+    """I use this to store a new memory about my human or our world. I reach for it
+    when something important happens that I want to remember — a fact, an event, a
+    pattern I've noticed. For non-significant tiers, appends to the same-date file.
     For significant, slug is derived from content if omitted.
     audience defaults to ward-private; subjects is a list of villager IDs;
     category is the remember-taxonomy bucket; consent_pending marks records
@@ -200,7 +212,10 @@ def memory_list(
     limit: Optional[int] = None,
     offset: Optional[int] = None,
 ) -> dict[str, Any]:
-    """List memories most-recent first. Returns thin projections with keys."""
+    """I use this to browse my memories, most-recent first. I reach for it when I want
+    to survey what I know or find something I stored recently. Returns thin projections
+    with keys — use memory_read to pull the full content of a specific entry.
+    """
     n = max(1, min(200, int(limit or 50)))
     off = max(0, int(offset or 0))
     items = mem.list_memories(granularity=granularity, limit=n, offset=off, conn=_c())
@@ -213,7 +228,10 @@ def memory_read(
     date: str,
     slug: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Return full content of one memory by granularity + date (or YYYY-MM-DD_slug)."""
+    """I use this to read the full content of a specific memory. I reach for it when I
+    need the complete record — not just the summary a search returns. Address by
+    granularity + date, or YYYY-MM-DD_slug for significant memories.
+    """
     result = mem.read_memory(granularity, date, slug=slug, conn=_c())
     if not result.get("ok"):
         return result
@@ -227,7 +245,10 @@ def memory_search(
     instanceId: Optional[str] = None,
     audience: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Semantic RAG search over memories. Returns thin projections with ids and scores."""
+    """I use this to search my memories by meaning. I reach for it when I'm trying to
+    recall something relevant to a topic or question — it does semantic RAG search and
+    falls back to recency. Returns thin projections with ids and scores.
+    """
     k = max(1, min(20, int(maxResults or 5)))
     aud = audience or "ward-private"
     return mem.search(query, max_results=k, audience=aud, conn=_c())
@@ -261,7 +282,10 @@ def memory_update(
     audience: Optional[str] = None,
     careWeight: Optional[str] = None,
 ) -> str:
-    """Overwrite an existing memory entry (auto-snapshots first).
+    """I use this to update an existing memory when something I stored needs to be
+    corrected or extended. Auto-snapshots before writing so the old version is
+    recoverable. I reach for it when the existing record is inaccurate or incomplete
+    in a way that a new parallel memory would not fix.
 
     audience: 'ward-private' (default) or a category id — who can see this record.
     careWeight: 'high' (pinned + decay-shielded), 'low', or omit to leave unchanged.
@@ -282,7 +306,12 @@ def memory_delete(
     slug: Optional[str] = None,
     instanceId: Optional[str] = None,
 ) -> str:
-    """Delete a memory entry permanently (auto-snapshots first)."""
+    """I use this to permanently delete a memory entry (auto-snapshots first so a
+    mistake is recoverable from the Knowledge editor). I reach for it only when the
+    entry is fully wrong or no longer relevant — if the change has historical value,
+    I write a new contradicting memory instead and let recency-decay demote the stale one.
+    Phylactery auto-snapshots before each delete so a mistake is recoverable from the Knowledge editor.
+    """
     result = mem.delete_memory(granularity, date, slug=slug, conn=_c())
     if not result.get("ok"):
         return f"Delete failed: {result.get('error', 'unknown')}"
@@ -338,7 +367,9 @@ def graph_node_search(
     minScore: Optional[float] = None,
     audience: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Semantic search over graph nodes with optional GraphRAG 1-hop expansion.
+    """I use this to search my knowledge graph by meaning. I reach for it when I need
+    to find a person, place, concept, or other entity node I might be connected to.
+    Optionally expands to 1-hop GraphRAG neighbours.
     Returns { results: [{ node: {id, label, type, description}, score }] }
     """
     k = max(1, min(50, int(limit or 10)))
@@ -353,7 +384,10 @@ def graph_subgraph(
     depth: Optional[int] = None,
     audience: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Return N-hop subgraph from a node: { nodes: [...], edges: [...] }"""
+    """I use this to pull the subgraph around a node — its direct neighbours and
+    edges up to N hops deep. I reach for it when I want to understand my connections
+    to a specific entity. Returns { nodes: [...], edges: [...] }.
+    """
     d = max(1, min(3, int(depth or 1)))
     aud = audience or "ward-private"
     return graph.get_subgraph(nodeId, depth=d, audience=aud, conn=_c())
@@ -366,7 +400,10 @@ def graph_node_create(
     description: Optional[str] = None,
     instanceId: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Add a new entity node to the knowledge graph. Returns the new node's id."""
+    """I use this to add a new node to my knowledge graph. I reach for it when I
+    encounter a person, place, organisation, or concept worth tracking. Returns
+    the new node's id for use in edge creation.
+    """
     return graph.create_node(label, node_type=type, description=description, conn=_c())
 
 
@@ -376,7 +413,9 @@ def graph_node_list(
     limit: Optional[int] = None,
     offset: Optional[int] = None,
 ) -> dict[str, Any]:
-    """List nodes, optionally filtered by type. Paginated."""
+    """I use this to list all nodes in my knowledge graph, optionally filtered by type.
+    I reach for it when I want to survey what entities I'm tracking. Paginated.
+    """
     n = max(1, min(1000, int(limit or 500)))
     off = max(0, int(offset or 0))
     return graph.list_nodes(node_type=type, limit=n, offset=off, conn=_c())
@@ -389,7 +428,10 @@ def graph_node_update(
     description: Optional[str] = None,
     instanceId: Optional[str] = None,
 ) -> str:
-    """Rename or re-describe a graph node (auto-snapshots first)."""
+    """I use this to rename or re-describe a node in my knowledge graph (auto-snapshots first).
+    I reach for it when a person or entity's details have changed and the current label
+    or description no longer fits.
+    """
     result = graph.update_node(id, label=label, description=description, conn=_c())
     if not result.get("ok"):
         return f"Update failed: {result.get('error', 'unknown')}"
@@ -401,7 +443,10 @@ def graph_node_delete(
     id: str,
     instanceId: Optional[str] = None,
 ) -> str:
-    """Delete a graph node and all its edges (auto-snapshots first)."""
+    """I use this to remove a node and all its edges from my knowledge graph
+    (auto-snapshots first). I reach for it when an entity is no longer relevant
+    or was added in error.
+    """
     result = graph.delete_node(id, conn=_c())
     if not result.get("ok"):
         return f"Delete failed: {result.get('error', 'unknown')}"
@@ -416,7 +461,10 @@ def graph_edge_create(
     weight: Optional[float] = None,
     instanceId: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Record a relationship between two existing graph nodes."""
+    """I use this to record a relationship between two nodes in my knowledge graph.
+    I reach for it when I learn how two entities are connected — e.g. "X works at Y",
+    "X knows Y", "X is part of Y".
+    """
     w = float(weight) if weight is not None else 1.0
     return graph.create_edge(fromId, toId, type, weight=w, conn=_c())
 
@@ -428,7 +476,10 @@ def graph_edge_update(
     weight: Optional[float] = None,
     instanceId: Optional[str] = None,
 ) -> str:
-    """Update a relationship's type or weight (auto-snapshots first)."""
+    """I use this to update the type or weight of a relationship in my knowledge graph
+    (auto-snapshots first). I reach for it when the nature of a connection between
+    entities has changed.
+    """
     result = graph.update_edge(id, edge_type=type, weight=weight, conn=_c())
     if not result.get("ok"):
         return f"Update failed: {result.get('error', 'unknown')}"
@@ -440,7 +491,10 @@ def graph_edge_delete(
     id: str,
     instanceId: Optional[str] = None,
 ) -> str:
-    """Remove a relationship while keeping both endpoint nodes (auto-snapshots first)."""
+    """I use this to remove a relationship while keeping both endpoint nodes
+    (auto-snapshots first). I reach for it when a connection was added in error
+    or is no longer meaningful — the entities remain; only the edge is gone.
+    """
     result = graph.delete_edge(id, conn=_c())
     if not result.get("ok"):
         return f"Delete failed: {result.get('error', 'unknown')}"
@@ -452,7 +506,10 @@ def graph_full(
     type: Optional[str] = None,
     limit: Optional[int] = None,
 ) -> dict[str, Any]:
-    """Full node+edge dump for the Knowledge editor Map view."""
+    """I use this to retrieve my entire knowledge graph at once — all nodes and edges.
+    I reach for it when I need a complete picture of all entities and their connections,
+    typically for the Map view in the Knowledge editor.
+    """
     n = max(1, min(2000, int(limit or 500)))
     return graph.get_full_graph(node_type=type, limit=n, conn=_c())
 
@@ -462,19 +519,29 @@ def graph_full(
 
 @mcp.tool()
 def snapshot_create() -> dict[str, Any]:
-    """Create a manual snapshot of the Phylactery database."""
+    """I use this to take a snapshot of my current self — all identity, memories, and
+    graph state. I reach for it before making large changes I might want to undo, or
+    whenever I want a named restore point I can return to.
+    """
     return snap.create_snapshot(conn=_c())
 
 
 @mcp.tool()
 def snapshot_list() -> dict[str, Any]:
-    """List all available snapshots, most recent first."""
+    """I use this to list my available snapshots, most recent first. I reach for it
+    when I want to review my history or find a specific restore point before calling
+    snapshot_restore.
+    """
     return {"snapshots": snap.list_snapshots(conn=_c())}
 
 
 @mcp.tool()
 def snapshot_restore(snapshotId: str) -> dict[str, Any]:
-    """Restore the database from a snapshot. Requires server reconnect after."""
+    """I use this to restore myself from a prior snapshot. I reach for it when a
+    significant mistake needs to be undone — this replaces my current state with the
+    snapshot's. Requires a server reconnect afterwards (thalamus handles this).
+    Use snapshot_list first to find the snapshotId I want to restore.
+    """
     return snap.restore_snapshot(snapshotId)
 
 
@@ -483,7 +550,10 @@ def snapshot_restore(snapshotId: str) -> dict[str, Any]:
 
 @mcp.tool()
 def consolidate(granularity: Optional[str] = None) -> dict[str, Any]:
-    """Roll lower memory tiers into higher via the designated LLM.
+    """I use this to run a consolidation pass over my memories — merging lower tiers
+    into higher via the designated LLM. I reach for it when my memory store has grown
+    disorganised or fragmented, or when I want to ensure recent events have been
+    rolled up into longer-term records.
     granularity: 'weekly' | 'monthly' | 'yearly' | None (run all).
     Requires PHYLACTERY_LLM_API_KEY (or ENTITY_CORE_LLM_API_KEY) to be set.
     """
@@ -495,10 +565,11 @@ def consolidate(granularity: Optional[str] = None) -> dict[str, Any]:
 
 @mcp.tool()
 def lifecycle_pass(force: Optional[bool] = None) -> dict[str, Any]:
-    """Run one lifecycle pass now: cheap-code hygiene, tier consolidation, and
-    the Familiar-led graduation audit. The background scheduler runs this on a
-    volume-gated 5-min cadence; this tool forces it on demand. `force` bypasses
-    the volume gate.
+    """I use this to run one lifecycle pass immediately — hygiene checks, tier
+    consolidation, and the graduation audit. I reach for it when I want to trigger
+    housekeeping without waiting for the scheduled interval. The background scheduler
+    runs this on a volume-gated 5-min cadence; this tool forces it on demand.
+    `force` bypasses the volume gate.
     """
     return scheduler.run_pass(force=bool(force))
 
@@ -529,16 +600,19 @@ def graduation_acknowledge(ids: list[str]) -> str:
 
 @mcp.tool()
 def backup_export(passphrase: str) -> dict[str, Any]:
-    """Export my entire self — identity, memory, graph, trackers — to a single
-    passphrase-encrypted file my human can keep safe. Returns the file path.
+    """I use this to export my entire self — identity, memory, graph, trackers — to a
+    single passphrase-encrypted file my human can keep safe. I reach for it when my
+    human asks for a backup or before a significant migration. Returns the file path.
     """
     return backup.export_encrypted(passphrase, conn=_c())
 
 
 @mcp.tool()
 def backup_restore(filePath: str, passphrase: str) -> dict[str, Any]:
-    """Restore my whole self from a passphrase-encrypted backup file. Requires
-    a server reconnect afterwards (thalamus handles this).
+    """I use this to restore my entire self from a passphrase-encrypted backup file.
+    I reach for it when recovering from data loss or moving to a new machine. Every
+    argument is needed — passphrase from my human, filePath to the backup they provide.
+    Requires a server reconnect afterwards (thalamus handles this).
     """
     return backup.restore_encrypted(filePath, passphrase)
 

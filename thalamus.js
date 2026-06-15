@@ -90,7 +90,7 @@ function resolveUvBinary() {
 
 // Path to the central settings file. server.js owns the read/write
 // surface (PUT /api/settings) but we read it here at spawn time to pick
-// up the API-key designation for entity-core. Read is sync and small.
+// up the API-key designation for Phylactery. Read is sync and small.
 const SETTINGS_FILE = path.join(__dirname, 'settings.json');
 
 // ── Tome / state-file coordination ─────────────────────────────────
@@ -220,7 +220,7 @@ export async function findOrCreateTomeByName(tomesDir, name, defaultStruct) {
 // Phylactery's consolidate.py reads PHYLACTERY_LLM_* first, falling back
 // to ENTITY_CORE_LLM_* aliases for continuity. The full chat-completions
 // URL (not just the base) is what these vars want — same as the old
-// entity-core contract. Shared via ./providers.js.
+// Phylactery contract. Shared via ./providers.js.
 import { PROVIDER_URLS } from './providers.js';
 
 /**
@@ -434,7 +434,7 @@ export async function reconnectPhylactery() {
 }
 
 // Unruh runs as an independent stdio child. Its failures must not affect
-// entity-core's enrichment path — connectUnruh() is best-effort and the
+// Phylactery's enrichment path — connectUnruh() is best-effort and the
 // rest of enrich() degrades gracefully when unruhClient is null.
 //
 // Probe both the source tree AND the venv: the source file ships with the
@@ -615,7 +615,7 @@ export async function demoteStanding({ id }) {
  * Promote a topic to a standing value — an always-on orientation that
  * bypasses the normal decay. Used when the Familiar (or the user)
  * wants something to anchor behaviour permanently. weight defaults
- * to 1.0; value_ref is an opaque pointer to an entity-core identity
+ * to 1.0; value_ref is an opaque pointer to a Phylactery identity
  * fact (M7 bridge validates it on a live turn).
  */
 export async function setStandingInterest({ topic, weight = 1.0, value_ref }) {
@@ -1104,7 +1104,7 @@ function identitySection(files, order) {
  *   liveTurn   — this is a real chat turn (only /api/chat sets it), so
  *                side-effecting reconciliations are allowed: consume a
  *                surfaced session handoff, and demote standing values
- *                whose entity-core anchor has vanished. debug-prompt and
+ *                whose Phylactery anchor has vanished. debug-prompt and
  *                the handoff summariser leave it false → read-only.
  *   staticOnly — fetch only the identity layer (persona), skipping
  *                memory / graph / temporal. Used by the handoff
@@ -1151,7 +1151,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // Fire all queries in parallel but independently — a failure in any
     // one of them must not prevent the others from being injected.
     // Promise.allSettled never rejects. Unruh is queried alongside
-    // entity-core; either or both may be absent and the rest still works.
+    // Phylactery; either or both may be absent and the rest still works.
     // V3 knowledge gate: determine which fetches are permitted for this
     // session's audience. WARD_PRIVATE means no gating (today's behavior).
     // Absent grant = denied → skip the fetch entirely (gate-before-fetch).
@@ -1471,24 +1471,24 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       }).catch(err => console.error('[thalamus] mark handoff consumed failed:', err?.message ?? err));
     }
 
-    // ── Standing-value → entity-core bridge (M7) ──────────────────────────
-    // A standing value can anchor to an entity-core identity fact via a
+    // ── Standing-value → Phylactery bridge (M7) ───────────────────────────
+    // A standing value can anchor to a Phylactery identity fact via a
     // `value_ref` (e.g. "entity-core:self/my_wants.md#Caring…"). If that
     // fact has disappeared, demote the standing value to a live interest
     // (don't drop it). Thalamus mediates because it alone holds both
-    // sides — entity-core's identity (`id`) and Unruh's interests.
+    // sides — Phylactery's identity (`id`) and Unruh's interests.
     //
     // Two guards against false mass-demotion:
     //   1. liveTurn — only reconcile on a real chat turn (a read-only
     //      debug-prompt preview must not mutate state).
-    //   2. identityLooksReal — entity-core must have returned actual
+    //   2. identityLooksReal — Phylactery must have returned actual
     //      identity content. `idResult` being non-null isn't enough:
     //      an error / non-JSON payload parses to `id = {}`, against
     //      which EVERY ref would read "missing" → mass demote. Require
     //      at least one non-empty identity category before trusting a
     //      "missing" verdict. (Erring toward not-demoting is the safe
     //      direction — a stale standing value is cheaper than wrongly
-    //      stripping every value because entity-core hiccuped.)
+    //      stripping every value because Phylactery hiccuped.)
     if (liveTurn && unruhClient && identityHasContent(id)) {
       for (const sv of (temporalPayload?.interests?.standing ?? [])) {
         const ref = sv?.value_ref;
@@ -2103,7 +2103,7 @@ export async function listMemories({ granularity, limit = 50, offset = 0 } = {})
 export async function readMemory({ granularity, date, slug }) {
   // slug: significant memories live one-file-per-milestone as
   // {date}_{slug}.md; passing the slug addresses the exact file instead
-  // of letting entity-core fall back to first-match-by-date.
+  // of letting Phylactery fall back to first-match-by-date.
   return callTool('memory_read', { granularity, date, ...(slug ? { slug } : {}) });
 }
 
@@ -2124,7 +2124,7 @@ export async function getGraphSubgraph({ nodeId, depth = 1 }) {
 }
 
 // Aggregate every node and every edge into one payload for the Map view.
-// entity-core has no "list all edges" tool, so we walk each node's 1-hop
+// Phylactery has no "list all edges" tool, so we walk each node's 1-hop
 // subgraph and deduplicate edges by id. Concurrency is capped so we don't
 // open hundreds of simultaneous tool calls against the MCP server, and
 // edges to nodes outside the (possibly type-filtered) visible set are

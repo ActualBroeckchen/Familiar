@@ -1440,7 +1440,7 @@ let abortController = null;
 let lastSentMessages = null;
 /** Per-segment provenance for the system message of the last build. See buildApiMessages. */
 let lastBuildSegments = null;
-/** The entity-core block that the server actually prepended to the last request's system message. */
+/** The Phylactery enrichment block that the server actually prepended to the last request's system message. */
 // Last successful response's thalamus envelope, captured per-request:
 //   { static, dynamic, depth, injectedAt }
 // `static` lives at the top of the system message (cacheable prefix);
@@ -2574,7 +2574,7 @@ function openPromptInspector() {
   if (!lastThalamus || (!lastThalamus.static && !lastThalamus.dynamic)) {
     const note = document.createElement('p');
     note.className = 'field-hint';
-    note.textContent = 'No entity-core block in the last response. Thalamus may have returned empty (no enrichment), or the request hadn\'t completed yet — re-open after the next reply lands.';
+    note.textContent = 'No Phylactery enrichment block in the last response. Thalamus may have returned empty (no enrichment), or the request hadn\'t completed yet — re-open after the next reply lands.';
     body.appendChild(note);
   }
 
@@ -2619,7 +2619,7 @@ function openPromptInspector() {
       return;
     }
 
-    // System message: split by source. Includes the entity-core
+    // System message: split by source. Includes the Phylactery
     // STATIC block as its own first segment when present, then each
     // tracked build segment. The DYNAMIC block lives in its own
     // synthetic message at `injectedAt` (handled above), not here.
@@ -3205,7 +3205,7 @@ function init() {
   });
   $('diagnostics-download').addEventListener('click', downloadDiagnosticReport);
 
-  // Knowledge editor (entity-core)
+  // Knowledge editor (Phylactery)
   $('knowledge-btn').addEventListener('click', openKnowledgeModal);
   $('knowledge-modal-close').addEventListener('click', closeKnowledgeModal);
   // Intentionally NO backdrop-click-to-close: it fires mid-pan or while
@@ -5089,7 +5089,7 @@ function downloadDiagnosticReport() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-// ── Knowledge editor (entity-core: memories, identity, graph, snapshots) ─
+// ── Knowledge editor (Phylactery: memories, identity, graph, snapshots) ──
 //
 // Layered UI: tabs across the top, two-pane list+detail per tab. All ops
 // hit /api/entity/* endpoints; destructive ones auto-snapshot server-side
@@ -5174,7 +5174,7 @@ function keError(err, fallback) {
 }
 
 // Pull the server's real `{ error }` message out of a non-OK response.
-// Falls back to HTTP status. Surfaces 'entity-core not connected'
+// Falls back to HTTP status. Surfaces 'phylactery not connected'
 // instead of the opaque 'HTTP 502' the user used to see.
 async function keReadServerError(res) {
   try {

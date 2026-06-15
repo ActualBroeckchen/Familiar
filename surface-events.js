@@ -8,7 +8,7 @@
 // outcomes to learn patterns for `what_lapses_cost.md`.
 //
 // Storage lives at `tomes/.surface-events.json` — per-embodiment, like
-// ponderings. The derived insights (lifted to entity-core's identity
+// ponderings. The derived insights (lifted to Phylactery's identity
 // layer) belong to the human's continuity; the raw behavioural stream
 // belongs to this instance.
 //
