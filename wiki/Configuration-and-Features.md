@@ -11,7 +11,7 @@
 - **Context-cache depth:** how deep the dynamic enrichment block is injected (`thalamusDynamicDepth`, default 4) — keeps the cacheable identity prefix stable
 - **Session handoff:** opt-out toggle for the end-of-session summary that lets the next session resume mid-thought (`handoffEnabled`, default on)
 
-Saved connections (named provider/key/model combos with primary / fallback / entity-core designations) also live in the sidebar — see [docs/features.md](../docs/features.md#saved-connections-sidebar).
+Saved connections (named provider/key/model combos with primary / fallback / Phylactery designations) also live in the sidebar — see [docs/features.md](../docs/features.md#saved-connections-sidebar).
 
 ## Prompt layering
 
@@ -31,9 +31,9 @@ All prompt fields support file import from `.txt`, `.md`, or `.json`.
 - 24 built-in tools across a few groups:
   - **Context:** `get_datetime`, `get_session_info`
   - **Tomes:** `save_to_tome`
-  - **Entity-core memory:** `save_memory`, `update_memory`, `delete_memory`
-  - **Entity-core identity:** `update_identity`, `rewrite_identity_section`
-  - **Entity-core graph:** `find_graph_node`, `find_graph_edges`, `update_graph_node`, `delete_graph_node`, `update_graph_edge`, `delete_graph_edge`
+  - **Phylactery memory:** `save_memory`, `update_memory`, `delete_memory`
+  - **Phylactery identity:** `update_identity`, `rewrite_identity_section`
+  - **Phylactery graph:** `find_graph_node`, `find_graph_edges`, `update_graph_node`, `delete_graph_node`, `update_graph_edge`, `delete_graph_edge`
   - **Temporal (schedule):** `schedule_add_event`, `schedule_add_task`, `schedule_add_reminder`, `schedule_add_phase`, `schedule_resolve` — all accept a `recurrence` param so the Familiar can set "weekly Sunday cleaning" or "last Friday of every month" from chat; `schedule_resolve` accepts an optional `occurrence_date` to resolve one instance of a recurring node without killing the series
   - **Temporal (interests):** `interest_bump`, `interest_set_standing`
   - **Care / crisis:** `get_trusted_contacts`, `contact_trusted_person`, `show_crisis_resources`

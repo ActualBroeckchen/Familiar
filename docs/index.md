@@ -12,7 +12,7 @@ Proto-Familiar is the current working prototype of **Familiar** — a lightweigh
 | [Architecture](architecture.md) | Component overview, file structure, and data flow |
 | [Features](features.md) | Complete feature reference |
 | [API Reference](api-reference.md) | All server endpoints, request/response shapes |
-| [Entity-Core](entity-core.md) | Identity layer, memory enrichment, and MCP bridge |
+| [Entity-Core](entity-core.md) | Identity layer, memory enrichment, and MCP bridge (retired — replaced by Phylactery; kept for historical reference) |
 | [Unruh — Design](unruh-design.md) | The temporal-context module: schedule + interest layers, weights and decay, proactive messaging |
 | [Cerebellum — Design](cerebellum-design.md) | The motor module: tool dispatch, the server-side loop, channel adapters, escalation and the veto window |
 | [Village Support — Design](village-support-design.md) | The 0.5 milestone: villager registry, audience-gated knowledge, multi-channel sessions, Discord gateway |
@@ -21,7 +21,7 @@ Proto-Familiar is the current working prototype of **Familiar** — a lightweigh
 | [Sessions & Memorization](sessions.md) | Session lifecycle, logging, and automatic memory extraction |
 | [Tool Calling](tool-calling.md) | Built-in tools, custom tools, and the execution loop |
 | [Topics](topics.md) | Conversation topic tagging and auto-summaries |
-| [Troubleshooting](troubleshooting.md) | Common failure modes (entity-core down, modal storage, edge hit-test, snapshot recovery) and what to do about each |
+| [Troubleshooting](troubleshooting.md) | Common failure modes (Phylactery down, modal storage, edge hit-test, snapshot recovery) and what to do about each |
 | [Project Vision](project-vision.md) | Design principles, goals, and the road to the full Familiar |
 | [Future Features](future-features.md) | Scratch pad for ideas pending design or implementation |
 
@@ -31,6 +31,6 @@ Proto-Familiar is the current working prototype of **Familiar** — a lightweigh
 
 Proto-Familiar exists to validate the building blocks of **Familiar**: a personal, agentic caretaker AI designed to support users with conditions like ADHD, depression, and agoraphobia through proactive monitoring, long-term memory, and intentional parasocial bonding with an animal-character identity.
 
-The prototype focuses on the chat layer — provider proxying, Tome injection, entity-core enrichment, session management, and tool calling — while the [Project Vision](project-vision.md) describes the full planned system.
+The prototype focuses on the chat layer — provider proxying, Tome injection, Phylactery enrichment, session management, and tool calling — while the [Project Vision](project-vision.md) describes the full planned system.
 
 Research notes on architecture patterns, mental-health AI design, and memory systems can be found in the [`Research/`](../Research/) directory.

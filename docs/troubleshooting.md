@@ -44,12 +44,12 @@ once the new install is verified working.
 
 ### Pre-flight warnings about unreachable hosts
 
-The installer probes `github.com`, `registry.npmjs.org`, `deno.land`,
+The installer probes `github.com`, `registry.npmjs.org`,
 `astral.sh`, and `pypi.org` over TCP 443 before doing anything. Each
 unreachable host adds a line to the final summary MessageBox. The
 usual culprit is a corporate firewall (ZScaler / Netskope / etc.)
 doing TLS interception with an internal CA that the downstream tools
-(Deno, uv) don't trust. Routes to a "ask IT for a proxy bypass" or
+(uv) don't trust. Routes to a "ask IT for a proxy bypass" or
 "install Proto-Familiar on a non-corporate machine" path.
 
 ### Install log is empty / "logs are empty"
@@ -115,55 +115,48 @@ sort by Name → find `node.exe` → End task. Then run the update.
 
 ### "Failed to load graph: entity-core not connected"
 
-The MCP server is down. `thalamus.js` spawns entity-core as a child
-process on Proto-Familiar startup; if it crashed or never started,
-every `/api/entity/*` endpoint returns `502 { error: 'entity-core not
-connected' }` and the Knowledge editor surfaces that text directly.
+The MCP server is down. `thalamus.js` spawns Phylactery — the in-tree
+identity layer — as a child process on Proto-Familiar startup; if it
+crashed or never started, every `/api/entity/*` endpoint returns
+`502 { error: 'entity-core not connected' }` and the Knowledge editor
+surfaces that text directly.
 
 **Fix:** restart Proto-Familiar (`npm start`). On startup, watch the
 server logs for `[thalamus]` lines — they'll say whether the child
 process spawned and connected. The most common causes are:
 
-- `deno` not on `PATH` for the shell that started Node. `start.sh`
-  adds `~/.deno/bin` to `PATH`; bare `npm start` won't.
-- entity-core path missing or moved. Set `ENTITY_CORE_PATH` to the
-  absolute path of its `src/mod.ts` if you have a non-standard layout.
-- entity-core's data directory permissions changed.
+- `uv` not installed, or not on `PATH` for the shell that started
+  Node. `start.sh` primes uv's location; a bare `npm start` from a
+  shell that doesn't have uv on PATH won't.
+- The `phylactery/.venv` hasn't been synced (a fresh checkout, or a
+  hand-edited install). Run `cd phylactery && uv sync`.
+- Phylactery's `data/` directory permissions changed.
 
-Chat still works without entity-core — `enrich()` returns an empty
+Chat still works without Phylactery — `enrich()` returns an empty
 string and every request goes through unenriched. But the Knowledge
 editor will be unusable until the MCP child reconnects.
 
-### Logs say `entity-core not found … skipping`, or it keeps reconnecting
+### Logs say the identity layer is absent or it keeps reconnecting
 
-Two distinct entity-core startup states, distinguished by what the
-`[thalamus]` logs say:
+The `[thalamus]` logs distinguish two states:
 
-- **`entity-core not found at <path> — skipping (run install.sh /
-  install.bat to clone it)`** — entity-core isn't cloned. `connect()`
-  pre-checks for the checkout (symmetric with how Unruh checks its
-  venv) and skips cleanly: one line, no retry loop. Run the installer
-  to clone it, or set `ENTITY_CORE_PATH` if you keep it somewhere
-  non-standard.
+- **Phylactery skipped at startup** — usually because `uv` isn't
+  installed or `phylactery/.venv` hasn't been synced. `connect()`
+  pre-checks for the venv (symmetric with how Unruh checks its own)
+  and skips cleanly: one line, no retry loop. **Fix:** re-run the
+  installer (`./install.sh` / `install.bat`, or just
+  `Proto-Familiar.vbs`), or — if uv is already installed — run
+  `cd phylactery && uv sync` manually, then restart Proto-Familiar.
 
-- **Repeated `Reconnecting to entity-core in …ms (attempt N/10)`** —
-  entity-core *is* cloned, but the `deno` spawn is failing. The
-  checkout exists so the skip-check passes, then the spawn errors and
-  the backoff loop runs (1s, 2s, 5s, 10s, 30s; max 10 attempts) before
-  giving up. The usual cause is **`deno` not installed, or installed
-  but not findable**. `thalamus.js` resolves `deno` from `~/.deno/bin`,
-  `~/.cargo/bin`, Homebrew, and (Windows) `%USERPROFILE%\.deno\bin`
-  before falling back to `PATH` — so this only bites when deno genuinely
-  isn't in any of those. (This is the one entity-core failure mode that
-  still spins rather than skipping: it's rare, because the installer
-  installs deno *when* it clones entity-core, so "cloned but no deno" is
-  an unusual hand-edited state.)
+- **Repeated reconnect attempts** — the venv exists so the skip-check
+  passes, but the `uv run` spawn is failing (e.g. a partial sync or a
+  missing uv binary). **Fix:** re-run the installer or `uv sync`, make
+  sure `uv` is reachable on PATH (or set `UV_BIN` to its absolute
+  path), then restart Proto-Familiar to retry — the loop doesn't
+  re-arm itself once it's given up.
 
-  **Fix:** re-run `./install.sh` / `install.bat` (it installs deno and
-  caches entity-core's deps), or install Deno yourself from
-  <https://deno.com/> and point `DENO_BIN` at the binary if it lives
-  somewhere unusual. Restart Proto-Familiar afterward to retry — the
-  loop doesn't re-arm itself once it's given up.
+Phylactery degrades to absent without breaking chat: if it can't
+start, enrichment is skipped and Proto-Familiar runs normally.
 
 ### Map view is empty or stuck on "Loading…"
 
@@ -172,7 +165,7 @@ returned and edges to nodes of other types are dropped (so the legend
 matches what's drawn). Clear the filter to see everything.
 
 If it's empty without a filter, switch to List view — if List is also
-empty, the graph genuinely has no nodes (or entity-core is down; see
+empty, the graph genuinely has no nodes (or Phylactery is down; see
 above). If List has rows but Map doesn't, click **Refresh**: Map view
 fetches its own `/api/entity/graph/full` aggregate, and a stale browser
 cache or an interrupted earlier load can leave it half-drawn.
@@ -347,10 +340,10 @@ forget. Check the server logs for:
 ```
 
 If you see the first line but not the second, the spawn itself
-failed — usually because `deno` isn't on PATH for the server
-process. Restart Proto-Familiar via the launcher script (which
-primes `~/.deno/bin`); a bare `npm start` from a shell without
-that path will inherit the same gap.
+failed — usually because `uv` isn't on PATH for the server
+process (or `phylactery/.venv` isn't synced). Restart Proto-Familiar
+via the launcher script (which primes uv's location); a bare
+`npm start` from a shell without uv on PATH will inherit the same gap.
 
 ---
 

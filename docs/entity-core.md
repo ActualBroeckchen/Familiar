@@ -1,5 +1,12 @@
 # Entity-Core Identity Layer
 
+> **⚠️ RETIRED.** As of the Phylactery milestone, entity-core has been retired and fully
+> replaced by the in-tree **Phylactery** store (`./phylactery/`, a Python MCP service run via
+> `uv`). Phylactery now owns the canonical self — identity files, RAG memories, knowledge graph,
+> and trackers. See [`docs/phylactery-design.md`](phylactery-design.md). This page is kept only
+> for historical reference and one-time migration from a legacy entity-core install; nothing
+> below describes the current runtime.
+
 ## What Is Entity-Core?
 
 [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.4.0) is a Deno-based MCP (Model Context Protocol) server that manages persistent identity files, RAG memories, and a knowledge graph for a named AI entity. Proto-Familiar connects to it through `thalamus.js` to ground every LLM request in stable, long-term context that survives session boundaries.
