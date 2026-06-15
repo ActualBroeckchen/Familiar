@@ -681,6 +681,21 @@
             <button id="ke-snap-refresh" class="btn-ghost">Refresh</button>
           </div>
           <div class="ke-list ke-list-full" id="ke-snap-list"></div>
+
+          <div class="ke-backup-card">
+            <h3>Back up / restore my Familiar</h3>
+            <p class="field-hint">A single encrypted file holding the whole self — identity, memory, graph, trackers. It's locked with a passphrase you choose; keep it somewhere safe. <strong>The passphrase is never stored — if you lose it, the backup can't be opened.</strong></p>
+            <div class="ke-backup-row">
+              <input type="password" id="ke-backup-pass" placeholder="Passphrase (min 4 chars)" autocomplete="new-password" spellcheck="false">
+              <button id="ke-backup-export" class="btn-secondary">Back up now</button>
+            </div>
+            <div id="ke-backup-result" class="field-hint"></div>
+            <div class="ke-backup-row">
+              <input type="text" id="ke-backup-path" placeholder="Backup file path to restore from" spellcheck="false">
+              <input type="password" id="ke-backup-restore-pass" placeholder="Passphrase" autocomplete="off" spellcheck="false">
+              <button id="ke-backup-restore" class="btn-ghost">Restore…</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

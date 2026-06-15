@@ -9,6 +9,7 @@ dependencies = [
     "sqlite-vec>=0.1.6",
     "fastembed>=0.4.0",
     "httpx>=0.27.0",
+    "cryptography>=42.0",
 ]
 
 [dependency-groups]

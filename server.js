@@ -24,6 +24,7 @@ import {
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   createGraphNode, createGraphEdge,
   createSnapshot, restoreSnapshot,
+  exportBackup, restoreBackup, runLifecyclePass,
   reconnectPhylactery,
   recordInterest, recordHandoff, listLiveInterests, listInterests,
   bumpInterest, demoteStanding, setStandingInterest,
@@ -1700,6 +1701,36 @@ app.post('/api/entity/snapshots/:id/restore', async (req, res) => {
   const result = await restoreSnapshot({ snapshotId: id });
   if (!result.ok) return gatewayDown(res, result.error);
   res.json(result.result);
+});
+
+// ── Backup / restore (Pillar H) — "back up / restore my Familiar" ───────────
+// Single passphrase-encrypted file holding the whole self. The passphrase is
+// never stored; a lost passphrase means an unrecoverable backup (the point of
+// encryption-at-rest), which the UI must surface.
+app.post('/api/entity/backup/export', async (req, res) => {
+  const { passphrase } = req.body ?? {};
+  if (!passphrase || typeof passphrase !== 'string' || passphrase.length < 4) {
+    return badRequest(res, 'passphrase required (at least 4 characters)');
+  }
+  const result = await exportBackup({ passphrase });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result);
+});
+
+app.post('/api/entity/backup/restore', async (req, res) => {
+  const { filePath, passphrase } = req.body ?? {};
+  if (!filePath || typeof filePath !== 'string') return badRequest(res, 'filePath required');
+  if (!passphrase || typeof passphrase !== 'string') return badRequest(res, 'passphrase required');
+  const result = await restoreBackup({ filePath, passphrase });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result);
+});
+
+// Run one lifecycle pass on demand (hygiene + consolidation + graduation).
+app.post('/api/entity/lifecycle', async (req, res) => {
+  const force = req.body?.force === true;
+  const result = await runLifecyclePass({ force });
+  res.json(result);
 });
 
 const PORT = Number(process.env.PORT) || 8742;

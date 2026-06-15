@@ -393,8 +393,8 @@ describe('fetchEligibility', () => {
     assert.equal(fetchEligibility({ memories: true }).memory, true);
   });
 
-  it("memories: 'shared' → memory fetch NOT eligible (no audience tags exist yet — fail-closed)", () => {
-    assert.equal(fetchEligibility({ memories: 'shared' }).memory, false);
+  it("memories: 'shared' → memory fetch eligible (Pillar E: audience tags + outgoing filter now in place)", () => {
+    assert.equal(fetchEligibility({ memories: 'shared' }).memory, true);
   });
 
   it("schedule: 'full' → temporal fetch eligible", () => {

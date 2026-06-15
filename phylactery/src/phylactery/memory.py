@@ -103,10 +103,35 @@ def search(
             results = [{"id": r["id"], "granularity": r["granularity"], "date": r["date_key"],
                         "excerpt": (r["content"] or "")[:300], "score": 0.5} for r in rows]
 
+        # Pillar H: recall tracking. Pure observability — bumps recall_count
+        # and last_recalled_at for everything actually surfaced, so the
+        # graduation gate can tell front-of-mind records from never-recalled
+        # ones. Does NOT reorder or filter anything. Never raised into the
+        # caller's path: a tracking failure can't break a recall.
+        try:
+            _touch_recall(conn, [r["id"] for r in results])
+        except Exception as e:
+            import sys
+            print(f"[phylactery] recall tracking failed (ignored): {e}", file=sys.stderr)
+
         return {"results": results}
     finally:
         if own_conn:
             conn.close()
+
+
+def _touch_recall(conn: sqlite3.Connection, ids: list[str]) -> None:
+    """Bump recall_count + stamp last_recalled_at for surfaced records."""
+    ids = [i for i in ids if i]
+    if not ids:
+        return
+    placeholders = ",".join("?" * len(ids))
+    with conn:
+        conn.execute(
+            f"UPDATE memories SET recall_count = recall_count + 1, last_recalled_at = ? "
+            f"WHERE id IN ({placeholders})",
+            [now_iso()] + ids,
+        )
 
 
 # ── Create ────────────────────────────────────────────────────────────────────

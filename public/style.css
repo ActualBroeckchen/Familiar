@@ -1630,6 +1630,21 @@ button { cursor: pointer; font-family: var(--font); }
   background: var(--surface);
   flex-wrap: wrap;
 }
+.ke-backup-card {
+  margin: 16px; padding: 14px 16px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.ke-backup-card h3 { margin: 0 0 6px; font-size: 0.95rem; }
+.ke-backup-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.ke-backup-row input {
+  flex: 1 1 180px; min-width: 140px;
+  font-size: 0.85rem; padding: 5px 8px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text);
+}
+#ke-backup-result { margin-top: 10px; }
+#ke-backup-result code { word-break: break-all; }
 .ke-toolbar label { font-size: 0.82rem; color: var(--text-dim); display: flex; gap: 6px; align-items: center; }
 .ke-toolbar select, .ke-toolbar input[type="text"] {
   font-size: 0.85rem;

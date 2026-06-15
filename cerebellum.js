@@ -50,6 +50,7 @@ import {
   addScheduleNode, resolveScheduleNode, resolveScheduleOccurrence,
   bumpInterest, setStandingInterest,
   confirmConsentMemories, dropPendingMemories,
+  acknowledgeGraduations,
 } from './thalamus.js';
 import { markIntentActedOn } from './recent-ponderings.js';
 import { pruneConsentPending } from './memorization.js';
@@ -1281,6 +1282,24 @@ export const BUILTIN_TOOLS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'graduation_acknowledge',
+      description: "I call this once I've mentioned to my human (or judged no mention is needed) the ward-block detail I filed off my always-injected surface — the items shown in the [GRADUATION NOTICE] block. It marks them as surfaced so I don't keep re-raising the same graduations. Nothing is deleted; the detail stays recalled-when-relevant and can be pulled back.",
+      parameters: {
+        type: 'object',
+        properties: {
+          ids: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'List of graduation notice IDs (from the [GRADUATION NOTICE] block) I have now surfaced.',
+          },
+        },
+        required: ['ids'],
+      },
+    },
+  },
 ];
 
 /**
@@ -1395,6 +1414,13 @@ export const TOOL_EXECUTORS = {
     pruneConsentPending(ids).catch(() => {});
     const n = result?.dropped ?? ids.length;
     return `Dropped ${n} consent-pending record(s). (Auto-snapshot taken before deletion.)`;
+  },
+
+  graduation_acknowledge: async ({ ids }) => {
+    if (!Array.isArray(ids) || ids.length === 0) return 'ids must be a non-empty array of graduation notice IDs.';
+    const result = await acknowledgeGraduations(ids);
+    const n = result?.acknowledged ?? ids.length;
+    return `Marked ${n} graduation notice(s) as surfaced. The filed-away detail stays recalled-when-relevant.`;
   },
 
   // ── Knowledge-editing executors ────────────────────────────────────

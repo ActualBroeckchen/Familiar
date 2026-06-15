@@ -1698,6 +1698,28 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       }
     }
 
+    // ── Graduation-notice block (Pillar H, ward-consulted non-blocking) ───
+    // After I file ward-block detail off my always-injected surface, I let my
+    // human know in my own voice so they can pull anything back. TTL-cached so
+    // this costs at most one MCP call per few minutes; ward-private turns only.
+    let graduationBlock = '';
+    if (!staticOnly && !gated) {
+      try {
+        const gradItems = await listPendingGraduations();
+        if (Array.isArray(gradItems) && gradItems.length > 0) {
+          const lines = [
+            `[GRADUATION NOTICE — I recently filed ${gradItems.length} piece(s) of detail about my human off my always-injected surface into my recalled-when-relevant memory. Nothing is lost; I can pull any of it back. This is mine to mention in my own voice when a natural moment opens — non-blocking, never a reason to stall, and never the thing I lead with.]`,
+            'Filed away:',
+            ...gradItems.map((x, i) => `  ${i + 1}. ${x.summary ?? ''}  [id: ${x.id}]`),
+            'When I have mentioned these (or judged they need no mention), I call graduation_acknowledge with the id(s) so I do not re-raise them.',
+          ];
+          graduationBlock = lines.join('\n');
+        }
+      } catch {
+        /* best-effort — no graduation block on error */
+      }
+    }
+
     const dynamicSections = [];
     if (timeAnchorBlock)        dynamicSections.push(timeAnchorBlock);
     if (memLines)               dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
@@ -1705,6 +1727,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (ponderingsBlock)        dynamicSections.push(ponderingsBlock);
     if (deferredIntentsBlock)   dynamicSections.push(deferredIntentsBlock);
     if (consentPendingBlock)    dynamicSections.push(consentPendingBlock);
+    if (graduationBlock)        dynamicSections.push(graduationBlock);
     if (careBlock)              dynamicSections.push(careBlock);
     if (temporalLines)          dynamicSections.push(`[Temporal Context]\n${temporalLines}`);
     if (surfaceCandidatesBlock) dynamicSections.push(surfaceCandidatesBlock);
@@ -1728,6 +1751,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       ponderingsBlock        ? 'pondering'  : null,
       deferredIntentsBlock   ? 'intents'    : null,
       consentPendingBlock    ? 'consent'    : null,
+      graduationBlock        ? 'graduation' : null,
       careBlock              ? 'care'       : null,
       temporalLines          ? 'temporal'   : null,
       surfaceCandidatesBlock ? 'surface'    : null,
@@ -1900,6 +1924,84 @@ export async function searchMemoryRestricted({ query, roomAudience, threshold = 
     console.warn('[thalamus] searchMemoryRestricted failed (failing open):', err?.message ?? err);
     return { hit: false };
   }
+}
+
+// ── Graduation surfacing (Pillar H) ──────────────────────────────────────────
+// Graduations are rare, so we don't pay an MCP round-trip every turn. A short
+// TTL cache means at most one list call per GRADUATION_TTL_MS even on a busy
+// chat; the cache is invalidated immediately on acknowledge.
+const GRADUATION_TTL_MS = 5 * 60 * 1000;
+let _gradCache = { at: 0, items: [] };
+
+/**
+ * List ward-block detail I've graduated but not yet mentioned to my human.
+ * TTL-cached. Best-effort: returns [] if Phylactery is unavailable.
+ * @returns {Promise<Array<{id,filename,memoryId,summary,createdAt}>>}
+ */
+export async function listPendingGraduations({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && now - _gradCache.at < GRADUATION_TTL_MS) return _gradCache.items;
+  try {
+    const res = await callTool('graduation_list_pending', {});
+    const items = Array.isArray(res?.items) ? res.items : [];
+    _gradCache = { at: now, items };
+    return items;
+  } catch (err) {
+    console.warn('[thalamus] listPendingGraduations failed:', err?.message ?? err);
+    _gradCache = { at: now, items: [] };
+    return [];
+  }
+}
+
+/**
+ * Mark ward-block graduation mentions as surfaced. Invalidates the cache.
+ * @returns {Promise<{ ok: boolean, acknowledged?: number }>}
+ */
+export async function acknowledgeGraduations(ids) {
+  _gradCache = { at: 0, items: [] };
+  return callTool('graduation_acknowledge', { ids }).catch(err => {
+    console.warn('[thalamus] acknowledgeGraduations failed:', err?.message ?? err);
+    return { ok: false };
+  });
+}
+
+/**
+ * Run one lifecycle pass on demand (hygiene + consolidation + graduation).
+ * @returns {Promise<object>}
+ */
+export async function runLifecyclePass({ force = false } = {}) {
+  return callTool('lifecycle_pass', { force }).catch(err => {
+    console.warn('[thalamus] runLifecyclePass failed:', err?.message ?? err);
+    return { ok: false, error: err?.message ?? String(err) };
+  });
+}
+
+/**
+ * Passphrase-encrypted single-file backup of the whole Familiar.
+ * @returns {Promise<{ ok: boolean, filePath?: string, sizeBytes?: number, error?: string }>}
+ */
+export async function exportBackup({ passphrase }) {
+  return callTool('backup_export', { passphrase }).catch(err => {
+    console.warn('[thalamus] exportBackup failed:', err?.message ?? err);
+    return { ok: false, error: err?.message ?? String(err) };
+  });
+}
+
+/**
+ * Restore the whole Familiar from a passphrase-encrypted backup, then reconnect.
+ * @returns {Promise<{ ok: boolean, restoredFrom?: string, error?: string }>}
+ */
+export async function restoreBackup({ filePath, passphrase }) {
+  const res = await callTool('backup_restore', { filePath, passphrase }).catch(err => {
+    console.warn('[thalamus] restoreBackup failed:', err?.message ?? err);
+    return { ok: false, error: err?.message ?? String(err) };
+  });
+  if (res?.ok) {
+    // The live DB was swapped underneath us — reconnect the MCP child.
+    await reconnectPhylactery().catch(err =>
+      console.warn('[thalamus] reconnect after restore failed:', err?.message ?? err));
+  }
+  return res;
 }
 
 /**

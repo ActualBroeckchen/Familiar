@@ -40,6 +40,13 @@ Tools exposed (stable contract — Thalamus depends on these shapes):
   Consolidation (A3):
     consolidate             — roll lower tiers into higher via LLM
 
+  Lifecycle (Pillar H):
+    lifecycle_pass          — hygiene + consolidation + graduation audit on demand
+    graduation_list_pending — ward-block detail graduated but not yet mentioned
+    graduation_acknowledge  — mark graduation mentions as surfaced
+    backup_export           — passphrase-encrypted single-file backup
+    backup_restore          — restore from a passphrase-encrypted backup
+
 Original design by Zari Lewis (Psycheros). See docs/phylactery-build-spec.md.
 """
 
@@ -56,6 +63,9 @@ import phylactery.memory as mem
 import phylactery.graph as graph
 import phylactery.snapshot as snap
 import phylactery.consolidate as consol
+import phylactery.graduation as grad
+import phylactery.scheduler as scheduler
+import phylactery.backup as backup
 
 mcp = FastMCP("phylactery")
 
@@ -466,8 +476,62 @@ def consolidate(granularity: Optional[str] = None) -> dict[str, Any]:
     return consol.run_consolidation(granularity=granularity, conn=_c())
 
 
+# ── Lifecycle (Pillar H) ──────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def lifecycle_pass(force: Optional[bool] = None) -> dict[str, Any]:
+    """Run one lifecycle pass now: cheap-code hygiene, tier consolidation, and
+    the Familiar-led graduation audit. The background scheduler runs this on a
+    volume-gated 5-min cadence; this tool forces it on demand. `force` bypasses
+    the volume gate.
+    """
+    return scheduler.run_pass(force=bool(force))
+
+
+@mcp.tool()
+def graduation_list_pending() -> dict[str, Any]:
+    """I use this to see ward-block detail I've recently graduated off my
+    always-injected surface that my human hasn't been told about yet. I mention
+    these in my own voice — non-blocking — so they can pull anything back.
+    Returns { items: [{ id, filename, memoryId, summary, createdAt }] }.
+    """
+    return {"items": grad.list_unacknowledged_graduations(conn=_c())}
+
+
+@mcp.tool()
+def graduation_acknowledge(ids: list[str]) -> str:
+    """I call this once I've let my human know about ward-block detail I filed
+    away, so I don't keep re-raising the same graduations.
+    """
+    if not ids:
+        return "No ids provided."
+    result = grad.acknowledge_graduations(ids, conn=_c())
+    return f"Acknowledged {result.get('acknowledged', 0)} graduation notice(s)."
+
+
+# ── Backup / restore (Pillar H) ───────────────────────────────────────────────
+
+
+@mcp.tool()
+def backup_export(passphrase: str) -> dict[str, Any]:
+    """Export my entire self — identity, memory, graph, trackers — to a single
+    passphrase-encrypted file my human can keep safe. Returns the file path.
+    """
+    return backup.export_encrypted(passphrase, conn=_c())
+
+
+@mcp.tool()
+def backup_restore(filePath: str, passphrase: str) -> dict[str, Any]:
+    """Restore my whole self from a passphrase-encrypted backup file. Requires
+    a server reconnect afterwards (thalamus handles this).
+    """
+    return backup.restore_encrypted(filePath, passphrase)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 
 def main() -> None:
+    scheduler.start()
     mcp.run(transport="stdio")

@@ -128,11 +128,14 @@ ponderings injection, care-check framing) and as background loops
 │
 ├── phylactery/              In-tree Python module (Phylactery — canonical self-store)
 │   ├── pyproject.toml       uv-managed Python project, deps locked in uv.lock
-│   ├── src/phylactery/server.py  FastMCP server (25 tools: identity / memory / graph / snapshots)
+│   ├── src/phylactery/server.py  FastMCP server (identity / memory / graph / snapshots / lifecycle / backup)
 │   ├── src/phylactery/identity.py + memory.py + graph.py + consolidate.py
+│   ├── src/phylactery/graduation.py  Pillar H — signed-off graduation-eligibility rule + Familiar-led audit
+│   ├── src/phylactery/scheduler.py   Pillar H — volume-gated lifecycle worker (off-switch PROTO_FAMILIAR_CONSOLIDATE_DISABLED)
+│   ├── src/phylactery/backup.py      Pillar H — passphrase-encrypted single-file export/restore
 │   ├── src/phylactery/snapshot.py + audience.py + embed.py + db.py
-│   ├── data/                SQLite database + snapshots (auto-created, git-ignored)
-│   └── tests/               pytest contract tests
+│   ├── data/                SQLite database + snapshots + backups (auto-created, git-ignored)
+│   └── tests/               pytest contract tests (incl. test_graduation.py)
 │
 ├── unruh/                   In-tree Python module (Unruh — temporal context)
 │   ├── pyproject.toml       uv-managed Python project, deps locked in uv.lock
@@ -550,6 +553,65 @@ Pillar C added `audience` tags at write time; Pillar D adds the outgoing gate.
 Together they make 'shared' safe to open: a non-ward-private room can now
 receive memories tagged for its audience, and the outgoing filter catches any
 ward-private content that might slip through in the reply text.
+
+### Pillar H — lifecycle: consolidation scheduler, hygiene, graduation, backup
+
+**Consolidation scheduler** (`scheduler.py`) — Phylactery's own internal
+background worker (daemon thread, 5-min wake cadence, **volume-gated** so an
+idle Familiar burns no LLM calls). Each pass runs, independently guarded:
+hygiene → tier consolidation → graduation audit. Off-switch
+`PROTO_FAMILIAR_CONSOLIDATE_DISABLED=1`; started from `server.py:main()`,
+forced on demand via the `lifecycle_pass` tool / `POST /api/entity/lifecycle`.
+
+**Cheap-code hygiene** (`consolidate.run_hygiene`) — pure SQL, folded into the
+pass (not a separate loop): dedup exact-duplicate narrative records (keep
+oldest), merge graph nodes sharing a non-empty `(label, villagerId)` (re-point
+edges, drop losers). Same label with **different** identities is never
+auto-merged — it's reported as ambiguous for the ward to resolve. Snapshots
+before any change.
+
+**Recall tracking** (`memory.search` → `_touch_recall`) — pure observability:
+bumps `recall_count` + `last_recalled_at` for everything surfaced. It does NOT
+reorder or filter recall (a retrieval-decay knob would change *whether* a fact
+surfaces — its own future sign-off). It exists to feed the graduation gate's
+"never-recalled = no longer front-of-mind" signal.
+
+**Graduation audit** (`graduation.py`) — keeps the always-injected
+`identity`/`ward` surface lean by filing no-longer-front-of-mind detail into
+RAG-recalled `me`/`ward` register records. Nothing is deleted; graduated
+records can be pulled back. The **eligibility rule is human-signed** and lives
+in one pure function, `is_graduation_eligible(record, now)`:
+
+```
+candidate  = NOT careWeight:high
+             AND on-surface > DWELL_DAYS (30)
+             AND last recalled > RECALL_RECENCY_DAYS (30, or never)
+             AND last confirmed > CONFIRM_RECENCY_DAYS (30)
+NEVER eligible (pinned): careWeight:high
+             OR category ∈ {health_info, crisis, support-map}
+             OR content matches care-critical patterns (allergies, meds,
+                doses, crisis triggers, support contacts, care guidance)
+             OR confirmed within the window
+```
+
+The bias is toward KEEPING — false positives are cheap, filing away a
+safety-relevant fact is not. The actual per-block decision rides the
+consolidation LLM call (the Familiar, in its own voice); code only narrows the
+candidates and re-screens every graduated item against the care matcher
+(defence in depth). `auto_snapshot` runs before any identity trim. Ward-block
+graduations land in `graduation_log`; thalamus surfaces unacknowledged ones as
+a `[GRADUATION NOTICE]` block (TTL-cached, ward-private turns only,
+non-blocking), and the Familiar calls `graduation_acknowledge` once mentioned.
+Tested in `phylactery/tests/test_graduation.py`.
+
+**Encrypted backup/restore** (`backup.py`) — "back up / restore my Familiar":
+`VACUUM INTO` a consistent copy, encrypt with a key derived from the ward's
+passphrase (PBKDF2-HMAC-SHA256 → Fernet/AES), write a single `.phylactery`
+file. Restore decrypts, sanity-checks it's a real Phylactery DB, swaps it over
+the live DB, and `thalamus.restoreBackup` reconnects the MCP child. The
+passphrase is never stored — a lost passphrase means an unrecoverable backup,
+which the UI states plainly. Surfaced in the Knowledge editor → Snapshots tab
+and via `POST /api/entity/backup/{export,restore}`.
 
 ### `public/app.js` — frontend (one file)
 

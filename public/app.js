@@ -752,11 +752,11 @@ function renderConnectionsList() {
     // connection regardless of how the chat path uses it.
     const ecBtn = document.createElement('button');
     ecBtn.type = 'button';
-    ecBtn.textContent = isEntityCore ? ‘✓ Phylactery’ : ‘+ Phylactery’;
+    ecBtn.textContent = isEntityCore ? '✓ Phylactery' : '+ Phylactery';
     ecBtn.title = isEntityCore
-      ? ‘Currently the API key source for Phylactery (click to clear)’
-      : ‘Use this connection\’s API key for Phylactery’;
-    ecBtn.setAttribute(‘aria-label’, isEntityCore
+      ? 'Currently the API key source for Phylactery (click to clear)'
+      : "Use this connection's API key for Phylactery";
+    ecBtn.setAttribute('aria-label', isEntityCore
       ? `Clear Phylactery API-key designation from "${conn.name}"`
       : `Use "${conn.name}" as Phylactery API-key source`);
     ecBtn.setAttribute('aria-pressed', isEntityCore ? 'true' : 'false');
@@ -3298,6 +3298,8 @@ function init() {
   $('ke-id-refresh').addEventListener('click', keLoadIdentity);
   $('ke-snap-create').addEventListener('click', keCreateSnapshot);
   $('ke-snap-refresh').addEventListener('click', keLoadSnapshots);
+  $('ke-backup-export').addEventListener('click', keExportBackup);
+  $('ke-backup-restore').addEventListener('click', keRestoreBackup);
 
   // Tomes modal
   $('tomes-btn').addEventListener('click', openTomesModal);
@@ -6345,6 +6347,44 @@ async function keCreateSnapshot() {
   const r = await fetch('/api/entity/snapshots', { method: 'POST' });
   if (!r.ok) { alert(`Snapshot failed: ${(await r.json()).error ?? r.status}`); return; }
   keLoadSnapshots();
+}
+
+// ── Backup / restore (Pillar H) ──────────────────────────────────────────
+async function keExportBackup() {
+  const pass = $('ke-backup-pass').value;
+  const out  = $('ke-backup-result');
+  if (!pass || pass.length < 4) { out.textContent = 'Passphrase must be at least 4 characters.'; return; }
+  out.textContent = 'Encrypting…';
+  try {
+    const r = await fetch('/api/entity/backup/export', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ passphrase: pass }),
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) throw new Error(data.error ?? r.status);
+    out.innerHTML = `Backed up to <code>${esc(data.filePath)}</code> (${Math.round((data.sizeBytes ?? 0) / 1024)} KB). Keep this file and your passphrase safe.`;
+    $('ke-backup-pass').value = '';
+  } catch (err) { out.textContent = `Backup failed: ${err.message}`; }
+}
+
+async function keRestoreBackup() {
+  const filePath = $('ke-backup-path').value.trim();
+  const pass     = $('ke-backup-restore-pass').value;
+  const out      = $('ke-backup-result');
+  if (!filePath) { out.textContent = 'Enter the backup file path to restore from.'; return; }
+  if (!pass)     { out.textContent = 'Enter the passphrase for the backup.'; return; }
+  if (!confirm('Restore from this backup? This OVERWRITES the current memory / identity / graph state entirely.')) return;
+  out.textContent = 'Restoring…';
+  try {
+    const r = await fetch('/api/entity/backup/restore', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath, passphrase: pass }),
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) throw new Error(data.error ?? r.status);
+    out.textContent = `Restored from ${data.restoredFrom}. The Familiar is reconnecting to the restored self.`;
+    $('ke-backup-restore-pass').value = '';
+  } catch (err) { out.textContent = `Restore failed: ${err.message}`; }
 }
 
 // ── Tome entry editor ─────────────────────────────────────────────

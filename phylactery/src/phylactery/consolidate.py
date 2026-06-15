@@ -169,3 +169,106 @@ def run_consolidation(
     finally:
         if own_conn:
             conn.close()
+
+
+# ── Cheap-code hygiene (Pillar H) ─────────────────────────────────────────────
+# Folded into the consolidation pass, not a separate loop. Pure SQL — no LLM.
+# Ambiguous merges are reported, never auto-applied.
+
+def run_hygiene(conn: sqlite3.Connection | None = None) -> dict[str, Any]:
+    """Dedup exact-duplicate narrative records and merge unambiguous graph nodes.
+
+    - Exact dups: same kind/granularity/date_key/content → keep the oldest,
+      drop the rest (with their embeddings). Snapshots first if anything matches.
+    - Node merge: graph nodes sharing a non-empty (label, villagerId) are folded
+      into the oldest; edges are re-pointed. Nodes with the same label but
+      DIFFERENT villagerIds (or none) are left alone and reported as ambiguous.
+    """
+    from phylactery.snapshot import auto_snapshot
+
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        deduped = 0
+        merged = 0
+        ambiguous: list[dict] = []
+        snapshotted = False
+
+        # ── Exact-duplicate narrative records ────────────────────────────────
+        dup_groups = conn.execute("""
+            SELECT kind, granularity, date_key, content, COUNT(*) n,
+                   GROUP_CONCAT(id) ids, MIN(created_at) oldest
+            FROM memories
+            WHERE kind='narrative'
+            GROUP BY kind, granularity, date_key, content
+            HAVING n > 1
+        """).fetchall()
+        for g in dup_groups:
+            ids = (g["ids"] or "").split(",")
+            # Keep the oldest-created record; drop the others.
+            keep_row = conn.execute(
+                "SELECT id FROM memories WHERE id IN (%s) ORDER BY created_at ASC LIMIT 1"
+                % ",".join("?" * len(ids)), ids,
+            ).fetchone()
+            keep = keep_row["id"] if keep_row else ids[0]
+            drop = [i for i in ids if i and i != keep]
+            if not drop:
+                continue
+            if not snapshotted:
+                auto_snapshot(conn); snapshotted = True
+            ph = ",".join("?" * len(drop))
+            with conn:
+                conn.execute(f"DELETE FROM memories WHERE id IN ({ph})", drop)
+                conn.execute(f"DELETE FROM memory_vecs WHERE memory_id IN ({ph})", drop)
+            deduped += len(drop)
+
+        # ── Unambiguous graph-node merge by (label, villagerId) ──────────────
+        node_rows = conn.execute(
+            "SELECT id, label, properties_json, created_at FROM graph_nodes"
+        ).fetchall()
+        buckets: dict[tuple, list[dict]] = {}
+        label_only: dict[str, set] = {}
+        for r in node_rows:
+            try:
+                props = json.loads(r["properties_json"] or "{}")
+            except Exception:
+                props = {}
+            vid = props.get("villagerId")
+            label = (r["label"] or "").strip().lower()
+            if not label:
+                continue
+            label_only.setdefault(label, set())
+            if vid:
+                buckets.setdefault((label, vid), []).append(
+                    {"id": r["id"], "created_at": r["created_at"]})
+                label_only[label].add(vid)
+            else:
+                label_only[label].add(None)
+
+        for (label, vid), nodes in buckets.items():
+            if len(nodes) < 2:
+                continue
+            if not snapshotted:
+                auto_snapshot(conn); snapshotted = True
+            nodes.sort(key=lambda n: n["created_at"] or "")
+            keep = nodes[0]["id"]
+            losers = [n["id"] for n in nodes[1:]]
+            ph = ",".join("?" * len(losers))
+            with conn:
+                conn.execute(f"UPDATE graph_edges SET from_id=? WHERE from_id IN ({ph})", [keep] + losers)
+                conn.execute(f"UPDATE graph_edges SET to_id=? WHERE to_id IN ({ph})", [keep] + losers)
+                conn.execute(f"DELETE FROM graph_nodes WHERE id IN ({ph})", losers)
+                conn.execute(f"DELETE FROM graph_node_vecs WHERE node_id IN ({ph})", losers)
+            merged += len(losers)
+
+        # Same label, multiple distinct identities (or tagged vs untagged) →
+        # surface for the ward to resolve, never auto-merge.
+        for label, ids in label_only.items():
+            if len(ids) > 1:
+                ambiguous.append({"label": label, "identities": sorted(str(i) for i in ids)})
+
+        return {"ok": True, "deduped": deduped, "merged": merged, "ambiguous": ambiguous}
+    finally:
+        if own_conn:
+            conn.close()
