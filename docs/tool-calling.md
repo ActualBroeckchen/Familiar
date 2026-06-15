@@ -14,7 +14,7 @@ The **Enable tool use** checkbox in the sidebar **Tools** section controls wheth
 
 ## Built-in Tools
 
-Thirty-two tools are always available when tool use is enabled: eight read/write tools (including the deferred-intent acknowledger and two on-demand memory-read tools), four graph-lookup and graph-creation tools, seven editing tools for correcting stale Phylactery state, eight temporal tools (schedule + interests, backed by Unruh), two Village tools (look up who's in the ward's Village and add/edit people, with sensitive notes gated to private turns), and three crisis outreach tools for when the Familiar needs to help a user who is in danger during a live conversation. Every destructive tool (delete / rewrite / replace) auto-snapshots Phylactery before the call — recovery is one click in the **Snapshots** tab of the Knowledge editor.
+Thirty-four tools are always available when tool use is enabled: eight read/write tools (including the deferred-intent acknowledger and two on-demand memory-read tools), four graph-lookup and graph-creation tools, seven editing tools for correcting stale Phylactery state, eight temporal tools (schedule + interests, backed by Unruh), two Village tools (look up who's in the ward's Village and add/edit people, with sensitive notes gated to private turns), two own-file tools (sandboxed read access to the Familiar's own folder — tomes, logs, docs), and three crisis outreach tools for when the Familiar needs to help a user who is in danger during a live conversation. Every destructive tool (delete / rewrite / replace) auto-snapshots Phylactery before the call — recovery is one click in the **Snapshots** tab of the Knowledge editor.
 
 | Tool | Description | Returns |
 |---|---|---|
@@ -49,7 +49,9 @@ Thirty-two tools are always available when tool use is enabled: eight read/write
 | `contact_trusted_person` | Immediately send a message to one of the user's trusted contacts (Discord webhook). Intended for live conversations where the user is actively present but in genuine danger. Every outbound is also mirrored into the user's chat (and pushed to their own webhook when configured) — nothing is covert. | Confirmation string, or an error string on failure |
 | `show_crisis_resources` | Surface international crisis-line and safety-resource links as a chat message (and push). Low friction — call early rather than late. No contacts required. | Confirmation string |
 | `village_lookup` | See who's in the ward's Village; filter by `category`, `location`, or `name`. Returns each villager's id, relation, notes, and linked graph node. `privateNotes` are disclosed only on ward-private turns and withheld whenever others are present | Plain-text list, or a "no one matches" note |
-| `village_upsert` | Add or edit a villager (name, category, relation, pronouns, notes, `privateNotes`, and the `graphNodeId` link to a Phylactery node). Resolves a category name to its id. **Ward-private turns only** — refuses to mutate the registry when others are present | Confirmation string |
+| `village_upsert` | Add or edit a villager (name, category, relation, pronouns, notes, `privateNotes`, and the `graphNodeId` link to a Phylactery node). Resolves a category name to its id. With others present, creating a just-met person is allowed, but edits to existing records and the `privateNotes` bucket are deferred for the ward's consent | Confirmation string |
+| `list_files` | List entries under a repo-relative folder of the Familiar's own checkout (tomes, logs, docs). Sandboxed (no escaping the root), secrets (settings/keys/.env) and build noise denied. **Ward-private turns only** | Plain-text listing |
+| `read_file` | Read one of the Familiar's own text files by repo-relative path (size-capped, text-only, same sandbox + denylist as `list_files`). Lets the Familiar look up its own tomes / session logs on purpose. **Ward-private turns only** | File contents, or an error string |
 
 ### Graph ids in the prompt
 

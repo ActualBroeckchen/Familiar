@@ -148,12 +148,16 @@ via `ctx.wardPrivate` (threaded from the session's audience tag in
 `server.js`):
 
 - **With the ward (ward-private turn): full disclosure** — including
-  `privateNotes`.
-- **Anyone else present: `privateNotes` is stripped** from lookups, and
-  *all* Village mutations are refused (the Familiar won't edit the
-  registry while others are watching). The villager still surfaces —
-  existence and ordinary notes aren't secret — only the sensitive bucket
-  is held back.
+  `privateNotes` — and full read/write.
+- **Anyone else present: `privateNotes` is stripped** from lookups. The
+  villager still surfaces — existence and ordinary notes aren't secret —
+  only the sensitive bucket is held back. On the write side (decided with
+  the ward, 2026-06-15): *creating* a just-met person is allowed (a
+  low-stakes, shareable act — the ward can review it later), but editing
+  an existing record is **deferred for the ward's consent**, and any
+  `privateNotes` passed mid-room is **held** rather than written. The
+  Familiar surfaces these as "I'll bring it up / add that once we're
+  alone" rather than a flat refusal.
 - **Undefined audience (non-chat paths: loops, tests) defaults to
   ward-private**, because those paths are the ward's own. The only place
   a non-ward audience exists is a browser/Discord session that carries

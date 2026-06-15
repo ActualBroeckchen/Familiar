@@ -102,12 +102,32 @@ test('village_lookup: filters by location (resolves to its category)', async () 
   });
 });
 
-test('village_upsert: refused when others are present (no mutation)', async () => {
+test('village_upsert: others present → creating a just-met person is allowed', async () => {
   await withFakeVillage(async (calls) => {
     const out = await executeToolCall('village_upsert',
-      JSON.stringify({ name: 'New Person' }), { wardPrivate: false });
-    assert.match(out, /privately with/i, 'refusal mentions it needs a private moment');
-    assert.equal(calls.length, 0, 'upsertVillager must NOT be called in a gated room');
+      JSON.stringify({ name: 'New Person', notes: 'met at the café' }), { wardPrivate: false });
+    assert.equal(calls.length, 1, 'creation is allowed mid-room');
+    assert.equal(calls[0].name, 'New Person');
+    assert.match(out, /added in the Village/i);
+  });
+});
+
+test('village_upsert: others present → editing an existing record is deferred for consent', async () => {
+  await withFakeVillage(async (calls) => {
+    const out = await executeToolCall('village_upsert',
+      JSON.stringify({ id: 'v1', notes: 'changed' }), { wardPrivate: false });
+    assert.equal(calls.length, 0, 'no mutation to an existing record with others present');
+    assert.match(out, /bring it up with them|just us|confirm/i, 'defers for the ward\'s consent');
+  });
+});
+
+test('village_upsert: others present → privateNotes on a new person is held back', async () => {
+  await withFakeVillage(async (calls) => {
+    const out = await executeToolCall('village_upsert',
+      JSON.stringify({ name: 'New Person', privateNotes: 'sensitive' }), { wardPrivate: false });
+    assert.equal(calls.length, 1, 'the person is still created');
+    assert.equal('privateNotes' in calls[0], false, 'but the sensitive bucket is NOT written mid-room');
+    assert.match(out, /held the private detail|once it's just us/i);
   });
 });
 

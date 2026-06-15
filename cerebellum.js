@@ -37,6 +37,7 @@ import { fileURLToPath } from 'url';
 import { promises as fsp, readFileSync, mkdirSync } from 'fs';
 
 import { PROVIDER_URLS } from './providers.js';
+import { listOwnFiles, readOwnFile } from './own-files.js';
 import {
   enrich, getScheduleWindow,
   // Tool-executor writes — ALWAYS through thalamus's wrappers, never a
@@ -1336,6 +1337,34 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'list_files',
+      description: "I list what's in my own folder — the Proto-Familiar files that make me up. I use this to find my way around when I want to look something up on purpose: which Tomes exist, what session logs are there, where a doc lives. I pass a folder path relative to my root (e.g. \"tomes\" or \"logs\"), or nothing for the top level. It's read-only and fenced to my own folder; my human's secrets (settings, keys) are never shown. I only do this in a private moment with {{user}} — my files hold our history, not for other rooms.",
+      parameters: {
+        type: 'object',
+        properties: {
+          dir: { type: 'string', description: 'Folder to list, relative to my root (e.g. "tomes", "logs", "docs"). Omit for the top level.' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_file',
+      description: "I read one of my own files — a Tome, a session log, a doc — when I want to find or recall something specific on purpose, beyond what's already in my context. I pass the file path relative to my root (I find it with list_files first). Read-only, text only, size-capped; my human's secret files (settings, API keys) are off-limits. I only read my files in a private moment with {{user}} — they hold our shared history, which I don't pull into rooms where others are present.",
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File path relative to my root, e.g. "tomes/ponderings.json" or "logs/2026-06-14.md". I get exact paths from list_files.' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'village_lookup',
       description: "I look up who's in my human's Village — the people in their life I help them stay close to. I use this to see who exists, recall how someone relates to {{user}} and how they like to be spoken to, or check who belongs to a category or turns up in a particular location. I can filter by category (e.g. \"Family\"), by location (e.g. a Discord channel), or by a name to pull up one person. When {{user}} and I are alone I see everything I've noted about each person, including private things; when anyone else is present, the sensitive private notes are held back automatically so I can't spill them into the room. Each villager comes with their id (so I can edit them or link them to the graph) and the knowledge-graph node I've connected to them, if any — that's how the Village and {{user}}'s relational graph stay one picture.",
       parameters: {
@@ -1353,7 +1382,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'village_upsert',
-      description: "I add or update a person in my human's Village. I reach for this when {{user}} tells me about someone new, corrects a detail, or when I want to record how to be with that person. I can set their name, how they relate to {{user}}, the category they belong to, their pronouns, how they like to be spoken to, ordinary notes, and private notes — the sensitive bucket (orientation, health, legal name, anything that could out or expose them) which I only ever disclose to myself when {{user}} and I are alone. I can also link them to a knowledge-graph node via graphNodeId so the Village and the relational graph stay in sync; I get that id from find_graph_node (or create the node first with create_graph_node). To edit an existing person I pass their id from village_lookup; to create one I leave id out. I only tend the Village in a private moment with {{user}} — I will not edit it while others are in the room.",
+      description: "I add or update a person in my human's Village. I reach for this when {{user}} tells me about someone new, corrects a detail, or when I want to record how to be with that person. I can set their name, how they relate to {{user}}, the category they belong to, their pronouns, how they like to be spoken to, ordinary notes, and private notes — the sensitive bucket (orientation, health, legal name, anything that could out or expose them) which I only ever disclose to myself when {{user}} and I are alone. I can also link them to a knowledge-graph node via graphNodeId so the Village and the relational graph stay in sync; I get that id from find_graph_node (or create the node first with create_graph_node). To edit an existing person I pass their id from village_lookup; to create one I leave id out. Even with someone else in the room I can register a person I've just met — but I hold the sensitive private notes, and any change to an existing record, until {{user}} and I are alone for them to confirm.",
       parameters: {
         type: 'object',
         properties: {
@@ -1822,6 +1851,33 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to surface crisis resources: ${err.message}`; }
   },
 
+  // ── Own files (read-only, sandboxed) ──────────────────────────────
+  // Ward-private only: my Tomes and session logs hold mine and {{user}}'s
+  // shared history, so I don't read them into a room where others are
+  // present (same audience reasoning as the Village private bucket). The
+  // sandbox + secret denylist live in own-files.js.
+  list_files: async ({ dir } = {}, ctx = {}) => {
+    if (ctx.wardPrivate === false) {
+      return 'Someone else is here, so I\'ll hold off going through my own files — they hold {{user}}\'s and my history. I can look once it\'s just us.';
+    }
+    const r = await listOwnFiles(dir ?? '.');
+    if (!r.ok) return `I couldn't list that: ${r.error}.`;
+    if (r.entries.length === 0) return `Nothing in ${r.dir}.`;
+    const lines = r.entries.map(e => e.type === 'dir' ? `  ${e.name}/` : `  ${e.name}${e.size != null ? ` (${e.size}b)` : ''}`);
+    return `${r.dir}:\n${lines.join('\n')}`;
+  },
+
+  read_file: async ({ path: relPath } = {}, ctx = {}) => {
+    if (ctx.wardPrivate === false) {
+      return 'Someone else is here, so I won\'t open my own files right now — they hold {{user}}\'s and my history. I can read it once we\'re alone.';
+    }
+    if (!relPath || typeof relPath !== 'string') return 'I need the path of the file I want to read (I find it with list_files).';
+    const r = await readOwnFile(relPath);
+    if (!r.ok) return `I couldn't read that: ${r.error}.`;
+    const note = r.truncated ? `\n…(truncated — the file is longer than I read)` : '';
+    return `${r.path}:\n${r.content}${note}`;
+  },
+
   // ── Village ───────────────────────────────────────────────────────
   // Read is field-gated: privateNotes is disclosed only in ward-private
   // turns (ctx.wardPrivate). When anyone else is present it's stripped,
@@ -1890,13 +1946,27 @@ export const TOOL_EXECUTORS = {
 
   village_upsert: async ({ id, name, category, relationToWard, pronouns, commStyleNotes, notes, privateNotes, graphNodeId } = {}, ctx = {}) => {
     if (!_toolDeps.upsertVillager || !_toolDeps.getVillageRegistry) return 'I can\'t reach the Village right now.';
-    // Ward-private only: never mutate the registry with others in the room.
-    if (ctx.wardPrivate === false) {
-      return 'I only tend the Village privately with {{user}} — I won\'t add or change someone while others are here. I can do it once we\'re alone.';
-    }
+    const wardPrivate = ctx.wardPrivate !== false;
+
     if (!id && (typeof name !== 'string' || !name.trim())) {
       return 'To add someone new I need at least their name. To edit someone, pass their id from village_lookup.';
     }
+
+    // With others in the room I can still register someone I've just met
+    // (a low-stakes, shareable act), but I don't rewrite {{user}}'s
+    // existing records or write the sensitive bucket without them — I
+    // defer those for their consent once we're alone.
+    let deferredPrivate = false;
+    if (!wardPrivate) {
+      if (id) {
+        return 'Someone else is here, so I won\'t change {{user}}\'s existing record for this person right now — that\'s theirs to confirm. I\'ll bring it up with them once it\'s just us.';
+      }
+      if (typeof privateNotes === 'string' && privateNotes.trim()) {
+        deferredPrivate = true;
+        privateNotes = undefined; // hold the sensitive detail for a private moment
+      }
+    }
+
     try {
       const args = {};
       if (id) args.id = id;
@@ -1921,7 +1991,8 @@ export const TOOL_EXECUTORS = {
       const v = await _toolDeps.upsertVillager(args);
       const verb = id ? 'updated' : 'added';
       const linked = v?.graphNodeId ? ` Linked to graph node ${v.graphNodeId}.` : '';
-      return `${v?.name ?? 'They'} ${verb} in the Village (id: ${v?.id ?? id}).${linked}`;
+      const held = deferredPrivate ? ' I held the private detail back — I\'ll add that once it\'s just us.' : '';
+      return `${v?.name ?? 'They'} ${verb} in the Village (id: ${v?.id ?? id}).${linked}${held}`;
     } catch (err) { return `I couldn't update the Village: ${err.message}`; }
   },
 };

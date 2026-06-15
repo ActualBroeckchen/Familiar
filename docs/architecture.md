@@ -112,6 +112,7 @@ ponderings injection, care-check framing) and as background loops
 ├── surface-context.js       Consumer pipeline — hard gates + candidate selection + block format
 ├── surface-events.js        Event store (offers + outcomes) + pure-code tagger + reflection inputs
 ├── village.js               Village registry (V1) — categories/grant sets, villagers (name/pronouns/aliases/relation/stance/comm-style/notes/privateNotes/remember consent map/graphNodeId), locations; local mirror + Phylactery write-through sync (see docs/village-support-design.md). The Familiar reaches it via the village_lookup / village_upsert tools (privateNotes field-gated to ward-private turns)
+├── own-files.js             Sandboxed read-only access to the Familiar's own checkout — resolves repo-relative paths inside the root, denies secrets (settings.json, .env) + build noise (node_modules/.git/.venv), size-caps + text-only. Backs the list_files / read_file tools (ward-private only)
 ├── audience.js              Audience grant resolution (V3) — union/intersection/ladders, fetch eligibility, identity section markers; consumed by thalamus.enrich() and the Discord router
 ├── discord-gateway.js       Discord gateway adapter (V4) — bot-token WebSocket presence; DM policy + mention-only guild replies, per-location sessions, V3 gate applied before every reply; off-switch PROTO_FAMILIAR_DISCORD_DISABLED=1
 ├── knocks.js                Village knock list (V4.x) — contact attempts from unregistered people, captured for one-click registration in the Village editor; tomes/.village-knocks.json, capped, metadata only
@@ -318,8 +319,16 @@ Currently owns:
   from the session audience tag in /api/chat): `privateNotes` disclosed
   and mutations allowed only on ward-private turns; lookups still surface
   the person and ordinary notes when others are present, with the
-  sensitive bucket stripped. See docs/village-support-design.md
-  ("Field-level gating — privateNotes").
+  sensitive bucket stripped. Mutations: editing an existing record or
+  writing `privateNotes` is ward-private only and deferred for consent
+  otherwise; *creating* a just-met person is allowed even with others
+  present. See docs/village-support-design.md ("Field-level gating —
+  privateNotes").
+- **Own-file tools (0.6.x)** — `list_files` / `read_file` give the
+  Familiar sandboxed read-only access to its own checkout (tomes, logs,
+  docs) so it can look things up on purpose. Sandbox + secret denylist
+  in `own-files.js`; ward-private only (file contents are shared
+  history, not for gated rooms).
 - **`decideTriageViaLLM({threat, silenceMs, signals})`** — the triage
   deliberation: assembles the [Now]-anchored prompt (identity context,
   recent conversation with relative times, threat signals, trusted
