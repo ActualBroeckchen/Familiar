@@ -20,7 +20,7 @@
  * gracefully when Phylactery is unavailable.
  */
 
-import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, writeFileSync, readFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -81,12 +81,21 @@ if (sync.status === 0) {
   warn(`uv sync exited with status ${sync.status} — Phylactery may not work this boot.`);
 }
 
-// ── Auto-migrate from entity-core (first-run only) ───────────────────────────
-// If entity-core exists as a sibling directory and migration hasn't run yet,
-// migrate identity, memories, and graph into Phylactery automatically.
-// Runs here (before server boot) so Phylactery isn't running yet and there's
-// no SQLite concurrency. The marker file prevents re-running on every boot.
-const EC_MARKER = path.join(PHYLACTERY_ROOT, 'data', '.ec-migrated');
+// ── Auto-migrate from entity-core ────────────────────────────────────────────
+// If entity-core exists as a sibling directory, migrate identity, memories, and
+// graph into Phylactery automatically. Runs here (before server boot) so
+// Phylactery isn't running yet and there's no SQLite concurrency.
+//
+// The marker is a JSON report of the last migration's results — NOT a bare
+// "done" flag. A bare flag can't tell "migrated everything" apart from "ran and
+// imported nothing because graph.db wasn't found / its schema wasn't
+// recognised", so a partial migration would wedge the graph empty forever. We
+// re-run when the graph portion came back 'failed' (rows present in the source
+// but none imported) — capped so an unfixable source doesn't slow every boot.
+// 'absent'/'empty'/'ok' are terminal: nothing more to import.
+const EC_REPORT      = path.join(PHYLACTERY_ROOT, 'data', '.ec-migration.json');
+const EC_LEGACY_FLAG = path.join(PHYLACTERY_ROOT, 'data', '.ec-migrated');
+const MAX_GRAPH_RETRIES = 3;
 
 function looksLikeEcDataDir(p) {
   return existsSync(path.join(p, 'self'))
@@ -94,7 +103,12 @@ function looksLikeEcDataDir(p) {
       || existsSync(path.join(p, 'graph.db'));
 }
 
-if (!existsSync(EC_MARKER) && existsSync(PHYLACTERY_VENV)) {
+function readReport() {
+  try { return JSON.parse(readFileSync(EC_REPORT, 'utf8')); }
+  catch { return null; }
+}
+
+if (existsSync(PHYLACTERY_VENV)) {
   const ecCandidates = [
     path.resolve(REPO_ROOT, '..', 'entity-core'),
     path.resolve(REPO_ROOT, '..', 'entity-core-alpha'),
@@ -110,21 +124,52 @@ if (!existsSync(EC_MARKER) && existsSync(PHYLACTERY_VENV)) {
   }
 
   if (sourceDataDir) {
-    say('Found entity-core data — migrating identity, memories, and graph into Phylactery (one-time)…');
-    const mig = spawnSync(
-      uv,
-      ['run', 'python', '-m', 'phylactery.migrate_from_entity_core', '--source', sourceDataDir],
-      { cwd: PHYLACTERY_ROOT, stdio: 'inherit' },
-    );
-    if (mig.status === 0) {
-      try {
-        mkdirSync(path.dirname(EC_MARKER), { recursive: true });
-        writeFileSync(EC_MARKER, new Date().toISOString() + '\n');
-      } catch { /* non-fatal — will retry next boot */ }
-      say('Migration complete — identity, memories, and graph imported.');
-    } else {
-      warn(`Migration exited with status ${mig.status ?? 'unknown'}.`);
-      warn(`If this persists, run manually: npm run import-entity -- --from "${path.dirname(sourceDataDir)}"`);
+    const prev = readReport();
+    // Decide whether to run. No report yet (first run, or upgrading from the
+    // old bare-flag marker) → run. Prior graph failure under the retry cap →
+    // run again (a code update may now recognise the schema).
+    const graphFailed = prev?.graph?.status === 'failed';
+    const attempts    = prev?._attempts ?? 0;
+    const shouldRun   = !prev || (graphFailed && attempts < MAX_GRAPH_RETRIES);
+
+    if (shouldRun) {
+      if (!prev) say('Found entity-core data — migrating identity, memories, and graph into Phylactery…');
+      else       say(`Retrying entity-core graph migration (attempt ${attempts + 1}/${MAX_GRAPH_RETRIES})…`);
+
+      const mig = spawnSync(
+        uv,
+        ['run', 'python', '-m', 'phylactery.migrate_from_entity_core',
+         '--source', sourceDataDir, '--report', EC_REPORT],
+        { cwd: PHYLACTERY_ROOT, stdio: 'inherit' },
+      );
+
+      if (mig.status === 0) {
+        // The Python side wrote EC_REPORT. Re-read it, stamp the attempt
+        // count, and surface the graph outcome plainly.
+        const rep = readReport();
+        if (rep) {
+          rep._attempts = attempts + 1;
+          try { writeFileSync(EC_REPORT, JSON.stringify(rep, null, 2)); } catch { /* non-fatal */ }
+          try { if (existsSync(EC_LEGACY_FLAG)) unlinkSync(EC_LEGACY_FLAG); } catch { /* non-fatal */ }
+
+          const g = rep.graph ?? {};
+          const idN = rep.identity?.imported ?? 0;
+          const memN = rep.memories?.imported ?? 0;
+          say(`Migration done — identity: ${idN} new, memories: ${memN} new, graph: ${g.nodes_imported ?? 0} nodes / ${g.edges_imported ?? 0} edges (status: ${g.status ?? 'unknown'}).`);
+
+          if (g.status === 'failed') {
+            warn('entity-core graph.db was found with data but none of it could be imported — its schema was not recognised.');
+            if (attempts + 1 >= MAX_GRAPH_RETRIES) {
+              warn(`Giving up auto-retry after ${MAX_GRAPH_RETRIES} attempts. To force a manual import: npm run import-entity -- --from "${path.dirname(sourceDataDir)}"`);
+            }
+          }
+        } else {
+          warn('Migration ran but no report was written — graph state unknown. Will retry next boot.');
+        }
+      } else {
+        warn(`Migration exited with status ${mig.status ?? 'unknown'} — will retry next boot.`);
+        warn(`If this persists, run manually: npm run import-entity -- --from "${path.dirname(sourceDataDir)}"`);
+      }
     }
   }
 }

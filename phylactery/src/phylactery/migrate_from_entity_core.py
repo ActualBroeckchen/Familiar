@@ -169,25 +169,74 @@ def _columns(graph_conn: sqlite3.Connection, table: str) -> set[str]:
     return {r[1] for r in graph_conn.execute(f"PRAGMA table_info({table})").fetchall()}
 
 
+def _total_rows(graph_conn: sqlite3.Connection) -> int:
+    """Count rows across every user table in the source graph.db.
+
+    Counts ALL tables, not just the node/edge tables we know how to read, so
+    that a graph.db with an unrecognised schema (data sitting in tables we
+    don't probe) is still seen as "has data" — which classifies as 'failed'
+    (retry-worthy) rather than 'empty' (terminal). Counting only the
+    recognised tables would silently wedge such a graph empty forever.
+    """
+    total = 0
+    try:
+        tables = [
+            r[0] for r in graph_conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+        ]
+        for t in tables:
+            try:
+                total += graph_conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+            except Exception:
+                continue
+    except Exception:
+        return 0
+    return total
+
+
 def migrate_graph(
     conn: sqlite3.Connection,
     source_data_dir: Path,
     dry_run: bool,
-) -> tuple[int, int, int, int]:
-    """Read graph.db and insert nodes+edges. Returns (nodes_imported, nodes_skipped, edges_imported, edges_skipped)."""
+) -> dict:
+    """Read graph.db and insert nodes+edges.
+
+    Returns a dict describing what happened so callers can tell apart
+    "no graph to import" from "a graph was present but we failed to read
+    it" — the distinction that governs whether an auto-migration should
+    retry on a later boot:
+        { db_found, source_rows, nodes_imported, nodes_skipped,
+          edges_imported, edges_skipped, status }
+    status is one of: 'absent' (no graph.db), 'empty' (graph.db has no
+    rows), 'failed' (graph.db has rows but none could be imported),
+    'ok' (imported and/or already-present).
+    """
     graph_db = source_data_dir / "graph.db"
     if not graph_db.exists():
-        return 0, 0, 0, 0
+        return {
+            "db_found": False, "source_rows": 0,
+            "nodes_imported": 0, "nodes_skipped": 0,
+            "edges_imported": 0, "edges_skipped": 0,
+            "status": "absent",
+        }
 
     try:
         gconn = sqlite3.connect(str(graph_db))
         gconn.row_factory = sqlite3.Row
     except Exception as e:
         print(f"[migrate] Warning: could not open graph.db: {e}", file=sys.stderr)
-        return 0, 0, 0, 0
+        # The file is there but unreadable — that's a failure worth retrying.
+        return {
+            "db_found": True, "source_rows": 0,
+            "nodes_imported": 0, "nodes_skipped": 0,
+            "edges_imported": 0, "edges_skipped": 0,
+            "status": "failed",
+        }
 
     try:
         nodes_tbl, edges_tbl = _probe_table_names(gconn)
+        source_rows = _total_rows(gconn)
 
         nodes_imported = nodes_skipped = 0
         edges_imported = edges_skipped = 0
@@ -277,11 +326,31 @@ def migrate_graph(
 
     except Exception as e:
         print(f"[migrate] Warning: graph.db schema unrecognised, skipping: {e}", file=sys.stderr)
-        return 0, 0, 0, 0
+        return {
+            "db_found": True, "source_rows": 0,
+            "nodes_imported": 0, "nodes_skipped": 0,
+            "edges_imported": 0, "edges_skipped": 0,
+            "status": "failed",
+        }
     finally:
         gconn.close()
 
-    return nodes_imported, nodes_skipped, edges_imported, edges_skipped
+    handled = nodes_imported + nodes_skipped + edges_imported + edges_skipped
+    if source_rows == 0:
+        status = "empty"
+    elif handled == 0:
+        # The graph.db held rows but we imported/recognised none of them —
+        # an unrecognised schema. Worth retrying after a code update.
+        status = "failed"
+    else:
+        status = "ok"
+
+    return {
+        "db_found": True, "source_rows": source_rows,
+        "nodes_imported": nodes_imported, "nodes_skipped": nodes_skipped,
+        "edges_imported": edges_imported, "edges_skipped": edges_skipped,
+        "status": status,
+    }
 
 
 # ── Graph reconciliation report (Phase 2) ─────────────────────────────────────
@@ -319,6 +388,12 @@ def main() -> None:
         action="store_true",
         help="Walk files and count what would be imported without writing anything.",
     )
+    parser.add_argument(
+        "--report",
+        default=None,
+        help="Write a JSON summary of what was migrated to this path (used by the "
+             "auto-migration prestart hook to decide whether a retry is needed).",
+    )
     args = parser.parse_args()
 
     source_dir = Path(args.source).resolve()
@@ -348,9 +423,7 @@ def main() -> None:
 
     # Phase 1c: graph.
     print("Phase 1c: importing graph nodes and edges…")
-    nodes_imported, nodes_skipped, edges_imported, edges_skipped = migrate_graph(
-        conn, source_dir, args.dry_run
-    )
+    graph = migrate_graph(conn, source_dir, args.dry_run)
 
     conn.close()
 
@@ -359,12 +432,29 @@ def main() -> None:
         f"\n{dry_prefix}Migration complete.\n"
         f"  Identity : {id_imported} imported, {id_skipped} skipped.\n"
         f"  Memories : {mem_imported} imported, {mem_skipped} skipped.\n"
-        f"  Graph    : {nodes_imported} nodes, {edges_imported} edges imported "
-        f"({nodes_skipped} nodes, {edges_skipped} edges skipped)."
+        f"  Graph    : {graph['nodes_imported']} nodes, {graph['edges_imported']} edges imported "
+        f"({graph['nodes_skipped']} nodes, {graph['edges_skipped']} edges skipped) "
+        f"[graph status: {graph['status']}]."
     )
 
+    # Write the machine-readable report if asked. The auto-migration hook
+    # reads graph.status to decide whether a later boot should retry.
+    if args.report:
+        report = {
+            "at": now_iso(),
+            "source": str(source_dir),
+            "dry_run": args.dry_run,
+            "identity": {"imported": id_imported, "skipped": id_skipped},
+            "memories": {"imported": mem_imported, "skipped": mem_skipped},
+            "graph": graph,
+        }
+        try:
+            Path(args.report).write_text(json.dumps(report, indent=2), encoding="utf-8")
+        except Exception as e:
+            print(f"[migrate] Warning: could not write report to {args.report}: {e}", file=sys.stderr)
+
     # Phase 2: person-node reconciliation report (manual, not auto-merge).
-    if not args.dry_run and (nodes_imported + nodes_skipped) > 0:
+    if not args.dry_run and (graph["nodes_imported"] + graph["nodes_skipped"]) > 0:
         conn2 = get_conn()
         print_person_nodes(conn2)
         conn2.close()

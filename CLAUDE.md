@@ -169,6 +169,16 @@ threat level 10 before acting**. In a real situation the human could have been d
 
 If a prompt change feels like it's "softening" the Familiar's ability to act — STOP. That is exactly the kind of edit that caused the 1.5-hour failure. Ask the human before shipping it.
 
+### Recorded prompt-engineering errors (learn from these, don't repeat them)
+
+These are real mistakes that shipped and had to be walked back. Each one looked reasonable in isolation.
+
+1. **"Bias toward staying quiet" (the 1.5-hour silence).** Documented above. Cautious-sounding language added to a when-to-act prompt produced catastrophic passivity. Lesson: the model already defaults to caution — naming only the cost of intrusion, never the cost of silence, is how bias is built.
+
+2. **Over-correcting into "act now, do not hold back" — which the model read as "skip the work."** The deferred-intents block (`recent-ponderings.js`) once said *"I act on them now… I do not hold back. I use the right tool, then call acknowledge_deferred_intent."* The Familiar started calling `acknowledge_deferred_intent` **without doing the actual filing or saying the thing first** — treating the bookkeeping call as the action. Two compounding errors: (a) the urgent "now / don't hold back" framing created pressure to reach the closing step fast, and (b) listing the acknowledge tool in the same breath as the work made acknowledging *look like* the deliverable. Lesson: when a task has a do-the-work step and a mark-it-done step, **never let the prompt imply the mark-done step alone counts.** Make the order explicit and name the failure (*"calling acknowledge without doing the work is not acting, it is erasing the task"*) — and don't pile urgency on top of a multi-step action without separating the steps. Also: this was caught only because the human was watching the Familiar's live behaviour. Prompt changes to action/closure loops need behavioural testing, not just "reads well."
+
+3. **Token-bloat anti-pattern: "it's not X, it's Y" scaffolding.** Contrastive framing (*"this is not a suggestion but a commitment"*, *"not later, not when it feels right, now"*) reads as emphatic to a human but is mostly filler to the model and burns context every turn the block renders. State the positive instruction plainly. If a contrast is load-bearing (like the acknowledge-≠-acting lesson above), keep it; if it's rhetorical reinforcement, cut it.
+
 ## ⚠️ Safety-critical code requires human sign-off
 
 The proactivity section above protects *prompts*. This section protects the *code* in the same paths. Any **behavioral** change — not a relocation, not a comment, not a rename — in these files requires explicitly asking the human before shipping:
