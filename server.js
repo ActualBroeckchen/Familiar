@@ -89,7 +89,7 @@ import {
 } from './village.js';
 import { resolveAudience, audienceTagFor, WARD_PRIVATE } from './audience.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
-import { startDiscordGateway, stopDiscordGateway, getDiscordStatus } from './discord-gateway.js';
+import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord } from './discord-gateway.js';
 import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock } from './knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1378,6 +1378,7 @@ initCerebellumTools({
   addDefaultTomeEntry,
   getVillageRegistry,
   upsertVillager,
+  relayToDiscord,
 });
 
 // ── Memorization queue endpoints ────────────────────────────────

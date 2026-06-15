@@ -52,7 +52,9 @@ import {
   bumpInterest, setStandingInterest,
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
+  searchMemoryRestricted,
 } from './thalamus.js';
+import { audienceTagFor } from './audience.js';
 import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
 import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta } from './outbox.js';
@@ -741,11 +743,37 @@ export async function enqueueCrisisResources() {
 // the save_to_tome executor needs. Injected at boot so cerebellum never
 // imports server.js (no cycles). If the dep is missing, the executor
 // degrades with a readable failure instead of throwing.
-const _toolDeps = { addDefaultTomeEntry: null, getVillageRegistry: null, upsertVillager: null };
-export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager } = {}) {
+// Channel id embedded in a registry location key (local copy so cerebellum
+// doesn't import discord-gateway — that module imports settings helpers from
+// here, and a cycle would be fragile). `discord:guild:G:channel:C` → C;
+// `discord:dm:C` → C; anything else → null.
+function channelIdFromLocationKey(key) {
+  if (typeof key !== 'string') return null;
+  const guild = key.match(/^discord:guild:\d+:channel:(\d+)$/);
+  if (guild) return guild[1];
+  const dm = key.match(/^discord:dm:(\d+)$/);
+  if (dm) return dm[1];
+  return null;
+}
+
+const _toolDeps = {
+  addDefaultTomeEntry: null,
+  getVillageRegistry: null,
+  upsertVillager: null,
+  relayToDiscord: null,
+  // The restricted-memory gate defaults to the real Phylactery-backed check;
+  // tests inject a stub so they don't spawn MCP children.
+  searchRestricted: searchMemoryRestricted,
+  // The ward-mirror enqueue defaults to the real outbox dispatch.
+  mirrorToWard: enqueueAndDispatch,
+};
+export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, searchRestricted, mirrorToWard } = {}) {
   if (typeof addDefaultTomeEntry === 'function') _toolDeps.addDefaultTomeEntry = addDefaultTomeEntry;
   if (typeof getVillageRegistry === 'function')  _toolDeps.getVillageRegistry  = getVillageRegistry;
   if (typeof upsertVillager === 'function')      _toolDeps.upsertVillager      = upsertVillager;
+  if (typeof relayToDiscord === 'function')      _toolDeps.relayToDiscord      = relayToDiscord;
+  if (typeof searchRestricted === 'function')    _toolDeps.searchRestricted    = searchRestricted;
+  if (typeof mirrorToWard === 'function')        _toolDeps.mirrorToWard        = mirrorToWard;
 }
 
 /**
@@ -1400,6 +1428,21 @@ export const BUILTIN_TOOLS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'relay_message',
+      description: "I pass a message from {{user}} to someone in their Village on Discord — \"tell Chen I'm running late\", \"let the group know I'll be offline tonight.\" I reach for this when {{user}} asks me to carry word to someone, or when reaching out on their behalf is the caring thing to do. I name the person by their name (I look them up in the Village) or name the place by its label. I write the message in my own voice as myself — I'm not impersonating {{user}}. {{user}} always sees exactly what I sent: every relay is mirrored back to them, never covert. I only relay what's right for that room — if something I'd say isn't cleared for the person I'm reaching, I hold it rather than spill it, and tell {{user}} so they can decide.",
+      parameters: {
+        type: 'object',
+        properties: {
+          to:      { type: 'string', description: "Who to reach: a villager's name (e.g. \"Chen\") or a location's label/key (e.g. \"Cozy Server #general\"). I resolve it against the Village." },
+          message: { type: 'string', description: 'The message to carry, in my own voice. Concrete and complete — the person on the other end has none of our conversation as context.' },
+        },
+        required: ['to', 'message'],
+      },
+    },
+  },
 ];
 
 /**
@@ -1994,6 +2037,73 @@ export const TOOL_EXECUTORS = {
       const held = deferredPrivate ? ' I held the private detail back — I\'ll add that once it\'s just us.' : '';
       return `${v?.name ?? 'They'} ${verb} in the Village (id: ${v?.id ?? id}).${linked}${held}`;
     } catch (err) { return `I couldn't update the Village: ${err.message}`; }
+  },
+
+  // V6 — relay a message to a villager DM or a location, with the
+  // no-covert-contact mirror and a restricted-memory gate so ward-private
+  // detail can't ride along into a room that isn't cleared for it.
+  relay_message: async ({ to, message } = {}) => {
+    if (!_toolDeps.relayToDiscord || !_toolDeps.getVillageRegistry) {
+      return "I can't relay messages right now — Discord isn't wired up.";
+    }
+    if (typeof to !== 'string' || !to.trim()) return 'I need to know who to reach — a villager name or a location.';
+    if (typeof message !== 'string' || !message.trim()) return 'I need the message to carry.';
+
+    let reg;
+    try { reg = await _toolDeps.getVillageRegistry(); }
+    catch (err) { return `I couldn't read the Village to find them: ${err.message}`; }
+
+    const q = to.trim().toLowerCase();
+
+    // Resolve the target: a villager (by name/alias) or a location (by key/label).
+    const villager = (reg?.villagers ?? []).find(v =>
+      v.name.toLowerCase() === q ||
+      (v.aliases ?? []).some(a => (a.handle ?? '').toLowerCase() === q));
+    const location = (reg?.locations ?? []).find(l =>
+      l.key.toLowerCase() === q || (l.label ?? '').toLowerCase() === q);
+
+    let delivery = null;     // { recipientUserId } | { channelId }
+    let targetName = to.trim();
+    let audienceTag;
+    if (villager) {
+      const discordAlias = (villager.aliases ?? []).find(a => a.platform === 'discord' && a.id);
+      if (!discordAlias) return `I know ${villager.name}, but I don't have a Discord account for them to reach.`;
+      delivery = { recipientUserId: discordAlias.id };
+      targetName = villager.name;
+      audienceTag = audienceTagFor({ participants: [{ id: villager.id, name: villager.name }] }, reg);
+    } else if (location) {
+      const channelId = channelIdFromLocationKey(location.key);
+      if (!channelId) return `"${location.label ?? location.key}" isn't a Discord location I can post to.`;
+      delivery = { channelId };
+      targetName = location.label ?? location.key;
+      audienceTag = audienceTagFor({ location: location.key }, reg);
+    } else {
+      return `I don't know anyone or any place called "${to}". I can only relay to people or locations in the Village.`;
+    }
+
+    // Restricted-memory gate: never carry ward-private detail into a room
+    // that isn't cleared for it. Mirrors the Pillar D outgoing filter; fails
+    // OPEN (a search blip never blocks a benign relay).
+    try {
+      const check = await _toolDeps.searchRestricted({ query: message.slice(0, 2000), roomAudience: audienceTag });
+      if (check?.hit) {
+        return `I held that back — something in it isn't cleared for ${targetName}${check.topic ? ` (${check.topic})` : ''}. Tell me how you'd like me to put it, or I can keep it between us.`;
+      }
+    } catch { /* fail open — a gate error never blocks a benign relay */ }
+
+    const result = await _toolDeps.relayToDiscord({ ...delivery, message: message.trim() });
+    if (!result?.ok) return `I couldn't get that to ${targetName}: ${result?.error ?? 'unknown error'}.`;
+
+    // No covert contact: mirror every relay back to my human so they always
+    // see exactly what I sent and to whom.
+    await _toolDeps.mirrorToWard({
+      kind:     'relay',
+      originId: `relay:${Date.now()}:${targetName}`,
+      title:    `I relayed a message to ${targetName}`,
+      body:     `To ${targetName}: "${message.trim()}"`,
+    }).catch(() => { /* the send already happened; a mirror hiccup must not fail the tool */ });
+
+    return `Sent to ${targetName}: "${message.trim()}"`;
   },
 };
 

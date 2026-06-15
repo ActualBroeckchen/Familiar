@@ -114,7 +114,7 @@ ponderings injection, care-check framing) and as background loops
 ├── village.js               Village registry (V1) — categories/grant sets, villagers (name/pronouns/aliases/relation/stance/comm-style/notes/privateNotes/remember consent map/graphNodeId), locations; local mirror + Phylactery write-through sync (see docs/village-support-design.md). The Familiar reaches it via the village_lookup / village_upsert tools (privateNotes field-gated to ward-private turns)
 ├── own-files.js             Sandboxed read-only access to the Familiar's own checkout — resolves repo-relative paths inside the root, denies secrets (settings.json, .env) + build noise (node_modules/.git/.venv), size-caps + text-only. Backs the list_files / read_file tools (ward-private only)
 ├── audience.js              Audience grant resolution (V3) — union/intersection/ladders, fetch eligibility, identity section markers; consumed by thalamus.enrich() and the Discord router
-├── discord-gateway.js       Discord gateway adapter (V4+V5) — bot-token WebSocket presence; DM policy + mention-only guild replies, per-location sessions, V3 gate applied before every reply; V5: per-location connection routing (location.connectionId → settings.connections → primary fallback) + hourly token-bucket rate limiting (tomes/.rate-limits.json, ward outbox notice on exhaustion); off-switch PROTO_FAMILIAR_DISCORD_DISABLED=1
+├── discord-gateway.js       Discord gateway adapter (V4+V5+V6) — bot-token WebSocket presence; DM policy + mention-only guild replies, per-location sessions, V3 gate applied before every reply; V5: per-location connection routing (location.connectionId → settings.connections → primary fallback) + hourly token-bucket rate limiting (tomes/.rate-limits.json, ward outbox notice on exhaustion); V6: relayToDiscord() REST send (DM-open or channel post) backing the relay_message tool; off-switch PROTO_FAMILIAR_DISCORD_DISABLED=1
 ├── knocks.js                Village knock list (V4.x) — contact attempts from unregistered people, captured for one-click registration in the Village editor; tomes/.village-knocks.json, capped, metadata only
 ├── injection-guard.js       Prompt injection immunization — pattern scanner + sanitizer applied at every external-data boundary
 ├── memorization.js          Persistent per-session memorization queue + worker; V7: buildSharedRoomPrompt variant selected when audienceTag !== 'ward-private' — focuses on ward-only facts, skips unregistered-third-party detail
@@ -309,10 +309,12 @@ Currently owns:
   (built-ins + the user's advertise-only custom tools) +
   `runToolCallLoop()` (the non-streaming multi-round loop; the
   streaming variant lives in /api/chat because it is SSE transport).
-  `initCerebellumTools()` receives the tome-storage capability **and the
-  Village read/upsert functions** from server.js at boot so `save_to_tome`
-  and the `village_lookup` / `village_upsert` tools work without cerebellum
-  ever importing server.js.
+  `initCerebellumTools()` receives the tome-storage capability, **the
+  Village read/upsert functions, and `relayToDiscord`** from server.js at
+  boot so `save_to_tome`, `village_lookup` / `village_upsert`, and
+  `relay_message` work without cerebellum ever importing server.js (the
+  last would be a cycle — discord-gateway imports settings helpers from
+  cerebellum).
 - **Village tools (0.6.x)** — `village_lookup` / `village_upsert` let the
   Familiar see and edit the Village and link villagers to graph nodes
   (`graphNodeId`). Gated via `ctx.wardPrivate` (threaded into `toolCtx`
@@ -329,6 +331,15 @@ Currently owns:
   docs) so it can look things up on purpose. Sandbox + secret denylist
   in `own-files.js`; ward-private only (file contents are shared
   history, not for gated rooms).
+- **`relay_message` (Village V6, 0.6.15-alpha)** — carries a message from
+  the ward to a villager (DM) or a Discord location. Resolves the target
+  against the registry, runs the composed text through the
+  restricted-memory gate at the *target's* audience tag (`searchRestricted`
+  dep, defaults to `searchMemoryRestricted`; fails open), delivers via
+  `relayToDiscord` (injected dep), and mirrors every relay to the ward's
+  outbox (`mirrorToWard` dep, defaults to `enqueueAndDispatch`) — no covert
+  contact. The gate/mirror/delivery deps are injectable so tests run
+  without spawning MCP children or touching the real outbox.
 - **`decideTriageViaLLM({threat, silenceMs, signals})`** — the triage
   deliberation: assembles the [Now]-anchored prompt (identity context,
   recent conversation with relative times, threat signals, trusted

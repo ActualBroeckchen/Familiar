@@ -52,6 +52,7 @@ Thirty-four tools are always available when tool use is enabled: eight read/writ
 | `village_upsert` | Add or edit a villager (name, category, relation, pronouns, notes, `privateNotes`, and the `graphNodeId` link to a Phylactery node). Resolves a category name to its id. With others present, creating a just-met person is allowed, but edits to existing records and the `privateNotes` bucket are deferred for the ward's consent | Confirmation string |
 | `list_files` | List entries under a repo-relative folder of the Familiar's own checkout (tomes, logs, docs). Sandboxed (no escaping the root), secrets (settings/keys/.env) and build noise denied. **Ward-private turns only** | Plain-text listing |
 | `read_file` | Read one of the Familiar's own text files by repo-relative path (size-capped, text-only, same sandbox + denylist as `list_files`). Lets the Familiar look up its own tomes / session logs on purpose. **Ward-private turns only** | File contents, or an error string |
+| `relay_message` | Carry a message from the ward to a villager (DM) or a Discord location, named by `to` (villager name/alias or location label/key) + `message`. Delivery via the Discord bot token (REST); a restricted-memory gate holds back anything not cleared for the target room (fails open on error); every relay is mirrored to the ward's outbox — never covert | Confirmation string, a "held that back" note if gated, or an error string |
 
 ### Graph ids in the prompt
 

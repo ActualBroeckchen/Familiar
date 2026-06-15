@@ -397,6 +397,60 @@ async function sendChannelMessage(token, channelId, content) {
   }
 }
 
+/** Channel id embedded in a registry location key, or null if the key
+ *  isn't a Discord location. `discord:guild:G:channel:C` → C;
+ *  `discord:dm:C` → C. Exported + pure for tests. */
+export function discordChannelIdFromKey(key) {
+  if (typeof key !== 'string') return null;
+  const guild = key.match(/^discord:guild:\d+:channel:(\d+)$/);
+  if (guild) return guild[1];
+  const dm = key.match(/^discord:dm:(\d+)$/);
+  if (dm) return dm[1];
+  return null;
+}
+
+/**
+ * Relay a message the Familiar composed into a Discord channel or to a
+ * villager's DM. This is the V6 relay_message delivery half — cerebellum
+ * owns the target resolution + ward mirror + the restricted-memory gate;
+ * this function only knows Discord.
+ *
+ * Provide exactly one of:
+ *   - channelId       — send straight to that channel (guild room or known DM).
+ *   - recipientUserId — open/create a DM with that Discord user, then send.
+ *
+ * Reads the bot token from Settings (so it works whether or not the
+ * gateway's WebSocket is currently up — delivery is a plain REST call).
+ * Never throws: returns { ok: false, error } on any failure so the tool
+ * path stays clean.
+ */
+export async function relayToDiscord({ channelId, recipientUserId, message } = {}) {
+  try {
+    if (!message || typeof message !== 'string' || !message.trim()) {
+      return { ok: false, error: 'no message to relay' };
+    }
+    const settings = readSettingsSync();
+    const token = typeof settings?.discordBotToken === 'string' ? settings.discordBotToken.trim() : '';
+    if (!token) return { ok: false, error: 'Discord is not configured (no bot token)' };
+    if (settings?.discordEnabled === false) return { ok: false, error: 'Discord is turned off in Settings' };
+
+    let targetChannel = channelId ?? null;
+    if (!targetChannel && recipientUserId) {
+      const dm = await discordRest(token, '/users/@me/channels', {
+        method: 'POST',
+        body: { recipient_id: String(recipientUserId) },
+      });
+      targetChannel = dm?.id ?? null;
+    }
+    if (!targetChannel) return { ok: false, error: 'could not resolve a Discord channel for the target' };
+
+    await sendChannelMessage(token, targetChannel, message);
+    return { ok: true, channelId: targetChannel };
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+}
+
 // ── Turn handler ──────────────────────────────────────────────────
 
 // Serialize turns per location so concurrent messages can't interleave

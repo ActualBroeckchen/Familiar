@@ -3,8 +3,10 @@
 > Status: V1–V4 implemented (0.5.0-alpha); Familiar-facing Village access +
 > `privateNotes` field-gating added 0.6.x. V5 (per-location connections +
 > rate limits) and V7 (stranger data minimization) shipped 0.6.14-alpha.
-> V6 (Village actions: relay_message, check-on-ward) is design-phase and
-> requires human sign-off before implementation.
+> V6 `relay_message` shipped 0.6.15-alpha (ward-approved). The rest of V6
+> (check-on-ward outside triage, ward double-check for villager-initiated
+> commitments) remains design-phase and touches the safety-critical
+> escalation surface — human sign-off required before implementation.
 > Read this before touching any Village code; update it in the same commit
 > as any architectural change (same rule as architecture.md).
 
@@ -359,12 +361,20 @@ cerebellum adapters:
   all platforms. "You said you were going to sleep an hour ago — in the
   browser" works through existing RAG + the session-handoff machinery,
   with session location included in what gets memorized.
-- **Near-realtime relay:** a `relay_message` tool lets the Familiar
-  pass a message from one location to another ("tell Chen I'm running
-  late"). Mechanically: tool call → outbox item targeted at a location →
-  the location's adapter delivers. Gated: relaying *to* a villager is
-  subject to the target audience's grants; the ward always sees the
-  mirror.
+- **Near-realtime relay (shipped 0.6.15-alpha):** the `relay_message`
+  cerebellum tool lets the Familiar pass a message to a villager or a
+  location ("tell Chen I'm running late"). The implementation differs
+  from the original outbox-routing sketch: the tool resolves the target
+  against the registry (villager by name/alias → their Discord DM;
+  location by label/key → its channel), runs the composed message
+  through the restricted-memory gate at the *target's* audience tag
+  (`searchMemoryRestricted`, the same Pillar-D check, failing open), and
+  delivers via the Discord bot token over REST (`relayToDiscord` in
+  discord-gateway.js, injected into cerebellum to avoid an import cycle).
+  No covert contact: every relay is mirrored to the ward's outbox. The
+  delivery is a plain REST call, so it works whether or not the gateway
+  WebSocket is currently up. (Tools don't run on inbound Discord turns —
+  V4 decision 4 — so relay is a ward-session action that reaches *out*.)
 - **Commitments need the ward.** Anything that creates obligations
   (appointments, reminders set *by* villagers, schedule changes) is
   double-checked with the ward before it lands — unless the ward has
@@ -434,7 +444,7 @@ landing; sub-features inside it bump patch.
 | **V3** ✅ | Thalamus knowledge gate: `audience` option on enrich(), gate-before-fetch for every knowledge class, two-tier identity gating with section markers, ward-only blocks, heavy test coverage incl. fail-closed and intersection tests | Human sign-off obtained 2026-06-11; shipped 0.4.21-alpha |
 | **V4** ✅ | Discord gateway adapter: bot connect/resume, router, DM policy, guild mention-reply, per-location sessions end-to-end | Shipped 0.5.0-alpha (the milestone landing — Village Support is live end-to-end) |
 | **V5** ✅ | Per-location connections + rate limits | Shipped 0.6.14-alpha: `connectionId` routing in discord-gateway (location → connection → primaryConnection fallback); hourly token-bucket in discord-gateway with `tomes/.rate-limits.json`; ward outbox notice on exhaustion; Connection dropdown in location editor |
-| **V6** | Village actions: `relay_message`, check-on-ward requests outside triage, ward double-check flows for commitments | Touches outreach surface — sign-off rule applies |
+| **V6** ◑ | Village actions: `relay_message` ✅ (0.6.15-alpha), check-on-ward requests outside triage, ward double-check flows for commitments | `relay_message` shipped (ward-approved): cerebellum tool resolves a villager/location target, applies the restricted-memory gate, delivers via the Discord bot token, mirrors to the ward (no covert contact). check-on-ward + commitment double-check still touch the safety-critical escalation surface — sign-off rule applies |
 | **V7** ✅ | Stranger data minimization (memorization profiles by audience) | Shipped 0.6.14-alpha: `buildSharedRoomPrompt` variant in memorization.js selected when `audienceTag !== 'ward-private'`; focuses on ward-only facts, skips unregistered-third-party detail |
 
 Suggested order rationale: V1–V3 build the safety floor before the
