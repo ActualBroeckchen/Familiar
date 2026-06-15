@@ -163,7 +163,7 @@ trap {
 
 # ── Pre-flight checks ──────────────────────────────────────────────
 # Catch the common silent-killer environments BEFORE the install
-# cascades into an opaque npm / git / deno error that's hard to
+# cascades into an opaque npm / git / uv error that's hard to
 # diagnose from log fragments. Hard-fail checks call Fail() with a
 # clear actionable message; soft-fail checks add to
 # $script:installWarnings so the final MessageBox surfaces them.
@@ -349,11 +349,10 @@ Details: $($_.Exception.Message)
     #    a local mirror, or a flaky host recovers between pre-flight
     #    and the actual install step.
     $hostsToProbe = @(
-        @{ Name = 'github.com';         Consequence = 'entity-core clone will fail' },
+        @{ Name = 'github.com';         Consequence = 'Git install will fail' },
         @{ Name = 'registry.npmjs.org'; Consequence = 'npm install will fail' },
-        @{ Name = 'deno.land';          Consequence = 'Deno install + entity-core deps will fail' },
-        @{ Name = 'astral.sh';          Consequence = 'uv install will fail (Unruh disabled)' },
-        @{ Name = 'pypi.org';           Consequence = 'Unruh Python deps will fail' }
+        @{ Name = 'astral.sh';          Consequence = 'uv install will fail (Phylactery + Unruh disabled)' },
+        @{ Name = 'pypi.org';           Consequence = 'Phylactery + Unruh Python deps will fail' }
     )
     foreach ($h in $hostsToProbe) {
         $reachable = $false
@@ -405,8 +404,7 @@ Write-Host ""
 
 # Pre-flight runs in both modes — same silent killers can break an
 # update as a fresh install (a OneDrive move, a new corporate AV
-# policy since last update, the user moved entity-core into the
-# Proto-Familiar folder, etc.).
+# policy since last update, etc.).
 Test-PreFlight
 
 # --- Pre-pull data backup (update mode only) ---
@@ -515,8 +513,6 @@ $nodeMajor = [int]($nodeVersion.Split('.')[0])
 if ($nodeMajor -lt 18) { Fail "Node.js $nodeVersion detected; Proto-Familiar needs 18+." }
 Ok "Node.js v$nodeVersion"
 
-# --- Deno (install if missing, in both modes) ---
-# Deno's installer writes to ~\.deno\bin\deno.exe. Prime PATH so a
 # --- Git (install if missing, in both modes) ---
 Step "Checking Git..."
 if (-not (Have "git")) {
@@ -548,10 +544,10 @@ try {
 Ok "Dependencies up to date"
 
 # --- uv (install if missing, in both modes) ---
-# uv is the Python package/runtime manager Unruh uses. Astral's installer
+# uv is the Python package/runtime manager Phylactery + Unruh use. Astral's installer
 # writes to %USERPROFILE%\.local\bin\uv.exe by default. winget has a uv
 # package too; prefer it when available for consistency with how we
-# handle Node/Deno/Git, fall back to the official one-liner.
+# handle Node/Git, fall back to the official one-liner.
 Step "Checking uv..."
 $uvDefaultPath = Join-Path $env:USERPROFILE ".local\bin\uv.exe"
 if (Test-Path $uvDefaultPath) {
@@ -668,8 +664,8 @@ try {
 # above exits otherwise). The launchers check for this instead of
 # node_modules to decide whether to (re)run the installer —
 # node_modules can exist without the installer having run (a manual
-# `npm install`), which would skip entity-core clone + shortcut
-# creation. The marker is the reliable "installer actually completed"
+# `npm install`), which would skip shortcut creation and Phylactery/Unruh
+# venv sync. The marker is the reliable "installer actually completed"
 # signal. Content is the version, for debugging.
 $pfVersion = "unknown"
 try { $pfVersion = (Get-Content (Join-Path $projectRoot "package.json") -Raw | ConvertFrom-Json).version } catch {}

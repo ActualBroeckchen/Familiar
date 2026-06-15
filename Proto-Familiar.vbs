@@ -17,8 +17,8 @@ installMarker  = scriptDir & "\.pf-install-complete"
 ' .pf-install-complete marker (written at the end of a successful
 ' install) is the reliable signal — node_modules can exist from a
 ' manual `npm install` without the installer having run, which would
-' leave entity-core uncloned and the Desktop/Start Menu shortcuts
-' uncreated. node_modules + the Unruh venv stay as additional triggers.
+' leave the Desktop/Start Menu shortcuts uncreated. node_modules + the
+' Phylactery/Unruh venvs stay as additional triggers.
 needInstall = False
 If Not fso.FileExists(installMarker) Then needInstall = True
 If Not fso.FolderExists(nodeModules) Then needInstall = True

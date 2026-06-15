@@ -6375,7 +6375,8 @@ async function keOpenRememberMap() {
       </div>`).join('');
     det.innerHTML = `
       <div class="ke-detail-header"><h3>Ward · Remember settings</h3></div>
-      <p class="field-hint">Controls how I handle information about my human in each category.
+      <p class="field-hint">Controls how I handle information about <strong>my human themselves</strong>, per category.
+        (For other people in the Village, set memory consent per-person in the Village editor.)
         "Store freely" means I remember it immediately.
         "Ask first" means I store it as pending and surface it for confirmation.
         "Never store" means I drop it silently — use with care.</p>
@@ -8240,7 +8241,7 @@ function vlRenderPersonDetail(villager) {
       <textarea id="vl-p-notes" placeholder="Anything else worth knowing…" style="width:100%;min-height:3.5em;resize:vertical">${isNew ? '' : esc(villager.notes ?? '')}</textarea>
     </div>
     <div>
-      <div class="vl-field-label">Memory consent <span class="field-hint">(what I may store about this person)</span></div>
+      <div class="vl-field-label">Memory consent <span class="field-hint">(what I may store about this person — for my human's own settings, see Knowledge → Identity → ward → Remember settings)</span></div>
       <div id="vl-p-remember" class="vl-rem-grid">${remRows}</div>
     </div>
     ${graphNodeHtml}

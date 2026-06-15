@@ -1,6 +1,6 @@
 # Proto-Familiar - Windows system-tray app
 # Left-click the tray icon to open the browser. Right-click for Start/Stop/Restart/Logs/Quit.
-# Quit gracefully stops both Proto-Familiar and its entity-core child process.
+# Quit gracefully stops Proto-Familiar and its MCP children (Phylactery + Unruh).
 
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Windows.Forms
@@ -117,8 +117,8 @@ function Get-TrackedPid {
 }
 
 # Kill a process AND its child tree. taskkill /T traverses the parent-
-# child relationship to catch the MCP children (deno for entity-core,
-# python via uv for Unruh) that thalamus.js spawns. Stop-Process -Force
+# child relationship to catch the MCP children (Phylactery + Unruh, both
+# python via uv) that thalamus.js spawns. Stop-Process -Force
 # only calls TerminateProcess on the parent, which orphans the
 # children — they'd keep running with the port released but their state
 # directories locked, which itself can break a subsequent uv sync.
@@ -131,7 +131,7 @@ function Stop-ProcessTree([int]$processId) {
 function Stop-StrayServerProcesses {
     # Step 1: kill what our PID file points at. That's the canonical
     # "spawned by this tray" signal. taskkill /T /F sweeps the tree so
-    # MCP children (deno + python) die with it.
+    # MCP children (python via uv) die with it.
     $tracked = Get-TrackedPid
     if ($tracked) { Stop-ProcessTree $tracked }
 
@@ -214,16 +214,11 @@ function Start-Server {
         return
     }
     Set-Status "starting"
-    # Prime PATH for the MCP children thalamus.js spawns (deno for
-    # entity-core, uv for Unruh). Both have their own resolvers in
-    # thalamus.js, but if either was just installed by the bundled
-    # installer in this same session, the child inherits PATH from
-    # this PS process — so PATH-priming here means the very first
-    # boot after install works without a reboot.
-    $denoBin = Join-Path $env:USERPROFILE ".deno\bin"
-    if ((Test-Path (Join-Path $denoBin "deno.exe")) -and ($env:PATH -notlike "*$denoBin*")) {
-        $env:PATH = "$denoBin;$env:PATH"
-    }
+    # Prime PATH for the MCP children thalamus.js spawns (Phylactery +
+    # Unruh, both via uv). uv has its own resolver in thalamus.js, but if
+    # it was just installed by the bundled installer in this same session,
+    # the child inherits PATH from this PS process — so PATH-priming here
+    # means the very first boot after install works without a reboot.
     $uvBin = Join-Path $env:USERPROFILE ".local\bin"
     if ((Test-Path (Join-Path $uvBin "uv.exe")) -and ($env:PATH -notlike "*$uvBin*")) {
         $env:PATH = "$uvBin;$env:PATH"

@@ -1098,8 +1098,9 @@ handler awaits each loop's `stop*()` before closing the MCP children.
 - **Prompt inspector + temporal editor + threat surface:** unauthenticated.
   Intended for localhost. Disable / firewall before any non-loopback
   deployment.
-- **Entity-core permissions:** spawned with `deno run -A`. Acceptable for
-  a personal local tool; scope down for shared deployments.
+- **MCP child processes:** Phylactery + Unruh run as local stdio children
+  (Python via uv), reading/writing only their own `data/` dirs. No network
+  listener of their own; reachable only through thalamus over stdio.
 - **Input size:** `express.json` capped at 4MB; per-field memory + identity
   writes capped at 8KB.
 - **Tailscale gate:** server binds `0.0.0.0` but rejects non-loopback

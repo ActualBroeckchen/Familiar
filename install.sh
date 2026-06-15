@@ -237,8 +237,8 @@ esac
 # would have exited above on failure). The launchers check for this
 # instead of node_modules to decide whether to (re)run the installer —
 # node_modules can exist without the installer ever having run (a manual
-# `npm install`), which would skip entity-core clone + shortcut/desktop-
-# entry creation. The marker is the reliable "installer actually
+# `npm install`), which would skip shortcut/desktop-entry creation and
+# Phylactery/Unruh venv sync. The marker is the reliable "installer actually
 # completed" signal. Content is the version, for debugging / future
 # version-aware logic.
 PF_VERSION="$(node -p "require('$SCRIPT_DIR/package.json').version" 2>/dev/null || echo unknown)"

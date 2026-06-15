@@ -6,11 +6,11 @@
 # GitHub and lays it over the current folder, then runs the installer
 # for dependencies + database migrations.
 #
-# Your data is preserved. settings.json, logs/, saved tomes, Unruh's
-# database, and the entity-core sibling folder are NOT part of the
-# download, so copying the new files over the old ones can't touch them.
-# The installer also auto-backs up tomes/, logs/, settings, and
-# entity-core data into .pf-backups/ before doing anything.
+# Your data is preserved. settings.json, logs/, saved tomes, and the
+# Unruh + Phylactery databases are NOT part of the download, so copying
+# the new files over the old ones can't touch them. The installer also
+# auto-backs up tomes/, logs/, settings, and phylactery/data/ into
+# .pf-backups/ before doing anything.
 #
 # If you installed with `git clone`, you don't need this — just re-run
 # the installer; it does `git pull` for you.
