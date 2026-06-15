@@ -5,7 +5,7 @@ REM Responsibilities, in order:
 REM   1. Detect & recycle any stale Proto-Familiar instance holding
 REM      the configured port (via PID file + Win32_Process+CommandLine
 REM      heuristic matching this project dir).
-REM   2. Trigger install.bat if node_modules or phylactery\.venv is missing.
+REM   2. Trigger install.bat if node_modules, phylactery\.venv, or unruh\.venv is missing.
 REM   3. Prime PATH so the spawned node sees uv (Phylactery + Unruh)
 REM      — the MCP children thalamus.js spawns.
 REM   4. Launch node server.js detached via PowerShell, write PID file,
@@ -93,13 +93,14 @@ REM Trigger the installer if it hasn't completed here. The
 REM .pf-install-complete marker (written at the end of a successful
 REM install) is the reliable signal — node_modules can exist from a
 REM manual `npm install` without the installer having run, which would
-REM leave the Desktop/Start Menu shortcuts
-REM uncreated. node_modules + the Unruh venv stay as additional
-REM triggers in case they're removed after a complete install.
+REM leave the Desktop/Start Menu shortcuts uncreated.
+REM Also retriggers when either Python venv is missing so the Familiar
+REM doesn't silently degrade if the user deletes a .venv directory.
 set "NEED_INSTALL=0"
 if not exist "%SCRIPT_DIR%\.pf-install-complete" set "NEED_INSTALL=1"
 if not exist "%SCRIPT_DIR%\node_modules" set "NEED_INSTALL=1"
 if exist "%SCRIPT_DIR%\unruh\pyproject.toml" if not exist "%SCRIPT_DIR%\unruh\.venv" set "NEED_INSTALL=1"
+if exist "%SCRIPT_DIR%\phylactery\pyproject.toml" if not exist "%SCRIPT_DIR%\phylactery\.venv" set "NEED_INSTALL=1"
 if "!NEED_INSTALL!"=="1" (
   echo Running installer to complete setup...
   call "%SCRIPT_DIR%\install.bat"

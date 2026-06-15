@@ -509,9 +509,9 @@ test('update_memory / delete_memory executors reject malformed keys with a reada
   assert.match(del, /invalid date format .*YYYY-MM-DD_slug/);
 });
 
-test('new graph/memory executors validate input before touching entity-core', async () => {
+test('new graph/memory executors validate input before touching Phylactery', async () => {
   // These guards run before any MCP call, so they return their hint even
-  // with entity-core absent (the test env has no peer connected).
+  // with Phylactery absent (the test env has no peer connected).
   assert.match(await EXECS.create_graph_node({}), /label \(string\) is required/);
   assert.match(await EXECS.create_graph_edge({ fromId: 'a', toId: 'b' }), /fromId, toId, and type are all required/);
   assert.match(await EXECS.create_graph_edge({ fromId: 'a', toId: 'b', type: 'x', weight: 2 }), /weight must be a number in \[0, 1\]/);

@@ -108,6 +108,13 @@ else
     # have to know about uv to start the app.
     say "Unruh dependencies missing. Running installer to set them up..."
     bash "$SCRIPT_DIR/install.sh"
+  elif [ -f "$SCRIPT_DIR/phylactery/pyproject.toml" ] && [ ! -d "$SCRIPT_DIR/phylactery/.venv" ]; then
+    # Same guard for Phylactery's venv. If it was deleted or never
+    # materialised (e.g. the .venv dir was cleaned), run the installer
+    # rather than booting with Phylactery silently down and the Familiar
+    # losing their identity/memories.
+    say "Phylactery dependencies missing. Running installer to set them up..."
+    bash "$SCRIPT_DIR/install.sh"
   fi
   say "Starting Proto-Familiar on $URL (logs: $LOG_FILE) ..."
   ( cd "$SCRIPT_DIR" && PORT="$PORT" TAILSCALE="$TAILSCALE" nohup node server.js >"$LOG_FILE" 2>&1 & echo $! >"$PID_FILE" )

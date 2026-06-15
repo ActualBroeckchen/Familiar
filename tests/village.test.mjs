@@ -308,7 +308,7 @@ test('write-through: successful push clears syncPending; failure sets it', async
   assert.equal(reg.syncPending, false);
   assert.equal(pushes, 1);
 
-  initVillageSync({ push: async () => ({ ok: false, error: 'entity-core down' }) });
+  initVillageSync({ push: async () => ({ ok: false, error: 'Phylactery down' }) });
   await upsertVillager({ name: 'Sam' }, { filePath });
   reg = await getRegistry({ filePath });
   assert.equal(reg.syncPending, true);
@@ -364,7 +364,7 @@ test('bootSync: older canonical does not clobber mirror; pending mirror replays'
 
 test('bootSync: pull failure leaves mirror authoritative (never throws)', async () => {
   await upsertVillager({ name: 'Chen' }, { filePath });
-  initVillageSync({ pull: async () => { throw new Error('entity-core down'); } });
+  initVillageSync({ pull: async () => { throw new Error('Phylactery down'); } });
   const reg = await bootSync({ filePath });
   assert.equal(reg.villagers[0].name, 'Chen');
 });

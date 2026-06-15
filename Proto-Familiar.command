@@ -31,6 +31,12 @@ elif [ -f "unruh/pyproject.toml" ] && [ ! -d "unruh/.venv" ]; then
   # needs to be materialised before Thalamus can connect. Run installer.
   echo "Unruh dependencies missing - running installer..."
   bash ./install.sh
+elif [ -f "phylactery/pyproject.toml" ] && [ ! -d "phylactery/.venv" ]; then
+  # Same guard for Phylactery. If the venv was deleted or never created,
+  # run the installer rather than starting with Phylactery down and the
+  # Familiar silently missing their identity and memories.
+  echo "Phylactery dependencies missing - running installer..."
+  bash ./install.sh
 fi
 
 # Prime PATH for uv before exec'ing node — thalamus.js spawns Phylactery

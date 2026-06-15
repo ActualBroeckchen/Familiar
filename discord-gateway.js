@@ -437,7 +437,7 @@ async function handleTurn(gw, msg, decision) {
   // Scanned from the ACCUMULATED participants (readable, not just active,
   // same basis as the gate above), so a stranger who spoke earlier still
   // floors the room now. Stamped on the session so the memorization
-  // sweep can route ward-private content into entity-core while
+  // sweep can route ward-private content into Phylactery while
   // quarantining shared-room content to the local tome.
   const audienceTag = audienceTagFor(
     decision.audience === null ? null : { location: decision.audience.location, participants: session.participants },
