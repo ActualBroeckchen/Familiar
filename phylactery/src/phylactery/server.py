@@ -47,6 +47,10 @@ Tools exposed (stable contract — Thalamus depends on these shapes):
     backup_export           — passphrase-encrypted single-file backup
     backup_restore          — restore from a passphrase-encrypted backup
 
+  Ward consent (Pillar I):
+    remember_map_get        — read the ward's remember consent map
+    remember_map_set        — write the ward's remember consent map
+
 Original design by Zari Lewis (Psycheros). See docs/phylactery-build-spec.md.
 """
 
@@ -66,6 +70,7 @@ import phylactery.consolidate as consol
 import phylactery.graduation as grad
 import phylactery.scheduler as scheduler
 import phylactery.backup as backup
+import phylactery.remember as remember
 
 mcp = FastMCP("phylactery")
 
@@ -253,9 +258,18 @@ def memory_update(
     content: str,
     editedBy: Optional[str] = None,
     slug: Optional[str] = None,
+    audience: Optional[str] = None,
+    careWeight: Optional[str] = None,
 ) -> str:
-    """Overwrite an existing memory entry (auto-snapshots first)."""
-    result = mem.update_memory(granularity, date, content, slug=slug, conn=_c())
+    """Overwrite an existing memory entry (auto-snapshots first).
+
+    audience: 'ward-private' (default) or a category id — who can see this record.
+    careWeight: 'high' (pinned + decay-shielded), 'low', or omit to leave unchanged.
+    """
+    result = mem.update_memory(
+        granularity, date, content, slug=slug,
+        audience=audience, care_weight=careWeight, conn=_c(),
+    )
     if not result.get("ok"):
         return f"Update failed: {result.get('error', 'unknown')}"
     return "Memory updated. (Snapshot created before change.)"
@@ -527,6 +541,34 @@ def backup_restore(filePath: str, passphrase: str) -> dict[str, Any]:
     a server reconnect afterwards (thalamus handles this).
     """
     return backup.restore_encrypted(filePath, passphrase)
+
+
+# ── Ward consent map (Pillar I) ───────────────────────────────────────────────
+
+
+@mcp.tool()
+def remember_map_get() -> dict[str, Any]:
+    """I use this to read my human's remember-consent map — which categories
+    of information they've asked me to store freely, ask about, or never store.
+
+    Returns {basics, emotional_content, health_info, relationships, whereabouts}
+    where each value is true (store freely), false (never store, drop silently),
+    or 'ask' (store as consent_pending and surface to my human for confirmation).
+    """
+    return remember.get()
+
+
+@mcp.tool()
+def remember_map_set(map: dict[str, Any]) -> dict[str, Any]:
+    """I use this to write my human's remember-consent map.
+
+    map must be an object with any subset of the categories:
+      basics, emotional_content, health_info, relationships, whereabouts
+    Each value must be true, false, or 'ask'.
+
+    Returns {"ok": true, "map": ...} on success, {"ok": false, "errors": [...]} on validation failure.
+    """
+    return remember.set_map(map)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

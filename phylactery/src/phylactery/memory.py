@@ -58,6 +58,8 @@ def _row_to_list_item(row: sqlite3.Row) -> dict:
         "granularity": row["granularity"],
         "title": head,
         "content": content,
+        "audience": row["audience"] or "ward-private",
+        "care_weight": row["care_weight"],
     }
 
 
@@ -249,12 +251,12 @@ def list_memories(
     try:
         if granularity:
             rows = conn.execute(
-                "SELECT id,granularity,date_key,content FROM memories WHERE granularity=? AND kind='narrative' ORDER BY date_key DESC LIMIT ? OFFSET ?",
+                "SELECT id,granularity,date_key,content,audience,care_weight FROM memories WHERE granularity=? AND kind='narrative' ORDER BY date_key DESC LIMIT ? OFFSET ?",
                 (granularity, limit, offset),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id,granularity,date_key,content FROM memories WHERE kind='narrative' ORDER BY date_key DESC LIMIT ? OFFSET ?",
+                "SELECT id,granularity,date_key,content,audience,care_weight FROM memories WHERE kind='narrative' ORDER BY date_key DESC LIMIT ? OFFSET ?",
                 (limit, offset),
             ).fetchall()
         return [_row_to_list_item(r) for r in rows]
@@ -279,12 +281,17 @@ def read_memory(
         else:
             dk = date_key
         row = conn.execute(
-            "SELECT content FROM memories WHERE granularity=? AND date_key=? AND kind='narrative'",
+            "SELECT content, audience, care_weight FROM memories WHERE granularity=? AND date_key=? AND kind='narrative'",
             (granularity, dk),
         ).fetchone()
         if not row:
             return {"ok": False, "error": f"no {granularity} memory at {dk!r}"}
-        return {"ok": True, "content": row["content"] or ""}
+        return {
+            "ok": True,
+            "content": row["content"] or "",
+            "audience": row["audience"] or "ward-private",
+            "care_weight": row["care_weight"],
+        }
     finally:
         if own_conn:
             conn.close()
@@ -297,6 +304,8 @@ def update_memory(
     date_key: str,
     new_content: str,
     slug: str | None = None,
+    audience: str | None = None,
+    care_weight: str | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     own_conn = conn is None
@@ -306,9 +315,19 @@ def update_memory(
         auto_snapshot(conn)
         dk = f"{date_key}_{slug}" if slug else date_key
         now = now_iso()
+        # Build SET clause dynamically — only update fields the caller provided.
+        sets = ["content=?", "updated_at=?"]
+        params: list = [new_content, now]
+        if audience is not None:
+            sets.append("audience=?")
+            params.append(audience)
+        if care_weight is not None:
+            sets.append("care_weight=?")
+            params.append(care_weight if care_weight != "" else None)
+        params += [granularity, dk]
         result = conn.execute(
-            "UPDATE memories SET content=?, updated_at=? WHERE granularity=? AND date_key=? AND kind='narrative'",
-            (new_content, now, granularity, dk),
+            f"UPDATE memories SET {', '.join(sets)} WHERE granularity=? AND date_key=? AND kind='narrative'",
+            params,
         )
         if result.rowcount == 0:
             return {"ok": False, "error": f"no {granularity} memory at {dk!r}"}

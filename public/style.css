@@ -1690,6 +1690,30 @@ button { cursor: pointer; font-family: var(--font); }
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
+.ke-row-settings { opacity: 0.85; font-style: italic; }
+.ke-meta-row {
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 8px; margin-bottom: 10px;
+}
+.ke-meta-label {
+  font-size: 0.82rem; color: var(--text-dim);
+  min-width: 100px; flex-shrink: 0;
+}
+.ke-select {
+  font-size: 0.85rem; padding: 4px 8px;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text);
+  flex: 1 1 180px; min-width: 140px;
+}
+.ke-badge {
+  display: inline-block; margin-left: 6px;
+  font-size: 0.7rem; padding: 1px 5px;
+  border-radius: 3px; vertical-align: middle;
+  font-weight: 600; letter-spacing: 0.04em;
+}
+.ke-badge-audience { background: var(--accent-dim, #1c3a5e); color: var(--accent, #7ab4f5); }
+.ke-badge-cw-high   { background: #3a1c1c; color: #f5a07a; }
+.ke-badge-cw-low    { background: var(--surface); color: var(--text-dim); }
 
 .ke-detail-header { margin-bottom: 12px; }
 .ke-detail-header h3 { margin: 0; font-size: 1rem; color: var(--text); }

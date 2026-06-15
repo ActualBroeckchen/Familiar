@@ -6,7 +6,7 @@
 # Before exec'ing the server we (1) run the installer if deps are
 # missing, (2) recycle any stale Proto-Familiar instance holding the
 # port so a second double-click doesn't die with EADDRINUSE, and
-# (3) prime PATH for Deno + uv so spawned MCP children can find them.
+# (3) prime PATH for uv so spawned MCP children can find it.
 
 set -e
 cd "$(dirname "$0")"
@@ -21,7 +21,7 @@ export TAILSCALE="${TAILSCALE:-0}"
 # First-run install. Check the .pf-install-complete marker (written at
 # the end of a successful install) rather than just node_modules:
 # node_modules can exist from a manual `npm install` without the
-# installer having run, which would leave entity-core uncloned. The
+# installer having run, which would leave Phylactery unset up. The
 # marker is the reliable "installer actually ran" signal.
 if [ ! -f ".pf-install-complete" ] || [ ! -d "node_modules" ]; then
   echo "Installer hasn't completed here yet - running it first..."
@@ -33,12 +33,8 @@ elif [ -f "unruh/pyproject.toml" ] && [ ! -d "unruh/.venv" ]; then
   bash ./install.sh
 fi
 
-# Prime PATH for deno + uv before exec'ing node — thalamus.js spawns
-# both as MCP children and they must be on PATH. Same priming pattern
-# start.sh uses; thalamus.js has its own resolver as a backstop.
-if ! command -v deno >/dev/null 2>&1 && [ -x "$HOME/.deno/bin/deno" ]; then
-  export PATH="$HOME/.deno/bin:$PATH"
-fi
+# Prime PATH for uv before exec'ing node — thalamus.js spawns Phylactery
+# and Unruh as MCP children via uv. thalamus.js has its own resolver too.
 if ! command -v uv >/dev/null 2>&1 && [ -x "$HOME/.local/bin/uv" ]; then
   export PATH="$HOME/.local/bin:$PATH"
 fi
@@ -80,7 +76,7 @@ cat <<EOF
   Help:   docs/troubleshooting.md
 
   Logs print below. Closing this window
-  will shut down Proto-Familiar and entity-core.
+  will shut down Proto-Familiar and its MCP children.
 
 ========================================
 

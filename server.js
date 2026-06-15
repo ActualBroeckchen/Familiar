@@ -25,6 +25,7 @@ import {
   createGraphNode, createGraphEdge,
   createSnapshot, restoreSnapshot,
   exportBackup, restoreBackup, runLifecyclePass,
+  getRememberMap, setRememberMap,
   reconnectPhylactery,
   recordInterest, recordHandoff, listLiveInterests, listInterests,
   bumpInterest, demoteStanding, setStandingInterest,
@@ -1516,13 +1517,18 @@ app.get('/api/entity/memories/:granularity/:date', async (req, res) => {
 
 app.put('/api/entity/memories/:granularity/:date', async (req, res) => {
   const { granularity, date } = req.params;
-  const { content, editedBy } = req.body;
+  const { content, editedBy, audience, careWeight } = req.body;
   if (!VALID_MEMORY_GRANULARITIES.has(granularity)) return badRequest(res, 'invalid granularity');
   const key = parseMemoryKey(date);
   if (!key) return badRequest(res, 'invalid date format');
   if (typeof content !== 'string' || !content.trim()) return badRequest(res, 'content required');
   if (content.length > 16384)                       return badRequest(res, 'content exceeds 16 KB limit');
-  const result = await updateMemory({ granularity, date: key.date, slug: key.slug ?? undefined, content: content.trim(), editedBy });
+  const result = await updateMemory({
+    granularity, date: key.date, slug: key.slug ?? undefined,
+    content: content.trim(), editedBy,
+    ...(audience   !== undefined ? { audience }   : {}),
+    ...(careWeight !== undefined ? { careWeight }  : {}),
+  });
   if (!result.ok) return gatewayDown(res, result.error);
   res.json(result.result);
 });
@@ -1733,6 +1739,22 @@ app.post('/api/entity/lifecycle', async (req, res) => {
   res.json(result);
 });
 
+// Ward remember-consent map — governs per-category memory storage policy.
+app.get('/api/entity/ward/remember', async (_req, res) => {
+  const map = await getRememberMap();
+  if (!map) return gatewayDown(res, 'phylactery not connected');
+  res.json({ map });
+});
+
+app.put('/api/entity/ward/remember', async (req, res) => {
+  const { map } = req.body ?? {};
+  if (!map || typeof map !== 'object' || Array.isArray(map))
+    return badRequest(res, 'map (object) is required');
+  const result = await setRememberMap(map);
+  if (!result?.ok) return res.status(400).json({ error: result?.errors ?? result?.error ?? 'update failed' });
+  res.json(result);
+});
+
 const PORT = Number(process.env.PORT) || 8742;
 
 // Bind address. Defaults to 0.0.0.0 so the in-UI Tailscale toggle can flip
@@ -1839,7 +1861,8 @@ function injectDynamicAtDepth(messages, dynamicContent, depth) {
 // else (UI prefs, system prompts, etc.) doesn't require a Phylactery
 // respawn and shouldn't trigger one.
 function phylacteryCredsSnapshot(settings) {
-  const id = settings?.entityCoreConnectionId ?? null; // field name unchanged until Pillar I
+  // phylacteryConnectionId is canonical (Pillar I); legacy entityCoreConnectionId still accepted.
+  const id = settings?.phylacteryConnectionId ?? settings?.entityCoreConnectionId ?? null;
   if (!id) return { id: null, apiKey: '', provider: '', model: '' };
   const conn = (settings.connections ?? []).find(c => c?.id === id);
   if (!conn) return { id, apiKey: '', provider: '', model: '' };

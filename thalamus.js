@@ -246,7 +246,9 @@ function loadPhylacteryEnv() {
   } catch {
     return {}; // no settings.json yet (fresh install) or unreadable
   }
-  const id = settings.entityCoreConnectionId;
+  // phylacteryConnectionId is the canonical field name (Pillar I); fall back
+  // to the legacy entityCoreConnectionId so old settings.json files still work.
+  const id = settings.phylacteryConnectionId ?? settings.entityCoreConnectionId;
   if (!id) return {};
   const conn = (settings.connections ?? []).find(c => c?.id === id);
   if (!conn) return {};
@@ -2004,6 +2006,22 @@ export async function restoreBackup({ filePath, passphrase }) {
   return res;
 }
 
+// ── Ward remember-consent map (Pillar I) ─────────────────────────────────────
+
+export async function getRememberMap() {
+  return callTool('remember_map_get', {}).catch(err => {
+    console.warn('[thalamus] getRememberMap failed (degraded):', err?.message ?? err);
+    return null;
+  });
+}
+
+export async function setRememberMap(map) {
+  return callTool('remember_map_set', { map }).catch(err => {
+    console.warn('[thalamus] setRememberMap failed:', err?.message ?? err);
+    return { ok: false, error: err?.message ?? String(err) };
+  });
+}
+
 /**
  * Append content to a Phylactery identity file.
  * @param {{ category: string, filename: string, content: string }} opts
@@ -2145,16 +2163,17 @@ export async function listSnapshots() {
 
 // ── Writes (auto-snapshot before destructive) ────────────────────────────────
 
-export async function updateMemory({ granularity, date, slug, content, editedBy = PROTO_INSTANCE_ID }) {
+export async function updateMemory({ granularity, date, slug, content, editedBy = PROTO_INSTANCE_ID, audience, careWeight }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   await autoSnapshot(`memory_update ${granularity}/${date}${slug ? `_${slug}` : ''}`);
   try {
-    // slug matters for significant memories: entity-core's memory_update
-    // preserves the existing entry's slug on a date-only match, but an
-    // explicit slug addresses the exact {date}_{slug}.md file when
-    // several milestones share a date.
-    const result = await callTool('memory_update', { granularity, date, content, editedBy, ...(slug ? { slug } : {}) });
+    const args = { granularity, date, content, editedBy,
+      ...(slug       ? { slug }       : {}),
+      ...(audience   ? { audience }   : {}),
+      ...(careWeight !== undefined ? { careWeight } : {}),
+    };
+    const result = await callTool('memory_update', args);
     console.log(`[thalamus] updateMemory ${granularity}/${date}${slug ? `_${slug}` : ''}`);
     return { ok: true, result };
   } catch (err) {

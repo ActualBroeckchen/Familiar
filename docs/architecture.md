@@ -119,7 +119,7 @@ ponderings injection, care-check framing) and as background loops
 ├── memorization.js          Persistent per-session memorization queue + worker
 ├── outgoing-filter.js       Pillar D outgoing gate — semantic check before delivery; retries up to budget then safe-refusal
 ├── providers.js             Shared chat-completions URL map (used by server.js + thalamus.js)
-├── entity-ref.js            Validate entity-core:self/file.md#section refs (M7 standing-value bridge; ref format unchanged until Pillar I)
+├── entity-ref.js            Validate phylactery:self/file.md#section refs; accepts legacy entity-core: prefix as alias
 ├── package.json
 ├── .gitignore
 │
@@ -133,9 +133,10 @@ ponderings injection, care-check framing) and as background loops
 │   ├── src/phylactery/graduation.py  Pillar H — signed-off graduation-eligibility rule + Familiar-led audit
 │   ├── src/phylactery/scheduler.py   Pillar H — volume-gated lifecycle worker (off-switch PROTO_FAMILIAR_CONSOLIDATE_DISABLED)
 │   ├── src/phylactery/backup.py      Pillar H — passphrase-encrypted single-file export/restore
+│   ├── src/phylactery/remember.py    Pillar I — ward remember-consent map (per-category true/false/ask policy)
 │   ├── src/phylactery/snapshot.py + audience.py + embed.py + db.py
-│   ├── data/                SQLite database + snapshots + backups (auto-created, git-ignored)
-│   └── tests/               pytest contract tests (incl. test_graduation.py)
+│   ├── data/                SQLite database + snapshots + backups + remember_map.json (auto-created, git-ignored)
+│   └── tests/               pytest contract tests (test_graduation.py + test_retrieval_decay.py)
 │
 ├── unruh/                   In-tree Python module (Unruh — temporal context)
 │   ├── pyproject.toml       uv-managed Python project, deps locked in uv.lock
@@ -258,10 +259,9 @@ SIGINT / SIGHUP handler so clean shutdown awaits any in-flight tick.
 
 ### `thalamus.js` — the cognitive-module mediator
 
-Spawns and reconnects **entity-core** (Deno, retiring) + **Unruh** (Python via uv)
-as stdio MCP children. **Phylactery** (Python via uv, `./phylactery/`) is the
-in-tree successor to entity-core — built in Pillar A; will replace entity-core's
-slot in Pillar B. Until the repoint, entity-core remains the live canonical store.
+Spawns and reconnects **Phylactery** (Python via uv, `./phylactery/`) + **Unruh**
+(Python via uv) as stdio MCP children. Phylactery is the canonical self-store
+(identity + memory + graph + trackers); entity-core (Deno) is retired as of Pillar I.
 Exposes:
 
 - **`enrich(userMessage, { liveTurn, staticOnly, lastUserMessageAt, audience })`**
@@ -571,10 +571,12 @@ auto-merged — it's reported as ambiguous for the ward to resolve. Snapshots
 before any change.
 
 **Recall tracking** (`memory.search` → `_touch_recall`) — pure observability:
-bumps `recall_count` + `last_recalled_at` for everything surfaced. It does NOT
-reorder or filter recall (a retrieval-decay knob would change *whether* a fact
-surfaces — its own future sign-off). It exists to feed the graduation gate's
-"never-recalled = no longer front-of-mind" signal.
+bumps `recall_count` + `last_recalled_at` for everything surfaced.
+
+**Retrieval-decay** (`_decay_weight`) — `score = similarity × 0.5^(days_since_recall/180)`.
+careWeight:high records floor at 0.5; never-recalled records get weight=1.0. Down-rank only
+(never a filter cutoff). Applied before the `max_results` slice so decay can reorder across
+similarity bands. Re-sort on every search ensures stale records don't crowd out fresh ones.
 
 **Graduation audit** (`graduation.py`) — keeps the always-injected
 `identity`/`ward` surface lean by filing no-longer-front-of-mind detail into
@@ -661,6 +663,29 @@ and via `POST /api/entity/backup/{export,restore}`.
   buttons per-message, summarizer modal.
 - **Tome engine** unchanged from the original SillyTavern-compatible
   implementation.
+
+### Pillar I — Knowledge-manager repoint + new-field surfacing
+
+All `/api/entity/*` HTTP routes now delegate entirely to Phylactery via thalamus.js wrappers
+(entity-core is retired). New fields surfaced in the KE:
+
+- **`audience` + `careWeight` on memory records** — shown in the detail view with editable
+  dropdowns; `PUT /api/entity/memories/:granularity/:date` now accepts `audience` and `careWeight`
+  and forwards them to `memory_update` → `memory.py` `update_memory()`.
+- **Audience badges** in the memory list rows for non-ward-private records; careWeight badges
+  for `high`/`low` entries.
+- **Ward · Remember settings** — persistent consent-policy map
+  (`basics / emotional_content / health_info / relationships / whereabouts → true/false/ask`).
+  Stored in `phylactery/data/remember_map.json`. Surfaced via:
+  - Phylactery MCP tools `remember_map_get` / `remember_map_set` (`remember.py`)
+  - thalamus.js helpers `getRememberMap()` / `setRememberMap()`
+  - HTTP routes `GET /api/entity/ward/remember`, `PUT /api/entity/ward/remember`
+  - KE Identity pane: "Remember settings" row always visible under the `ward` category header
+- **Settings field rename**: `entityCoreConnectionId` → `phylacteryConnectionId` (legacy name
+  still accepted as fallback in `loadPhylacteryEnv()` and `phylacteryCredsSnapshot()`).
+- **Prompt Inspector labels**: "Entity-Core (static/dynamic)" → "Phylactery (static/dynamic)".
+- **Deno/entity-core retirement**: `start.sh`, `start.bat`, `Proto-Familiar.command` no longer
+  prime `~/.deno/bin` on PATH; comments updated to reflect Phylactery+Unruh as the only MCP children.
 
 ## Data flow — single chat request
 

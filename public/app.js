@@ -176,7 +176,7 @@ const state = {
   primaryConnectionId:     null, // id of the active/primary connection
   fallbackConnectionIds:   [],   // ordered ids tried when primary fails/returns empty
   maxEmptyRetries:         2,    // retries per connection when response is empty
-  entityCoreConnectionId:  null, // id of the connection whose API key entity-core uses
+  phylacteryConnectionId:  null, // id of the connection whose API key Phylactery uses
   // ── Prompt-cache tuning ──────────────────────────────────
   // How many messages from the end of the conversation the dynamic
   // thalamus block gets injected at. Static identity stays at the
@@ -255,7 +255,7 @@ const SERVER_SYNCED_KEYS = [
   'tomeScanDepth', 'tomeRecursive', 'tomeMaxRecursionSteps',
   'tomeCaseSensitive', 'tomeMatchWholeWords',
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
-  'entityCoreConnectionId',
+  'phylacteryConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale',
   'trustedContacts', 'userDiscordWebhook',
@@ -549,9 +549,9 @@ function migrateLegacyConnection() {
   state.fallbackConnectionIds = (state.fallbackConnectionIds || [])
     .filter(id => state.connections.find(c => c.id === id))
     .filter(id => id !== state.primaryConnectionId);
-  // Clear the entity-core designation if it points at a missing connection.
-  if (state.entityCoreConnectionId && !state.connections.find(c => c.id === state.entityCoreConnectionId)) {
-    state.entityCoreConnectionId = null;
+  // Clear the Phylactery designation if it points at a missing connection.
+  if (state.phylacteryConnectionId && !state.connections.find(c => c.id === state.phylacteryConnectionId)) {
+    state.phylacteryConnectionId = null;
   }
 }
 
@@ -624,7 +624,7 @@ function saveNewConnection(name) {
 function deleteConnection(id) {
   state.connections = state.connections.filter(c => c.id !== id);
   state.fallbackConnectionIds = state.fallbackConnectionIds.filter(x => x !== id);
-  if (state.entityCoreConnectionId === id) state.entityCoreConnectionId = null;
+  if (state.phylacteryConnectionId === id) state.phylacteryConnectionId = null;
   if (state.primaryConnectionId === id) {
     state.primaryConnectionId = state.connections[0]?.id ?? null;
     const newPrimary = getPrimaryConnection();
@@ -669,13 +669,12 @@ function toggleFallback(id, enabled) {
  * respawns Phylactery when this (or the pointed-at connection's key)
  * changes — so the user sees the new key take effect on the next
  * chat message, no restart required.
- * (Function name kept as setEntityCoreConnection until Pillar I.)
  */
-function setEntityCoreConnection(id) {
-  if (state.entityCoreConnectionId === id) {
-    state.entityCoreConnectionId = null;
+function setPhylacteryConnection(id) {
+  if (state.phylacteryConnectionId === id) {
+    state.phylacteryConnectionId = null;
   } else {
-    state.entityCoreConnectionId = id;
+    state.phylacteryConnectionId = id;
   }
   saveSettings();
   renderConnectionsList();
@@ -702,7 +701,7 @@ function renderConnectionsList() {
     const isPrimary  = conn.id === state.primaryConnectionId;
     const fbIdx      = state.fallbackConnectionIds.indexOf(conn.id);
     const isFallback = fbIdx >= 0 && !isPrimary;
-    const isEntityCore = conn.id === state.entityCoreConnectionId;
+    const isEntityCore = conn.id === state.phylacteryConnectionId;
 
     const li = document.createElement('li');
     li.className = 'connection-item' + (isPrimary ? ' is-primary' : '');
@@ -747,7 +746,7 @@ function renderConnectionsList() {
 
     // Phylactery designation: single-select across all connections. Tells
     // the server which API key to pass to the Phylactery child process
-    // via ENTITY_CORE_LLM_API_KEY (and ZAI_API_KEY for z.ai providers).
+    // via PHYLACTERY_LLM_API_KEY (and ZAI_API_KEY for z.ai providers).
     // Independent of primary/fallback — you can point Phylactery at any
     // connection regardless of how the chat path uses it.
     const ecBtn = document.createElement('button');
@@ -760,7 +759,7 @@ function renderConnectionsList() {
       ? `Clear Phylactery API-key designation from "${conn.name}"`
       : `Use "${conn.name}" as Phylactery API-key source`);
     ecBtn.setAttribute('aria-pressed', isEntityCore ? 'true' : 'false');
-    ecBtn.addEventListener('click', () => setEntityCoreConnection(conn.id));
+    ecBtn.addEventListener('click', () => setPhylacteryConnection(conn.id));
     actions.appendChild(ecBtn);
 
     if (isFallback) {
@@ -2520,8 +2519,8 @@ const PI_SOURCE_LABELS = {
   // the static block prepends the system message (cacheable prefix);
   // the dynamic block is depth-injected as its own system message so
   // changes don't invalidate the static prefix.
-  'thalamus-static':   'Entity-Core (static)',
-  'thalamus-dynamic':  'Entity-Core (dynamic @ depth)',
+  'thalamus-static':   'Phylactery (static)',
+  'thalamus-dynamic':  'Phylactery (dynamic @ depth)',
   'lore-sys-top':      'Lore · system top',
   'lore-before-char':  'Lore · before character',
   'lore-after-char':   'Lore · after character',
@@ -5200,10 +5199,14 @@ async function keLoadMemories() {
     for (const m of memories) {
       const row = document.createElement('div');
       row.className = 'ke-row';
+      const audienceBadge = (m.audience && m.audience !== 'ward-private')
+        ? `<span class="ke-badge ke-badge-audience">${esc(m.audience)}</span>` : '';
+      const cwBadge = m.care_weight
+        ? `<span class="ke-badge ke-badge-cw-${esc(m.care_weight)}">${esc(m.care_weight)}</span>` : '';
       row.innerHTML = `
-        <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date)}</div>
-        <div class="ke-row-sub">${esc((m.preview ?? '').slice(0, 140))}</div>`;
-      row.addEventListener('click', () => keOpenMemory(m.granularity, m.date));
+        <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date ?? m.key)}${audienceBadge}${cwBadge}</div>
+        <div class="ke-row-sub">${esc((m.preview ?? m.title ?? '').slice(0, 140))}</div>`;
+      row.addEventListener('click', () => keOpenMemory(m.granularity, m.date ?? m.key));
       list.appendChild(row);
     }
   } catch (err) { list.innerHTML = keError(err, 'Failed to load memories.'); }
@@ -5215,13 +5218,28 @@ async function keOpenMemory(granularity, date) {
     const res = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`);
     if (!res.ok) throw new Error(await keReadServerError(res));
     const data = await res.json();
-    const content = data.memory?.content ?? data.content ?? '';
+    const content   = data.memory?.content    ?? data.content    ?? '';
+    const audience  = data.memory?.audience   ?? data.audience   ?? 'ward-private';
+    const careWeight = data.memory?.care_weight ?? data.care_weight ?? '';
     const det = $('ke-mem-detail');
     det.innerHTML = `
       <div class="ke-detail-header">
         <h3>${esc(granularity)} · ${esc(date)}</h3>
       </div>
-      <textarea id="ke-mem-content" rows="14" class="ke-textarea">${esc(content)}</textarea>
+      <textarea id="ke-mem-content" rows="12" class="ke-textarea">${esc(content)}</textarea>
+      <div class="ke-meta-row">
+        <label class="ke-meta-label" for="ke-mem-audience">Audience</label>
+        <select id="ke-mem-audience" class="ke-select">
+          <option value="ward-private" ${audience === 'ward-private' ? 'selected' : ''}>ward-private (most restrictive)</option>
+          <option value="all" ${audience === 'all' ? 'selected' : ''}>all (any room)</option>
+        </select>
+        <label class="ke-meta-label" for="ke-mem-care-weight">Care weight</label>
+        <select id="ke-mem-care-weight" class="ke-select">
+          <option value=""     ${!careWeight             ? 'selected' : ''}>— unset</option>
+          <option value="high" ${careWeight === 'high'   ? 'selected' : ''}>high (decay-shielded, never graduates)</option>
+          <option value="low"  ${careWeight === 'low'    ? 'selected' : ''}>low</option>
+        </select>
+      </div>
       <div class="ke-actions">
         <button id="ke-mem-save"    class="btn-send">Save (overwrite)</button>
         <button id="ke-mem-super"   class="btn-secondary">Supersede with today's date</button>
@@ -5230,9 +5248,11 @@ async function keOpenMemory(granularity, date) {
       <p class="field-hint">Editing rewrites the entry in place; an auto-snapshot is taken first. "Supersede" writes a NEW dated entry that contradicts this one — recency-decay then demotes the stale entry while preserving history.</p>`;
     $('ke-mem-save').addEventListener('click', async () => {
       const body = $('ke-mem-content').value;
+      const aud = $('ke-mem-audience').value;
+      const cw  = $('ke-mem-care-weight').value;
       const r = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: body, editedBy: 'user-edit' }),
+        body: JSON.stringify({ content: body, editedBy: 'user-edit', audience: aud, careWeight: cw || null }),
       });
       if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
       keLoadMemories();
@@ -6251,7 +6271,8 @@ async function keLoadIdentity() {
     let any = false;
     for (const category of ['self', 'ward', 'relationship', 'custom']) {
       const files = data[category] ?? [];
-      if (!files.length) continue;
+      const isWard = category === 'ward';
+      if (!files.length && !isWard) continue;
       const header = document.createElement('div');
       header.className = 'ke-row-header';
       header.textContent = category;
@@ -6265,6 +6286,17 @@ async function keLoadIdentity() {
           <div class="ke-row-sub">${esc((f.content ?? '').slice(0, 100).replace(/\n/g, ' '))}</div>`;
         row.addEventListener('click', () => keOpenIdentity(category, f));
         list.appendChild(row);
+      }
+      if (isWard) {
+        // Always expose Remember settings even when there are no ward files yet.
+        any = true;
+        const rmRow = document.createElement('div');
+        rmRow.className = 'ke-row ke-row-settings';
+        rmRow.innerHTML = `
+          <div class="ke-row-title">Remember settings</div>
+          <div class="ke-row-sub">Memory storage policy per category</div>`;
+        rmRow.addEventListener('click', keOpenRememberMap);
+        list.appendChild(rmRow);
       }
     }
     if (!any) list.innerHTML = '<p class="logs-empty">No identity files yet.</p>';
@@ -6308,6 +6340,64 @@ function keOpenIdentity(category, file) {
       keLoadIdentity();
     });
   });
+}
+
+// ── Remember-consent map ─────────────────────────────────────────────────────
+async function keOpenRememberMap() {
+  const det = $('ke-id-detail');
+  det.innerHTML = '<p class="logs-loading">Loading remember settings…</p>';
+  try {
+    const res = await fetch('/api/entity/ward/remember');
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const data = await res.json();
+    const map = data.map ?? {};
+    const categories = ['basics', 'emotional_content', 'health_info', 'relationships', 'whereabouts'];
+    const labels = {
+      basics: 'Basics (name, age, daily facts)',
+      emotional_content: 'Emotional content (feelings, struggles)',
+      health_info: 'Health information (meds, conditions)',
+      relationships: 'Relationships (family, friends)',
+      whereabouts: 'Whereabouts (location, travel)',
+    };
+    function selFor(cat) {
+      const v = map[cat];
+      const opts = [
+        `<option value="true"  ${v === true   ? 'selected' : ''}>Store freely</option>`,
+        `<option value="ask"   ${v === 'ask'  ? 'selected' : ''}>Ask first (consent_pending)</option>`,
+        `<option value="false" ${v === false  ? 'selected' : ''}>Never store</option>`,
+      ].join('');
+      return `<select id="rm-${cat}" class="ke-select">${opts}</select>`;
+    }
+    const rows = categories.map(cat => `
+      <div class="ke-meta-row">
+        <label class="ke-meta-label" for="rm-${cat}">${esc(labels[cat])}</label>
+        ${selFor(cat)}
+      </div>`).join('');
+    det.innerHTML = `
+      <div class="ke-detail-header"><h3>Ward · Remember settings</h3></div>
+      <p class="field-hint">Controls how I handle information about my human in each category.
+        "Store freely" means I remember it immediately.
+        "Ask first" means I store it as pending and surface it for confirmation.
+        "Never store" means I drop it silently — use with care.</p>
+      ${rows}
+      <div class="ke-actions">
+        <button id="ke-rm-save" class="btn-send">Save</button>
+      </div>`;
+    $('ke-rm-save').addEventListener('click', async () => {
+      const newMap = {};
+      for (const cat of categories) {
+        const raw = det.querySelector(`#rm-${cat}`)?.value;
+        newMap[cat] = raw === 'true' ? true : raw === 'false' ? false : 'ask';
+      }
+      const r = await fetch('/api/entity/ward/remember', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ map: newMap }),
+      });
+      if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
+      alert('Remember settings saved.');
+      keOpenRememberMap();
+    });
+  } catch (err) { det.innerHTML = keError(err, 'Failed to load remember settings.'); }
 }
 
 // ── Snapshots tab ───────────────────────────────────────────────────────

@@ -2,16 +2,16 @@
 # Proto-Familiar launcher (macOS / Linux).
 #
 # Responsibilities, in order:
-#   1. Prime PATH so spawned MCP children find deno + uv even when the
-#      shell hasn't reloaded after install.
+#   1. Prime PATH so spawned MCP children find uv even when the shell
+#      hasn't reloaded after install.
 #   2. Detect & recycle any stale Proto-Familiar instance holding the
 #      configured port (via PID file + pgrep+cwd-match heuristic).
-#   3. Trigger install.sh if node_modules or unruh/.venv is missing.
+#   3. Trigger install.sh if node_modules or phylactery/.venv is missing.
 #   4. Launch `node server.js` detached, write PID file, open browser.
 #
 # Stop with ./stop.sh — kills every node server.js rooted here, not
-# just the tracked PID. server.js auto-spawns entity-core (Deno) and
-# Unruh (Python via uv) as MCP children; both die when server.js does.
+# just the tracked PID. server.js auto-spawns Phylactery (Python via uv)
+# and Unruh (Python via uv) as MCP children; both die when server.js does.
 
 set -e
 
@@ -27,15 +27,7 @@ LOG_FILE="$SCRIPT_DIR/.proto-familiar.log"
 
 say() { printf '\033[1;36m==> %s\033[0m\n' "$*"; }
 
-# thalamus.js spawns `deno` for entity-core. Make sure ~/.deno/bin is on
-# PATH even when the user installed Deno via the official script but
-# hasn't reloaded their shell — otherwise the spawn fails with ENOENT
-# and the identity layer silently doesn't load.
-if ! command -v deno >/dev/null 2>&1 && [ -x "$HOME/.deno/bin/deno" ]; then
-  export PATH="$HOME/.deno/bin:$PATH"
-fi
-
-# Same pattern for `uv` (Unruh / temporal context). Astral's installer
+# thalamus.js spawns uv for Phylactery and Unruh. Astral's installer
 # writes to ~/.local/bin by default. thalamus.js has its own resolver
 # but PATH-priming here means install.sh below can also find it.
 if ! command -v uv >/dev/null 2>&1 && [ -x "$HOME/.local/bin/uv" ]; then
@@ -102,7 +94,7 @@ else
   # .pf-install-complete marker (written at the end of a successful
   # install) rather than just node_modules, because node_modules can
   # exist without the installer having run — e.g. a manual `npm install`
-  # — which would leave entity-core uncloned and the desktop entry
+  # — which would leave the desktop entry
   # uncreated. The marker is the reliable "installer actually ran"
   # signal; node_modules + venv stay as additional triggers in case
   # they get removed after a complete install.
