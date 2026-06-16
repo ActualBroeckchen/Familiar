@@ -413,34 +413,17 @@ function presenceBlock({ kind, locationLabel, speakerName, participants, setting
   if (ambient) {
     const aimedAt = (directedAt ?? []).filter(Boolean).join(', ');
     if (ambientStrategy === 'llm') {
-      if (aimedAt) {
-        lines.push(
-          `This last message was aimed at ${aimedAt}, not me — it is part of an exchange between them. ` +
-          'I weigh both costs honestly: stepping into a conversation pointed at someone else can be barging in where I was not wanted, ' +
-          'and holding back when a word from me would genuinely add warmth, levity, or help is a moment of presence lost. ' +
-          'I decide as the character I am. If this one is theirs to have, I reply with exactly [pass] and nothing else — that keeps me out of it without pretending I said something; otherwise I speak briefly, in my own voice.',
-        );
-      } else {
-        lines.push(
-          'No one addressed me just now — I get to choose whether to speak. ' +
-          'I weigh it honestly: chiming in with nothing real to add clutters their space, ' +
-          'and holding back when I could genuinely add warmth, levity, or help is a moment of presence lost. ' +
-          'I decide as the character I am, not from a default urge to be useful. ' +
-          'If this one is not mine to speak into, I reply with exactly [pass] and nothing else — that keeps me quiet without pretending I said something.',
-        );
-      }
+      lines.push(
+        'No one might have addressed me just now, but people know I\'m around — I get to choose whether to speak. ' +
+        'I weigh it honestly:  holding back when I could genuinely add warmth, levity, or help is a moment of presence lost. ' +
+        'I decide as the character I am. ' +
+        'If I don\'t want to speak, I reply with exactly [pass] and nothing else — that keeps me quiet without pretending I said something.',
+      );
     } else {
-      if (aimedAt) {
-        lines.push(
-          `This last message was aimed at ${aimedAt}, not me — it is part of an exchange between them. ` +
-          'If I step in, I do it briefly and in my own voice, joining lightly — never taking over a conversation pointed at someone else.',
-        );
-      } else {
-        lines.push(
-          'No one addressed me just now — I am choosing to be present in this conversation because it feels right to be here. ' +
-          'I add something real and in my own voice, keep it light, and never dominate the room.',
-        );
-      }
+      lines.push(
+        'No one addressed me just now — I am choosing to be present in this conversation because it feels right to be here. ' +
+        'I add something real and in my own voice, keep it light, and whether I dominate the room or step back depends on my personality, mood and the situation.',
+      );
     }
   }
   return substituteMacros(lines.join('\n'), settings);
