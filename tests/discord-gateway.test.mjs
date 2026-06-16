@@ -357,10 +357,15 @@ describe('isAmbientAbstain', () => {
     assert.equal(isAmbientAbstain('   \n '), true);
     assert.equal(isAmbientAbstain(null), true);
   });
-  it('matches a bare pass/silence token, bracketed or not', () => {
-    for (const t of ['[pass]', 'pass', '(silence)', 'PASS.', '[skip]', 'quiet']) {
-      assert.equal(isAmbientAbstain(t), true, t);
+  it('matches [pass] and [silence] in their canonical and bare forms', () => {
+    for (const t of ['[pass]', 'pass', '(pass)', 'PASS.', '[silence]', 'silence', 'SILENCE.']) {
+      assert.equal(isAmbientAbstain(t), true, `should abstain: ${t}`);
     }
+  });
+  it('bare words that are valid chat replies are NOT abstains', () => {
+    assert.equal(isAmbientAbstain('nothing'), false);
+    assert.equal(isAmbientAbstain('quiet'),   false);
+    assert.equal(isAmbientAbstain('skip'),     false);
   });
   it('a real reply is not an abstain', () => {
     assert.equal(isAmbientAbstain('I can pass the salt!'), false);

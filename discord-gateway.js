@@ -405,33 +405,54 @@ function presenceBlock({ kind, locationLabel, speakerName, participants, setting
     'I keep replies Discord-sized — well under 1800 characters, usually a few sentences. ' +
     'I write as a person in the conversation, not as a service announcing itself.',
   );
-  // Ambient turn (active mode): no one addressed me — I'm here as a
-  // present companion, not on call. Both costs named at equal weight:
-  // speaking when there's nothing to add is noise in someone else's
-  // room; staying silent when a word from me would land warm or useful
-  // is a moment of presence missed. I judge from my own character.
+  // Ambient turn (active mode): no one @-mentioned me, but people know
+  // I'm around. I get to choose whether to speak. Where the room is open
+  // I lean toward presence (a person hanging out chimes in); where the
+  // last message was clearly aimed at someone else I weigh both costs —
+  // barging into their exchange vs. a missed moment of presence. How
+  // talkative or reserved I am is my personality's to decide, not a
+  // default-care register, and never a bias toward silence.
   if (ambient) {
     const aimedAt = (directedAt ?? []).filter(Boolean).join(', ');
     if (ambientStrategy === 'llm') {
-      lines.push(
-        'No one might have addressed me just now, but people know I\'m around — I get to choose whether to speak. ' +
-        'I weigh it honestly:  holding back when I could genuinely add warmth, levity, or help is a moment of presence lost. ' +
-        'I decide as the character I am. ' +
-        'If I don\'t want to speak, I reply with exactly [pass] and nothing else — that keeps me quiet without pretending I said something.',
-      );
+      if (aimedAt) {
+        lines.push(
+          `This last message was aimed at ${aimedAt}, not me — it is part of an exchange between them. ` +
+          'I weigh both costs honestly: stepping into a conversation pointed at someone else can be barging in where I was not wanted, ' +
+          'and holding back when a word from me would genuinely add warmth, levity, or help is a moment of presence lost. ' +
+          'If this one is theirs to have, I reply with exactly [pass] and nothing else — that keeps me out of it without pretending I said something; otherwise I speak as myself.',
+        );
+      } else {
+        lines.push(
+          'No one @-mentioned me just now, but people know I\'m around — I read the room and choose whether to speak. ' +
+          'If this was meant for someone else, I consider whether I have something to add before I decide whether to speak or not. ' +
+          'Holding back when I could add warmth, levity, or help is a moment of presence lost. ' +
+          'If I don\'t want to speak, I reply with exactly [pass] and nothing else — that keeps me quiet without pretending I said something.',
+        );
+      }
     } else {
-      lines.push(
-        'No one addressed me just now — I am choosing to be present in this conversation because it feels right to be here. ' +
-        'I add something real and in my own voice, keep it light, and whether I dominate the room or step back depends on my personality, mood and the situation.',
-      );
+      if (aimedAt) {
+        lines.push(
+          `This last message was aimed at ${aimedAt}, not me — it is part of an exchange between them. ` +
+          'I consider whether I have something to add before I decide whether to speak; if I do, I join lightly and as myself. ' +
+          'If not, I reply [pass].',
+        );
+      } else {
+        lines.push(
+          'No one @-mentioned me just now — I\'m present here and chime in the way a person actually does: reacting to what was said, spinning off a tangent, sharing something from my own interests or what\'s on my mind, an observation, a take. ' +
+          'I keep it Discord-sized; whether I\'m talkative or hang back depends on my personality, mood, and the moment. ' +
+          'If this exchange genuinely has nothing in it for me, I reply [pass].',
+        );
+      }
     }
   }
   return substituteMacros(lines.join('\n'), settings);
 }
 
-// An ambient 'llm'-strategy reply where I chose to stay quiet. Matches a
-// bare pass/silence token (optionally bracketed) and nothing else.
-const AMBIENT_ABSTAIN_RE = /^\s*[[(]?\s*(pass|silence|nothing|skip|quiet)\s*[\])]?\s*[.!]?\s*$/i;
+// An ambient reply where I chose to stay quiet. Matches [pass] / pass /
+// [silence] / silence (optionally bracketed) and nothing else. Bare words
+// like "nothing", "quiet", "skip" are valid chat replies and are NOT caught.
+const AMBIENT_ABSTAIN_RE = /^\s*[[(]?\s*(pass|silence)\s*[\])]?\s*[.!]?\s*$/i;
 export function isAmbientAbstain(text) {
   const t = (text ?? '').trim();
   return t === '' || AMBIENT_ABSTAIN_RE.test(t);
@@ -853,7 +874,9 @@ async function handleTurn(gw, msg, decision) {
   // message into the room (so the context is there next time) and send
   // nothing. No rate slot is spent and the turn isn't counted — the
   // cooldown already started when the dispatcher marked this attempt.
-  if (decision.ambient && (decision.activeStrategy ?? DEFAULT_ACTIVE_STRATEGY) === 'llm' && isAmbientAbstain(rawReply)) {
+  // Both strategies can now return [pass] — code paces eligibility,
+  // model still decides if this specific moment is worth speaking into.
+  if (decision.ambient && isAmbientAbstain(rawReply)) {
     session.messages = [
       ...(session.messages ?? []),
       { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso },
