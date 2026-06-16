@@ -46,10 +46,12 @@ import {
   markReflected,
   tagRaisedOutcomes,
 } from './surface-events.js';
-import { getRecentPonderings, deletePondering, markIntentActedOn } from './recent-ponderings.js';
+import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedIntents } from './recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
 import { listOutbox, acknowledgeOutbox, clearAcknowledged, enqueueOutbox } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
+import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';
+import { decideReachoutViaLLM, getWarmVillagers } from './reachout.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
 import { buildTimeAnchorBlock } from './relative-time.js';
 // Cerebellum is the motor module — the outbound counterpart to thalamus.
@@ -89,7 +91,7 @@ import {
 } from './village.js';
 import { resolveAudience, audienceTagFor, WARD_PRIVATE } from './audience.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
-import { startDiscordGateway, stopDiscordGateway, getDiscordStatus } from './discord-gateway.js';
+import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord } from './discord-gateway.js';
 import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock } from './knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1378,6 +1380,7 @@ initCerebellumTools({
   addDefaultTomeEntry,
   getVillageRegistry,
   upsertVillager,
+  relayToDiscord,
 });
 
 // ── Memorization queue endpoints ────────────────────────────────
@@ -2438,6 +2441,7 @@ const httpServer = app.listen(PORT, HOST, async () => {
   startAutonomousPondering();
   startRemindersScheduler();
   startSilenceTriage();
+  startReachout();
   startVillageSync();
   // Discord gateway (Village V4). Supervisor idles until the ward sets
   // a bot token + enables the toggle in Settings; follows settings
@@ -2651,6 +2655,96 @@ function startSilenceTriage() {
   console.log(`[triage] Silence triage ENABLED. Re-check defaults: severe=${DEFAULT_RECHECK_MS.severe/60_000}min, high=${DEFAULT_RECHECK_MS.high/60_000}min, moderate=${DEFAULT_RECHECK_MS.moderate/60_000}min (LLM may shorten/lengthen). calm/mild never trigger. Hard-disable with PROTO_FAMILIAR_TRIAGE_DISABLED=1.`);
 }
 
+// ── Warm reach-out loop (companionship) ─────────────────────────
+// The non-crisis counterpart to silence-triage: the Familiar reaches out
+// warmly — to my human, or to a Village member tagged warm toward it —
+// because a companion makes contact for fond and frivolous reasons too,
+// not only emergencies. Decision is an LLM call (reachout.js); delivery is
+// a ward banner (outbox kind 'reachout') or a villager DM (relayToDiscord),
+// the latter always mirrored to my human. Stands down entirely when threat
+// is elevated (triage owns that). Default-ON; toggle warmthEnabled in
+// Settings or hard-disable with PROTO_FAMILIAR_WARMTH_DISABLED=1.
+
+// Quiet hours for warm knocks — my human's configured night (local server
+// time). Start==end disables the window. Defaults to 23:00–08:00.
+function isWarmthQuietHours(now = new Date()) {
+  const s = readSettingsSync();
+  let start = Number(s?.warmthQuietHoursStart);
+  let end   = Number(s?.warmthQuietHoursEnd);
+  if (!Number.isInteger(start) || start < 0 || start > 23) start = 23;
+  if (!Number.isInteger(end)   || end   < 0 || end   > 23) end   = 8;
+  if (start === end) return false; // window disabled
+  const h = now.getHours();
+  return start < end ? (h >= start && h < end) : (h >= start || h < end);
+}
+
+function startReachout() {
+  if (process.env.PROTO_FAMILIAR_WARMTH_DISABLED === '1') {
+    console.log('[reachout] PROTO_FAMILIAR_WARMTH_DISABLED=1 — warm reach-out loop is OFF');
+    return;
+  }
+  startReachoutLoop({
+    tickMs: 10 * 60_000,
+    isEnabled: async () => {
+      const s = readSettingsSync();
+      if (s.warmthEnabled === false) return false;          // default-ON (undefined = on)
+      const conn = primaryConnectionFrom(s);
+      return !!(conn?.apiKey && conn?.provider && conn?.model);
+    },
+    getThreat,
+    getLastActivity: getLastUserActivity,
+    isQuietHours: async () => isWarmthQuietHours(),
+    getPendingTells: async () => {
+      try {
+        const intents = await getUnactedIntents({ limit: 5 });
+        return intents.filter(t => t.kind === 'tell');
+      } catch { return []; }
+    },
+    getWarmVillagers: async () => {
+      try { return getWarmVillagers(await getVillageRegistry()); }
+      catch { return []; }
+    },
+    decideReachout: decideReachoutViaLLM,
+    // Ward knock → gentle banner + push. Dedup bucket so a hiccup can't
+    // double-banner. If this knock finally says a flagged "tell", mark it.
+    deliverWardKnock: async ({ message, tell }) => {
+      const enq = await enqueueAndDispatch({
+        kind:     'reachout',
+        originId: reachoutBucketOriginId(),
+        title:    'a thought from me',
+        body:     message,
+        ts:       new Date().toISOString(),
+      });
+      if (enq?.id && !enq?.deduped && tell?.uid && Number.isInteger(tell.index)) {
+        markIntentActedOn({ uid: tell.uid, index: tell.index })
+          .catch(err => console.error('[reachout] markIntentActedOn failed:', err?.message ?? err));
+      }
+      return { ok: !!enq?.id, deduped: !!enq?.deduped };
+    },
+    // Villager reach → DM via the bot token, always mirrored to my human
+    // (no covert contact — the same guarantee relay_message carries).
+    deliverVillagerReach: async ({ villager, message }) => {
+      const res = await relayToDiscord({ recipientUserId: villager.discordId, message });
+      if (!res?.ok) return res ?? { ok: false, error: 'relay failed' };
+      await enqueueAndDispatch({
+        kind:     'relay',
+        originId: `reachout-relay:${Date.now()}:${villager.name}`,
+        title:    `I reached out to ${villager.name}`,
+        body:     `To ${villager.name}: "${message}"`,
+      }).catch(() => { /* the send happened; a mirror hiccup must not fail it */ });
+      return { ok: true };
+    },
+    onTick: (r) => {
+      if (r.reason === 'reached_ward')         console.log(`[reachout] warm knock to my human: "${r.decision?.message?.slice(0, 80)}…"`);
+      else if (r.reason === 'reached_villager') console.log(`[reachout] warm reach to ${r.villager?.name}: "${r.decision?.message?.slice(0, 60)}…"`);
+      else if (r.reason === 'delivery_failed')  console.warn(`[reachout] delivery failed (${r.target}): ${r.error}`);
+      // wait / crisis_defer / quiet_hours / in_cooldown / disabled are silent.
+    },
+    onError: (err) => console.error('[reachout]', err?.message ?? err),
+  });
+  console.log('[reachout] Warm reach-out ENABLED (default-ON). Stands down at moderate+ threat; quiet hours respected. Hard-disable with PROTO_FAMILIAR_WARMTH_DISABLED=1.');
+}
+
 // Graceful shutdown — fires on SIGTERM (stop.sh / stop.bat / docker
 // stop), SIGINT (Ctrl-C), and SIGHUP (terminal closes). Without this,
 // the memorization setIntervals would keep the event loop alive past
@@ -2678,6 +2772,7 @@ async function handleSignal(signal) {
   try { await stopPonderingLoop(); } catch { /* already stopped */ }
   try { await stopRemindersLoop(); } catch { /* already stopped */ }
   try { await stopSilenceTriageLoop(); } catch { /* already stopped */ }
+  try { await stopReachoutLoop(); } catch { /* already stopped */ }
   try { stopDiscordGateway(); } catch { /* already stopped */ }
   try { shutdownPhylactery(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }

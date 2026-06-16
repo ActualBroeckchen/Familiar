@@ -1,4 +1,4 @@
-import { describe, it } from 'node:test';
+import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
@@ -7,6 +7,9 @@ import {
   chunkReply,
   mergeParticipant,
   GATEWAY_INTENTS,
+  checkRateLimit,
+  consumeRateSlot,
+  resetRateLimitState,
 } from '../discord-gateway.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────
@@ -268,5 +271,54 @@ describe('GATEWAY_INTENTS', () => {
   it('does not include presence or member intents (privileged, unneeded)', () => {
     assert.equal(GATEWAY_INTENTS & (1 << 8), 0,  'GUILD_PRESENCES not requested');
     assert.equal(GATEWAY_INTENTS & (1 << 1), 0,  'GUILD_MEMBERS not requested');
+  });
+});
+
+// ── Rate-limit bucket (V5) ────────────────────────────────────────
+
+describe('checkRateLimit', () => {
+  beforeEach(() => resetRateLimitState());
+
+  it('passes when no limit is set (perHour=0)', () => {
+    assert.deepEqual(checkRateLimit('loc:A', 0), { ok: true });
+  });
+
+  it('passes when no limit is set (perHour=null)', () => {
+    assert.deepEqual(checkRateLimit('loc:A', null), { ok: true });
+  });
+
+  it('passes on first call within the limit', () => {
+    assert.equal(checkRateLimit('loc:A', 5).ok, true);
+  });
+
+  it('passes when count is below the limit', () => {
+    checkRateLimit('loc:A', 3);           // initialises bucket
+    consumeRateSlot('loc:A');             // count = 1
+    consumeRateSlot('loc:A');             // count = 2
+    assert.equal(checkRateLimit('loc:A', 3).ok, true);
+  });
+
+  it('blocks when count reaches the limit', () => {
+    checkRateLimit('loc:A', 2);
+    consumeRateSlot('loc:A');
+    consumeRateSlot('loc:A');
+    const r = checkRateLimit('loc:A', 2);
+    assert.equal(r.ok, false);
+    assert.ok(typeof r.resetAt === 'number' && r.resetAt > Date.now(), 'resetAt is a future timestamp');
+  });
+
+  it('resetRateLimitState clears all buckets (simulates window expiry)', () => {
+    checkRateLimit('loc:B', 1);
+    consumeRateSlot('loc:B');
+    assert.equal(checkRateLimit('loc:B', 1).ok, false, 'exhausted before reset');
+    resetRateLimitState();
+    assert.equal(checkRateLimit('loc:B', 1).ok, true,  'fresh after reset');
+  });
+
+  it('different location keys are independent buckets', () => {
+    checkRateLimit('loc:X', 1);
+    consumeRateSlot('loc:X');
+    assert.equal(checkRateLimit('loc:X', 1).ok, false, 'loc:X exhausted');
+    assert.equal(checkRateLimit('loc:Y', 1).ok, true,  'loc:Y unaffected');
   });
 });

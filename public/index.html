@@ -132,6 +132,23 @@
             <input type="number" id="pondering-scale" value="1" min="1" max="10" step="0.5">
             <div class="field-hint">Multiplies the base ponder interval. 1× = default cadence (30 min – 6 hr). 2× doubles every interval (1 hr – 12 hr). Use this to dial token cost down without disabling entirely. Only stretches, never speeds up.</div>
           </div>
+
+          <div class="field-row">
+            <label for="warmth-toggle">Warm reach-outs</label>
+            <input type="checkbox" id="warmth-toggle" checked>
+          </div>
+          <div class="field-hint">When on, your Familiar reaches out warmly on its own — not just in a crisis. A gentle "thinking of you", following up on something you mentioned, or saying hi to a Villager tagged <em>warm toward it</em> (you always see a mirror of anything it sends out). It stands down automatically when concern is elevated (the crisis check-in handles that), and respects the quiet hours below. Off skips all non-crisis outreach.</div>
+
+          <div class="field">
+            <label>Quiet hours (no warm knocks)</label>
+            <div style="display:flex;align-items:center;gap:6px">
+              <input type="number" id="warmth-quiet-start" value="23" min="0" max="23" step="1" style="width:4em" aria-label="Quiet hours start">
+              <span style="color:var(--text-dim)">to</span>
+              <input type="number" id="warmth-quiet-end" value="8" min="0" max="23" step="1" style="width:4em" aria-label="Quiet hours end">
+              <span style="color:var(--text-dim);font-size:0.85rem">(24-hour, local)</span>
+            </div>
+            <div class="field-hint">The Familiar won't send warm reach-outs during this window. Set both to the same number to disable quiet hours. Crisis check-ins are never silenced by this.</div>
+          </div>
         </div>
 
         <!-- Saved Connections & Fallbacks -->
@@ -224,9 +241,17 @@
             <span class="chevron">▾</span>
           </button>
           <div class="section-content" id="content-posthist">
-            <p class="field-hint">Injected as a final user message after the conversation history, right before the AI responds. Use for in-character direction or formatting instructions.</p>
+            <p class="field-hint">Injected after the conversation history, right before the AI responds. Use for in-character direction or formatting instructions. Choose the role it's sent as below.</p>
             <textarea id="post-history-prompt" rows="4" placeholder="e.g. [Write {{char}}'s next reply, staying in character.]"></textarea>
             <div class="field-actions">
+              <label class="field-label" style="margin-right:auto;display:flex;align-items:center;gap:0.4em;font-size:0.82em">
+                Role
+                <select id="post-history-role" style="font-size:1em">
+                  <option value="system">system</option>
+                  <option value="user">user</option>
+                  <option value="assistant">assistant</option>
+                </select>
+              </label>
               <button class="btn-secondary import-btn" data-target="post-history-prompt">↑ Import file</button>
               <button class="btn-ghost clear-field-btn" data-target="post-history-prompt">✕ Clear</button>
             </div>

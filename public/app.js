@@ -151,6 +151,7 @@ const state = {
   characterProfile:  '',
   userProfile:       '',
   postHistoryPrompt: '',
+  postHistoryRole:   'system',
   sessionId:               null,   // UUID, created at init or on clear
   sessionStartedAt:        null,   // ISO timestamp
   sessionEndedAt:          null,   // ISO timestamp — set when session is auto-ended
@@ -205,6 +206,14 @@ const state = {
   ponderingEnabled:        true,
   ponderingIntervalScale:  1,
 
+  // Warm reach-outs (companionship loop). Default-ON: the Familiar
+  // reaches out warmly on its own, not only in crisis. Quiet hours are
+  // a local-time window (start==end disables it). Off via this toggle or
+  // the PROTO_FAMILIAR_WARMTH_DISABLED=1 env var on the server.
+  warmthEnabled:           true,
+  warmthQuietHoursStart:   23,
+  warmthQuietHoursEnd:     8,
+
   // Trusted contacts for silence-triage outreach (M12c). Each entry
   // is { name, channel: 'discord', webhook: 'https://discord.com/api/webhooks/…' }.
   // The triage LLM may *suggest* contacting one of these (by name) when
@@ -250,7 +259,7 @@ const state = {
 const SERVER_SYNCED_KEYS = [
   'provider', 'apiKey', 'model', 'streaming', 'temperature', 'maxTokens',
   'userName', 'charName',
-  'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt',
+  'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
   'toolsEnabled', 'customTools',
   'tomeScanDepth', 'tomeRecursive', 'tomeMaxRecursionSteps',
   'tomeCaseSensitive', 'tomeMatchWholeWords',
@@ -258,6 +267,7 @@ const SERVER_SYNCED_KEYS = [
   'phylacteryConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale',
+  'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
   'trustedContacts', 'userDiscordWebhook',
   'discordEnabled', 'discordBotToken', 'discordWardUserId',
 ];
@@ -335,6 +345,15 @@ function loadPersisted() {
       || state.ponderingIntervalScale < 1
       || state.ponderingIntervalScale > 10) {
     state.ponderingIntervalScale = 1;
+  }
+  if (typeof state.warmthEnabled !== 'boolean') state.warmthEnabled = true;
+  if (!Number.isInteger(state.warmthQuietHoursStart)
+      || state.warmthQuietHoursStart < 0 || state.warmthQuietHoursStart > 23) {
+    state.warmthQuietHoursStart = 23;
+  }
+  if (!Number.isInteger(state.warmthQuietHoursEnd)
+      || state.warmthQuietHoursEnd < 0 || state.warmthQuietHoursEnd > 23) {
+    state.warmthQuietHoursEnd = 8;
   }
   if (!Array.isArray(state.trustedContacts)) state.trustedContacts = [];
   migrateLegacyConnection();
@@ -1092,13 +1111,14 @@ function _buildApiMessagesInner(userInput) {
   msgs.push({ role: 'user', content: stampContent(userInput, _pendingUserMsgTimestamp) });
 
   // ── Post-history prompt ───────────────────────────────────────
-  // role:'system' rather than role:'user' so it's semantically a
-  // priming directive (not a {{user}} turn), and so the "last
-  // role:'user' in the array" extraction server-side picks up
-  // {{user}}'s actual input. (The chat path also sends an explicit
-  // userMessage field for the same reason — belt-and-suspenders.)
-  if (state.postHistoryPrompt.trim())
-    msgs.push({ role: 'system', content: applyNameVars(state.postHistoryPrompt.trim()) });
+  // Role is user-configurable (default 'system'). The chat path always
+  // sends an explicit `userMessage` field, so the server-side "last
+  // role:'user'" fallback never picks this up regardless of role chosen.
+  if (state.postHistoryPrompt.trim()) {
+    const phr = ['system', 'user', 'assistant'].includes(state.postHistoryRole)
+      ? state.postHistoryRole : 'system';
+    msgs.push({ role: phr, content: applyNameVars(state.postHistoryPrompt.trim()) });
+  }
 
   lastBuildSegments = { systemSegments, atDepthInjections };
   return msgs;
@@ -1738,12 +1758,11 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
       stream:      true,
       temperature: state.temperature,
       max_tokens:  state.maxTokens,
-      // The Familiar's post-history prompt is also a user-role message
-      // at the end of `messages`, so naively extracting "last user"
-      // server-side picks up the template instead of {{user}}'s actual
-      // text. One request per user message now - the server runs all
-      // tool rounds inside it, so threat scoring / last-activity fire
-      // exactly once.
+      // `userMessage` carries {{user}}'s actual input so the server
+      // never mistakes the post-history prompt for it, regardless of
+      // the role that prompt is sent as. One request per user message —
+      // the server runs all tool rounds inside it, so threat scoring /
+      // last-activity fire exactly once.
       ...(typeof userInput === 'string' && userInput.trim()
           ? { userMessage: userInput }
           : {}),
@@ -1943,9 +1962,8 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
       stream:      false,
       temperature: state.temperature,
       max_tokens:  state.maxTokens,
-      // See attemptStreamingOnce for why userMessage is sent explicitly:
-      // post-history prompt is also role:'user', so naive server-side
-      // extraction picks the wrong message.
+      // `userMessage` carries {{user}}'s actual input — see
+      // attemptStreamingOnce for the full rationale.
       ...(typeof userInput === 'string' && userInput.trim()
           ? { userMessage: userInput }
           : {}),
@@ -2179,12 +2197,25 @@ function readSettingsFromUI() {
     const n = parseFloat($('pondering-scale').value);
     state.ponderingIntervalScale = Number.isFinite(n) && n >= 1 && n <= 10 ? n : 1;
   }
+  if ($('warmth-toggle')) state.warmthEnabled = $('warmth-toggle').checked;
+  if ($('warmth-quiet-start')) {
+    const n = parseInt($('warmth-quiet-start').value, 10);
+    state.warmthQuietHoursStart = Number.isInteger(n) && n >= 0 && n <= 23 ? n : 23;
+  }
+  if ($('warmth-quiet-end')) {
+    const n = parseInt($('warmth-quiet-end').value, 10);
+    state.warmthQuietHoursEnd = Number.isInteger(n) && n >= 0 && n <= 23 ? n : 8;
+  }
   state.userName          = $('user-name').value.trim() || 'User';
   state.charName          = $('char-name').value.trim() || 'Assistant';
   state.systemPrompt      = $('system-prompt').value;
   state.characterProfile  = $('char-profile').value;
   state.userProfile       = $('user-profile').value;
   state.postHistoryPrompt = $('post-history-prompt').value;
+  if ($('post-history-role')) {
+    const v = $('post-history-role').value;
+    state.postHistoryRole = ['system', 'user', 'assistant'].includes(v) ? v : 'system';
+  }
   state.toolsEnabled      = $('tools-enabled').checked;
   state.customTools       = $('custom-tools').value;
   const scanEl = $('tome-scan-depth');
@@ -2231,6 +2262,9 @@ function writeSettingsToUI() {
   if ($('handoff-toggle')) setIfNotFocused($('handoff-toggle'), 'checked', state.handoffEnabled !== false);
   if ($('pondering-toggle')) setIfNotFocused($('pondering-toggle'), 'checked', state.ponderingEnabled !== false);
   if ($('pondering-scale'))  setIfNotFocused($('pondering-scale'),  'value',   state.ponderingIntervalScale ?? 1);
+  if ($('warmth-toggle'))      setIfNotFocused($('warmth-toggle'),      'checked', state.warmthEnabled !== false);
+  if ($('warmth-quiet-start')) setIfNotFocused($('warmth-quiet-start'), 'value',   state.warmthQuietHoursStart ?? 23);
+  if ($('warmth-quiet-end'))   setIfNotFocused($('warmth-quiet-end'),   'value',   state.warmthQuietHoursEnd ?? 8);
   setIfNotFocused($('temperature'),     'value',   state.temperature);
   $('temp-display').textContent = state.temperature;
   setIfNotFocused($('max-tokens'),         'value',   state.maxTokens);
@@ -2241,6 +2275,7 @@ function writeSettingsToUI() {
   setIfNotFocused($('char-profile'),       'value',   state.characterProfile);
   setIfNotFocused($('user-profile'),       'value',   state.userProfile);
   setIfNotFocused($('post-history-prompt'),'value',   state.postHistoryPrompt);
+  if ($('post-history-role')) setIfNotFocused($('post-history-role'), 'value', state.postHistoryRole ?? 'system');
   setIfNotFocused($('tools-enabled'),      'checked', state.toolsEnabled ?? true);
   setIfNotFocused($('custom-tools'),       'value',   state.customTools ?? '');
   setIfNotFocused($('user-discord-webhook'), 'value', state.userDiscordWebhook ?? '');
@@ -3006,9 +3041,11 @@ function init() {
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
     'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle',
-    'pondering-toggle', 'pondering-scale', 'user-name', 'char-name',
+    'pondering-toggle', 'pondering-scale',
+    'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
+    'user-name', 'char-name',
     'system-prompt', 'char-profile',
-    'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
+    'user-profile', 'post-history-prompt', 'post-history-role', 'tools-enabled', 'custom-tools',
     'user-discord-webhook',
     'discord-enabled', 'discord-bot-token', 'discord-ward-user-id',
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',
@@ -8674,6 +8711,16 @@ function vlRenderLocDetail(loc) {
     `<option value="${esc(c.id)}"${loc?.assignedCategoryId === c.id ? ' selected' : ''}>${esc(c.name)}</option>`
   ).join('');
 
+  // Connection dropdown — lets the ward assign a specific API connection
+  // (e.g. a throttled key for public Discord rooms) instead of the primary.
+  const connOpts = [
+    `<option value=""${!loc?.connectionId ? ' selected' : ''}>— use default —</option>`,
+    ...(state.connections ?? []).map(c => {
+      const label = c.name || c.provider || c.id;
+      return `<option value="${esc(c.id)}"${loc?.connectionId === c.id ? ' selected' : ''}>${esc(label)}</option>`;
+    }),
+  ].join('');
+
   detail.innerHTML = `
     <div class="vl-detail-head">${isNew ? 'Add location' : esc(loc.label)}</div>
     <div>
@@ -8687,6 +8734,10 @@ function vlRenderLocDetail(loc) {
     <div>
       <div class="vl-field-label">Trust ceiling <span class="field-hint">(anyone here is treated as at most this)</span></div>
       <select id="vl-l-cat" style="width:100%">${catOpts}</select>
+    </div>
+    <div>
+      <div class="vl-field-label">Connection <span class="field-hint">(optional — use a specific API key for this location)</span></div>
+      <select id="vl-l-conn" style="width:100%">${connOpts}</select>
     </div>
     <div>
       <div class="vl-field-label">Rate limit (messages/hour, optional)</div>
@@ -8711,6 +8762,7 @@ async function vlSaveLocation(key) {
   if (!locKey) { status.textContent = 'Key is required.'; return; }
   const label  = $('vl-l-label').value.trim() || locKey;
   const assignedCategoryId = $('vl-l-cat').value;
+  const connectionId = $('vl-l-conn')?.value || null;
   const rateRaw = $('vl-l-rate').value.trim();
   const rateLimit = rateRaw ? { perHour: parseInt(rateRaw, 10) } : null;
   status.textContent = 'Saving…';
@@ -8718,7 +8770,7 @@ async function vlSaveLocation(key) {
     const r = await fetch('/api/village/locations', {
       method: key ? 'PATCH' : 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key: locKey, label, assignedCategoryId, rateLimit }),
+      body: JSON.stringify({ key: locKey, label, assignedCategoryId, connectionId, rateLimit }),
     });
     if (!r.ok) throw new Error(await vlErrMsg(r));
     const saved = await r.json();

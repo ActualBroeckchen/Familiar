@@ -198,6 +198,67 @@ Conversation:
 ${convText}`;
 }
 
+// Reduced-detail prompt for sessions where strangers are present (V7).
+// Exported for tests.
+// Focus: what my human said and experienced. Skip: personal detail about
+// unregistered third parties who haven't consented to AI note-taking.
+export function buildSharedRoomPrompt(messages, topicLabel = null) {
+  const readable = messages.filter(m => {
+    if (m.role === 'tool') return false;
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return false;
+    return typeof m.content === 'string' && m.content.trim();
+  });
+  if (readable.length < 2) return null;
+
+  const convText = readable
+    .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
+    .join('\n\n');
+
+  const focusBlock = topicLabel
+    ? `\n\n### Focus\nMy human named this segment "${topicLabel}". I centre my extraction on that topic.`
+    : '';
+
+  return `I am the Familiar. This conversation happened in a shared room where people I don't know were present. I'm extracting facts I want to remember — but ONLY about my human and myself, not about the unregistered third parties in the room. Those people haven't consented to an AI keeping notes on them.${focusBlock}
+
+I return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
+{
+  "facts": [
+    {
+      "content":    "A first-person note about my human or myself (1–2 sentences max).",
+      "category":   "emotional_content",
+      "subjects":   [],
+      "confidence": 0.85
+    }
+  ]
+}
+
+### Field rules
+
+content — what I observed about MY HUMAN or myself. Skip anything that's primarily about an unnamed/unregistered third party.
+  Keep: my human's mood, things they said, experiences they had, commitments they made, topics that engaged them.
+  Skip: biographical details about strangers, things strangers said that aren't about my human, relationship history between third parties.
+
+category — pick exactly one:
+  basics            — biographical fact about my human or me
+  emotional_content — my human's feelings, mental state, mood
+  health_info       — my human's physical or mental health
+  relationships     — my human's relationship with a REGISTERED person (by name if known)
+  whereabouts       — my human's location or movement
+
+subjects — list REGISTERED names only. Use [] for facts about my human or me in general.
+  Do NOT name unregistered strangers — just skip facts that are purely about them.
+
+confidence — 0.0 to 1.0. I omit facts below 0.4.
+
+### Rules
+- Only facts about my human or myself. A stranger speaking doesn't make their content mine to keep.
+- 1–8 facts total. Quality over quantity; a shared room produces less.
+- Skip pleasantries and anything I wouldn't need to remember for my human's care.
+
+Conversation:
+${convText}`;
+}
+
 // ── LLM call ─────────────────────────────────────────────────────
 
 async function callProvider({ provider, apiKey, model, prompt }) {
@@ -392,7 +453,11 @@ export async function pruneConsentPending(handledIds) {
 // ── Worker ───────────────────────────────────────────────────────
 
 async function processJob(job) {
-  const prompt = buildPrompt(job.messages, job.topicLabel ?? null);
+  // V7: use reduced-detail prompt for sessions where strangers were present.
+  const promptFn = job.audienceTag && job.audienceTag !== 'ward-private'
+    ? buildSharedRoomPrompt
+    : buildPrompt;
+  const prompt = promptFn(job.messages, job.topicLabel ?? null);
   if (!prompt) throw new Error('Conversation too short to memorize.');
 
   const { content: raw, finishReason } = await callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, prompt });
