@@ -329,7 +329,7 @@ serving requests. Two common causes:
   server logs a warning at boot: `[thalamus] phylactery: provider
   "<tag>" has no known URL — add it to PROVIDER_URLS in
   providers.js`. Either edit the map or pick a connection with one
-  of the supported provider tags (`nanogpt`, `zai`, `zai-coding`).
+  of the supported provider tags (`nanogpt`, `zai`, `zai-coding`, `google`).
 
 ### Designation change didn't take effect
 

@@ -43,11 +43,13 @@ const REGISTRY = {
   ],
   villagers: [
     { id: 'v1', name: 'Sam', categoryIds: ['family'],
+      aliases: [{ platform: 'discord', id: '777', handle: 'sam_d' }],
       relationToWard: 'sister', notes: 'likes cats',
       privateNotes: 'recently diagnosed — not public', graphNodeId: 'node-sam' },
   ],
   locations: [
     { key: 'guild:1/chan:2', label: '#general', assignedCategoryId: 'family' },
+    { key: 'discord:guild:5:channel:6', label: 'Book Club', assignedCategoryId: 'family', mode: 'active' },
   ],
 };
 
@@ -99,6 +101,39 @@ test('village_lookup: filters by location (resolves to its category)', async () 
   await withFakeVillage(async () => {
     const out = await executeToolCall('village_lookup', JSON.stringify({ location: '#general' }), { wardPrivate: true });
     assert.match(out, /Sam/, 'location → assigned category → matching villagers');
+  });
+});
+
+// ── Discoverability for relay (V8 / request 2) ─────────────────────
+
+test('village_lookup: roster view lists Places I can relay to', async () => {
+  await withFakeVillage(async () => {
+    const out = await executeToolCall('village_lookup', '{}', { wardPrivate: true });
+    assert.match(out, /Places I'm present in/, 'the location roster is surfaced');
+    assert.match(out, /Book Club/, 'each place is named (relay-by-label)');
+    assert.match(out, /active mode/, 'the place carries its presence mode');
+  });
+});
+
+test('village_lookup: marks which villagers are reachable on Discord', async () => {
+  await withFakeVillage(async () => {
+    const out = await executeToolCall('village_lookup', '{}', { wardPrivate: true });
+    assert.match(out, /Sam.*reachable on Discord/, 'a Discord-aliased villager is flagged reachable');
+  });
+});
+
+test('village_lookup: a non-Discord location is flagged not-postable', async () => {
+  await withFakeVillage(async () => {
+    const out = await executeToolCall('village_lookup', '{}', { wardPrivate: true });
+    assert.match(out, /#general.*not a room I can post into/, 'non-Discord keys are marked unreachable');
+  });
+});
+
+test('village_lookup: a targeted name search omits the Places footer (about the person)', async () => {
+  await withFakeVillage(async () => {
+    const out = await executeToolCall('village_lookup', JSON.stringify({ name: 'Sam' }), { wardPrivate: true });
+    assert.match(out, /Sam/);
+    assert.doesNotMatch(out, /Places I'm present in/, 'name lookups stay focused on the person');
   });
 });
 

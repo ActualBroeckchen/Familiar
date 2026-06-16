@@ -33,7 +33,7 @@ Open with **☰** in the top bar.
 
 | Setting | Description |
 |---|---|
-| Provider | NanoGPT, Z.ai Standard, or Z.ai Coding Plan |
+| Provider | NanoGPT, Z.ai Standard, Z.ai Coding Plan, or Google AI Studio (Gemini) |
 | API Key | Your provider API key (sent to `localhost` only; never logged) |
 | Model | Model name — choose from the dropdown or type any valid name |
 | Streaming | Enable/disable SSE streaming |

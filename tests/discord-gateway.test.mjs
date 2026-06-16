@@ -10,6 +10,8 @@ import {
   checkRateLimit,
   consumeRateSlot,
   resetRateLimitState,
+  decideAmbientReply,
+  isAmbientAbstain,
 } from '../discord-gateway.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────
@@ -182,6 +184,143 @@ describe('classifyMessage — guild policy', () => {
     const msg = guildMsg('777888999000111222', 'hey @other', { mentions: [{ id: 'someone-else' }] });
     const d = classifyMessage(msg, ctx());
     assert.equal(d.action, 'ignore');
+  });
+});
+
+// ── classifyMessage: guild presence modes (V8) ────────────────────
+
+describe('classifyMessage — guild presence modes', () => {
+  const GUILD_KEY = 'discord:guild:42:channel:1001';
+  // ctx with the guild location set to a given mode.
+  const ctxMode = (mode, extra = {}) => {
+    const registry = makeRegistry();
+    const loc = registry.locations.find(l => l.key === GUILD_KEY);
+    Object.assign(loc, { mode, ...extra });
+    return { registry, botUserId: BOT_ID, wardUserId: WARD_ID };
+  };
+
+  it('strict (default): not-mentioned → ignore', () => {
+    const d = classifyMessage(guildMsg('777888999000111222'), ctxMode('strict'));
+    assert.equal(d.action, 'ignore');
+    assert.equal(d.reason, 'not-mentioned');
+  });
+
+  it('lurk: not-mentioned → observe (read the room, no reply)', () => {
+    const d = classifyMessage(guildMsg('777888999000111222'), ctxMode('lurk'));
+    assert.equal(d.action, 'observe');
+    assert.equal(d.kind, 'guild');
+    assert.equal(d.audience.location, GUILD_KEY);
+    assert.deepEqual(d.audience.participants, [{ id: 'v-chen', name: 'Chen' }]);
+  });
+
+  it('lurk: still replies when addressed', () => {
+    const msg = guildMsg('777888999000111222', 'hey bot', { mentions: [{ id: BOT_ID }] });
+    const d = classifyMessage(msg, ctxMode('lurk'));
+    assert.equal(d.action, 'respond');
+    assert.equal(d.ambient, false);
+  });
+
+  it('active: not-mentioned → respond with ambient flag + cadence config', () => {
+    const d = classifyMessage(guildMsg('777888999000111222'),
+      ctxMode('active', { activeStrategy: 'tiers', activeCooldownSec: 45 }));
+    assert.equal(d.action, 'respond');
+    assert.equal(d.ambient, true);
+    assert.equal(d.activeStrategy, 'tiers');
+    assert.equal(d.activeCooldownSec, 45);
+  });
+
+  it('active: defaults to llm strategy + 60s when unset', () => {
+    const d = classifyMessage(guildMsg('777888999000111222'), ctxMode('active'));
+    assert.equal(d.ambient, true);
+    assert.equal(d.activeStrategy, 'llm');
+    assert.equal(d.activeCooldownSec, 60);
+  });
+
+  it('active: an @-mention is a direct (non-ambient) reply', () => {
+    const msg = guildMsg('777888999000111222', 'hey bot', { mentions: [{ id: BOT_ID }] });
+    const d = classifyMessage(msg, ctxMode('active'));
+    assert.equal(d.action, 'respond');
+    assert.equal(d.ambient, false);
+  });
+
+  it('DMs are unaffected by location mode (always respond, never ambient)', () => {
+    const d = classifyMessage(dmFrom(WARD_ID), ctxMode('active'));
+    assert.equal(d.action, 'respond');
+    assert.equal(d.kind, 'ward-dm');
+    assert.notEqual(d.ambient, true);
+  });
+});
+
+// ── decideAmbientReply (the active-mode pacing gate) ───────────────
+
+describe('decideAmbientReply', () => {
+  const NOW = 1_000_000_000_000;
+
+  it('llm: first turn (no prior) acts', () => {
+    const r = decideAmbientReply({ strategy: 'llm', now: NOW, lastTurnAt: 0, cooldownMs: 60_000 });
+    assert.equal(r.act, true);
+    assert.equal(r.reason, 'llm');
+  });
+
+  it('llm: inside the cooldown window does not act', () => {
+    const r = decideAmbientReply({ strategy: 'llm', now: NOW, lastTurnAt: NOW - 30_000, cooldownMs: 60_000 });
+    assert.equal(r.act, false);
+    assert.equal(r.reason, 'cooldown');
+  });
+
+  it('llm: past the cooldown acts again', () => {
+    const r = decideAmbientReply({ strategy: 'llm', now: NOW, lastTurnAt: NOW - 61_000, cooldownMs: 60_000 });
+    assert.equal(r.act, true);
+  });
+
+  it('tiers: a quiet room is "slow" and acts after the base cooldown', () => {
+    const r = decideAmbientReply({
+      strategy: 'tiers', now: NOW, lastTurnAt: NOW - 61_000, cooldownMs: 60_000,
+      recentMsgTimestamps: [NOW - 10_000], // 1 msg in window → slow
+    });
+    assert.equal(r.tier, 'slow');
+    assert.equal(r.act, true);
+  });
+
+  it('tiers: a busy room is "medium" and holds off far longer than slow would', () => {
+    const recent = Array.from({ length: 6 }, (_, i) => NOW - i * 1000); // 6 msgs in window
+    // 90s since last turn: past slow (60s) but inside medium (60s×5=300s).
+    const r = decideAmbientReply({
+      strategy: 'tiers', now: NOW, lastTurnAt: NOW - 90_000, cooldownMs: 60_000,
+      recentMsgTimestamps: recent,
+    });
+    assert.equal(r.tier, 'medium');
+    assert.equal(r.act, false);
+    assert.equal(r.reason, 'tier-cooldown');
+  });
+
+  it('tiers: a lively room is "fast"', () => {
+    const recent = Array.from({ length: 15 }, (_, i) => NOW - i * 1000);
+    const r = decideAmbientReply({
+      strategy: 'tiers', now: NOW, lastTurnAt: 0, cooldownMs: 60_000,
+      recentMsgTimestamps: recent,
+    });
+    assert.equal(r.tier, 'fast');
+    assert.equal(r.act, true);
+  });
+});
+
+// ── isAmbientAbstain ──────────────────────────────────────────────
+
+describe('isAmbientAbstain', () => {
+  it('treats empty / whitespace as abstain', () => {
+    assert.equal(isAmbientAbstain(''), true);
+    assert.equal(isAmbientAbstain('   \n '), true);
+    assert.equal(isAmbientAbstain(null), true);
+  });
+  it('matches a bare pass/silence token, bracketed or not', () => {
+    for (const t of ['[pass]', 'pass', '(silence)', 'PASS.', '[skip]', 'quiet']) {
+      assert.equal(isAmbientAbstain(t), true, t);
+    }
+  });
+  it('a real reply is not an abstain', () => {
+    assert.equal(isAmbientAbstain('I can pass the salt!'), false);
+    assert.equal(isAmbientAbstain('Sure, happy to help.'), false);
   });
 });
 

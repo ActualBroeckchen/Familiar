@@ -19,7 +19,7 @@ Proxy request to selected provider.
 
 **Body (main fields):**
 
-- `provider` (`nanogpt | zai | zai-coding`)
+- `provider` (`nanogpt | zai | zai-coding | google`)
 - `apiKey`
 - `model`
 - `messages`

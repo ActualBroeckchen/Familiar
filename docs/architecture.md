@@ -60,7 +60,7 @@ server.js  (Express, Node 18+, ESM)
     │  ── village (audience gating + external presence) ───────────
     ├── village.js          ── registry: categories/grants, villagers, locations
     ├── audience.js         ── grant resolution + section-marker gate (V3)
-    ├── discord-gateway.js  ── autonomous: bidirectional Discord presence (V4)
+    ├── discord-gateway.js  ── autonomous: bidirectional Discord presence (V4); per-location presence modes strict/lurk/active (V8)
     │
     │  ── classical infrastructure ──────────────────────────────
     ├── memorization.js     ── autonomous per-fact memorization queue + worker (Pillar C)
@@ -343,7 +343,10 @@ Currently owns:
   `relayToDiscord` (injected dep), and mirrors every relay to the ward's
   outbox (`mirrorToWard` dep, defaults to `enqueueAndDispatch`) — no covert
   contact. The gate/mirror/delivery deps are injectable so tests run
-  without spawning MCP children or touching the real outbox.
+  without spawning MCP children or touching the real outbox. Both target
+  kinds are made enumerable to the Familiar by `village_lookup`, which
+  (V8) reports a **Places** roster + per-villager Discord-reachability so
+  the Familiar can always name a valid relay target.
 - **`decideTriageViaLLM({threat, silenceMs, signals})`** — the triage
   deliberation: assembles the [Now]-anchored prompt (identity context,
   recent conversation with relative times, threat signals, trusted
@@ -483,18 +486,34 @@ native-WebSocket client (Node ≥ 22) implementing identify / heartbeat /
 resume / backoff; fatal close codes (bad token, missing privileged
 intents) park it until Settings change. Inbound `MESSAGE_CREATE` flows
 through `classifyMessage()` (pure, tested): ward DM → ward-private
-turn; registered-villager DM → gated turn; guild → reply only when
-@-mentioned or replied-to, with the location ceiling ALWAYS in the
-audience (unassigned room = Strangers). Each location is a session in
-`logs/` (rotated after 6h idle; map in `tomes/.discord-map.json`),
-participants accumulate, and the audience is re-resolved per turn from
-the accumulated list. Ward messages also run crisis-signal scoring +
-threat recording (`source: 'discord'`). Discord turns carry NO tools
-and never consume handoffs (`liveTurn: false`). Memorization of
-Discord sessions is deferred until memories carry audience tags (see
-village-support-design.md). Off-switch:
-`PROTO_FAMILIAR_DISCORD_DISABLED=1`. Observability:
+turn; registered-villager DM → gated turn; guild → governed by the
+location's **presence mode** (Village V8): `strict` (default — reply
+only when @-mentioned or replied-to), `lurk` (read the room, reply only
+when addressed), or `active` (may chime in unprompted). The location
+ceiling is ALWAYS in the audience (unassigned room = Strangers). Each
+location is a session in `logs/` (rotated after 6h idle; map in
+`tomes/.discord-map.json`), participants accumulate, and the audience is
+re-resolved per turn from the accumulated list. Ward messages also run
+crisis-signal scoring + threat recording (`source: 'discord'`) on the
+reply path. Discord turns carry NO tools and never consume handoffs
+(`liveTurn: false`). Memorization of Discord sessions is deferred until
+memories carry audience tags (see village-support-design.md).
+Off-switch: `PROTO_FAMILIAR_DISCORD_DISABLED=1`. Observability:
 `GET /api/discord/status`.
+
+*Presence modes (V8).* Messages the Familiar isn't addressed in resolve
+to `action: 'observe'` (lurk, and active turns it sits out): the message
+is appended to the session for context, nothing is sent, no LLM call —
+and deliberately **threat-neutral** (observing never moves the ward's
+activity clock or threat tier; that stays on the reply path, out of the
+safety-critical surface). Active-mode pacing is `decideAmbientReply()`
+(pure, tested) over a volatile in-memory `ambientState` (per-location
+`lastTurnAt` + recent message timestamps): a hard `activeCooldownSec`
+floor on unprompted turns plus one of two ward-toggleable strategies —
+`llm` (model decides each time; abstains via a bare `[pass]`, detected
+by `isAmbientAbstain`) or `tiers` (pure-code slow/medium/fast cadence
+scaled off the cooldown). The V3 knowledge gate runs identically in
+every mode — mode is *when* the Familiar speaks, never *what it knows*.
 
 ### `memorization.js` — autonomous per-fact memorization (Pillar C)
 

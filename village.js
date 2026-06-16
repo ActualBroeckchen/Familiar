@@ -45,6 +45,43 @@ const DEFAULT_VILLAGE_PATH = path.join(__dirname, 'village.json');
 export const CATEGORY_EMERGENCY = 'emergency-contacts';
 export const CATEGORY_STRANGERS = 'strangers';
 
+// ── Location presence modes (Village V8) ──────────────────────────
+//
+// How I behave in a shared room, per location. Inherited shape from
+// Psycheros's Discord channel modes (strict | lurk | active):
+//   - strict: I reply only when @-mentioned or directly replied-to.
+//             Messages I'm not addressed in pass me by. (The default —
+//             every pre-V8 location reads as strict.)
+//   - lurk:   I still only speak when addressed, but I READ the room —
+//             messages accumulate into the session so when someone
+//             finally turns to me I have the conversation in hand.
+//   - active: I can chime in without being addressed, paced so I don't
+//             flood the room. Two cadence strategies (activeStrategy):
+//               'llm'   — each eligible message, I decide whether it's
+//                         worth speaking (I can stay quiet).
+//               'tiers' — code paces me to how busy the room is
+//                         (slow/medium/fast), scaled off activeCooldownSec.
+// A hard per-location cooldown (activeCooldownSec) floors how often I
+// take an unprompted turn at all, so active presence never runs away
+// with the token budget. The V5 rate limit is the second backstop.
+export const LOCATION_MODES = ['strict', 'lurk', 'active'];
+export const ACTIVE_STRATEGIES = ['llm', 'tiers'];
+export const DEFAULT_LOCATION_MODE = 'strict';
+export const DEFAULT_ACTIVE_STRATEGY = 'llm';
+export const DEFAULT_ACTIVE_COOLDOWN_SEC = 60;
+
+// Normalize a location's presence-mode fields. Unknown mode → strict
+// (fail-quiet: an unrecognized mode must never make me chattier than
+// the ward asked). Strategy/cooldown only ride along in 'active' mode.
+function normalizeLocationMode(l) {
+  const mode = LOCATION_MODES.includes(l?.mode) ? l.mode : DEFAULT_LOCATION_MODE;
+  if (mode !== 'active') return { mode };
+  const strategy = ACTIVE_STRATEGIES.includes(l?.activeStrategy) ? l.activeStrategy : DEFAULT_ACTIVE_STRATEGY;
+  const sec = Number(l?.activeCooldownSec);
+  const cooldown = Number.isFinite(sec) && sec >= 0 ? Math.floor(sec) : DEFAULT_ACTIVE_COOLDOWN_SEC;
+  return { mode, activeStrategy: strategy, activeCooldownSec: cooldown };
+}
+
 // ── Default category seeds ────────────────────────────────────────
 //
 // Three pre-seeded categories provided on fresh installs (and back-filled
@@ -230,6 +267,7 @@ export function normalizeRegistry(raw) {
       label: typeof l.label === 'string' ? l.label : l.key.trim(),
       // Unassigned or dangling → strangers ceiling (the floor).
       assignedCategoryId: byId.has(l.assignedCategoryId) ? l.assignedCategoryId : CATEGORY_STRANGERS,
+      ...normalizeLocationMode(l),
       ...(typeof l.connectionId === 'string' && l.connectionId ? { connectionId: l.connectionId } : {}),
       ...(l.rateLimit && typeof l.rateLimit === 'object' && Number.isFinite(l.rateLimit.perHour)
         ? { rateLimit: { perHour: Math.max(0, Math.floor(l.rateLimit.perHour)) } }
@@ -542,7 +580,7 @@ export async function deleteVillager({ id }, { filePath = DEFAULT_VILLAGE_PATH }
 
 // ── Location CRUD ─────────────────────────────────────────────────
 
-export async function upsertLocation({ key, label, assignedCategoryId, connectionId, rateLimit }, { filePath = DEFAULT_VILLAGE_PATH } = {}) {
+export async function upsertLocation({ key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec }, { filePath = DEFAULT_VILLAGE_PATH } = {}) {
   return mutate(filePath, (reg) => {
     if (typeof key !== 'string' || !key.trim()) throw new Error('key (string) is required');
     if (assignedCategoryId !== undefined && !reg.categories.some(c => c.id === assignedCategoryId)) {
@@ -551,11 +589,24 @@ export async function upsertLocation({ key, label, assignedCategoryId, connectio
     const k = key.trim();
     let loc = reg.locations.find(l => l.key === k);
     if (!loc) {
-      loc = { key: k, label: k, assignedCategoryId: CATEGORY_STRANGERS };
+      loc = { key: k, label: k, assignedCategoryId: CATEGORY_STRANGERS, mode: DEFAULT_LOCATION_MODE };
       reg.locations.push(loc);
     }
     if (typeof label === 'string' && label.trim()) loc.label = label.trim();
     if (assignedCategoryId !== undefined) loc.assignedCategoryId = assignedCategoryId;
+    // Presence mode (V8). Unknown mode → strict. Strategy/cooldown are
+    // only kept in 'active' mode; switching away clears them so the
+    // registry never carries stale cadence settings.
+    if (mode !== undefined) loc.mode = LOCATION_MODES.includes(mode) ? mode : DEFAULT_LOCATION_MODE;
+    if (activeStrategy !== undefined && ACTIVE_STRATEGIES.includes(activeStrategy)) loc.activeStrategy = activeStrategy;
+    if (activeCooldownSec !== undefined) {
+      const s = Number(activeCooldownSec);
+      if (Number.isFinite(s) && s >= 0) loc.activeCooldownSec = Math.floor(s);
+    }
+    if ((loc.mode ?? DEFAULT_LOCATION_MODE) !== 'active') {
+      delete loc.activeStrategy;
+      delete loc.activeCooldownSec;
+    }
     if (connectionId !== undefined) {
       if (typeof connectionId === 'string' && connectionId) loc.connectionId = connectionId;
       else delete loc.connectionId;

@@ -3,8 +3,9 @@
 > Status: V1–V4 implemented (0.5.0-alpha); Familiar-facing Village access +
 > `privateNotes` field-gating added 0.6.x. V5 (per-location connections +
 > rate limits) and V7 (stranger data minimization) shipped 0.6.14-alpha.
-> V6 `relay_message` shipped 0.6.15-alpha (ward-approved). The rest of V6
-> (check-on-ward outside triage, ward double-check for villager-initiated
+> V6 `relay_message` shipped 0.6.15-alpha (ward-approved). V8 (per-location
+> presence modes + relay discoverability) shipped 0.6.19-alpha. The rest of
+> V6 (check-on-ward outside triage, ward double-check for villager-initiated
 > commitments) remains design-phase and touches the safety-critical
 > escalation surface — human sign-off required before implementation.
 > Read this before touching any Village code; update it in the same commit
@@ -226,7 +227,10 @@ JSON blob. The ward sets both buckets in the Village editor (the
       "label": "Cozy Server #general",
       "assignedCategoryId": "uuid-of-online-friends",   // ward-assigned trust ceiling for the room
       "connectionId": "uuid-of-rate-limited-key",        // optional per-location API connection
-      "rateLimit": { "perHour": 30 }                     // optional, enforced in code
+      "rateLimit": { "perHour": 30 },                    // optional, enforced in code
+      "mode": "active",                                  // V8 presence: 'strict' (default) | 'lurk' | 'active'
+      "activeStrategy": "llm",                           // only in 'active': 'llm' (default) | 'tiers'
+      "activeCooldownSec": 60                             // only in 'active': hard floor between unprompted turns
     }
   ]
 }
@@ -396,6 +400,78 @@ Existing behavior is preserved and re-grounded:
 - What an Emergency Contact learns is shaped by `wardPresence`, exactly
   as today: "could you check on them," not why.
 
+## Presence modes (V8, inherited from Psycheros)
+
+How the Familiar *inhabits* a shared room, set per location. The three
+modes come from Psycheros's Discord channel modes (`strict | lurk |
+active`); only `strict` was wired up before V8 (the guild router replied
+solely on @-mention). The other two were the design intent that got
+lost, restored here.
+
+| Mode | The Familiar's presence | When it speaks |
+|---|---|---|
+| **strict** (default) | Discrete. Messages it isn't addressed in pass it by entirely. | Only on @-mention or a direct reply. *Every pre-V8 location reads as strict — backward compatible.* |
+| **lurk** | Present, reading the room. Non-addressing messages are taken into the session so context accumulates. | Still only on @-mention / reply — but now with the conversation in hand when it answers. |
+| **active** | A participant. Can speak unprompted, paced so it never floods. | On @-mention, *and* on its own judgment between mentions (gated, see below). |
+
+**The `observe` path.** lurk (and active turns the Familiar sits out)
+resolve to a new router action, `action: 'observe'`: the inbound message
+is appended to the room's session and nothing is sent — no LLM call, no
+rate slot. This is deliberately **threat-neutral**: observing never moves
+the ward's last-activity clock or threat tier (that machinery stays on
+the reply path, *out* of the safety-critical surface — see CLAUDE.md).
+The non-addressed case is therefore never *worse* than today's strict
+(which dropped the message), and active-on-reply scores exactly as a
+mentioned reply does.
+
+**Active-mode pacing (two strategies, ward-toggleable per location).**
+Both share one hard backstop and the V5 rate limit:
+
+- **Cooldown floor (always).** `activeCooldownSec` (default 60) is the
+  minimum time between *unprompted turns* — counted on every attempt,
+  including ones the Familiar ends up sitting out, so abstaining can't
+  make it reconsider on the very next message. This bounds the token
+  cost of ambient presence in cheap code before any LLM call (CLAUDE.md
+  "gate in code / self-set cool-down").
+- **`activeStrategy: 'llm'`** (default) — past the cooldown, the Familiar
+  takes the turn and *the model itself* decides whether it's worth
+  speaking. It abstains by replying with a bare `[pass]` (detected by
+  `isAmbientAbstain`), which routes to the observe path: the message is
+  kept for context, nothing is sent. The presence prompt names both
+  costs at equal weight — speaking with nothing to add clutters someone
+  else's room; staying silent when a word would land warm or useful is a
+  moment of presence missed — and anchors the choice to the Familiar's
+  own character (no default-care register; no bias-toward-quiet).
+- **`activeStrategy: 'tiers'`** — pure-code cadence that paces the
+  Familiar to how busy the room is, scaled off `activeCooldownSec`:
+  *slow* (quiet room, ×1 — responds promptly on the cooldown), *medium*
+  (busy, ×5 — just glances in periodically), *fast* (lively, ×1.5 —
+  engaged but not every line). The tier is read from a short rolling
+  window of recent message timestamps (`decideAmbientReply`, pure and
+  unit-tested). No timers, no per-message LLM call: the gate is free, and
+  only an actual reply costs.
+
+All of this lives in `discord-gateway.js`: `decideAmbientReply`
+(pure decision), the in-memory `ambientState` (per-location
+`lastTurnAt` + recent timestamps, volatile — cadence needn't survive a
+restart), and the dispatcher routing `observe` / ambient-gated turns.
+The knowledge gate (V3) runs identically regardless of mode — mode
+governs *when* the Familiar speaks, never *what context it has*.
+
+### Reaching what it can relay to (V8, the operability half)
+
+`relay_message` (V6) resolves a target by villager-name or
+location-label — but the Familiar could only *enumerate* people, not
+places, so it couldn't reliably name a room to relay into. V8 closes
+that: `village_lookup` now also reports **Places I'm present in** (each
+location's label, presence mode, trust ceiling, and whether it's a room
+the Familiar can post into) on any roster/category/location view, and
+flags which villagers are **reachable on Discord**. Both relay targets
+now ride in on the lookup the Familiar already reaches for — the
+"every capability must be reachable BY the Familiar" rule (CLAUDE.md)
+applied to places, not just people. A single-person name search stays
+focused and omits the Places footer.
+
 ## Per-location connections and rate limits
 
 - `locations[].connectionId` selects which API connection serves that
@@ -446,6 +522,7 @@ landing; sub-features inside it bump patch.
 | **V5** ✅ | Per-location connections + rate limits | Shipped 0.6.14-alpha: `connectionId` routing in discord-gateway (location → connection → primaryConnection fallback); hourly token-bucket in discord-gateway with `tomes/.rate-limits.json`; ward outbox notice on exhaustion; Connection dropdown in location editor |
 | **V6** ◑ | Village actions: `relay_message` ✅ (0.6.15-alpha), check-on-ward requests outside triage, ward double-check flows for commitments | `relay_message` shipped (ward-approved): cerebellum tool resolves a villager/location target, applies the restricted-memory gate, delivers via the Discord bot token, mirrors to the ward (no covert contact). check-on-ward + commitment double-check still touch the safety-critical escalation surface — sign-off rule applies |
 | **V7** ✅ | Stranger data minimization (memorization profiles by audience) | Shipped 0.6.14-alpha: `buildSharedRoomPrompt` variant in memorization.js selected when `audienceTag !== 'ward-private'`; focuses on ward-only facts, skips unregistered-third-party detail |
+| **V8** ✅ | Per-location presence modes (`strict`/`lurk`/`active`) + relay discoverability | Shipped 0.6.19-alpha: location `mode` field (default strict, backward compatible); `observe` router action for lurk + sat-out active turns (threat-neutral context accumulation); active-mode pacing with a hard cooldown floor and two ward-toggleable strategies — `llm` (model abstains via `[pass]`) and `tiers` (pure-code activity cadence, `decideAmbientReply`); `village_lookup` now surfaces the Places roster + Discord-reachability so both `relay_message` target kinds are enumerable by the Familiar |
 
 Suggested order rationale: V1–V3 build the safety floor before the
 first external door opens in V4. Opening Discord before the gate exists

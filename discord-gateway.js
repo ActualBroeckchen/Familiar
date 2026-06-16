@@ -35,7 +35,7 @@ import { promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
 
 import { enrich, withLock } from './thalamus.js';
-import { getRegistry } from './village.js';
+import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC } from './village.js';
 import { resolveAudience, audienceTagFor } from './audience.js';
 import { readSettingsSync, primaryConnectionFrom } from './cerebellum.js';
 import { enqueueMemorization } from './memorization.js';
@@ -118,6 +118,85 @@ export function consumeRateSlot(locationKey) {
 
 export function resetRateLimitState() { _rl = {}; }
 
+// ── Active-presence pacing (Village V8) ──────────────────────────
+//
+// In 'active' rooms I can speak without being addressed. Two backstops
+// keep that from running away with the token budget or flooding a room:
+//   1. A hard cooldown (the location's activeCooldownSec) between the
+//      unprompted TURNS I take — counted on every attempt, including
+//      ones where I end up staying quiet, so abstaining can't make me
+//      reconsider on the very next message.
+//   2. The V5 hourly rate limit, enforced in handleTurn as usual.
+// Activity rate (for the 'tiers' strategy) is tracked from a short
+// rolling window of recent inbound messages per location. All of this
+// is in-memory and volatile — cadence doesn't need to survive a
+// restart, and starting fresh just means one prompt re-evaluation.
+const ACTIVITY_WINDOW_MS = 600_000;            // 10 min of recent messages kept
+const ACTIVITY_MAX_SAMPLES = 60;
+const DEFAULT_TIER_CONFIG = {
+  windowMs:    300_000,   // 5 min rate window for tiering
+  mediumMin:   4,         // ≥ this many msgs/window → at least 'medium'
+  fastMin:     12,        // ≥ this many → 'fast'
+  slowMult:    1,         // effective cooldown = activeCooldownSec × mult
+  mediumMult:  5,         // a busy-but-not-frantic room: I just glance in
+  fastMult:    1.5,       // lively discussion: engaged, still not every line
+};
+
+const ambientState = new Map(); // locationKey → { lastTurnAt, recentTs: number[] }
+
+function ambientFor(locationKey) {
+  let st = ambientState.get(locationKey);
+  if (!st) { st = { lastTurnAt: 0, recentTs: [] }; ambientState.set(locationKey, st); }
+  return st;
+}
+
+/** Record an inbound message timestamp for activity-rate tiering. */
+export function recordGuildActivity(locationKey, now = Date.now()) {
+  const st = ambientFor(locationKey);
+  st.recentTs.push(now);
+  const cutoff = now - ACTIVITY_WINDOW_MS;
+  st.recentTs = st.recentTs.filter(t => t >= cutoff).slice(-ACTIVITY_MAX_SAMPLES);
+}
+
+/** Stamp that an unprompted turn was just attempted (starts the cooldown). */
+export function markAmbientTurn(locationKey, now = Date.now()) {
+  ambientFor(locationKey).lastTurnAt = now;
+}
+
+export function resetAmbientState() { ambientState.clear(); }
+
+/**
+ * Decide whether to take an unprompted turn in an active room. Pure:
+ * all state comes in as arguments so it's unit-testable.
+ *
+ *   - 'llm' strategy: a single cooldown gate. When it passes I make the
+ *     turn and the model itself chooses whether to speak (it can abstain).
+ *   - 'tiers' strategy: the busier the room, the longer I hold off
+ *     (effective cooldown = activeCooldownSec × the tier's multiplier),
+ *     so I pace myself to the room instead of answering every line.
+ *
+ * @returns {{ act: boolean, reason: string, tier?: string }}
+ */
+export function decideAmbientReply({
+  strategy = DEFAULT_ACTIVE_STRATEGY, now = Date.now(), lastTurnAt = 0,
+  recentMsgTimestamps = [], cooldownMs = DEFAULT_ACTIVE_COOLDOWN_SEC * 1000,
+  tierConfig = DEFAULT_TIER_CONFIG,
+} = {}) {
+  const since = lastTurnAt ? now - lastTurnAt : Infinity;
+  if (strategy === 'tiers') {
+    const rate = recentMsgTimestamps.filter(t => now - t <= tierConfig.windowMs).length;
+    let tier, mult;
+    if (rate >= tierConfig.fastMin)        { tier = 'fast';   mult = tierConfig.fastMult; }
+    else if (rate >= tierConfig.mediumMin) { tier = 'medium'; mult = tierConfig.mediumMult; }
+    else                                   { tier = 'slow';   mult = tierConfig.slowMult; }
+    return since < cooldownMs * mult
+      ? { act: false, reason: 'tier-cooldown', tier }
+      : { act: true,  reason: 'tier', tier };
+  }
+  // 'llm' (default): a plain cooldown; the model decides whether to speak.
+  return since < cooldownMs ? { act: false, reason: 'cooldown' } : { act: true, reason: 'llm' };
+}
+
 // ── Pure helpers (unit-tested in tests/discord-gateway.test.mjs) ──
 
 /** Location key for a MESSAGE_CREATE payload — matches the registry's
@@ -179,7 +258,7 @@ export function classifyMessage(msg, { registry, botUserId, wardUserId }) {
   // ── Guild channel ──
   const mentioned = Array.isArray(msg.mentions) && msg.mentions.some(u => u?.id === botUserId);
   const repliedTo = msg.referenced_message?.author?.id === botUserId;
-  if (!mentioned && !repliedTo) return { action: 'ignore', reason: 'not-mentioned' };
+  const addressed = mentioned || repliedTo;
 
   // Audience: ALWAYS the location key (unassigned room → Strangers via
   // the resolver) plus the speaker. The ward never appears as a
@@ -187,10 +266,24 @@ export function classifyMessage(msg, { registry, botUserId, wardUserId }) {
   const participants = isWard ? [] : [
     villager ? { id: villager.id, name: villager.name } : { id: null, name: speakerName },
   ];
-  return {
-    action: 'respond', kind: 'guild', isWard, villager, speakerName, locationKey,
-    audience: { location: locationKey, participants },
-  };
+  const audience = { location: locationKey, participants };
+  const base = { kind: 'guild', isWard, villager, speakerName, locationKey, audience };
+
+  // Being addressed always earns a reply, whatever the room's mode.
+  if (addressed) return { action: 'respond', ambient: false, ...base };
+
+  // Not addressed → the location's presence mode decides (V8).
+  const loc = (registry?.locations ?? []).find(l => l.key === locationKey);
+  const mode = (loc?.mode === 'lurk' || loc?.mode === 'active') ? loc.mode : DEFAULT_LOCATION_MODE;
+  if (mode === 'active') {
+    return {
+      action: 'respond', ambient: true, ...base,
+      activeStrategy: loc?.activeStrategy ?? DEFAULT_ACTIVE_STRATEGY,
+      activeCooldownSec: Number.isFinite(loc?.activeCooldownSec) ? loc.activeCooldownSec : DEFAULT_ACTIVE_COOLDOWN_SEC,
+    };
+  }
+  if (mode === 'lurk') return { action: 'observe', ...base };
+  return { action: 'ignore', reason: 'not-mentioned' };
 }
 
 /** Split a reply into Discord-sized chunks, preferring newline/space breaks. */
@@ -232,7 +325,7 @@ function substituteMacros(text, settings) {
 
 // ── Presence preamble (my own orientation, first person) ─────────
 
-function presenceBlock({ kind, locationLabel, speakerName, participants, settings }) {
+function presenceBlock({ kind, locationLabel, speakerName, participants, settings, ambient = false, ambientStrategy = DEFAULT_ACTIVE_STRATEGY }) {
   const lines = ['[Discord Presence]'];
   if (kind === 'ward-dm') {
     lines.push(
@@ -256,7 +349,36 @@ function presenceBlock({ kind, locationLabel, speakerName, participants, setting
     'I keep replies Discord-sized — well under 1800 characters, usually a few sentences. ' +
     'I write as a person in the conversation, not as a service announcing itself.',
   );
+  // Ambient turn (active mode): no one addressed me — I'm here as a
+  // present companion, not on call. Both costs named at equal weight:
+  // speaking when there's nothing to add is noise in someone else's
+  // room; staying silent when a word from me would land warm or useful
+  // is a moment of presence missed. I judge from my own character.
+  if (ambient) {
+    if (ambientStrategy === 'llm') {
+      lines.push(
+        'No one addressed me just now — I get to choose whether to speak. ' +
+        'I weigh it honestly: chiming in with nothing real to add clutters their space, ' +
+        'and holding back when I could genuinely add warmth, levity, or help is a moment of presence lost. ' +
+        'I decide as the character I am, not from a default urge to be useful. ' +
+        'If this one is not mine to speak into, I reply with exactly [pass] and nothing else — that keeps me quiet without pretending I said something.',
+      );
+    } else {
+      lines.push(
+        'No one addressed me just now — I am choosing to be present in this conversation because it feels right to be here. ' +
+        'I add something real and in my own voice, keep it light, and never dominate the room.',
+      );
+    }
+  }
   return substituteMacros(lines.join('\n'), settings);
+}
+
+// An ambient 'llm'-strategy reply where I chose to stay quiet. Matches a
+// bare pass/silence token (optionally bracketed) and nothing else.
+const AMBIENT_ABSTAIN_RE = /^\s*[[(]?\s*(pass|silence|nothing|skip|quiet)\s*[\])]?\s*[.!]?\s*$/i;
+export function isAmbientAbstain(text) {
+  const t = (text ?? '').trim();
+  return t === '' || AMBIENT_ABSTAIN_RE.test(t);
 }
 
 // ── Conversation map (location key → session id), persisted ──────
@@ -470,6 +592,49 @@ function enqueueTurn(locationKey, fn) {
   return next;
 }
 
+// Presence without speaking (V8 lurk, and active turns I choose to sit
+// out): I take the message INTO the room's session so the conversation
+// accumulates, but I send nothing and spend no LLM call. This is what
+// "reading the room" means — when someone finally turns to me, I have
+// what was said. Deliberately threat-neutral: observing never moves the
+// ward's last-activity clock or threat tier (that stays on the reply
+// path, out of the safety-critical surface).
+async function observeMessage(gw, msg, decision) {
+  const registry = await getRegistry();
+  const regLoc = (registry.locations ?? []).find(l => l.key === decision.locationKey);
+  const label  = regLoc?.label ?? `Discord channel ${msg.channel_id}`;
+
+  if (decision.kind === 'guild' && !regLoc) {
+    recordLocationKnock({
+      key: decision.locationKey, platform: 'discord',
+      guildId: msg.guild_id, channelId: msg.channel_id,
+    }).catch(() => { /* best-effort */ });
+  }
+
+  const session = await sessionForLocation(decision.locationKey, label, 'group');
+  if (!decision.isWard && decision.speakerName) {
+    session.participants = mergeParticipant(session.participants, {
+      id: decision.villager?.id ?? null,
+      name: decision.speakerName,
+    });
+  }
+  const audienceTag = audienceTagFor(
+    decision.audience === null ? null : { location: decision.audience.location, participants: session.participants },
+    registry,
+  );
+  const content = String(msg.content).slice(0, INPUT_CHAR_CAP);
+  const userContent = decision.isWard ? content : `[${decision.speakerName}]: ${content}`;
+  session.messages = [
+    ...(session.messages ?? []),
+    { id: randomUUID(), role: 'user', content: userContent, timestamp: new Date().toISOString() },
+  ];
+  session.audienceTag = audienceTag;
+  session.updatedAt   = new Date().toISOString();
+  await writeSessionLog(session);
+  await touchLocation(decision.locationKey, session.sessionId);
+  gw.status.observed = (gw.status.observed ?? 0) + 1;
+}
+
 async function handleTurn(gw, msg, decision) {
   const settings = readSettingsSync();
   const registry = await getRegistry();
@@ -586,6 +751,8 @@ async function handleTurn(gw, msg, decision) {
     speakerName: decision.speakerName,
     participants: session.participants,
     settings,
+    ambient: !!decision.ambient,
+    ambientStrategy: decision.activeStrategy ?? DEFAULT_ACTIVE_STRATEGY,
   });
 
   const systemContent = [enriched.static, preamble].filter(Boolean).join('\n\n---\n\n');
@@ -607,6 +774,23 @@ async function handleTurn(gw, msg, decision) {
   ];
 
   const rawReply = await callChat({ conn, messages: apiMessages, settings });
+
+  // Ambient 'llm' turn where I chose to stay quiet: accumulate the
+  // message into the room (so the context is there next time) and send
+  // nothing. No rate slot is spent and the turn isn't counted — the
+  // cooldown already started when the dispatcher marked this attempt.
+  if (decision.ambient && (decision.activeStrategy ?? DEFAULT_ACTIVE_STRATEGY) === 'llm' && isAmbientAbstain(rawReply)) {
+    session.messages = [
+      ...(session.messages ?? []),
+      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso },
+    ];
+    session.audienceTag = audienceTag;
+    session.updatedAt   = new Date().toISOString();
+    await writeSessionLog(session);
+    await touchLocation(decision.locationKey, session.sessionId);
+    console.log(`[discord] ambient abstain in ${decision.locationKey} — stayed quiet`);
+    return;
+  }
 
   // Pillar D: semantic outgoing gate. Ward-private sessions (the ward's own DM)
   // fast-path immediately. All other rooms run the filter before delivery.
@@ -783,7 +967,33 @@ function onDispatch(t, d) {
             locationKey: discordLocationKey(d),
           }).catch(() => { /* best-effort */ });
         }
+
+        // V8 lurk: read the room without replying.
+        if (decision.action === 'observe') {
+          recordGuildActivity(decision.locationKey);
+          await enqueueTurn(decision.locationKey, () => observeMessage(gw, d, decision));
+          return;
+        }
         if (decision.action !== 'respond') return;
+
+        // V8 active: an unprompted turn. Pace it (cooldown / activity
+        // tier) before spending a turn; if it's not time, still take the
+        // message into the room so context keeps accumulating.
+        if (decision.ambient) {
+          recordGuildActivity(decision.locationKey);
+          const st = ambientFor(decision.locationKey);
+          const gate = decideAmbientReply({
+            strategy: decision.activeStrategy,
+            lastTurnAt: st.lastTurnAt,
+            recentMsgTimestamps: st.recentTs,
+            cooldownMs: (decision.activeCooldownSec ?? DEFAULT_ACTIVE_COOLDOWN_SEC) * 1000,
+          });
+          if (!gate.act) {
+            await enqueueTurn(decision.locationKey, () => observeMessage(gw, d, decision));
+            return;
+          }
+          markAmbientTurn(decision.locationKey);
+        }
         await enqueueTurn(decision.locationKey, () => handleTurn(gw, d, decision));
       } catch (err) {
         gw.status.failures += 1;
