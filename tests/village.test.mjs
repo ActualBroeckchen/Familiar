@@ -232,6 +232,57 @@ test('location rate limit is floored to non-negative integers', async () => {
   assert.equal(cleared.rateLimit, undefined);
 });
 
+// ── Presence modes (V8) ────────────────────────────────────────────
+
+test('location defaults to strict mode', async () => {
+  const loc = await upsertLocation({ key: 'discord:guild:1:channel:2' }, { filePath });
+  assert.equal(loc.mode, 'strict');
+});
+
+test('unknown mode falls back to strict (never chattier than asked)', async () => {
+  const reg = normalizeRegistry({
+    categories: [], villagers: [],
+    locations: [{ key: 'k', mode: 'screaming' }],
+  });
+  assert.equal(reg.locations[0].mode, 'strict');
+});
+
+test('lurk mode is stored, no active sub-fields kept', async () => {
+  const loc = await upsertLocation({ key: 'k', mode: 'lurk', activeStrategy: 'tiers', activeCooldownSec: 30 }, { filePath });
+  assert.equal(loc.mode, 'lurk');
+  assert.equal(loc.activeStrategy, undefined);
+  assert.equal(loc.activeCooldownSec, undefined);
+});
+
+test('active mode keeps strategy + cooldown; defaults applied on read', async () => {
+  await upsertLocation({ key: 'k', mode: 'active' }, { filePath });
+  const reg = await getRegistry({ filePath });
+  const loc = reg.locations.find(l => l.key === 'k');
+  assert.equal(loc.mode, 'active');
+  assert.equal(loc.activeStrategy, 'llm');         // DEFAULT_ACTIVE_STRATEGY
+  assert.equal(loc.activeCooldownSec, 60);         // DEFAULT_ACTIVE_COOLDOWN_SEC
+});
+
+test('active mode accepts a valid strategy + cooldown', async () => {
+  const loc = await upsertLocation({ key: 'k', mode: 'active', activeStrategy: 'tiers', activeCooldownSec: 45 }, { filePath });
+  assert.equal(loc.activeStrategy, 'tiers');
+  assert.equal(loc.activeCooldownSec, 45);
+});
+
+test('switching active → strict clears strategy + cooldown', async () => {
+  await upsertLocation({ key: 'k', mode: 'active', activeStrategy: 'tiers', activeCooldownSec: 45 }, { filePath });
+  const loc = await upsertLocation({ key: 'k', mode: 'strict' }, { filePath });
+  assert.equal(loc.mode, 'strict');
+  assert.equal(loc.activeStrategy, undefined);
+  assert.equal(loc.activeCooldownSec, undefined);
+});
+
+test('invalid active strategy is ignored (keeps default on read)', async () => {
+  await upsertLocation({ key: 'k', mode: 'active', activeStrategy: 'telepathy' }, { filePath });
+  const reg = await getRegistry({ filePath });
+  assert.equal(reg.locations.find(l => l.key === 'k').activeStrategy, 'llm');
+});
+
 // ── Migration ──────────────────────────────────────────────────────
 
 test('trustedContacts migrate into Emergency Contacts, idempotently', async () => {

@@ -2339,9 +2339,9 @@ app.delete('/api/village/villagers/:id', async (req, res) => {
 });
 
 app.post('/api/village/locations', async (req, res) => {
-  const { key, label, assignedCategoryId, connectionId, rateLimit } = req.body ?? {};
+  const { key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec } = req.body ?? {};
   try {
-    const saved = await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit });
+    const saved = await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec });
     reconcileLocationKnock(saved);
     res.json(saved);
   }
@@ -2350,9 +2350,9 @@ app.post('/api/village/locations', async (req, res) => {
 
 app.patch('/api/village/locations', async (req, res) => {
   // Location keys contain ':' and '/' so they ride the body, not the path.
-  const { key, label, assignedCategoryId, connectionId, rateLimit } = req.body ?? {};
+  const { key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec } = req.body ?? {};
   try {
-    const saved = await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit });
+    const saved = await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec });
     reconcileLocationKnock(saved);
     res.json(saved);
   }

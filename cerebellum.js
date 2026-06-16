@@ -1394,7 +1394,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'village_lookup',
-      description: "I look up who's in my human's Village — the people in their life I help them stay close to. I use this to see who exists, recall how someone relates to {{user}} and how they like to be spoken to, or check who belongs to a category or turns up in a particular location. I can filter by category (e.g. \"Family\"), by location (e.g. a Discord channel), or by a name to pull up one person. When {{user}} and I are alone I see everything I've noted about each person, including private things; when anyone else is present, the sensitive private notes are held back automatically so I can't spill them into the room. Each villager comes with their id (so I can edit them or link them to the graph) and the knowledge-graph node I've connected to them, if any — that's how the Village and {{user}}'s relational graph stay one picture.",
+      description: "I look up my human's Village — both the people in their life I help them stay close to AND the places I'm present in (Discord rooms, DMs). I use this to see who exists, recall how someone relates to {{user}} and how they like to be spoken to, check who belongs to a category, or see which rooms I can reach. Unless I'm searching for one person by name, the answer also lists my Places — each room's label, its presence mode, and whether I can post there — so I always know exactly who and where I can relay a message to. I can filter by category (e.g. \"Family\"), by location (e.g. a Discord channel), or by a name to pull up one person. When {{user}} and I are alone I see everything I've noted about each person, including private things; when anyone else is present, the sensitive private notes are held back automatically so I can't spill them into the room. Each villager comes with their id (so I can edit them or link them to the graph), whether they're reachable on Discord, and the knowledge-graph node I've connected to them, if any — that's how the Village and {{user}}'s relational graph stay one picture.",
       parameters: {
         type: 'object',
         properties: {
@@ -1962,28 +1962,54 @@ export const TOOL_EXECUTORS = {
         v.name.toLowerCase().includes(nameQ) ||
         (v.aliases ?? []).some(a => String(a?.id ?? '').toLowerCase().includes(nameQ)));
 
-      if (villagers.length === 0) return 'No one in the Village matches that.';
+      const discordReachable = (v) => (v.aliases ?? []).some(a => a.platform === 'discord' && a.id);
 
-      const lines = villagers.map(v => {
-        const parts = [`- ${v.name} (id: ${v.id})`];
-        const cnames = (v.categoryIds ?? []).map(catName).join(', ');
-        if (cnames) parts.push(`  Category: ${cnames}`);
-        if (v.pronouns) parts.push(`  Pronouns: ${v.pronouns}`);
-        if (v.relationToWard) parts.push(`  To {{user}}: ${v.relationToWard}`);
-        if (v.commStyleNotes) parts.push(`  Comm style: ${v.commStyleNotes}`);
-        if (v.notes) parts.push(`  Notes: ${v.notes}`);
-        if (v.privateNotes) {
-          if (wardPrivate) parts.push(`  Private (ward-only): ${v.privateNotes}`);
-          else parts.push('  (private notes withheld — someone else is present)');
+      const sections = [];
+
+      if (villagers.length > 0) {
+        const lines = villagers.map(v => {
+          const parts = [`- ${v.name} (id: ${v.id})${discordReachable(v) ? ' — reachable on Discord' : ''}`];
+          const cnames = (v.categoryIds ?? []).map(catName).join(', ');
+          if (cnames) parts.push(`  Category: ${cnames}`);
+          if (v.pronouns) parts.push(`  Pronouns: ${v.pronouns}`);
+          if (v.relationToWard) parts.push(`  To {{user}}: ${v.relationToWard}`);
+          if (v.commStyleNotes) parts.push(`  Comm style: ${v.commStyleNotes}`);
+          if (v.notes) parts.push(`  Notes: ${v.notes}`);
+          if (v.privateNotes) {
+            if (wardPrivate) parts.push(`  Private (ward-only): ${v.privateNotes}`);
+            else parts.push('  (private notes withheld — someone else is present)');
+          }
+          if (v.graphNodeId) parts.push(`  Linked graph node: ${v.graphNodeId}`);
+          else parts.push('  Not linked to a graph node yet.');
+          return parts.join('\n');
+        });
+        const header = wardPrivate
+          ? `${villagers.length} villager(s):`
+          : `${villagers.length} villager(s) (sensitive private notes hidden — others are present):`;
+        sections.push(`${header}\n${lines.join('\n')}`);
+      } else if (nameQ || wantCatId) {
+        sections.push('No one in the Village matches that.');
+      }
+
+      // Places footer — the rooms I'm present in, so I always know what I
+      // can relay to. Skipped on a targeted single-person name search
+      // (that's about the person, not the map). channelIdFromLocationKey
+      // tells me whether a location is one I can actually post into.
+      if (!nameQ) {
+        const locs = reg?.locations ?? [];
+        if (locs.length > 0) {
+          const placeLines = locs.map(l => {
+            const postable = channelIdFromLocationKey(l.key);
+            const mode = l.mode ?? 'strict';
+            return `- ${l.label ?? l.key} (key: ${l.key}) — ${mode} mode, trust ceiling: ${catName(l.assignedCategoryId)}`
+              + (postable ? '' : ' — not a room I can post into');
+          });
+          sections.push(`Places I'm present in (${locs.length}) — I can relay to any postable one by its label:\n${placeLines.join('\n')}`);
         }
-        if (v.graphNodeId) parts.push(`  Linked graph node: ${v.graphNodeId}`);
-        else parts.push('  Not linked to a graph node yet.');
-        return parts.join('\n');
-      });
-      const header = wardPrivate
-        ? `${villagers.length} villager(s):`
-        : `${villagers.length} villager(s) (sensitive private notes hidden — others are present):`;
-      return `${header}\n${lines.join('\n')}`;
+      }
+
+      if (sections.length === 0) return "My human's Village is empty for now — no people or places registered yet.";
+      return sections.join('\n\n');
     } catch (err) { return `I couldn't read the Village: ${err.message}`; }
   },
 
