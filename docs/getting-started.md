@@ -99,7 +99,7 @@ Windows equivalents (`install.bat`, `start.bat`, `stop.bat`, and the PowerShell 
 ## First-time setup
 
 1. Open the **Settings panel** (☰ icon in the top bar).
-2. Select your **Provider** (NanoGPT, Z.ai Standard, or Z.ai Coding Plan).
+2. Select your **Provider** (NanoGPT, Z.ai Standard, Z.ai Coding Plan, or Google AI Studio).
 3. Paste your **API key**.
 4. Select or type a **model name**.
 5. Start chatting.
@@ -111,7 +111,7 @@ Your API key lives in `settings.json` server-side (and is mirrored to browser `l
 Phylactery's background consolidator (weekly / monthly / yearly memory summaries) needs an LLM API key of its own. Tell it which to use:
 
 1. In the sidebar, open the **Connections** section.
-2. Save one or more connections via **+ Save current as connection** (any provider works — `nanogpt`, `zai`, or `zai-coding`).
+2. Save one or more connections via **+ Save current as connection** (any provider works — `nanogpt`, `zai`, `zai-coding`, or `google`).
 3. Click **+ Phylactery** on the connection whose key + model Phylactery should use. The badge **Phylactery** appears next to the connection's name. Click again on the same row to clear, or on a different row to move the designation.
 
 When the designation changes, server.js detects it on the next `PUT /api/settings` and respawns the Phylactery child process with the new env (`PHYLACTERY_LLM_API_KEY`, `PHYLACTERY_LLM_BASE_URL`, `PHYLACTERY_LLM_MODEL`, `PHYLACTERY_LLM_PROVIDER`; the legacy `ENTITY_CORE_LLM_*` aliases are still set too for backward compatibility, plus `ZAI_API_KEY` / `ZAI_BASE_URL` / `ZAI_MODEL` for z.ai providers). No server restart needed — the new key takes effect on the next chat or scheduled consolidation.
@@ -223,7 +223,7 @@ Phylactery's own env vars (read by Phylactery itself, not by Proto-Familiar; doc
 | `PHYLACTERY_LLM_API_KEY` | always, from the designated connection | Bearer token for Phylactery's outbound LLM calls (consolidation, embeddings) |
 | `PHYLACTERY_LLM_BASE_URL` | always, derived from the connection's provider | Full chat-completions URL (Phylactery POSTs to this exactly — no path appending) |
 | `PHYLACTERY_LLM_MODEL` | always, from the connection | Model name for Phylactery's outbound LLM calls |
-| `PHYLACTERY_LLM_PROVIDER` | always | Informational provider tag (`nanogpt` / `zai` / `zai-coding`) |
+| `PHYLACTERY_LLM_PROVIDER` | always | Informational provider tag (`nanogpt` / `zai` / `zai-coding` / `google`) |
 | `ENTITY_CORE_LLM_API_KEY` / `ENTITY_CORE_LLM_BASE_URL` / `ENTITY_CORE_LLM_MODEL` | always | Legacy aliases set alongside the `PHYLACTERY_LLM_*` names so `consolidate.py` resolves either; for backward compatibility only. |
 | `ZAI_API_KEY` / `ZAI_BASE_URL` / `ZAI_MODEL` | only when provider is `zai` or `zai-coding` | Alternate names Phylactery falls back to if the `PHYLACTERY_LLM_*` variants are unset. Setting both pairs makes any Phylactery build work without re-config. |
 
@@ -243,7 +243,12 @@ Phylactery's own env vars (read by Phylactery itself, not by Proto-Familiar; doc
 - **Endpoint:** `https://api.z.ai/api/coding/paas/v4/chat/completions` (separate quota from Standard)
 - **Suggested models:** `glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`, `glm-4.5-air`
 
-All three providers use the OpenAI-compatible `chat/completions` format. The server selects the correct endpoint automatically based on your provider selection.
+### Google AI Studio — Gemini
+- **Endpoint:** `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` (Google's OpenAI-compatible surface)
+- **Suggested models:** `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.0-flash`, `gemini-2.0-flash-lite`
+- **API key:** create one at [Google AI Studio](https://aistudio.google.com/apikey); it's sent as a `Bearer` token like every other provider here.
+
+All providers use the OpenAI-compatible `chat/completions` format. The server selects the correct endpoint automatically based on your provider selection.
 
 ---
 

@@ -18,4 +18,8 @@ export const PROVIDER_URLS = {
   nanogpt:      'https://nano-gpt.com/api/v1/chat/completions',
   zai:          'https://api.z.ai/api/paas/v4/chat/completions',
   'zai-coding': 'https://api.z.ai/api/coding/paas/v4/chat/completions',
+  // Google AI Studio (Gemini) via its OpenAI-compatible surface — same
+  // Bearer-auth chat/completions shape every other consumer here expects,
+  // so streaming, tools, and Phylactery consolidation all work unchanged.
+  google:       'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
 };

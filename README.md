@@ -16,7 +16,7 @@ If you want to join the efforts and follow the development closely, you can join
 
 The current version lives in `package.json` as the single source of truth; the server reads it at boot and exposes it via `/api/version`, `/api/health`, the startup banner, and the sidebar footer badge.
 
-A lightweight, self-hosted chat UI for [z.ai](https://api.z.ai) and [NanoGPT](https://nano-gpt.com). Runs entirely on your machine — your API key never leaves `localhost`.
+A lightweight, self-hosted chat UI for [z.ai](https://api.z.ai), [NanoGPT](https://nano-gpt.com), and [Google AI Studio](https://aistudio.google.com). Runs entirely on your machine — your API key never leaves `localhost`.
 
 ### Requirements
 
@@ -87,7 +87,7 @@ Project wiki pages are available in [`/wiki`](wiki/):
 
 | Feature | Details |
 |---|---|
-| **Providers** | NanoGPT (OpenAI-compatible) · Z.ai Standard API · Z.ai Coding Plan |
+| **Providers** | NanoGPT (OpenAI-compatible) · Z.ai Standard API · Z.ai Coding Plan · Google AI Studio (Gemini) |
 | **Saved connections** | Multiple named provider/key/model combos in the Connections sidebar. Mark one **Primary**, any others **fallback** (ordered list, tried when primary returns empty), and one **+ Phylactery** — its API key is passed to the Phylactery child as `PHYLACTERY_LLM_API_KEY` so its consolidator can call out for embeddings / weekly summaries. Changing the designation re-spawns Phylactery automatically, no restart needed |
 | **Phylactery enrichment** | Automatically grounds every request in the in-tree Phylactery MCP server (`./phylactery/`). The context is split for prompt-cache efficiency: a **static** block (full identity layer, XML-wrapped) is prepended to the system message, while a **dynamic** block (RAG memories + knowledge-graph excerpt + temporal context) is depth-injected so per-turn churn doesn't invalidate the cached prefix. Depth is the `thalamusDynamicDepth` setting (default 4) |
 | **Temporal context (Unruh)** | Sibling Python MCP module (`unruh/`, alpha — see [`docs/unruh-design.md`](docs/unruh-design.md)) that adds a `[Temporal Context]` block with three layers: **schedule** (current phase + upcoming events/tasks/reminders, with **recurrence** — daily / weekly / monthly / yearly, plus advanced patterns like "last Friday of every month" via `bysetpos`+`byweekday`, plus per-occurrence resolution so this week's cleaning done doesn't kill next week's), **interests** (standing values that always surface + live interests that accrue weight from chat engagement and decay over days), and **session handoff** (at session end the conversation is summarised into an intent + open threads, surfaced at the top of the next session so the Familiar resumes mid-thought). The handoff summary is opt-out via the **Session handoff** setting. When you've been quiet for **30 minutes**, the next message enters *idle mode*: up to 3 due bookmarks surface in `[Temporal Context]` for the Familiar to weave in naturally; each surfacing outcome is tracked (engaged / ignored) and resurface intervals adapt automatically (engaged → longer; ignored → shorter; 3+ consecutive ignores → topic weight decay). Every timestamped surface (schedule items, RAG memories, ponderings, handoff) renders through `relative-time.js` so the Familiar reads "tomorrow at 10am" / "yesterday at 4pm" / "in 30 minutes" rather than ISO arithmetic; a `[Now]` block lands at the very tail of every prompt (after chat history + post-history prompt) anchoring current wall-clock time + how long since the last user message |
@@ -142,7 +142,11 @@ Suggested models: `glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`, `glm-4.5`, `glm-
 
 Suggested models: `glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`, `glm-4.5-air`
 
-All three providers share the same OpenAI-compatible `chat/completions` format; the server selects the correct endpoint based on your provider choice.
+**Google AI Studio — Gemini** — `https://generativelanguage.googleapis.com` (OpenAI-compatible surface). Get a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
+
+Suggested models: `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.0-flash`, `gemini-2.0-flash-lite`
+
+All providers share the same OpenAI-compatible `chat/completions` format; the server selects the correct endpoint based on your provider choice.
 
 ---
 
@@ -346,7 +350,7 @@ Proxies a chat request to the chosen provider.
 **Request body:**
 ```json
 {
-  "provider":    "nanogpt | zai | zai-coding",
+  "provider":    "nanogpt | zai | zai-coding | google",
   "apiKey":      "sk-...",
   "model":       "gpt-4o-mini",
   "messages":    [{ "role": "user", "content": "Hello" }],

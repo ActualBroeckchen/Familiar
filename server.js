@@ -224,7 +224,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
 
   const url = PROVIDER_URLS[provider];
   if (!url) {
-    return res.status(400).json({ error: `Unknown provider: "${provider}". Expected "nanogpt", "zai", or "zai-coding".` });
+    return res.status(400).json({ error: `Unknown provider: "${provider}". Expected one of: ${Object.keys(PROVIDER_URLS).join(', ')}.` });
   }
   if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
     return res.status(400).json({ error: 'API key is required.' });

@@ -14,7 +14,7 @@ Proxies a chat completion request to the selected LLM provider. Supports both st
 
 ```json
 {
-  "provider":    "nanogpt | zai | zai-coding",
+  "provider":    "nanogpt | zai | zai-coding | google",
   "apiKey":      "sk-...",
   "model":       "gpt-4o-mini",
   "messages":    [{ "role": "user", "content": "Hello" }],
@@ -28,7 +28,7 @@ Proxies a chat completion request to the selected LLM provider. Supports both st
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `provider` | string | Yes | One of `"nanogpt"`, `"zai"`, `"zai-coding"` |
+| `provider` | string | Yes | One of `"nanogpt"`, `"zai"`, `"zai-coding"`, `"google"` |
 | `apiKey` | string | Yes | Your API key for the chosen provider |
 | `model` | string | Yes | Model name (e.g. `"gpt-4o-mini"`, `"glm-4.7"`) |
 | `messages` | array | Yes | OpenAI-compatible messages array |

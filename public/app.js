@@ -39,12 +39,22 @@ const PROVIDER_MODELS = {
     'glm-4.7',
     'glm-4.5-air',
   ],
+  // Google AI Studio via its OpenAI-compatible endpoint — bare model ids
+  // (no "models/" prefix needed on that surface).
+  google: [
+    'gemini-2.5-pro',
+    'gemini-2.5-flash',
+    'gemini-2.5-flash-lite',
+    'gemini-2.0-flash',
+    'gemini-2.0-flash-lite',
+  ],
 };
 
 const PROVIDER_DEFAULT_MODEL = {
   nanogpt:      'gpt-4o-mini',
   zai:          'glm-4.7',
   'zai-coding': 'glm-4.7',
+  google:       'gemini-2.5-flash',
 };
 
 // ── ID generation ────────────────────────────────────────────
