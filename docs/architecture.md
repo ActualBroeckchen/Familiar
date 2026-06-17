@@ -60,7 +60,7 @@ server.js  (Express, Node 18+, ESM)
     │  ── village (audience gating + external presence) ───────────
     ├── village.js          ── registry: categories/grants, villagers, locations
     ├── audience.js         ── grant resolution + section-marker gate (V3)
-    ├── discord-gateway.js  ── autonomous: bidirectional Discord presence (V4); per-location presence modes strict/lurk/active + mention legibility + readBots (V8)
+    ├── discord-gateway.js  ── autonomous: bidirectional Discord presence (V4); per-location presence modes strict/lurk/active + mention legibility + readBots (V8); deferred presence [later:…] revisit queue (V9)
     │
     │  ── classical infrastructure ──────────────────────────────
     ├── memorization.js     ── autonomous per-fact memorization queue + worker (Pillar C)
@@ -554,6 +554,24 @@ with `readBots: true` lets them through `classifyMessage` as normal, so
 they're answered when addressed and paced by the room's mode +
 `activeCooldownSec` + rate limit otherwise. For shared Familiar
 channels; the loop is the ward's to pace, not a hard block.
+
+*Deferred presence (V9).* Ambient turns now have a third option beyond
+speak / `[pass]`: `[later:…]` schedules a revisit. Three syntax forms —
+relative (`[later:15m]`), wall-clock (`[later:22:30]`), and named
+buckets (`[later:soon]` ~15min / `[later:later]` ~45min /
+`[later:much-later]` ~1h). Clamped to [5min, 1h]; may re-defer up to
+2× total. Persisted in `tomes/.discord-revisits.json`. A self-arming
+timer (`armRevisitTimer`) fires the soonest-due entry and re-arms; it
+is seeded from the queue at `startDiscordGateway` and cleared in
+`teardown`. Any real incoming message at a location supersedes its
+pending revisit (`cancelRevisitsForLocation`). Revisit turns are
+threat-neutral and never move the ward's activity clock.
+
+Session history now renders `[HH:MM]` timestamps (server local time)
+before each speaker prefix, so the model can read exchange rhythm and
+gaps directly. `carriedExchange` gains a `maxAgeMs` staleness gate
+(default 1h) so exchanges older than that are not carried forward as
+live threads.
 
 ### `memorization.js` — autonomous per-fact memorization (Pillar C)
 

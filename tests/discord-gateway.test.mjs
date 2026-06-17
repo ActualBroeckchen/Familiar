@@ -16,6 +16,8 @@ import {
   directedAtOthers,
   messageNamesBot,
   carriedExchange,
+  parseDeferToken,
+  isDeferToken,
 } from '../discord-gateway.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────
@@ -671,5 +673,60 @@ describe('carriedExchange — an untagged line that continues someone else\'s th
     }));
     // broeckOpens is now 7 back — outside the default lookback of 5.
     assert.deepEqual(carriedExchange([broeckOpens, ...filler], { currentSpeaker: 'Nichtschwert' }), []);
+  });
+
+  it('does not carry forward a message older than maxAgeMs', () => {
+    const staleTs = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(); // 2 hours ago
+    const staleMsg = { ...broeckOpens, timestamp: staleTs };
+    // Default maxAgeMs is 1h, so a 2h-old message should not be carried.
+    assert.deepEqual(carriedExchange([staleMsg], { currentSpeaker: 'Nichtschwert' }), []);
+  });
+
+  it('still carries forward a message within maxAgeMs', () => {
+    const freshTs = new Date(Date.now() - 10 * 60 * 1000).toISOString(); // 10 min ago
+    const freshMsg = { ...broeckOpens, timestamp: freshTs };
+    assert.deepEqual(carriedExchange([freshMsg], { currentSpeaker: 'Nichtschwert' }), ['Broeckchen']);
+  });
+});
+
+describe('parseDeferToken — deferred presence syntax', () => {
+  it('parses a relative minute token', () => {
+    assert.equal(parseDeferToken('[later:15m]'), 15 * 60_000);
+  });
+  it('parses a relative hour token, clamped to 1h max', () => {
+    assert.equal(parseDeferToken('[later:2h]'), 60 * 60_000);
+  });
+  it('parses bucket: soon → 15min', () => {
+    assert.equal(parseDeferToken('[later:soon]'), 15 * 60_000);
+  });
+  it('parses bucket: later → 45min', () => {
+    assert.equal(parseDeferToken('[later:later]'), 45 * 60_000);
+  });
+  it('parses bucket: much-later → 60min (ceiling)', () => {
+    assert.equal(parseDeferToken('[later:much-later]'), 60 * 60_000);
+  });
+  it('floors small durations to 5min', () => {
+    assert.equal(parseDeferToken('[later:1m]'), 5 * 60_000);
+  });
+  it('parses an absolute wall-clock time ~30min from now', () => {
+    const target = new Date(Date.now() + 30 * 60_000);
+    const hh = String(target.getHours()).padStart(2, '0');
+    const mm = String(target.getMinutes()).padStart(2, '0');
+    const ms = parseDeferToken(`[later:${hh}:${mm}]`);
+    assert.ok(ms !== null, 'should parse');
+    // Minute-granular token: allow up to 65s of skew (minute truncation + elapsed time)
+    assert.ok(Math.abs(ms - 30 * 60_000) < 65_000, `expected ~30min, got ${ms}ms`);
+  });
+  it('returns null for [pass]', () => {
+    assert.equal(parseDeferToken('[pass]'), null);
+  });
+  it('returns null for unrecognised tokens', () => {
+    assert.equal(parseDeferToken('[later:tomorrow]'), null);
+    assert.equal(parseDeferToken('later:15m'), null);
+  });
+  it('isDeferToken mirrors parseDeferToken', () => {
+    assert.equal(isDeferToken('[later:20m]'), true);
+    assert.equal(isDeferToken('[pass]'), false);
+    assert.equal(isDeferToken('just chatting'), false);
   });
 });
