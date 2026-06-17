@@ -204,6 +204,10 @@ async function armRevisitTimer() {
     if (!list.length) return;
     const next = list.slice().sort((a, b) => a.dueAt - b.dueAt)[0];
     const delay = Math.max(1000, next.dueAt - Date.now());
+    // A concurrent arm may have set a timer during the await above — clear it
+    // before replacing it so we never leave an orphaned timeout firing from a
+    // stale closure (the fireRevisit claim guard backstops this too).
+    if (revisitTimer) clearTimeout(revisitTimer);
     revisitTimer = setTimeout(() => { fireRevisit(next).catch(err => console.error('[discord] fireRevisit failed:', err?.message ?? err)); }, delay);
     revisitTimer.unref?.();
   } catch (err) {
