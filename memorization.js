@@ -123,6 +123,7 @@ async function persistQueue() {
 
 import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap } from './thalamus.js';
 import { getRegistry } from './village.js';
+import { readSettingsSync } from './cerebellum.js';
 
 export function findOrCreateSessionMemoriesTome() {
   return findOrCreateTomeByName(TOMES_DIR, TOME_NAME, {
@@ -139,7 +140,24 @@ export function findOrCreateSessionMemoriesTome() {
 
 // ── Prompt ───────────────────────────────────────────────────────
 
-function buildPrompt(messages, topicLabel = null) {
+// I never label my human's turns "User" — they are not a generic account,
+// they are this specific person. The label is their configured name (passed
+// in from settings) or "My human" as a fallback. My own turns are "Me".
+// In a shared room, non-ward speakers already arrive name-prefixed as
+// "[Name]: …" from the gateway, so I keep that prefix rather than overwrite
+// it with the ward's name.
+function formatTranscript(readable, wardLabel, { sharedRoom = false } = {}) {
+  return readable
+    .map(m => {
+      if (m.role !== 'user') return `Me: ${m.content ?? ''}`;
+      const c = m.content ?? '';
+      if (sharedRoom && /^\[[^\]]+\]:/.test(c)) return c; // already names the speaker
+      return `${wardLabel}: ${c}`;
+    })
+    .join('\n\n');
+}
+
+export function buildPrompt(messages, topicLabel = null, wardName = 'My human') {
   const readable = messages.filter(m => {
     if (m.role === 'tool') return false;
     if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return false;
@@ -147,9 +165,7 @@ function buildPrompt(messages, topicLabel = null) {
   });
   if (readable.length < 2) return null;
 
-  const convText = readable
-    .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
-    .join('\n\n');
+  const convText = formatTranscript(readable, wardName);
 
   const focusBlock = topicLabel
     ? `\n\n### Focus\nMy human named this segment "${topicLabel}". I centre my extraction on that topic; I skip tangential threads unless they reveal something genuinely important.`
@@ -202,7 +218,7 @@ ${convText}`;
 // Exported for tests.
 // Focus: what my human said and experienced. Skip: personal detail about
 // unregistered third parties who haven't consented to AI note-taking.
-export function buildSharedRoomPrompt(messages, topicLabel = null) {
+export function buildSharedRoomPrompt(messages, topicLabel = null, wardName = 'My human') {
   const readable = messages.filter(m => {
     if (m.role === 'tool') return false;
     if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return false;
@@ -210,9 +226,7 @@ export function buildSharedRoomPrompt(messages, topicLabel = null) {
   });
   if (readable.length < 2) return null;
 
-  const convText = readable
-    .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
-    .join('\n\n');
+  const convText = formatTranscript(readable, wardName, { sharedRoom: true });
 
   const focusBlock = topicLabel
     ? `\n\n### Focus\nMy human named this segment "${topicLabel}". I centre my extraction on that topic.`
@@ -457,7 +471,9 @@ async function processJob(job) {
   const promptFn = job.audienceTag && job.audienceTag !== 'ward-private'
     ? buildSharedRoomPrompt
     : buildPrompt;
-  const prompt = promptFn(job.messages, job.topicLabel ?? null);
+  // My human's configured name, never "User". Falls back to "My human".
+  const wardName = (readSettingsSync()?.userName || '').trim() || 'My human';
+  const prompt = promptFn(job.messages, job.topicLabel ?? null, wardName);
   if (!prompt) throw new Error('Conversation too short to memorize.');
 
   const { content: raw, finishReason } = await callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, prompt });

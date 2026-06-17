@@ -477,6 +477,19 @@ Two pure, unit-tested helpers fix this:
   "this is between them" from open-room chatter. Framed with both costs
   at equal weight (barging into someone else's exchange vs. a missed
   moment of presence) — never a bias toward silence.
+- **`carriedExchange(messages, …)`** closes the harder gap: the *only*
+  tagged line in an exchange is usually the opener ("@Nichtschwert, you
+  and I?"), while the untagged follow-up that continues it ("sure, what's
+  up?") would otherwise read as open-room and the Familiar would barge in.
+  Every stored message (spoken **and** observed) records `speaker`,
+  `targets` (others it named) and `namedMe`; when an ambient line names no
+  one, `carriedExchange` finds the most recent message that named only
+  others and treats its parties as a live exchange — so a follow-up from
+  one of them is recognised as theirs, not an opening for me. It reads
+  only the structured fields (no display-text parsing); a line that names
+  me cancels the carry-forward. The open-room presence branch is worded to
+  make the model *read* for this rather than treat any unaddressed line as
+  its cue.
 
 ### Other bots & Familiars: `readBots` (V8)
 

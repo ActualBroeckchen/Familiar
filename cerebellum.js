@@ -469,9 +469,10 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
           ? m.content
           : (Array.isArray(m.content) ? (m.content.find(c => c.type === 'text')?.text ?? '') : '');
         const when = m.timestamp ? relativeTime(m.timestamp, nowMs) : '';
+        const humanLabel = (s?.userName || '').trim() || 'My human';
         const prefix = when
-          ? `[${m.role === 'user' ? 'User' : 'Me'} · ${when}]`
-          : `[${m.role === 'user' ? 'User' : 'Me'}]`;
+          ? `[${m.role === 'user' ? humanLabel : 'Me'} · ${when}]`
+          : `[${m.role === 'user' ? humanLabel : 'Me'}]`;
         return `  ${prefix}: ${text.slice(0, 400)}`;
       }).join('\n')}`
     : '\nNo recent conversation on record.';
@@ -1116,8 +1117,8 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           label: { type: 'string', description: 'Short human-readable name of the event (e.g. "dentist appointment").' },
-          when:  { type: 'string', description: 'ISO 8601 start time (e.g. "2026-06-01T14:00:00Z" or "2026-06-01T14:00:00-04:00"). Required.' },
-          end:   { type: 'string', description: 'Optional ISO 8601 end time.' },
+          when:  { type: 'string', description: 'ISO 8601 UTC start time, e.g. "2026-06-01T14:00:00+00:00". Unruh stores and compares all times against UTC — no automatic timezone conversion. My [Now] block always shows the current UTC offset (e.g. "(UTC+02:00)"); I use it to convert any local time {{user}} states to UTC exactly once.' },
+          end:   { type: 'string', description: 'Optional ISO 8601 UTC end time.' },
           recurrence: { type: 'object', description: 'Optional. Repeats this event. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N (every N units), until?: "YYYY-MM-DD" (cut-off date), bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Monday repeats Mondays. Examples: {freq:"weekly"} for a regular meet-up; {freq:"monthly", bysetpos:-1, byweekday:5} for "last Friday of every month"; {freq:"yearly"} for an anniversary.' },
         },
         required: ['label', 'when'],
@@ -1133,7 +1134,7 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           label: { type: 'string', description: 'Short description of the task (e.g. "file taxes", "reply to Sam").' },
-          when:  { type: 'string', description: 'Optional ISO 8601 deadline. Omit for open-ended tasks.' },
+          when:  { type: 'string', description: 'Optional ISO 8601 UTC deadline. Unruh compares against UTC — no automatic timezone conversion. My [Now] block shows the UTC offset; I convert any stated local time to UTC once. Omit for open-ended tasks.' },
           stakes_tier: {
             type: 'string',
             enum: ['external_obligation', 'personal_wellbeing', 'purely_optional'],
@@ -1173,7 +1174,7 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           label:   { type: 'string', description: 'Short label of what the reminder is about.' },
-          when:    { type: 'string', description: 'ISO 8601 fire time. Required.' },
+          when:    { type: 'string', description: 'ISO 8601 UTC fire time, e.g. "2026-06-17T13:00:00+00:00". Unruh compares when_ts against UTC wall-clock — no automatic timezone conversion whatsoever. My [Now] block always shows the current UTC offset (e.g. "(UTC+02:00)") — I use it to convert {{user}}\'s stated local time to UTC exactly once and store that. I do not pre-compensate for any perceived Unruh adjustment; there is none.' },
           message: { type: 'string', description: 'Optional longer text delivered as the reminder message, in my voice.' },
           stakes_tier: {
             type: 'string',
@@ -1199,8 +1200,8 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           label:   { type: 'string', description: 'Short name of the phase (e.g. "morning correspondence").' },
-          when:    { type: 'string', description: 'ISO 8601 start time. The date portion will be re-templated daily.' },
-          end:     { type: 'string', description: 'ISO 8601 end time. Required for phases.' },
+          when:    { type: 'string', description: 'ISO 8601 UTC start time. The date portion will be re-templated daily — only the time-of-day matters. Store in UTC (my [Now] block shows the offset), e.g. if the phase starts at 9am local and I\'m at UTC+02:00, I store "T07:00:00+00:00".' },
+          end:     { type: 'string', description: 'ISO 8601 UTC end time. Required for phases.' },
           texture: { type: 'string', description: 'Optional short description of what I\'m like in this phase (e.g. "getting a bit stricter to make sure {{user}} actually goes to sleep."). I am allowed to be any kind of way I want to be - warm, sleepy, distracted, anything!' },
           recurrence: { type: 'object', description: 'Optional. Without this, phases recur daily by design — they match on time-of-day only. With recurrence, a phase shows only on the matched weekday/day-of-month/etc. Useful for "Sunday cleaning block" or "monthly review". Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. Examples: {freq:"weekly"} for "Sunday-only phase"; {freq:"monthly", bysetpos:-1, byweekday:5} for "last-Friday-of-month review".' },
         },

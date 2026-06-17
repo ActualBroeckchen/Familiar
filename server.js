@@ -2511,6 +2511,9 @@ function startAutonomousPondering() {
         stakes_tier:    e.stakes_tier,
         confidence:     e.confidence,
         offered_at:     e.offered_at,
+        // Whether I actually raised this with my human (post-turn scan).
+        // Lets reflection tell "they didn't engage" from "I never spoke".
+        raised:         e.raised,
         outcome:        e.outcome,
         outcome_at:     e.outcome_at,
         state_snapshot: e.state_snapshot,

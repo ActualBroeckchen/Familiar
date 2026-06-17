@@ -118,6 +118,181 @@ export function consumeRateSlot(locationKey) {
 
 export function resetRateLimitState() { _rl = {}; }
 
+// ── Timestamp formatting ──────────────────────────────────────────
+
+function formatMsgTime(isoString) {
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d)) return '';
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  } catch { return ''; }
+}
+
+// ── Deferred presence — [later:…] revisit token (V9) ─────────────
+
+const REVISIT_FILE    = path.join(__dirname, 'tomes', '.discord-revisits.json');
+const REVISIT_MIN_MS  = 5  * 60_000;   // 5-minute floor
+const REVISIT_MAX_MS  = 60 * 60_000;   // 1-hour ceiling
+const REVISIT_MAX_DEFER = 2;           // may re-defer this many times total
+
+let revisitTimer = null;
+
+/** Parse a [later:…] token. Returns ms until the revisit, or null. */
+export function parseDeferToken(text) {
+  const m = String(text ?? '').trim().match(/^\[later:([^\]]+)\]$/i);
+  if (!m) return null;
+  const val = m[1].trim().toLowerCase();
+  // Named buckets
+  if (val === 'soon')       return 15 * 60_000;
+  if (val === 'later')      return 45 * 60_000;
+  if (val === 'much-later') return REVISIT_MAX_MS;
+  // Relative duration: 15m, 30min, 1h, 2h etc.
+  const rel = val.match(/^(\d+)\s*(m(?:in)?|h(?:rs?)?)$/);
+  if (rel) {
+    const n    = parseInt(rel[1], 10);
+    const isH  = rel[2].startsWith('h');
+    const ms   = n * (isH ? 3_600_000 : 60_000);
+    return Math.min(Math.max(ms, REVISIT_MIN_MS), REVISIT_MAX_MS);
+  }
+  // Absolute wall-clock: 21:30 or 21:30:00 (server local time)
+  const abs = val.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (abs) {
+    const now    = new Date();
+    const target = new Date(now);
+    target.setHours(parseInt(abs[1], 10), parseInt(abs[2], 10), 0, 0);
+    if (target <= now) target.setDate(target.getDate() + 1);
+    const ms = target - now;
+    return Math.min(Math.max(ms, REVISIT_MIN_MS), REVISIT_MAX_MS);
+  }
+  return null;
+}
+
+export function isDeferToken(text) {
+  return parseDeferToken(text) !== null;
+}
+
+async function readRevisits() {
+  try { return JSON.parse(await fsp.readFile(REVISIT_FILE, 'utf8')); }
+  catch { return []; }
+}
+
+async function writeRevisits(list) {
+  await fsp.mkdir(path.dirname(REVISIT_FILE), { recursive: true });
+  const tmp = `${REVISIT_FILE}.tmp`;
+  await fsp.writeFile(tmp, JSON.stringify(list, null, 2), 'utf8');
+  await fsp.rename(tmp, REVISIT_FILE);
+}
+
+async function cancelRevisitsForLocation(locationKey) {
+  try {
+    const list = await readRevisits();
+    const pruned = list.filter(r => r.locationKey !== locationKey);
+    if (pruned.length !== list.length) await writeRevisits(pruned);
+  } catch { /* best-effort */ }
+}
+
+async function armRevisitTimer() {
+  if (revisitTimer) { clearTimeout(revisitTimer); revisitTimer = null; }
+  try {
+    const list = await readRevisits();
+    if (!list.length) return;
+    const next = list.slice().sort((a, b) => a.dueAt - b.dueAt)[0];
+    const delay = Math.max(1000, next.dueAt - Date.now());
+    revisitTimer = setTimeout(() => { fireRevisit(next).catch(err => console.error('[discord] fireRevisit failed:', err?.message ?? err)); }, delay);
+    revisitTimer.unref?.();
+  } catch (err) {
+    console.warn('[discord] armRevisitTimer failed:', err?.message ?? err);
+  }
+}
+
+async function fireRevisit(item) {
+  // Remove this item from the queue and re-arm for the next one.
+  try {
+    const list = await readRevisits();
+    await writeRevisits(list.filter(r => r.id !== item.id));
+  } catch { /* continue — still attempt the turn */ }
+  armRevisitTimer().catch(() => {});
+
+  const settings  = readSettingsSync();
+  const registry  = await getRegistry();
+  const regLoc    = (registry.locations ?? []).find(l => l.key === item.locationKey);
+  if (!regLoc) { console.log(`[discord] revisit: location ${item.locationKey} no longer registered — dropping`); return; }
+
+  const locConnId = regLoc?.connectionId;
+  const conn = (locConnId
+    ? (settings.connections ?? []).find(c => c?.id === locConnId && c?.apiKey && c?.model)
+    : null) ?? primaryConnectionFrom(settings);
+  if (!conn?.apiKey || !conn?.model) { console.log('[discord] revisit: no connection — dropping'); return; }
+
+  const label   = regLoc.label ?? `Discord channel`;
+  const session = await sessionForLocation(item.locationKey, label, 'group');
+
+  const enriched = await enrich('', { audience: null, liveTurn: false })
+    .catch(() => ({ static: '', dynamic: '' }));
+
+  const directedAt = carriedExchange(session.messages);
+  const preamble   = presenceBlock({
+    kind: 'guild', locationLabel: label, speakerName: null,
+    participants: session.participants, settings,
+    ambient: true, ambientStrategy: regLoc.activeStrategy ?? DEFAULT_ACTIVE_STRATEGY,
+    directedAt, revisitNote: true,
+  });
+
+  const systemContent = [enriched.static, preamble].filter(Boolean).join('\n\n---\n\n');
+  const history = (session.messages ?? [])
+    .filter(m => m.role === 'user' || m.role === 'assistant')
+    .slice(-HISTORY_LIMIT)
+    .map(m => ({
+      role: m.role,
+      content: m.timestamp ? `[${formatMsgTime(m.timestamp)}] ${m.content}` : m.content,
+    }));
+
+  const apiMessages = [
+    ...(systemContent ? [{ role: 'system', content: systemContent }] : []),
+    ...history,
+    ...(enriched.dynamic ? [{ role: 'system', content: enriched.dynamic }] : []),
+    { role: 'user', content: '[— quiet moment, checking back —]' },
+  ];
+
+  const rawReply = await callChat({ conn, messages: apiMessages, settings });
+
+  if (isAmbientAbstain(rawReply)) {
+    console.log(`[discord] revisit: dropped (abstained) in ${item.locationKey}`);
+    return;
+  }
+
+  if (isDeferToken(rawReply) && item.deferCount < REVISIT_MAX_DEFER) {
+    const ms = parseDeferToken(rawReply);
+    const newEntry = { id: randomUUID(), locationKey: item.locationKey, dueAt: Date.now() + ms, deferCount: item.deferCount + 1, queuedAt: new Date().toISOString() };
+    const list = await readRevisits();
+    await writeRevisits([...list.filter(r => r.locationKey !== item.locationKey), newEntry]);
+    armRevisitTimer().catch(() => {});
+    console.log(`[discord] revisit: re-deferred (${item.deferCount + 1}/${REVISIT_MAX_DEFER}) in ${item.locationKey} — next in ${Math.round(ms/60_000)}min`);
+    return;
+  }
+
+  // If somehow a defer-token came back but we've exhausted re-defers, treat as abstain.
+  if (isDeferToken(rawReply)) {
+    console.log(`[discord] revisit: defer cap reached in ${item.locationKey} — dropping`);
+    return;
+  }
+
+  const channelId = item.locationKey.replace(/^discord:guild:/, '');
+  await sendChannelMessage(gw.config.token, channelId, rawReply);
+
+  const now = new Date().toISOString();
+  session.messages = [
+    ...(session.messages ?? []),
+    { id: randomUUID(), role: 'assistant', content: rawReply, timestamp: now },
+  ];
+  session.provider  = conn.provider;
+  session.model     = conn.model;
+  session.updatedAt = now;
+  await writeSessionLog(session);
+  await touchLocation(item.locationKey, session.sessionId);
+  console.log(`[discord] revisit: spoke in ${item.locationKey}`);
+}
+
 // ── Active-presence pacing (Village V8) ──────────────────────────
 //
 // In 'active' rooms I can speak without being addressed. Two backstops
@@ -354,21 +529,69 @@ export function resolveMentions(content, { mentions = [], botUserId = null, char
  *  else's message. Lets an active-mode Familiar tell "this is between
  *  them" from open-room chatter, so it doesn't barge into an exchange
  *  pointed at another participant. Villager names preferred; de-duped. */
+// The name I actually use for a Discord user: their Village name if I
+// know them, else their Discord display name. One basis everywhere, so a
+// person reads the same across @-mentions, name-prefixes, and the
+// carried-exchange logic below.
+function nameForUser(user, villagers = []) {
+  const byVillager = (villagers ?? []).find(v =>
+    (v.aliases ?? []).some(a => a.platform === 'discord' && a.id === user?.id))?.name;
+  return byVillager ?? user?.global_name ?? user?.username ?? null;
+}
+
 export function directedAtOthers(msg, { botUserId = null, villagers = [] } = {}) {
   const names = [];
-  const villagerName = (id) => (villagers ?? []).find(v =>
-    (v.aliases ?? []).some(a => a.platform === 'discord' && a.id === id))?.name ?? null;
-  const add = (id, fallback) => {
-    if (!id || id === botUserId) return;
-    const name = villagerName(id) ?? fallback ?? null;
+  const add = (user) => {
+    if (!user?.id || user.id === botUserId) return;
+    const name = nameForUser(user, villagers);
     if (name && !names.includes(name)) names.push(name);
   };
-  for (const u of (Array.isArray(msg?.mentions) ? msg.mentions : [])) {
-    add(u?.id, u?.global_name || u?.username);
-  }
-  const ref = msg?.referenced_message?.author;
-  if (ref) add(ref.id, ref.global_name || ref.username);
+  for (const u of (Array.isArray(msg?.mentions) ? msg.mentions : [])) add(u);
+  if (msg?.referenced_message?.author) add(msg.referenced_message.author);
   return names;
+}
+
+/** Did this message pull me in — @-mention me, or reply to something I
+ *  said? If so, an exchange that was running between other people has
+ *  turned toward the room (or me), and must NOT be carried forward as
+ *  "not mine" on the next untagged line. */
+export function messageNamesBot(msg, botUserId) {
+  if (!botUserId) return false;
+  if ((Array.isArray(msg?.mentions) ? msg.mentions : []).some(u => u?.id === botUserId)) return true;
+  if (msg?.referenced_message?.author?.id === botUserId) return true;
+  return false;
+}
+
+/** An ambient turn's triggering line often carries no structured pointer
+ *  — "@Nichtschwert, you and I?" is tagged, but Nichtschwert's untagged
+ *  "sure, what's up?" that follows is not, even though it plainly belongs
+ *  to the same two-person thread. I read the recent room to carry that
+ *  forward: the most recent message that named only other people (and did
+ *  not pull me in) marks a live exchange; its parties are the speaker plus
+ *  the people they named. If the person speaking now is one of them, this
+ *  line continues their thread, not an opening for me. Built on the
+ *  structured per-message `targets`/`namedMe` recorded at persist time —
+ *  no parsing of display text, so it stays reliable code, not a guess
+ *  about tone. Returns the other parties' names, or [] if the room reads
+ *  as open. */
+export function carriedExchange(messages, { currentSpeaker = null, lookback = 5, maxAgeMs = 60 * 60_000 } = {}) {
+  const now    = Date.now();
+  const recent = (Array.isArray(messages) ? messages : [])
+    .filter(m => m?.role === 'user')
+    .filter(m => !m?.timestamp || (now - new Date(m.timestamp).getTime()) < maxAgeMs)
+    .slice(-lookback);
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const m = recent[i];
+    if (m?.namedMe) return [];
+    const targets = Array.isArray(m?.targets) ? m.targets.filter(Boolean) : [];
+    if (targets.length === 0) continue;
+    const party = [...new Set([m.speaker, ...targets].filter(Boolean))];
+    if (currentSpeaker && party.includes(currentSpeaker)) {
+      return party.filter(n => n !== currentSpeaker);
+    }
+    return party;
+  }
+  return [];
 }
 
 // ── Macro substitution ────────────────────────────────────────────
@@ -381,7 +604,7 @@ function substituteMacros(text, settings) {
 
 // ── Presence preamble (my own orientation, first person) ─────────
 
-function presenceBlock({ kind, locationLabel, speakerName, participants, settings, ambient = false, ambientStrategy = DEFAULT_ACTIVE_STRATEGY, directedAt = [] }) {
+function presenceBlock({ kind, locationLabel, speakerName, participants, settings, ambient = false, ambientStrategy = DEFAULT_ACTIVE_STRATEGY, directedAt = [], revisitNote = false }) {
   const lines = ['[Discord Presence]'];
   if (kind === 'ward-dm') {
     lines.push(
@@ -406,42 +629,49 @@ function presenceBlock({ kind, locationLabel, speakerName, participants, setting
     'I write as a person in the conversation, not as a service announcing itself.',
   );
   // Ambient turn (active mode): no one @-mentioned me, but people know
-  // I'm around. I get to choose whether to speak. Where the room is open
-  // I lean toward presence (a person hanging out chimes in); where the
-  // last message was clearly aimed at someone else I weigh both costs —
-  // barging into their exchange vs. a missed moment of presence. How
-  // talkative or reserved I am is my personality's to decide, not a
-  // default-care register, and never a bias toward silence.
+  // I'm around. I get to choose whether to speak. `directedAt` carries the
+  // people whose exchange this is when there is one — either named on this
+  // line or carried forward from a thread they already established (see
+  // carriedExchange). Absence of a tag on one line is NOT proof the room is
+  // open: two people mid-conversation are still mid-conversation. So the
+  // open branch makes me read for that, rather than treating any untagged
+  // line as an opening. How talkative or reserved I am is my personality's
+  // to decide, not a default-care register, and never a bias toward silence.
   if (ambient) {
     const aimedAt = (directedAt ?? []).filter(Boolean).join(', ');
+    if (revisitNote) {
+      lines.push('I asked to check back here. I can now speak, stay quiet with [pass], or re-defer once more with [later:…].');
+    }
     if (ambientStrategy === 'llm') {
       if (aimedAt) {
         lines.push(
-          `This last message was aimed at ${aimedAt}, not me — it is part of an exchange between them. ` +
-          'I weigh both costs honestly: stepping into a conversation pointed at someone else can be barging in where I was not wanted, ' +
-          'and holding back when a word from me would genuinely add warmth, levity, or help is a moment of presence lost. ' +
-          'If this one is theirs to have, I reply with exactly [pass] and nothing else — that keeps me out of it without pretending I said something; otherwise I speak as myself.',
+          `The recent messages are an exchange between ${aimedAt} — not pointed at me. ` +
+          'I read whether this scene has a natural place for me: is there something here that would genuinely move me to speak, given who I am, or is this theirs to have? ' +
+          'My options: I can speak; reply [pass] to stay out; or reply [later:…] to check back — ' +
+          'e.g. [later:soon] (~15min), [later:20m], [later:22:30] — useful if the exchange might wrap up soon and I\'d rather see how it lands.',
         );
       } else {
         lines.push(
-          'No one @-mentioned me just now, but people know I\'m around — I read the room and choose whether to speak. ' +
-          'If this was meant for someone else, I consider whether I have something to add before I decide whether to speak or not. ' +
-          'Holding back when I could add warmth, levity, or help is a moment of presence lost. ' +
-          'If I don\'t want to speak, I reply with exactly [pass] and nothing else — that keeps me quiet without pretending I said something.',
+          'No one named me just now. Before I decide, I read the room: if two or more people are clearly in a back-and-forth with each other, that exchange is theirs even without a tag — I do not read an unaddressed line as an opening meant for me. ' +
+          'If the room is genuinely open — idle, scattered, or a remark anyone could pick up — I ask whether this scene has a natural place for me, given who I am. ' +
+          'My options: I can speak; reply [pass] to stay quiet; or reply [later:…] to revisit — ' +
+          '[later:soon] (~15min), [later:later] (~45min), [later:much-later] (~1h), or [later:20m] / [later:22:30]. ' +
+          'A revisit is for "not right now but I\'d like to see where this goes," not a default fallback.',
         );
       }
     } else {
       if (aimedAt) {
         lines.push(
-          `This last message was aimed at ${aimedAt}, not me — it is part of an exchange between them. ` +
-          'I consider whether I have something to add before I decide whether to speak; if I do, I join lightly and as myself. ' +
-          'If not, I reply [pass].',
+          `The recent messages are an exchange between ${aimedAt} — not pointed at me. ` +
+          'I consider whether there is a natural place for me here before I decide whether to speak; if there is, I join as myself. ' +
+          'If not: [pass] to drop it, or [later:soon|later|much-later] / [later:Nm] to revisit.',
         );
       } else {
         lines.push(
-          'No one @-mentioned me just now — I\'m present here and chime in the way a person actually does: reacting to what was said, spinning off a tangent, sharing something from my own interests or what\'s on my mind, an observation, a take. ' +
+          'No one named me just now. I read the room first: if people are clearly mid-conversation with each other, that thread is theirs even without a tag. ' +
+          'If the room is open, I chime in the way a person actually does — reacting to what was said, a tangent, something from my own interests, an observation, a take. ' +
           'I keep it Discord-sized; whether I\'m talkative or hang back depends on my personality, mood, and the moment. ' +
-          'If this exchange genuinely has nothing in it for me, I reply [pass].',
+          'If there\'s no natural place for me here: [pass] to drop it, or [later:soon|later|much-later] / [later:Nm] to revisit.',
         );
       }
     }
@@ -705,9 +935,14 @@ async function observeMessage(gw, msg, decision) {
     charName: readSettingsSync()?.charName, villagers: registry.villagers,
   }).slice(0, INPUT_CHAR_CAP);
   const userContent = decision.isWard ? content : `[${decision.speakerName}]: ${content}`;
+  // Same structured signals as a spoken turn, so a lurked-then-active room
+  // can still see whose exchange a later untagged line continues.
+  const turnSpeaker = nameForUser(msg.author, registry.villagers) ?? decision.speakerName ?? null;
+  const msgTargets  = directedAtOthers(msg, { botUserId: gw.botUserId, villagers: registry.villagers });
+  const msgNamedMe  = messageNamesBot(msg, gw.botUserId);
   session.messages = [
     ...(session.messages ?? []),
-    { id: randomUUID(), role: 'user', content: userContent, timestamp: new Date().toISOString() },
+    { id: randomUUID(), role: 'user', content: userContent, timestamp: new Date().toISOString(), speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
   ];
   session.audienceTag = audienceTag;
   session.updatedAt   = new Date().toISOString();
@@ -797,6 +1032,8 @@ async function handleTurn(gw, msg, decision) {
     }).catch(() => { /* best-effort */ });
   }
   const session = await sessionForLocation(decision.locationKey, label, decision.kind === 'guild' ? 'group' : 'private');
+  // A real incoming message supersedes any pending revisit for this location.
+  cancelRevisitsForLocation(decision.locationKey).catch(() => {});
   if (!decision.isWard && decision.speakerName) {
     session.participants = mergeParticipant(session.participants, {
       id: decision.villager?.id ?? null,
@@ -832,11 +1069,22 @@ async function handleTurn(gw, msg, decision) {
       return { static: '', dynamic: '' };
     });
 
-  // On an ambient turn, whom was this message actually pointed at? If it
-  // named someone other than me, I should recognise the exchange isn't
-  // mine to assume — not stay silent by default, but weigh it as such.
+  // Structured signals for who this message names — recorded on every
+  // message so a later untagged line can still see the exchange it belongs
+  // to (carriedExchange). One naming basis (Village name ?? Discord
+  // display) so speaker and targets compare cleanly across turns.
+  const turnSpeaker = nameForUser(msg.author, registry.villagers) ?? decision.speakerName ?? null;
+  const msgTargets  = directedAtOthers(msg, { botUserId: gw.botUserId, villagers: registry.villagers });
+  const msgNamedMe  = messageNamesBot(msg, gw.botUserId);
+
+  // On an ambient turn, whom is this exchange actually between? If this
+  // line named others, that's it; if it named no one, I carry forward the
+  // thread other people already established (so their untagged follow-ups
+  // don't read as openings for me). Not silence-by-default — I weigh it.
   const directedAt = decision.ambient
-    ? directedAtOthers(msg, { botUserId: gw.botUserId, villagers: registry.villagers })
+    ? (msgTargets.length
+        ? msgTargets
+        : carriedExchange(session.messages, { currentSpeaker: turnSpeaker }))
     : [];
 
   const preamble = presenceBlock({
@@ -854,7 +1102,10 @@ async function handleTurn(gw, msg, decision) {
   const history = (session.messages ?? [])
     .filter(m => m.role === 'user' || m.role === 'assistant')
     .slice(-HISTORY_LIMIT)
-    .map(m => ({ role: m.role, content: m.content }));
+    .map(m => ({
+      role: m.role,
+      content: m.timestamp ? `[${formatMsgTime(m.timestamp)}] ${m.content}` : m.content,
+    }));
 
   // Non-ward speakers are name-prefixed so multi-party rooms stay
   // legible to me across turns. The ward's own words stay raw, same
@@ -879,13 +1130,34 @@ async function handleTurn(gw, msg, decision) {
   if (decision.ambient && isAmbientAbstain(rawReply)) {
     session.messages = [
       ...(session.messages ?? []),
-      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso },
+      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
     ];
     session.audienceTag = audienceTag;
     session.updatedAt   = new Date().toISOString();
     await writeSessionLog(session);
     await touchLocation(decision.locationKey, session.sessionId);
     console.log(`[discord] ambient abstain in ${decision.locationKey} — stayed quiet`);
+    return;
+  }
+
+  // Ambient turn where I chose to revisit later rather than speak or drop.
+  if (decision.ambient && isDeferToken(rawReply)) {
+    const ms = parseDeferToken(rawReply);
+    const existing = await readRevisits();
+    await writeRevisits([
+      ...existing.filter(r => r.locationKey !== decision.locationKey),
+      { id: randomUUID(), locationKey: decision.locationKey, dueAt: Date.now() + ms, deferCount: 0, queuedAt: nowIso },
+    ]);
+    armRevisitTimer().catch(() => {});
+    session.messages = [
+      ...(session.messages ?? []),
+      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
+    ];
+    session.audienceTag = audienceTag;
+    session.updatedAt   = new Date().toISOString();
+    await writeSessionLog(session);
+    await touchLocation(decision.locationKey, session.sessionId);
+    console.log(`[discord] ambient defer in ${decision.locationKey} — revisit in ${Math.round(ms / 60_000)}min`);
     return;
   }
 
@@ -913,7 +1185,7 @@ async function handleTurn(gw, msg, decision) {
   // and stay listable by the ward in the UI — no hidden conversations.
   session.messages = [
     ...(session.messages ?? []),
-    { id: randomUUID(), role: 'user',      content: userContent, timestamp: nowIso },
+    { id: randomUUID(), role: 'user',      content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
     { id: randomUUID(), role: 'assistant', content: reply,       timestamp: new Date().toISOString() },
   ];
   session.provider    = conn.provider;
@@ -1200,6 +1472,7 @@ function desiredConfig() {
 
 function teardown() {
   clearTimers();
+  if (revisitTimer) { clearTimeout(revisitTimer); revisitTimer = null; }
   gw.running = false;
   gw.status.running = false;
   gw.connected = false;
@@ -1256,6 +1529,7 @@ export function startDiscordGateway() {
   superviseTick();
   gw.supervisorTimer = setInterval(superviseTick, SUPERVISOR_TICK_MS);
   gw.supervisorTimer.unref?.();
+  armRevisitTimer().catch(() => {});
   console.log('[discord] gateway supervisor started');
 }
 

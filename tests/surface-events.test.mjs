@@ -178,7 +178,50 @@ test('tagOutcomes: maps cancelled / carried_forward / fired', async () => {
   assert.equal(byId.t3, OUTCOMES.FIRED);
 });
 
-test('tagOutcomes: unresolved + > 24h old → unresponded', async () => {
+test('tagOutcomes: unresolved + >24h + I RAISED it → unresponded', async () => {
+  await recordSurfaceOffers(
+    [{ id: 't1', label: 'walk the dog', type: 'task', stakesTier: 'personal_wellbeing', confidence: 'low' }],
+    {}, T0, DIR,
+  );
+  // Post-turn scan confirms I actually brought it up.
+  await tagRaisedOutcomes({
+    responseText: 'hey, did you walk the dog yet?',
+    tasks: [{ id: 't1', label: 'walk the dog' }],
+    now: T0 + 1000, tomesDir: DIR,
+  });
+  const result = await tagOutcomes({
+    windowItems: [{ id: 't1', resolution: null }],
+    now: T0 + 25 * 3600 * 1000,
+    tomesDir: DIR,
+  });
+  assert.equal(result.tagged, 1);
+  const store = await loadSurfaceEvents(DIR);
+  assert.equal(store.events[0].outcome, OUTCOMES.UNRESPONDED);
+});
+
+test('tagOutcomes: unresolved + >24h + I NEVER raised it (raised=false) → not_raised', async () => {
+  await recordSurfaceOffers(
+    [{ id: 't1', label: 'walk the dog', type: 'task', stakesTier: 'personal_wellbeing', confidence: 'low' }],
+    {}, T0, DIR,
+  );
+  // Post-turn scan: my reply never mentioned it → raised=false.
+  await tagRaisedOutcomes({
+    responseText: 'totally unrelated reply',
+    tasks: [{ id: 't1', label: 'walk the dog' }],
+    now: T0 + 1000, tomesDir: DIR,
+  });
+  const result = await tagOutcomes({
+    windowItems: [{ id: 't1', resolution: null }],
+    now: T0 + 25 * 3600 * 1000,
+    tomesDir: DIR,
+  });
+  assert.equal(result.tagged, 1);
+  const store = await loadSurfaceEvents(DIR);
+  assert.equal(store.events[0].outcome, OUTCOMES.NOT_RAISED,
+    'never-raised offers must not be read as the human ignoring me');
+});
+
+test('tagOutcomes: unresolved + >24h + untagged raise (null) → not_raised (conservative)', async () => {
   await recordSurfaceOffers(
     [{ id: 't1', label: 'a', type: 'task', stakesTier: 'personal_wellbeing', confidence: 'low' }],
     {}, T0, DIR,
@@ -190,7 +233,24 @@ test('tagOutcomes: unresolved + > 24h old → unresponded', async () => {
   });
   assert.equal(result.tagged, 1);
   const store = await loadSurfaceEvents(DIR);
-  assert.equal(store.events[0].outcome, OUTCOMES.UNRESPONDED);
+  assert.equal(store.events[0].outcome, OUTCOMES.NOT_RAISED,
+    'unconfirmed raise is treated as not-raised, never as unresponded');
+});
+
+test('tagOutcomes: a real resolution still wins regardless of raised state', async () => {
+  await recordSurfaceOffers(
+    [{ id: 't1', label: 'a', type: 'task', stakesTier: 'personal_wellbeing', confidence: 'low' }],
+    {}, T0, DIR,
+  );
+  // Never raised, but the task actually got done — resolution is truth.
+  const result = await tagOutcomes({
+    windowItems: [{ id: 't1', resolution: 'done' }],
+    now: T0 + 25 * 3600 * 1000,
+    tomesDir: DIR,
+  });
+  assert.equal(result.tagged, 1);
+  const store = await loadSurfaceEvents(DIR);
+  assert.equal(store.events[0].outcome, OUTCOMES.ENGAGED_AND_COMPLETED);
 });
 
 test('tagOutcomes: unresolved + < 24h → skipped (left null)', async () => {

@@ -60,7 +60,7 @@ server.js  (Express, Node 18+, ESM)
     │  ── village (audience gating + external presence) ───────────
     ├── village.js          ── registry: categories/grants, villagers, locations
     ├── audience.js         ── grant resolution + section-marker gate (V3)
-    ├── discord-gateway.js  ── autonomous: bidirectional Discord presence (V4); per-location presence modes strict/lurk/active + mention legibility + readBots (V8)
+    ├── discord-gateway.js  ── autonomous: bidirectional Discord presence (V4); per-location presence modes strict/lurk/active + mention legibility + readBots (V8); deferred presence [later:…] revisit queue (V9)
     │
     │  ── classical infrastructure ──────────────────────────────
     ├── memorization.js     ── autonomous per-fact memorization queue + worker (Pillar C)
@@ -527,6 +527,26 @@ Familiar can distinguish "this exchange is between them" from open-room
 chatter and weigh both costs (barging in vs. a missed moment of
 presence) instead of treating every unaddressed line as its cue.
 
+But the *triggering* line of an exchange is often the only one that's
+tagged — "@Nichtschwert, you and I?" is, but Nichtschwert's untagged
+"sure, what's up?" that follows is not, even though it plainly continues
+their two-person thread. `directedAtOthers()` alone would read that
+follow-up as open-room and the Familiar would barge in. So every stored
+message (spoken and observed) records structured per-message signals —
+`speaker`, `targets` (others it named), `namedMe` (whether it pulled me
+in) — and on an ambient turn whose own line names no one,
+`carriedExchange()` (pure, tested) walks the recent history for the most
+recent message that named only others (and didn't pull me in): its
+speaker + named parties are a live exchange, and if the person speaking
+now is one of them, this line continues *their* thread, not an opening
+for me. It reads only the structured fields — no parsing of display text
+— so it stays reliable code, not a guess about tone. A line that names
+me cancels the carry-forward (the room turned toward me). The open-room
+presence branch is correspondingly worded to make the model *read* for an
+untagged exchange between others rather than treating any unaddressed
+line as its cue — absence of a tag on one line is not proof the room is
+open.
+
 *Other bots & Familiars (V8).* My own messages are ALWAYS ignored (the
 inner loop guard, above the opt-in). *Other* bots — including other
 Familiars — are ignored by default (`reason: 'bot-author'`); a location
@@ -534,6 +554,24 @@ with `readBots: true` lets them through `classifyMessage` as normal, so
 they're answered when addressed and paced by the room's mode +
 `activeCooldownSec` + rate limit otherwise. For shared Familiar
 channels; the loop is the ward's to pace, not a hard block.
+
+*Deferred presence (V9).* Ambient turns now have a third option beyond
+speak / `[pass]`: `[later:…]` schedules a revisit. Three syntax forms —
+relative (`[later:15m]`), wall-clock (`[later:22:30]`), and named
+buckets (`[later:soon]` ~15min / `[later:later]` ~45min /
+`[later:much-later]` ~1h). Clamped to [5min, 1h]; may re-defer up to
+2× total. Persisted in `tomes/.discord-revisits.json`. A self-arming
+timer (`armRevisitTimer`) fires the soonest-due entry and re-arms; it
+is seeded from the queue at `startDiscordGateway` and cleared in
+`teardown`. Any real incoming message at a location supersedes its
+pending revisit (`cancelRevisitsForLocation`). Revisit turns are
+threat-neutral and never move the ward's activity clock.
+
+Session history now renders `[HH:MM]` timestamps (server local time)
+before each speaker prefix, so the model can read exchange rhythm and
+gaps directly. `carriedExchange` gains a `maxAgeMs` staleness gate
+(default 1h) so exchanges older than that are not carried forward as
+live threads.
 
 ### `memorization.js` — autonomous per-fact memorization (Pillar C)
 
@@ -1077,12 +1115,15 @@ LLM returns:
 | `resolution === 'cancelled'` | `cancelled` |
 | `resolution === 'carried_forward'` | `deferred` |
 | `resolution === 'fired'` (reminder) | `fired` |
-| unresolved + offered > 24h ago | `unresponded` |
+| unresolved + offered > 24h ago + `raised === true` | `unresponded` |
+| unresolved + offered > 24h ago + `raised !== true` | `not_raised` |
 | unresolved + < 24h | left null, re-checked next turn |
+
+The `unresponded` / `not_raised` split is load-bearing: `unresponded` means the Familiar *actually raised* the task with the ward and nothing came of it (evidence about the ward), while `not_raised` means it was offered to the Familiar as a candidate but never reached the ward at all (evidence about the Familiar's own surfacing — the ward can't respond to what they never saw). Conflating them — the pre-0.6.25 behaviour — let a quiet stretch where the Familiar simply didn't speak get misread as the ward withdrawing. A confirmed resolution always wins over both regardless of `raised`.
 
 Once tagged, an event's `outcome` is immutable — the LLM later reasons about a stable record, not a moving target.
 
-**`raised` tagging** is a separate, earlier tag on the same event: did the Familiar actually *say* something about the task in the turn it was offered? Tagged post-turn by `tagRaisedOutcomes` (pure-code response-text scan, zero LLM calls). It drives the differentiated dedup window (raised → 6h rest; un-raised → back in 90min) and flows into reflection automatically — "offered N times, never raised" is itself a pattern the reflection loop can learn from, since reflection events carry the field.
+**`raised` tagging** is a separate, earlier tag on the same event: did the Familiar actually *say* something about the task in the turn it was offered? Tagged post-turn by `tagRaisedOutcomes` (pure-code response-text scan, zero LLM calls). It drives the differentiated dedup window (raised → 6h rest; un-raised → back in 90min), decides the aged-out outcome split above, and flows into reflection (the projection carries `raised`, and the reflection prompt is taught that `not_raised` outcomes are about the Familiar's surfacing, never the ward's engagement).
 
 **Prompt stance:** the `[Surface candidates]` header is written for a ward with executive dysfunction — there is no "right moment" that arrives on its own, so the header tunes toward action. It names explicit GREEN LIGHT states the Familiar surfaces in and explicit RED LIGHT states it holds in (vagueness is *not* a reason to stay quiet — the servile-default model needs the inclusion/exclusion conditions spelled out or it collapses to silence), names the cost of silence (the task waits forever; a missed task outweighs a refusable check-in), and offers concrete access ramps (timebox, single next action, planning-only slot, body-double). It deliberately contains no bias-toward-quiet language — see CLAUDE.md's proactivity section; a regression test in `tests/surface-context.test.mjs` guards against its return.
 

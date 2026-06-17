@@ -14,6 +14,10 @@ import {
   isAmbientAbstain,
   resolveMentions,
   directedAtOthers,
+  messageNamesBot,
+  carriedExchange,
+  parseDeferToken,
+  isDeferToken,
 } from '../discord-gateway.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────
@@ -585,5 +589,144 @@ describe('directedAtOthers — recognising an exchange is not mine', () => {
 
   it('open-room chatter (no mentions, no reply) is directed at no one', () => {
     assert.deepEqual(directedAtOthers({ content: 'lol' }, { botUserId: '999', villagers }), []);
+  });
+});
+
+describe('messageNamesBot — did this line pull me in', () => {
+  it('true when I am @-mentioned', () => {
+    assert.equal(messageNamesBot({ mentions: [{ id: '999' }] }, '999'), true);
+  });
+  it('true when the message replies to something I said', () => {
+    assert.equal(messageNamesBot({ mentions: [], referenced_message: { author: { id: '999' } } }, '999'), true);
+  });
+  it('false when only other people are named', () => {
+    assert.equal(messageNamesBot({ mentions: [{ id: '555' }] }, '999'), false);
+  });
+  it('false for untagged chatter', () => {
+    assert.equal(messageNamesBot({ content: 'hey' }, '999'), false);
+  });
+  it('false when I have no bot id yet', () => {
+    assert.equal(messageNamesBot({ mentions: [{ id: '999' }] }, null), false);
+  });
+});
+
+describe('carriedExchange — an untagged line that continues someone else\'s thread', () => {
+  // The reported case: Broeckchen says "@Nichtschwert ... you and I?",
+  // Nichtschwert replies "Sure! Whatcha wanna talk about" with NO tag.
+  // That untagged reply still belongs to their two-person thread.
+  const broeckOpens = {
+    role: 'user', content: '[Broeckchen]: @Nichtschwert can we have a brief back and forth, you and I?',
+    speaker: 'Broeckchen', targets: ['Nichtschwert'], namedMe: false,
+  };
+
+  it('carries the exchange forward to the named party\'s untagged reply', () => {
+    // Nichtschwert is about to speak; the room is Broeckchen↔Nichtschwert.
+    assert.deepEqual(
+      carriedExchange([broeckOpens], { currentSpeaker: 'Nichtschwert' }),
+      ['Broeckchen'],
+    );
+  });
+
+  it('returns the whole party when the speaker is a third person', () => {
+    assert.deepEqual(
+      carriedExchange([broeckOpens], { currentSpeaker: 'Someone Else' }),
+      ['Broeckchen', 'Nichtschwert'],
+    );
+  });
+
+  it('reads as open when no recent line named anyone', () => {
+    const history = [
+      { role: 'user', content: '[Broeckchen]: lol', speaker: 'Broeckchen', targets: [], namedMe: false },
+      { role: 'user', content: '[Nichtschwert]: same', speaker: 'Nichtschwert', targets: [], namedMe: false },
+    ];
+    assert.deepEqual(carriedExchange(history, { currentSpeaker: 'Nichtschwert' }), []);
+  });
+
+  it('stops carrying once a line pulled me in', () => {
+    const history = [
+      broeckOpens,
+      { role: 'user', content: '[Nichtschwert]: @Me what do you think?', speaker: 'Nichtschwert', targets: [], namedMe: true },
+    ];
+    // The most recent directed line named me — the room turned toward me.
+    assert.deepEqual(carriedExchange(history, { currentSpeaker: 'Broeckchen' }), []);
+  });
+
+  it('uses the most recent exchange, not a stale one', () => {
+    const history = [
+      broeckOpens,
+      { role: 'user', content: '[Ada]: @Bram you around?', speaker: 'Ada', targets: ['Bram'], namedMe: false },
+    ];
+    assert.deepEqual(carriedExchange(history, { currentSpeaker: 'Bram' }), ['Ada']);
+  });
+
+  it('ignores assistant turns and tolerates missing fields', () => {
+    const history = [
+      { role: 'assistant', content: 'hi' },
+      { role: 'user', content: '[Broeckchen]: untagged', speaker: 'Broeckchen' },
+    ];
+    assert.deepEqual(carriedExchange(history, { currentSpeaker: 'Broeckchen' }), []);
+  });
+
+  it('respects the lookback window', () => {
+    const filler = Array.from({ length: 6 }, (_, i) => ({
+      role: 'user', content: `[X${i}]: chatter`, speaker: `X${i}`, targets: [], namedMe: false,
+    }));
+    // broeckOpens is now 7 back — outside the default lookback of 5.
+    assert.deepEqual(carriedExchange([broeckOpens, ...filler], { currentSpeaker: 'Nichtschwert' }), []);
+  });
+
+  it('does not carry forward a message older than maxAgeMs', () => {
+    const staleTs = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(); // 2 hours ago
+    const staleMsg = { ...broeckOpens, timestamp: staleTs };
+    // Default maxAgeMs is 1h, so a 2h-old message should not be carried.
+    assert.deepEqual(carriedExchange([staleMsg], { currentSpeaker: 'Nichtschwert' }), []);
+  });
+
+  it('still carries forward a message within maxAgeMs', () => {
+    const freshTs = new Date(Date.now() - 10 * 60 * 1000).toISOString(); // 10 min ago
+    const freshMsg = { ...broeckOpens, timestamp: freshTs };
+    assert.deepEqual(carriedExchange([freshMsg], { currentSpeaker: 'Nichtschwert' }), ['Broeckchen']);
+  });
+});
+
+describe('parseDeferToken — deferred presence syntax', () => {
+  it('parses a relative minute token', () => {
+    assert.equal(parseDeferToken('[later:15m]'), 15 * 60_000);
+  });
+  it('parses a relative hour token, clamped to 1h max', () => {
+    assert.equal(parseDeferToken('[later:2h]'), 60 * 60_000);
+  });
+  it('parses bucket: soon → 15min', () => {
+    assert.equal(parseDeferToken('[later:soon]'), 15 * 60_000);
+  });
+  it('parses bucket: later → 45min', () => {
+    assert.equal(parseDeferToken('[later:later]'), 45 * 60_000);
+  });
+  it('parses bucket: much-later → 60min (ceiling)', () => {
+    assert.equal(parseDeferToken('[later:much-later]'), 60 * 60_000);
+  });
+  it('floors small durations to 5min', () => {
+    assert.equal(parseDeferToken('[later:1m]'), 5 * 60_000);
+  });
+  it('parses an absolute wall-clock time ~30min from now', () => {
+    const target = new Date(Date.now() + 30 * 60_000);
+    const hh = String(target.getHours()).padStart(2, '0');
+    const mm = String(target.getMinutes()).padStart(2, '0');
+    const ms = parseDeferToken(`[later:${hh}:${mm}]`);
+    assert.ok(ms !== null, 'should parse');
+    // Minute-granular token: allow up to 65s of skew (minute truncation + elapsed time)
+    assert.ok(Math.abs(ms - 30 * 60_000) < 65_000, `expected ~30min, got ${ms}ms`);
+  });
+  it('returns null for [pass]', () => {
+    assert.equal(parseDeferToken('[pass]'), null);
+  });
+  it('returns null for unrecognised tokens', () => {
+    assert.equal(parseDeferToken('[later:tomorrow]'), null);
+    assert.equal(parseDeferToken('later:15m'), null);
+  });
+  it('isDeferToken mirrors parseDeferToken', () => {
+    assert.equal(isDeferToken('[later:20m]'), true);
+    assert.equal(isDeferToken('[pass]'), false);
+    assert.equal(isDeferToken('just chatting'), false);
   });
 });

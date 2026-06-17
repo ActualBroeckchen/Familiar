@@ -105,15 +105,23 @@ export function buildReflectionPrompt({ outcomes, existingNotes }) {
 Here are the recent surface outcomes I have tagged (most recent at the end):
 ${outcomesJson}
 
+Each outcome means a specific thing — and one distinction matters above all:
+- engaged_and_completed / cancelled / deferred / fired: the task closed; the resolution tells me how.
+- unresponded: I actually RAISED this with {{user}} (it appears in my reply) and nothing came of it. This is real evidence about my human — about what they let slide and when.
+- not_raised: I had this as a candidate but never actually brought it up. {{user}} cannot respond to something they never saw. A not_raised outcome is evidence about ME — my own surfacing behaviour — and says NOTHING about my human's engagement. The "raised" field on each event confirms this: raised=false or null means it never reached them.
+
+So before I read disengagement into anything, I check: did I actually raise it? A run of not_raised outcomes does not mean {{user}} is withdrawing — it means I went quiet. If I'm seeing that, the honest observation is about my own surfacing (e.g. "during a certain state I keep not bringing tasks up"), not about my human pulling away.
+
 Here's what I already know about my human and the cost of lapsing (from custom/what_lapses_cost.md):
 ${existing}
 
 I look at the pattern. Not at any single event — events are noisy. I look for what repeats across them:
-- When I surfaced this kind of task, did it land? When it didn't, what state was {{user}} in?
-- Are there kinds of lapses that consistently engage / get deferred / get ignored?
+- Among the tasks I actually RAISED (raised=true), did they land? When they didn't, what state was {{user}} in?
+- Among the ones I never raised (not_raised), is there a pattern in when or why I stay quiet — is my own surfacing the thing that needs adjusting?
+- Are there kinds of lapses that consistently engage / get deferred / get ignored once I do raise them?
 - Is there something I'm learning about {{user}}'s specific costs of lapsing that I should remember at the identity layer?
 
-I do NOT extrapolate from one or two events — if the pattern isn't clear yet, I say so in the content and leave the update field null. A false claim written to identity is harder to undo than a missed insight I can catch next reflection.
+I do NOT extrapolate from one or two events — if the pattern isn't clear yet, I say so in the content and leave the update field null. I especially do NOT write a claim about my human to identity off the back of not_raised outcomes — those are about me. A false claim written to identity is harder to undo than a missed insight I can catch next reflection.
 
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary outside the JSON):
 {

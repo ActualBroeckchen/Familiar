@@ -1658,9 +1658,16 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // today and "two days ago" tomorrow, without anyone re-writing it.
     let timeAnchorBlock = '';
     try {
-      const nowMs = Date.now();
+      const nowMs   = Date.now();
+      const nowDate = new Date(nowMs);
+      // UTC offset — e.g. "+02:00" or "-05:00". getTimezoneOffset() returns
+      // the NEGATIVE of the UTC offset in minutes (e.g. UTC+2 → -120).
+      const offsetMin  = -nowDate.getTimezoneOffset();
+      const offsetSign = offsetMin >= 0 ? '+' : '-';
+      const absMin     = Math.abs(offsetMin);
+      const offsetStr  = `UTC${offsetSign}${String(Math.floor(absMin / 60)).padStart(2, '0')}:${String(absMin % 60).padStart(2, '0')}`;
       const lines = [
-        `Now: ${clockTime(nowMs)} on ${dayAndDate(nowMs)}.`,
+        `Now: ${clockTime(nowMs)} (${offsetStr}) on ${dayAndDate(nowMs)}.`,
       ];
       if (lastUserMessageAt) {
         const lastMs = new Date(lastUserMessageAt).getTime();
