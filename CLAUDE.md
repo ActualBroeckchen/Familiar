@@ -239,6 +239,24 @@ If a problem is real enough to fix at all, it's worth fixing properly. When I pr
 
 The versioning rules upstream already capture part of this (every meaningful change bumps; don't sneak fixes under the line). This section extends it to **proposal framing** — what I suggest *before* any commit lands.
 
+## ⚠️ No copy-paste of substantial logic
+
+Never copy-paste a non-trivial code block across files. If logic needs to live in two places, that is the signal to extract a shared helper, utility, or module — not to duplicate. The threshold is judgment, not line count: three genuinely parallel-but-distinct lines are fine; a copy-pasted helper function is not.
+
+The corollary of the premature-abstraction warning in the main rules: *extracting* a real duplication is not premature — it is the correction of a structural mistake. The anti-pattern to avoid is inventing a shared abstraction before duplication actually exists. Once it does, the abstraction is mandatory.
+
+## ⚠️ Fix the root cause, not the symptom
+
+When a bug's root cause is the architecture of a function, fix the function — don't stack an extra condition on top of already-tangled logic. A clean rewrite of the guilty function is almost always shorter, more readable, and less likely to introduce a new bug than a patch welded to the outside of a broken shape.
+
+This is the code-level expression of the "Robust > cheap" principle: a fast patch that leaves the underlying mess in place is not a fix, it is deferred cost that will surface again. The question is not *"does this close the symptom?"* but *"does this leave the code in better shape than I found it?"*
+
+## ⚠️ Modular by default; orchestration files are the exception
+
+When adding new logic, first ask where it belongs: a new focused module, or an existing one that already owns that concern. Default to a focused module. Only land logic in a wide orchestration file (`cerebellum.js`, `thalamus.js`) when it genuinely belongs to that file's connective role — not merely because it is convenient.
+
+`cerebellum.js` and `thalamus.js` are deliberately wide because they are the connective tissue of the system; that is not a SRP violation, it is appropriate architecture. Don't split them reflexively. But don't pile unrelated logic into them either — if something could live in its own focused file, it should.
+
 ## ⚠️ Ride existing requests; gate in code
 
 Every LLM request costs tokens and latency. The default move when a
