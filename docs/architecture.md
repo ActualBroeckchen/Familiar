@@ -271,7 +271,7 @@ Exposes:
 
 - **`enrich(userMessage, { liveTurn, staticOnly, lastUserMessageAt, audience })`**
   — the central per-request call. Fans out to identity + memory + graph
-  (entity-core) + temporal_context (Unruh) + local-disk reads (recent
+  (Phylactery) + temporal_context (Unruh) + local-disk reads (recent
   ponderings, threat state). Returns `{ static, dynamic }`. The
   `audience` option (Village V3) is the resolved grant object from
   `audience.js`; when present, ungranted knowledge classes are never
@@ -286,10 +286,10 @@ Exposes:
   `getDueReminders`, `getRemindersHealth`, `listPhases`.
 - **Handoff helpers:** `recordHandoff`, `getHandoff`,
   `markHandoffConsumed`.
-- **Entity-core spawn / reconnect:** auto re-spawns when settings
-  change the entity-core connection.
+- **Phylactery spawn / reconnect:** auto re-spawns when settings
+  change the Phylactery connection.
 - **Standing-value bridge (M7):** on every liveTurn, reconciles
-  standing values whose `value_ref` points at a now-gone entity-core
+  standing values whose `value_ref` points at a now-gone Phylactery
   identity fact (demotes them to live interests).
 
 ### `cerebellum.js` — the motor module (outbound counterpart to Thalamus)
@@ -301,7 +301,7 @@ cerebellum executes actions and never assembles prompt context.
 Cerebellum never opens its own MCP connections — every write to
 identity / memory / temporal state goes through thalamus.js's exported
 wrappers (the single enforcement point for "writes go through
-entity-core's MCP").
+Phylactery's MCP").
 
 Currently owns:
 
@@ -858,9 +858,9 @@ scoreMessage(userMessage)                ← crisis-signals.js
        │
        ▼
 thalamus.enrich(userMessage, { liveTurn: true })
-   ├── identity_get_all     ──►  entity-core (MCP)        → static block
-   ├── memory_search        ──►  entity-core (MCP)        ┐
-   ├── graph_node_search    ──►  entity-core (MCP)        │
+   ├── identity_get_all     ──►  Phylactery (MCP)         → static block
+   ├── memory_search        ──►  Phylactery (MCP)         ┐
+   ├── graph_node_search    ──►  Phylactery (MCP)         │
    ├── temporal_context     ──►  Unruh (MCP)              │ dynamic block:
    │     ├── current phase                                │  - RAG memory matches
    │     ├── full routine (live phases, date-independent) │  - graph excerpt
@@ -870,7 +870,7 @@ thalamus.enrich(userMessage, { liveTurn: true })
    ├── getRecentPonderings() ──► local tome read          │  - [CARE CHECK]
    └── getThreat()           ──► local file read          ┘  - [Temporal Context]
        │
-       │  injection-guard.js is available but NOT applied to entity-core /
+       │  injection-guard.js is available but NOT applied to Phylactery /
        │  Unruh content — those are trusted first-party systems. The guard
        │  is reserved for genuinely external ingestion points (web search
        │  results, Discord / channel-adapter messages) that do not yet exist.
@@ -1040,7 +1040,7 @@ temporalPayload.schedule.window   ←  open tasks/events/reminders
    ── CONTEXT ASSEMBLY (per candidate) ──
    stakes_tier  ← payload.stakes_tier OR inferStakesTier(label)
    priorsBlock  ← matched section from docs/consequence-priors.md
-   personModel  ← entity-core custom/what_lapses_cost.md (raw)
+   personModel  ← Phylactery custom/what_lapses_cost.md (raw)
    taskSpecific ← payload.consequence_model
    confidence   ← high/medium/low based on what info is present
                 │
@@ -1114,7 +1114,7 @@ LLM returns:
    └── If what_lapses_cost_update present:
        updateIdentitySection({ category: 'custom',
                                filename: 'what_lapses_cost.md',
-                               heading, content })   ← via entity-core MCP
+                               heading, content })   ← via Phylactery MCP
 ```
 
 **Outcome tagging** is pure-code, runs at chat-turn entry as a fire-and-forget pass over `tomes/.surface-events.json`:
@@ -1137,9 +1137,9 @@ Once tagged, an event's `outcome` is immutable — the LLM later reasons about a
 
 **Prompt stance:** the `[Surface candidates]` header is written for a ward with executive dysfunction — there is no "right moment" that arrives on its own, so the header tunes toward action. It names explicit GREEN LIGHT states the Familiar surfaces in and explicit RED LIGHT states it holds in (vagueness is *not* a reason to stay quiet — the servile-default model needs the inclusion/exclusion conditions spelled out or it collapses to silence), names the cost of silence (the task waits forever; a missed task outweighs a refusable check-in), and offers concrete access ramps (timebox, single next action, planning-only slot, body-double). It deliberately contains no bias-toward-quiet language — see CLAUDE.md's proactivity section; a regression test in `tests/surface-context.test.mjs` guards against its return.
 
-**Storage decision:** event records and reflection metadata live in `tomes/.surface-events.json` (per-embodiment, like ponderings). Identity-layer *insights* derived from them ("Eury crashes within 4h of skipping meals") get lifted to entity-core's `custom/what_lapses_cost.md` only after the reflection LLM judges the pattern strong enough. The raw event stream belongs to Proto-Familiar; the durable knowledge belongs to the entity.
+**Storage decision:** event records and reflection metadata live in `tomes/.surface-events.json` (per-embodiment, like ponderings). Identity-layer *insights* derived from them ("Eury crashes within 4h of skipping meals") get lifted to Phylactery's `custom/what_lapses_cost.md` only after the reflection LLM judges the pattern strong enough. The raw event stream belongs to Proto-Familiar; the durable knowledge belongs to the entity.
 
-**`what_lapses_cost.md`** lives at `entity-core/custom/what_lapses_cost.md`. The Familiar writes via the reflection loop when patterns emerge. May not exist initially; surface-context assembly is null-tolerant.
+**`what_lapses_cost.md`** lives in Phylactery's `custom` category as `what_lapses_cost.md`. The Familiar writes via the reflection loop when patterns emerge. May not exist initially; surface-context assembly is null-tolerant.
 
 Files: `surface-context.js`, `surface-events.js`, `docs/consequence-priors.md`.
 
@@ -1221,11 +1221,13 @@ that is the contract talking — update all seams together or stop.
 
 | Loop | Cadence | Off-switch | What it does |
 |---|---|---|---|
-| Memorization | 5s tick | (none — always on) | Drains queue of session-memorization jobs |
+| Memorization | 5s tick | `PROTO_FAMILIAR_MEMORIZE_DISABLED=1` | Drains queue of session-memorization jobs |
 | Pondering | 1min tick + tier-based interval | Settings toggle + `PROTO_FAMILIAR_PONDERING_DISABLED=1` | Picks an interest, ponders it, writes a real tome entry |
 | Reminders | 30s tick | `PROTO_FAMILIAR_REMINDERS_DISABLED=1` | Polls `reminders_due`, enqueues into outbox, marks fired |
 | Silence triage | 5min tick + LLM-set cool-down | `PROTO_FAMILIAR_TRIAGE_DISABLED=1` | LLM decides "should I reach out?" given threat + silence |
-| Threat detection | per chat msg (in-band) | `PROTO_FAMILIAR_THREAT_DISABLED=1` | Patterns score user text; tracker accumulates with decay |
+| Warm reach-out | 10min tick + LLM-set cool-down | Settings toggle + `PROTO_FAMILIAR_WARMTH_DISABLED=1` | Warm non-crisis outreach (ward banner or warm-villager DM); stands down at moderate+ threat |
+| Discord gateway | 30s supervisor | Settings toggle + `PROTO_FAMILIAR_DISCORD_DISABLED=1` | Bidirectional Discord presence; follows Settings (token/enable) without restart |
+| Threat detection | per chat msg (in-band) | `PROTO_FAMILIAR_THREAT_DISABLED=1` | Patterns score my human's text; tracker accumulates with decay |
 
 The autonomous loops do not run during shutdown — server.js's SIGTERM
 handler awaits each loop's `stop*()` before closing the MCP children.

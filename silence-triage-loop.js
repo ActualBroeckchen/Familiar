@@ -1,10 +1,10 @@
 /**
  * Silence triage (M12b) — proactive check-in when threat is elevated
- * AND the user has been quiet long enough.
+ * AND my human has been quiet long enough.
  *
  * This is the part the design doc calls "the actual triage *decision*
  * is an LLM call with full context, not a threshold check." We
- * compute the threshold (was the user quiet long enough?) but the
+ * compute the threshold (was my human quiet long enough?) but the
  * yes/no on whether to reach out is the model's call, given context.
  * The model is asked to be honest: "no, just wait" is a valid answer.
  *
@@ -15,12 +15,12 @@
  *   - If thresholds aren't met → skip silently.
  *   - If they ARE met → call LLM with a minimal "should I reach out?"
  *     prompt + recent threat signals. Parse the decision. On 'yes',
- *     enqueue an outbox item; the user sees a banner next time
+ *     enqueue an outbox item; my human sees a banner next time
  *     they're at the screen.
  *
  * Rate-limiting:
  *   - Outbox originId = `triage-<tier>-<4h-bucket>`. The outbox
- *     dedupes UNACKNOWLEDGED items, so the user can't get a second
+ *     dedupes UNACKNOWLEDGED items, so my human can't get a second
  *     triage banner of the same tier within 4 hours while the
  *     first one is still visible. Dismissing releases the dedupe —
  *     if silence continues, a fresh triage can land in the next
@@ -40,7 +40,7 @@ const DEFAULT_TICK_MS = 5 * 60_000;          // 5 min
 // yet). For moderate/high/severe we ALWAYS hand the decision to the
 // LLM with full context (silence duration, recent messages, signals)
 // — no hardcoded silence threshold gate, because the LLM is the one
-// with the judgement, and "the user was active 10 minutes ago at
+// with the judgement, and "my human was active 10 minutes ago at
 // severe threat" deserves the LLM's call, not a heuristic block.
 export const TRIAGE_SILENCE_THRESHOLD_MS = Object.freeze({
   calm:     Infinity,
@@ -156,7 +156,7 @@ export async function runOneTriageTick({
     };
   }
 
-  // Dedup bucket: tier + a 4-hour bucket, so the user can't see two
+  // Dedup bucket: tier + a 4-hour bucket, so my human can't see two
   // triage banners of the same tier in the same window unless they
   // dismissed the first one.
   const bucket   = Math.floor(now() / RATE_LIMIT_BUCKET_MS);
@@ -171,7 +171,7 @@ export async function runOneTriageTick({
     // decision.meta carries pendingContact + contactDeadlineTs when the
     // LLM also requested a trusted-contact escalation. Stored on the item
     // so the triage loop can fire the deferred delivery once the deadline
-    // passes without the user having acknowledged.
+    // passes without my human having acknowledged.
     ...(decision.meta && typeof decision.meta === 'object' ? { meta: decision.meta } : {}),
   });
 
@@ -189,7 +189,7 @@ export async function runOneTriageTick({
 
 /**
  * Reset the deliberation cool-down so the next tick will call the LLM
- * unconditionally. Exposed for the case where the user manually resets
+ * unconditionally. Exposed for the case where my human manually resets
  * the threat or the operator wants to force an immediate re-evaluation.
  */
 export function resetTriageCooldown() {

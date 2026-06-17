@@ -59,6 +59,9 @@ import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
 import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta } from './outbox.js';
 import { buildTimeAnchorBlock, relativeTime, plainInterval } from './relative-time.js';
+import { substituteMacros } from './macros.js';
+import { selectSurfaceCandidates } from './surface-context.js';
+import { getRecentOfferInfo } from './surface-events.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -507,8 +510,6 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   // candidates, not directives. Empty block if nothing's eligible.
   let candidateTasksBlock = '';
   try {
-    const { selectSurfaceCandidates } = await import('./surface-context.js');
-    const { getRecentOfferInfo }      = await import('./surface-events.js');
     // I already have temporal_context loaded as part of enrich() in
     // many call sites, but triage is async + standalone here, so
     // fetch a fresh window directly. Cheap — no LLM call.
@@ -594,9 +595,12 @@ I return ONLY a JSON object, no prose. Three valid shapes:
 
 The "message" field (to the human) must be 1–2 sentences. First person. Authentic to my voice and identity. Not therapist-speak ("how are you feeling?"), not alarming ("are you safe?") unless either of those fits my established personality. Something I, {{char}}, would actually say to this person.`;
 
+  // Resolve {{user}} / {{char}} to the configured names — the deliberating
+  // Familiar must read "Open tasks I'm holding for <their name>", never a
+  // literal macro token. Name rendering only; no triage logic changes.
   const llmMessages = [];
   if (identityContext) llmMessages.push({ role: 'system', content: identityContext });
-  llmMessages.push({ role: 'user', content: prompt });
+  llmMessages.push({ role: 'user', content: substituteMacros(prompt, s) });
 
   try {
     const resp = await fetch(url, {
@@ -842,7 +846,7 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           category: { type: 'string', enum: ['ward', 'relationship'], description: 'Identity file category.' },
-          filename: { type: 'string', description: 'Target filename within the category, e.g. user_notes.md or relationship_notes.md.' },
+          filename: { type: 'string', description: 'Target filename within the category, e.g. ward_notes.md or relationship_notes.md.' },
           content:  { type: 'string', description: 'Content to append to the identity file, written in my own first-person voice.' },
         },
         required: ['category', 'filename', 'content'],
@@ -1813,7 +1817,7 @@ export const TOOL_EXECUTORS = {
       if (recurrence) payload.recurrence = recurrence;
       const data = await addScheduleNode({ type: 'phase', label, when, end, payload });
       if (data?.ok === false) return `Failed to add phase: ${data.error ?? 'unknown error'}`;
-      return `Phase added (id: ${data.id}). It will appear in your daily routine at that time of day.`;
+      return `Phase added (id: ${data.id}). It will appear in {{user}}'s daily routine at that time of day.`;
     } catch (err) { return `Failed to add phase: ${err.message}`; }
   },
 
@@ -2168,7 +2172,10 @@ export async function executeToolCall(name, argsJson, ctx = {}) {
       const t0   = Date.now();
       const out  = String(await TOOL_EXECUTORS[name](args, ctx));
       console.log(`[tools] ${name} ok in ${Date.now() - t0}ms`);
-      return out;
+      // Tool results flow back to me as tool-role messages I read. Resolve
+      // {{user}} / {{char}} here, once, at the boundary — so no executor has
+      // to remember to do it and none can leak a literal macro into my view.
+      return substituteMacros(out, readSettingsSync());
     } catch (err) {
       console.warn(`[tools] ${name} FAILED: ${err.message}`);
       return `Error executing ${name}: ${err.message}`;

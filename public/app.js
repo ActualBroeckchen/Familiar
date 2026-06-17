@@ -155,7 +155,7 @@ const state = {
   streaming:         true,
   temperature:       0.8,
   maxTokens:         2048,
-  userName:          'User',
+  userName:          'My human',
   charName:          'Assistant',
   systemPrompt:      '',
   characterProfile:  '',
@@ -954,7 +954,7 @@ async function refreshPreviousSessionEndedAt() {
  */
 function applyNameVars(text) {
   return text
-    .replace(/\{\{user\}\}/gi, state.userName || 'User')
+    .replace(/\{\{user\}\}/gi, state.userName || 'my human')
     .replace(/\{\{char\}\}/gi, state.charName || 'Assistant')
     .replace(/\{\{elapsedTime\}\}/gi, () => {
       const ms = elapsedBetweenUserMessages();
@@ -1085,7 +1085,7 @@ function _buildApiMessagesInner(userInput) {
   if (lore.before_char.length)     pushSeg('lore-before-char', joinLore(lore.before_char));
   if (state.characterProfile.trim()) pushSeg('character-profile', '[Character Profile]\n' + applyNameVars(state.characterProfile.trim()));
   if (lore.after_char.length)      pushSeg('lore-after-char',  joinLore(lore.after_char));
-  if (state.userProfile.trim())    pushSeg('user-profile',     '[User Profile]\n' + applyNameVars(state.userProfile.trim()));
+  if (state.userProfile.trim())    pushSeg('user-profile',     '[Human Profile]\n' + applyNameVars(state.userProfile.trim()));
   if (lore.sys_bottom.length)      pushSeg('lore-sys-bottom',  joinLore(lore.sys_bottom));
 
   if (systemSegments.length)
@@ -2216,7 +2216,7 @@ function readSettingsFromUI() {
     const n = parseInt($('warmth-quiet-end').value, 10);
     state.warmthQuietHoursEnd = Number.isInteger(n) && n >= 0 && n <= 23 ? n : 8;
   }
-  state.userName          = $('user-name').value.trim() || 'User';
+  state.userName          = $('user-name').value.trim() || 'My human';
   state.charName          = $('char-name').value.trim() || 'Assistant';
   state.systemPrompt      = $('system-prompt').value;
   state.characterProfile  = $('char-profile').value;
@@ -2279,7 +2279,7 @@ function writeSettingsToUI() {
   $('temp-display').textContent = state.temperature;
   setIfNotFocused($('max-tokens'),         'value',   state.maxTokens);
   if ($('thalamus-dynamic-depth')) setIfNotFocused($('thalamus-dynamic-depth'), 'value', state.thalamusDynamicDepth ?? 4);
-  setIfNotFocused($('user-name'),          'value',   state.userName ?? 'User');
+  setIfNotFocused($('user-name'),          'value',   state.userName ?? 'My human');
   setIfNotFocused($('char-name'),          'value',   state.charName ?? 'Assistant');
   setIfNotFocused($('system-prompt'),      'value',   state.systemPrompt);
   setIfNotFocused($('char-profile'),       'value',   state.characterProfile);
@@ -4320,7 +4320,7 @@ let _pendingSummaryTopic = null;
 
 async function generateTopicSummary(topic, rangeMessages) {
   const convText = rangeMessages
-    .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
+    .map(m => `${m.role === 'user' ? (state.userName || 'My human') : 'Me'}: ${m.content ?? ''}`)
     .join('\n\n');
 
   const userLabel = userNamedTopicLabel(topic);

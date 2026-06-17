@@ -25,7 +25,7 @@ function rejectionPrompt(topic) {
   return `Your message wasn't sent because it contained content you are not permitted to disclose here${topic ? ': ' + topic : ''}. Someone in this room is not cleared for that. Please say something different.`;
 }
 
-async function checkRestricted(draftText, audienceTag) {
+async function defaultCheckRestricted(draftText, audienceTag) {
   if (!draftText || audienceTag === 'ward-private') return { hit: false };
   const result = await searchMemoryRestricted({
     query:        draftText.slice(0, 2000),
@@ -45,9 +45,10 @@ async function checkRestricted(draftText, audienceTag) {
  * @param {string}   opts.audienceTag  — Room tag; 'ward-private' → skip filter.
  * @param {Function} opts.callUpstream — async (messages) → string; called for each retry.
  * @param {Array}    opts.baseMessages — Messages array the original reply was generated from.
+ * @param {Function} [opts.checkRestricted] — async (draft, tag) → { hit, topic }; injectable for tests (defaults to the Phylactery-backed check).
  * @returns {Promise<{text: string, blocked: boolean}>}
  */
-export async function filterOutgoingReply({ draftText, audienceTag, callUpstream, baseMessages }) {
+export async function filterOutgoingReply({ draftText, audienceTag, callUpstream, baseMessages, checkRestricted = defaultCheckRestricted }) {
   if (audienceTag === 'ward-private') return { text: draftText, blocked: false };
   let draft = draftText;
   let msgs  = baseMessages;
