@@ -19,6 +19,8 @@ import {
   discordChannelIdFromKey,
   parseDeferToken,
   isDeferToken,
+  getDiscordStatus,
+  webSocketCtor,
 } from '../discord-gateway.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────
@@ -729,6 +731,54 @@ describe('parseDeferToken — deferred presence syntax', () => {
     assert.equal(isDeferToken('[later:20m]'), true);
     assert.equal(isDeferToken('[pass]'), false);
     assert.equal(isDeferToken('just chatting'), false);
+  });
+});
+
+// ── WebSocket transport + status shape ────────────────────────────
+// Regression guard for the "WS is not defined" bug: the availability
+// check and the actual `new WS(...)` once lived as two separate
+// references to globalThis.WebSocket and drifted apart, so the gateway
+// threw on every connect. webSocketCtor() is now the single source —
+// these tests assert it yields a real, constructable transport on a
+// supported runtime and that getDiscordStatus() reports it honestly.
+
+describe('webSocketCtor — the single WebSocket source', () => {
+  it('returns a constructor function on a Node ≥ 22 runtime (where these tests run)', () => {
+    const WS = webSocketCtor();
+    assert.equal(typeof WS, 'function', 'native WebSocket should be present in the test runtime');
+    // It must be the actual global — the same value connect() opens the socket with.
+    assert.equal(WS, globalThis.WebSocket);
+  });
+
+  it('reports null when the runtime has no global WebSocket', () => {
+    const saved = globalThis.WebSocket;
+    try {
+      // Simulate Node < 22 / a runtime without the global.
+      delete globalThis.WebSocket;
+      assert.equal(webSocketCtor(), null);
+    } finally {
+      globalThis.WebSocket = saved;
+    }
+  });
+});
+
+describe('getDiscordStatus — observability shape', () => {
+  it('returns the status fields the Settings UI depends on', () => {
+    const s = getDiscordStatus();
+    // Base gateway status fields.
+    assert.equal(typeof s.running, 'boolean');
+    assert.equal(typeof s.connected, 'boolean');
+    assert.equal(typeof s.turns, 'number');
+    // Capability fields added for the Node-22 Settings warning.
+    assert.equal(typeof s.webSocketSupported, 'boolean');
+    assert.equal(typeof s.nodeVersion, 'string');
+    assert.match(s.nodeVersion, /^v\d+\./, 'nodeVersion looks like a process.version string');
+  });
+
+  it('webSocketSupported tracks the actual transport availability', () => {
+    // On this runtime the native WebSocket exists, so the status must agree
+    // with webSocketCtor() — the same source connect() gates on.
+    assert.equal(getDiscordStatus().webSocketSupported, webSocketCtor() !== null);
   });
 });
 

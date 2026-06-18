@@ -1444,16 +1444,22 @@ function onDispatch(t, d) {
 }
 
 // The gateway transport is the platform's native WebSocket, which lands as
-// a stable global in Node ≥ 22. One predicate, used both to gate connect()
-// and to report capability up to the Settings UI — so the warning the ward
-// sees and the reason the gateway stays down can never drift apart.
-function webSocketAvailable() {
-  return typeof globalThis.WebSocket === 'function';
+// a stable global in Node ≥ 22. Resolving the constructor in ONE place —
+// used both to gate connect()/report capability AND to actually open the
+// socket — means the availability check and the instantiation can never
+// disagree. (An earlier refactor split them: the check was extracted to a
+// predicate while `new WS(...)` still referenced a binding the check no
+// longer created, so every connection threw "WS is not defined". Returning
+// the constructor here makes that whole class of bug impossible.)
+// Returns the WebSocket constructor, or null when the runtime lacks it.
+export function webSocketCtor() {
+  return typeof globalThis.WebSocket === 'function' ? globalThis.WebSocket : null;
 }
 
 async function connect() {
   if (!gw.running || gw.fatal) return;
-  if (!webSocketAvailable()) {
+  const WS = webSocketCtor();
+  if (!WS) {
     gw.fatal = true;
     gw.status.lastError = 'WebSocket unavailable — Discord gateway requires Node ≥ 22';
     console.error('[discord] no global WebSocket (Node ≥ 22 required) — gateway stays down');
@@ -1470,7 +1476,6 @@ async function connect() {
     if (!url) throw new Error('gateway URL missing from /gateway/bot');
   }
 
-  const WS = globalThis.WebSocket;
   const ws = new WS(`${url}?v=10&encoding=json`);
   gw.ws = ws;
 
@@ -1624,7 +1629,7 @@ export function getDiscordStatus() {
   // to connect. nodeVersion makes that warning concrete and actionable.
   return {
     ...gw.status,
-    webSocketSupported: webSocketAvailable(),
+    webSocketSupported: webSocketCtor() !== null,
     nodeVersion: process.version,
   };
 }
