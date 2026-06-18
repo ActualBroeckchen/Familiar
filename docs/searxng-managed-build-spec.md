@@ -1,10 +1,14 @@
 # Familiar-managed SearXNG — build spec
 
-> **Status: PARTIAL (`0.7.1-alpha`).** The lifecycle (`searxng-service.js`), the toggle-followed
-> supervisor, the keyless fallback, the executor backend-resolution, and the off-switch are
-> **built and unit-tested**. The one remaining step is **vendoring the SearXNG source** into
-> `./vendor/searxng/` and smoke-testing the real spawn on an install — until that lands, the
-> managed path is dormant by design and search runs on the in-box keyless backend.
+> **Status: SHIPPED (`0.7.x-alpha`).** The lifecycle (`searxng-service.js`), the toggle-followed
+> supervisor, the keyless fallback, the executor backend-resolution, and the off-switch are built
+> and unit-tested; SearXNG is vendored at `b5ef7ec` and the real spawn is **smoke-tested on
+> Windows** (`[searxng] managed instance ready`, real search returned results, `/healthz → OK`).
+> Kept as the build record. Two things differed from the original guesses: SearXNG packages with
+> `requirements.txt`+`setup.py` (not `pyproject.toml`), so deps go through `uv venv` + `uv pip
+> install` and the spawn invokes the venv Python directly; and `searx/valkeydb.py`'s Unix-only
+> `import pwd` needed guarding for Windows (a local patch — see `vendor/README.md`, re-apply on
+> every re-vendor).
 
 ## Why this exists
 
