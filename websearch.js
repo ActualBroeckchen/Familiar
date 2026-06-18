@@ -24,9 +24,35 @@
 
 import dns from 'node:dns/promises';
 import net from 'node:net';
-import { parseHTML } from 'linkedom';
-import { Readability } from '@mozilla/readability';
-import TurndownService from 'turndown';
+
+// The HTML-extraction stack (linkedom + @mozilla/readability + turndown) is
+// loaded LAZILY, not as static top-level imports. These are optional-feature
+// deps: if they're missing (e.g. a tester pulled new code but hasn't re-run
+// the installer, so `npm install` never added them), a static import here
+// would throw at module load and brick the WHOLE server — websearch.js is in
+// server.js's import chain. Loading them on first use instead means a missing
+// install disables only web search; the chat path always boots. (Graceful
+// degradation — no module may take down the chat path.) Cached after first load.
+let _extractLibs = null;
+async function loadExtractLibs() {
+  if (_extractLibs) return _extractLibs;
+  try {
+    const [linkedom, readability, turndownMod] = await Promise.all([
+      import('linkedom'),
+      import('@mozilla/readability'),
+      import('turndown'),
+    ]);
+    const TurndownService = turndownMod.default;
+    _extractLibs = {
+      parseHTML:   linkedom.parseHTML,
+      Readability: readability.Readability,
+      turndown:    new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' }),
+    };
+  } catch (err) {
+    _extractLibs = { error: err.message };
+  }
+  return _extractLibs;
+}
 
 const DEFAULT_MAX_RESULTS = 5;
 const DEFAULT_MAX_CHARS   = 15000;
@@ -37,8 +63,7 @@ const MAX_REDIRECTS       = 4;
 // Not a hard spoof — it names the project. Personal-tool tradeoff (see spec).
 const WEB_UA = 'Mozilla/5.0 (compatible; Proto-Familiar/0.7; +https://github.com/ScarletPrinceEury/Proto-Familiar)';
 
-// One reusable converter — turndown holds no per-call state.
-const turndown = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
+const LIBS_MISSING_MSG = 'My web tools aren\'t fully installed yet (the page-reading libraries are missing) — re-running the installer/updater should sort it. Until then I can\'t read web results.';
 
 /** A guard rejection or other expected failure that already carries a
  *  Familiar-voice message ready to read back. */
@@ -242,8 +267,11 @@ async function searchViaDuckDuckGo(q, { fetchFn = fetch, lookupFn } = {}) {
   try { html = await res.text(); }
   catch { return { error: 'My search answered but I couldn\'t read it.' }; }
 
+  const libs = await loadExtractLibs();
+  if (libs.error) return { error: LIBS_MISSING_MSG };
+
   try {
-    const { document } = parseHTML(html);
+    const { document } = libs.parseHTML(html);
     const rows = [];
     for (const block of document.querySelectorAll('.result')) {
       if (block.classList?.contains('result--ad')) continue;
@@ -315,13 +343,16 @@ export async function readWebpage(url, settings = {}, { fetchFn = fetch, lookupF
   try { html = await res.text(); }
   catch { return 'I reached that page but couldn\'t read its body.'; }
 
+  const libs = await loadExtractLibs();
+  if (libs.error) return LIBS_MISSING_MSG;
+
   let markdown;
   try {
-    const { document } = parseHTML(html);
-    const article = new Readability(document).parse();
+    const { document } = libs.parseHTML(html);
+    const article = new libs.Readability(document).parse();
     const articleHtml = article?.content;
     if (!articleHtml) return 'I opened that page but couldn\'t pull a readable article out of it.';
-    markdown = turndown.turndown(articleHtml).trim();
+    markdown = libs.turndown.turndown(articleHtml).trim();
   } catch (err) {
     return `I opened that page but couldn't make clean sense of it (${err.message}).`;
   }

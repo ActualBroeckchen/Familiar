@@ -140,6 +140,16 @@ The installer detects the existing install via the `node_modules/` directory and
 
 Update mode skips only the shortcut / desktop-entry creation, since those are already in place.
 
+> **Upgrading to 0.7 (web search):** this release adds Node dependencies (the page-reading
+> libraries `linkedom`, `@mozilla/readability`, `turndown`) and **vendors SearXNG into the repo**,
+> so the checkout/ZIP is noticeably larger. The new Node deps are installed by the `npm install`
+> step above — so **upgrade by re-running the installer/updater, not a bare `git pull`**. If you do
+> only pull new code without re-running the installer, the app still starts normally (web search is
+> isolated — a missing library disables only web search, never the chat); web search will just say
+> its libraries aren't installed until you run the installer. The optional Familiar-managed SearXNG
+> is built **on demand** — its Python venv is created the first time you turn on "Web search & read"
+> in Settings, **not** during install — so installs stay light for anyone who never enables it.
+
 **What's protected:**
 
 | Data | Where it lives | Protected by |

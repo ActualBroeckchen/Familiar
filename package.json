@@ -1,6 +1,6 @@
 {
   "name": "proto-familiar",
-  "version": "0.7.7-alpha",
+  "version": "0.7.8-alpha",
   "description": "Lightweight LLM frontend for z.ai, NanoGPT, and Google AI Studio",
   "type": "module",
   "main": "server.js",
