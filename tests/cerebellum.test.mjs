@@ -197,12 +197,24 @@ test('BUILTIN_TOOLS carries the full registry in OpenAI function format', () => 
 
 test('composeActiveTools appends custom tool objects after the built-ins', () => {
   const custom = [{ type: 'function', function: { name: 'my_tool', description: 'x', parameters: {} } }];
-  const tools = composeActiveTools(custom);
+  // webSearchEnabled opts in the two web tools so the full built-in set is present.
+  const on = { webSearchEnabled: true };
+  const tools = composeActiveTools(custom, on);
   assert.equal(tools.length, BUILTIN_TOOLS.length + 1);
   assert.equal(tools.at(-1).function.name, 'my_tool');
   // Non-arrays and junk entries are ignored, never thrown on.
-  assert.equal(composeActiveTools(undefined).length, BUILTIN_TOOLS.length);
-  assert.equal(composeActiveTools([null, 'junk']).length, BUILTIN_TOOLS.length);
+  assert.equal(composeActiveTools(undefined, on).length, BUILTIN_TOOLS.length);
+  assert.equal(composeActiveTools([null, 'junk'], on).length, BUILTIN_TOOLS.length);
+});
+
+test('composeActiveTools gates the web tools behind webSearchEnabled', () => {
+  const names = (settings) => new Set(composeActiveTools(undefined, settings).map(t => t.function?.name));
+  // Off (default): neither web tool is advertised.
+  const off = names({ webSearchEnabled: false });
+  assert.ok(!off.has('web_search') && !off.has('read_webpage'), 'web tools hidden when disabled');
+  // On: both appear.
+  const on = names({ webSearchEnabled: true });
+  assert.ok(on.has('web_search') && on.has('read_webpage'), 'web tools shown when enabled');
 });
 
 test('composeActiveTools resolves {{user}}/{{char}} macros in descriptions', () => {

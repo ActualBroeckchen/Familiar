@@ -55,6 +55,7 @@ import {
   searchMemoryRestricted,
 } from './thalamus.js';
 import { audienceTagFor } from './audience.js';
+import { searchWeb, readWebpage } from './websearch.js';
 import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
 import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta } from './outbox.js';
@@ -1449,6 +1450,34 @@ export const BUILTIN_TOOLS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'web_search',
+      description: "I reach for this when {{user}} needs something current that my own memory doesn't hold — news, a fact I'm unsure of, a page to look up. It gives me back a handful of titles, snippets, and links I can then open with read_webpage.",
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'What I want to search for, in plain words.' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_webpage',
+      description: "I read a page I found while searching, pulled down to clean markdown so I can actually take it in. I pass the exact link a search handed me. What I read stays with me for the rest of this conversation anyway — but when something is worth keeping past it, I save the gist to a tome (save_to_tome) so it's still mine in the next session.",
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'The exact link to open — usually one a web_search just gave me.' },
+        },
+        required: ['url'],
+      },
+    },
+  },
 ];
 
 /**
@@ -2137,6 +2166,14 @@ export const TOOL_EXECUTORS = {
 
     return `Sent to ${targetName}: "${message.trim()}"`;
   },
+
+  // ── Web access ────────────────────────────────────────────────────
+  // Thin delegation to websearch.js, which owns the SSRF guard, the
+  // timeout, and the extraction. Settings (base URL, caps) ride in via
+  // readSettingsSync. These never appear in the tool list unless the
+  // human has opted in (webSearchEnabled) — see composeActiveTools.
+  web_search:   async ({ query } = {}) => searchWeb(query, readSettingsSync()),
+  read_webpage: async ({ url }   = {}) => readWebpage(url, readSettingsSync()),
 };
 
 /**
@@ -2150,8 +2187,20 @@ export const TOOL_EXECUTORS = {
  * docs/architecture.md ("Custom tools — advertise-only") for what a
  * real extension point would need before it ships.
  */
+// Web access is opt-in: it needs a local SearXNG instance, so the two
+// web tools stay out of the advertised list until the human enables them
+// (and the env off-switch can force them off regardless). A tool the
+// Familiar can't actually use should never appear in its tool list.
+export const WEB_TOOL_NAMES = new Set(['web_search', 'read_webpage']);
+
+export function webSearchEnabled(settings = readSettingsSync()) {
+  if (process.env.PROTO_FAMILIAR_WEBSEARCH_DISABLED === '1') return false;
+  return settings?.webSearchEnabled === true;
+}
+
 export function composeActiveTools(customTools, settings = readSettingsSync()) {
-  const tools = [...BUILTIN_TOOLS];
+  const webOn = webSearchEnabled(settings);
+  const tools = BUILTIN_TOOLS.filter(t => webOn || !WEB_TOOL_NAMES.has(t.function?.name));
   if (Array.isArray(customTools)) {
     for (const t of customTools) {
       if (t && typeof t === 'object') tools.push(t);

@@ -171,6 +171,11 @@ const state = {
   // ── Tool calling ──────────────────────────────────────────
   toolsEnabled:      true,   // whether to send tools array with each request
   customTools:       '',     // JSON array string of user-defined tool definitions
+  // ── Web search (opt-in; needs a local SearXNG instance) ──────
+  webSearchEnabled:    false,
+  webSearchBaseUrl:    'http://localhost:8080',
+  webSearchMaxResults: 5,
+  webSearchMaxChars:   15000,
   // ── Topics & tomes (lorebook) ───────────────────────────
   tomeScanDepth:         4,      // how many recent messages to scan for keyword matches
   tomeRecursive:         false,  // enable recursive tome entry activation
@@ -271,6 +276,7 @@ const SERVER_SYNCED_KEYS = [
   'userName', 'charName',
   'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
   'toolsEnabled', 'customTools',
+  'webSearchEnabled', 'webSearchBaseUrl', 'webSearchMaxResults', 'webSearchMaxChars',
   'tomeScanDepth', 'tomeRecursive', 'tomeMaxRecursionSteps',
   'tomeCaseSensitive', 'tomeMatchWholeWords',
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
@@ -2232,6 +2238,14 @@ function readSettingsFromUI() {
   }
   state.toolsEnabled      = $('tools-enabled').checked;
   state.customTools       = $('custom-tools').value;
+  const wsEnabledEl = $('web-search-enabled');
+  if (wsEnabledEl) state.webSearchEnabled = wsEnabledEl.checked;
+  const wsBaseEl = $('web-search-base-url');
+  if (wsBaseEl) state.webSearchBaseUrl = wsBaseEl.value.trim() || 'http://localhost:8080';
+  const wsResEl = $('web-search-max-results');
+  if (wsResEl) state.webSearchMaxResults = Math.min(20, Math.max(1, parseInt(wsResEl.value, 10) || 5));
+  const wsCharsEl = $('web-search-max-chars');
+  if (wsCharsEl) state.webSearchMaxChars = Math.min(100000, Math.max(500, parseInt(wsCharsEl.value, 10) || 15000));
   const scanEl = $('tome-scan-depth');
   if (scanEl) state.tomeScanDepth = Math.max(1, parseInt(scanEl.value, 10) || 4);
   const recursiveEl = $('tome-recursive');
@@ -2292,6 +2306,10 @@ function writeSettingsToUI() {
   if ($('post-history-role')) setIfNotFocused($('post-history-role'), 'value', state.postHistoryRole ?? 'system');
   setIfNotFocused($('tools-enabled'),      'checked', state.toolsEnabled ?? true);
   setIfNotFocused($('custom-tools'),       'value',   state.customTools ?? '');
+  setIfNotFocused($('web-search-enabled'),     'checked', state.webSearchEnabled === true);
+  setIfNotFocused($('web-search-base-url'),    'value',   state.webSearchBaseUrl ?? 'http://localhost:8080');
+  setIfNotFocused($('web-search-max-results'), 'value',   state.webSearchMaxResults ?? 5);
+  setIfNotFocused($('web-search-max-chars'),   'value',   state.webSearchMaxChars ?? 15000);
   setIfNotFocused($('user-discord-webhook'), 'value', state.userDiscordWebhook ?? '');
   setIfNotFocused($('discord-enabled'),      'checked', state.discordEnabled === true);
   setIfNotFocused($('discord-bot-token'),    'value', state.discordBotToken ?? '');
@@ -3081,6 +3099,7 @@ function init() {
     'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'post-history-role', 'tools-enabled', 'custom-tools',
+    'web-search-enabled', 'web-search-base-url', 'web-search-max-results', 'web-search-max-chars',
     'user-discord-webhook',
     'discord-enabled', 'discord-bot-token', 'discord-ward-user-id',
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',

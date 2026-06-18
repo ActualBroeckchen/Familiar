@@ -1,6 +1,6 @@
 {
   "name": "proto-familiar",
-  "version": "0.6.42-alpha",
+  "version": "0.7.0-alpha",
   "description": "Lightweight LLM frontend for z.ai, NanoGPT, and Google AI Studio",
   "type": "module",
   "main": "server.js",
@@ -15,7 +15,10 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "express": "^4.18.2"
+    "@mozilla/readability": "^0.5.0",
+    "express": "^4.18.2",
+    "linkedom": "^0.18.12",
+    "turndown": "^7.2.4"
   },
   "engines": {
     "node": ">=22.0.0"

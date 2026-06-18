@@ -101,8 +101,13 @@ See [Tool Calling](tool-calling.md) for the full reference.
 |---|---|
 | Enable tool use | Whether to send the tools array with each request |
 | Custom tools | Paste a JSON array of OpenAI function-calling definitions |
+| Web search & read | Opt-in web access (`web_search` + `read_webpage`) via a local SearXNG. Off by default; configure base URL, results-to-keep, and max page chars. See [Web search setup](websearch-setup.md) |
 
 Built-in tools: `get_datetime`, `get_session_info`, `save_to_tome`, `save_memory`, `update_identity`. The two Phylactery tools (`save_memory`, `update_identity`) degrade gracefully when Phylactery is unreachable. See [Tool Calling](tool-calling.md) for parameter details.
+
+### Web search & read (opt-in)
+
+When enabled (Settings → Tools → **Web search & read**), the Familiar gains two tools: `web_search` queries a local self-hosted [SearXNG](https://docs.searxng.org/) instance, and `read_webpage` opens a result and reads it as clean markdown. `read_webpage` is SSRF-guarded (public http/https only — loopback, private, link-local, and cloud-metadata targets are refused), times out on slow hosts, and stamps each read with its source URL and date. A page stays in the conversation for the session; the Familiar keeps anything worth remembering past it via `save_to_tome`. Needs a SearXNG instance with JSON output — see [Web search setup](websearch-setup.md). Hard-disable with `PROTO_FAMILIAR_WEBSEARCH_DISABLED=1`.
 
 ---
 

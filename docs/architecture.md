@@ -117,6 +117,7 @@ ponderings injection, care-check framing) and as background loops
 ├── surface-events.js        Event store (offers + outcomes) + pure-code tagger + reflection inputs
 ├── village.js               Village registry (V1) — categories/grant sets, villagers (name/pronouns/aliases/relation/stance/comm-style/notes/privateNotes/remember consent map/graphNodeId), locations; local mirror + Phylactery write-through sync (see docs/village-support-design.md). The Familiar reaches it via the village_lookup / village_upsert tools (privateNotes field-gated to ward-private turns)
 ├── own-files.js             Sandboxed read-only access to the Familiar's own checkout — resolves repo-relative paths inside the root, denies secrets (settings.json, .env) + build noise (node_modules/.git/.venv), size-caps + text-only. Backs the list_files / read_file tools (ward-private only)
+├── websearch.js             Web access (opt-in, 0.7.0) — backs the web_search / read_webpage tools. Owns the SSRF guard (scheme allow-list + resolved-IP block of loopback/private/link-local/metadata + redirect re-validation), the fetch timeout, and the linkedom→@mozilla/readability→turndown extraction with provenance stamping. searchWeb hits the configured local SearXNG JSON API. cerebellum registers the defs + delegates; gated by webSearchEnabled / PROTO_FAMILIAR_WEBSEARCH_DISABLED=1 (see docs/websearch-setup.md)
 ├── audience.js              Audience grant resolution (V3) — union/intersection/ladders, fetch eligibility, identity section markers; consumed by thalamus.enrich() and the Discord router
 ├── discord-gateway.js       Discord gateway adapter (V4+V5+V6) — bot-token WebSocket presence; DM policy + mention-only guild replies, per-location sessions, V3 gate applied before every reply; V5: per-location connection routing (location.connectionId → settings.connections → primary fallback) + hourly token-bucket rate limiting (tomes/.rate-limits.json, ward outbox notice on exhaustion); V6: relayToDiscord() REST send (DM-open or channel post) backing the relay_message tool; off-switch PROTO_FAMILIAR_DISCORD_DISABLED=1
 ├── knocks.js                Village knock list (V4.x) — contact attempts from unregistered people, captured for one-click registration in the Village editor; tomes/.village-knocks.json, capped, metadata only
@@ -354,6 +355,17 @@ Currently owns:
   kinds are made enumerable to the Familiar by `village_lookup`, which
   (V8) reports a **Places** roster + per-villager Discord-reachability so
   the Familiar can always name a valid relay target.
+- **Web tools (opt-in, 0.7.0-alpha)** — `web_search` / `read_webpage`,
+  thin executors that delegate to `websearch.js` (SSRF guard, timeout,
+  `linkedom`→`@mozilla/readability`→`turndown` extraction with provenance
+  stamping). Unlike every other built-in they are **conditionally
+  advertised**: `composeActiveTools` filters them out via
+  `webSearchEnabled(settings)` unless the human has enabled web access
+  (and `PROTO_FAMILIAR_WEBSEARCH_DISABLED=1` forces them off). A page the
+  Familiar reads persists in session history for the rest of the session;
+  to carry it across sessions the Familiar keeps the gist via the existing
+  `save_to_tome` (the read return is provenance-stamped so the source
+  rides along). See docs/websearch-setup.md and docs/websearch-build-spec.md.
 - **`decideTriageViaLLM({threat, silenceMs, signals})`** — the triage
   deliberation: assembles the [Now]-anchored prompt (identity context,
   recent conversation with relative times, threat signals, trusted

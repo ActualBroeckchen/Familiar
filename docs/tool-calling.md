@@ -16,6 +16,8 @@ The **Enable tool use** checkbox in the sidebar **Tools** section controls wheth
 
 Thirty-four tools are always available when tool use is enabled: eight read/write tools (including the deferred-intent acknowledger and two on-demand memory-read tools), four graph-lookup and graph-creation tools, seven editing tools for correcting stale Phylactery state, eight temporal tools (schedule + interests, backed by Unruh), two Village tools (look up who's in the ward's Village and add/edit people, with sensitive notes gated to private turns), two own-file tools (sandboxed read access to the Familiar's own folder — tomes, logs, docs), and three crisis outreach tools for when the Familiar needs to help a user who is in danger during a live conversation. Every destructive tool (delete / rewrite / replace) auto-snapshots Phylactery before the call — recovery is one click in the **Snapshots** tab of the Knowledge editor.
 
+Two further tools — `web_search` and `read_webpage` — are **opt-in** (since **0.7.0-alpha**): they appear in the tool list only when the human enables web access in Settings (and a local SearXNG instance is configured — see [`websearch-setup.md`](websearch-setup.md)), and the `PROTO_FAMILIAR_WEBSEARCH_DISABLED=1` env var forces them off regardless. They are the only built-ins gated this way; everything else above is always present. All web logic lives in `websearch.js` (the SSRF guard, the timeout, the `linkedom`+`@mozilla/readability`+`turndown` extraction); cerebellum only registers the defs and delegates.
+
 | Tool | Description | Returns |
 |---|---|---|
 | `get_datetime` | Current local date, time, and timezone | Human-readable locale string (e.g. `"Tuesday, May 13, 2026 at 02:30:00 PM CEST"`) |
@@ -53,6 +55,8 @@ Thirty-four tools are always available when tool use is enabled: eight read/writ
 | `list_files` | List entries under a repo-relative folder of the Familiar's own checkout (tomes, logs, docs). Sandboxed (no escaping the root), secrets (settings/keys/.env) and build noise denied. **Ward-private turns only** | Plain-text listing |
 | `read_file` | Read one of the Familiar's own text files by repo-relative path (size-capped, text-only, same sandbox + denylist as `list_files`). Lets the Familiar look up its own tomes / session logs on purpose. **Ward-private turns only** | File contents, or an error string |
 | `relay_message` | Carry a message from the ward to a villager (DM) or a Discord location, named by `to` (villager name/alias or location label/key) + `message`. Delivery via the Discord bot token (REST); a restricted-memory gate holds back anything not cleared for the target room (fails open on error); every relay is mirrored to the ward's outbox — never covert | Confirmation string, a "held that back" note if gated, or an error string |
+| `web_search` *(opt-in)* | Search the web via the configured local SearXNG (`query`). Returns the top N results (default 5) as titles + links + snippets. Only advertised when web access is enabled in Settings | Compact result list, or a calm failure string if SearXNG is down/misconfigured |
+| `read_webpage` *(opt-in)* | Open a public URL (`url`, usually one a `web_search` returned), extract the main article to markdown (capped at `webSearchMaxChars`), stamped with `Source: <url> · retrieved <date>` and framed as untrusted. SSRF-guarded: refuses loopback/private/link-local/metadata targets and redirects into them | Clean markdown, or a calm refusal/failure string |
 
 ### Graph ids in the prompt
 

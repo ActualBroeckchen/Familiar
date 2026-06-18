@@ -279,6 +279,23 @@
               <button class="btn-secondary import-btn" data-target="custom-tools">↑ Import file</button>
               <button class="btn-ghost clear-field-btn" data-target="custom-tools">✕ Clear</button>
             </div>
+            <div class="field-row" style="margin-top:10px">
+              <label for="web-search-enabled">Web search &amp; read</label>
+              <input type="checkbox" id="web-search-enabled">
+            </div>
+            <p class="field-hint">Adds <code>web_search</code> + <code>read_webpage</code>. Needs a local <a href="https://docs.searxng.org/" target="_blank" rel="noopener">SearXNG</a> instance with JSON output enabled — see <code>docs/websearch-setup.md</code>.</p>
+            <div class="field">
+              <label for="web-search-base-url">SearXNG base URL</label>
+              <input type="text" id="web-search-base-url" placeholder="http://localhost:8080" spellcheck="false">
+            </div>
+            <div class="field-row">
+              <label for="web-search-max-results">Search results to keep</label>
+              <input type="number" id="web-search-max-results" min="1" max="20" step="1" style="width:5em">
+            </div>
+            <div class="field-row">
+              <label for="web-search-max-chars">Max page chars read</label>
+              <input type="number" id="web-search-max-chars" min="500" max="100000" step="500" style="width:7em">
+            </div>
           </div>
         </div>
 
