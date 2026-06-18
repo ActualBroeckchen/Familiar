@@ -180,11 +180,14 @@ async function spawnSearxng() {
 
   const child = spawn('uv', ['run', '--no-sync', 'python', '-m', 'searx.webapp'], {
     cwd: VENDORED_DIR,
+    // SearXNG reads the bind address + port from settings.yml (server.bind_address
+    // / server.port), which writeManagedSettings sets — NOT from env (verified
+    // against the pinned SHA's searx/webapp.py). SEARXNG_SETTINGS_PATH is the
+    // documented way to point it at our generated file (read by settings_loader);
+    // confirm that path is honoured on the first real boot.
     env: {
       ...process.env,
       SEARXNG_SETTINGS_PATH: SETTINGS_YML,
-      SEARXNG_BIND_ADDRESS:  '127.0.0.1',
-      SEARXNG_PORT:          String(port),
     },
     stdio: 'ignore',
   });
@@ -214,11 +217,13 @@ function writeManagedSettings(port) {
 }
 
 async function waitHealthy(url, { timeoutMs = HEALTH_TIMEOUT_MS, pollMs = HEALTH_POLL_MS, fetchFn = fetch } = {}) {
+  // webapp.py exposes GET /healthz → 200 "OK" (verified against the pinned SHA);
+  // cheaper and more reliable than driving a real search to test readiness.
   const deadline = Date.now() + timeoutMs;
   let lastErr = 'no response';
   while (Date.now() < deadline) {
     try {
-      const res = await fetchFn(`${url}/search?q=ping&format=json`, { headers: { Accept: 'application/json' } });
+      const res = await fetchFn(`${url}/healthz`);
       if (res.ok) return true;
       lastErr = `HTTP ${res.status}`;
     } catch (err) { lastErr = err.message; }

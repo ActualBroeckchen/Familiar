@@ -66,10 +66,13 @@ guaranteed floor, managed SearXNG as a one-click sturdier backend that costs not
    into `./vendor/searxng/VERSION`, then strip the nested `.git` so the files are vendored (not an
    embedded gitlink). Add `vendor/searxng/` build artifacts (`.venv`, `__pycache__`, caches) to
    `.gitignore`.
-2. **Confirm the spawn invocation** against that version: the entrypoint (`python -m searx.webapp`
-   vs a `granian`/`searx.webapp:app` runner), the env it reads for bind/port
-   (`SEARXNG_BIND_ADDRESS` / `SEARXNG_PORT` / `SEARXNG_SETTINGS_PATH`), and the health endpoint.
-   These are the only assumptions in `spawnSearxng` / `writeManagedSettings` / `waitHealthy`.
+2. **Spawn invocation — verified against the pinned SHA `bd73cc0`** by reading `searx/webapp.py`:
+   entrypoint `python -m searx.webapp` (its `__main__` calls `run()` → `app.run(host, port)`) ✅;
+   bind/port come from `settings.yml` (`server.bind_address` / `server.port`), **not** env vars —
+   so `writeManagedSettings` sets them and `spawnSearxng` no longer passes the dead
+   `SEARXNG_BIND_ADDRESS`/`SEARXNG_PORT` ✅; health is `GET /healthz` → `200 "OK"`, now used by
+   `waitHealthy` ✅. The **one** thing still to confirm at first boot: that `SEARXNG_SETTINGS_PATH`
+   (read by `searx/settings_loader`, not webapp.py) points the app at our generated settings.
 3. **`ensure-searxng-deps`**: the lazy `uv sync` runs on first enable. Confirm uv resolves
    SearXNG's requirements cross-platform; gate cleanly when `uv` is absent (stay keyless).
 4. **Smoke test on a real install**: enable the toggle → instance boots, `web_search` returns
