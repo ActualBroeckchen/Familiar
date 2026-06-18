@@ -184,7 +184,10 @@ test('BUILTIN_TOOLS carries the full registry in OpenAI function format', () => 
     assert.equal(typeof t.function.description, 'string');
   }
   const names = BUILTIN_TOOLS.map(t => t.function.name);
-  for (const expected of ['get_datetime', 'save_to_tome', 'save_memory', 'schedule_add_reminder', 'contact_trusted_person', 'show_crisis_resources']) {
+  for (const expected of ['get_datetime', 'save_to_tome', 'save_memory', 'schedule_add_reminder', 'contact_trusted_person', 'show_crisis_resources',
+    // Graph creation + on-demand memory recall — the Familiar can now build
+    // graph structure (not just edit/delete) and look up its own entries.
+    'create_graph_node', 'create_graph_edge', 'list_memories', 'read_memory']) {
     assert.ok(names.includes(expected), `missing ${expected}`);
   }
   // Every advertised built-in has an executor, and vice versa.
@@ -200,6 +203,18 @@ test('composeActiveTools appends custom tool objects after the built-ins', () =>
   // Non-arrays and junk entries are ignored, never thrown on.
   assert.equal(composeActiveTools(undefined).length, BUILTIN_TOOLS.length);
   assert.equal(composeActiveTools([null, 'junk']).length, BUILTIN_TOOLS.length);
+});
+
+test('composeActiveTools resolves {{user}}/{{char}} macros in descriptions', () => {
+  const custom = [{ type: 'function', function: { name: 'greet', description: 'I greet {{user}} as {{char}}.', parameters: {} } }];
+  const tools = composeActiveTools(custom, { userName: 'Zara', charName: 'Vex' });
+  const greet = tools.find(t => t.function.name === 'greet');
+  assert.equal(greet.function.description, 'I greet Zara as Vex.');
+  // No literal macro survives composition anywhere (built-in descriptions too).
+  const blob = JSON.stringify(tools);
+  assert.ok(!blob.includes('{{user}}') && !blob.includes('{{char}}'), 'no literal macros survive composition');
+  // The shared constant is cloned, never mutated — it keeps its authored macros.
+  assert.ok(JSON.stringify(BUILTIN_TOOLS).includes('{{user}}'), 'BUILTIN_TOOLS retains authored macros');
 });
 
 test('executeToolCall: unknown / custom tool returns advertise-only notice, not a throw', async () => {
@@ -504,4 +519,15 @@ test('update_memory / delete_memory executors reject malformed keys with a reada
   assert.match(upd, /invalid date format .*YYYY-MM-DD_slug/);
   const del = await EXECS.delete_memory({ granularity: 'significant', date: '2026-06-11_a/b' });
   assert.match(del, /invalid date format .*YYYY-MM-DD_slug/);
+});
+
+test('new graph/memory executors validate input before touching Phylactery', async () => {
+  // These guards run before any MCP call, so they return their hint even
+  // with Phylactery absent (the test env has no peer connected).
+  assert.match(await EXECS.create_graph_node({}), /label \(string\) is required/);
+  assert.match(await EXECS.create_graph_edge({ fromId: 'a', toId: 'b' }), /fromId, toId, and type are all required/);
+  assert.match(await EXECS.create_graph_edge({ fromId: 'a', toId: 'b', type: 'x', weight: 2 }), /weight must be a number in \[0, 1\]/);
+  assert.match(await EXECS.read_memory({ granularity: 'bogus', date: '2026-06-11' }), /invalid granularity/);
+  assert.match(await EXECS.read_memory({ granularity: 'daily', date: 'not-a-date' }), /invalid date format/);
+  assert.match(await EXECS.list_memories({ granularity: 'bogus' }), /invalid granularity/);
 });

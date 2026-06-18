@@ -24,14 +24,16 @@ import {
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   createGraphNode, createGraphEdge,
   createSnapshot, restoreSnapshot,
-  reconnectEntityCore,
+  exportBackup, restoreBackup, runLifecyclePass,
+  getRememberMap, setRememberMap,
+  reconnectPhylactery,
   recordInterest, recordHandoff, listLiveInterests, listInterests,
   bumpInterest, demoteStanding, setStandingInterest,
   getScheduleWindow, addScheduleNode, updateScheduleNode,
   resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode, listPhases, listRecurring,
   getHandoff, markHandoffConsumed,
   getDueReminders, getRemindersHealth,
-  shutdownUnruh, shutdownEntityCore,
+  shutdownUnruh, shutdownPhylactery,
   reportSurfacingOutcomes, listBookmarks,
 } from './thalamus.js';
 import { scoreMessage } from './crisis-signals.js';
@@ -44,10 +46,12 @@ import {
   markReflected,
   tagRaisedOutcomes,
 } from './surface-events.js';
-import { getRecentPonderings, deletePondering, markIntentActedOn } from './recent-ponderings.js';
+import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedIntents } from './recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
 import { listOutbox, acknowledgeOutbox, clearAcknowledged, enqueueOutbox } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
+import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';
+import { decideReachoutViaLLM, getWarmVillagers } from './reachout.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
 import { buildTimeAnchorBlock } from './relative-time.js';
 // Cerebellum is the motor module — the outbound counterpart to thalamus.
@@ -77,6 +81,18 @@ import {
   startMemorizationWorker, stopMemorizationWorker,
   findOrCreateSessionMemoriesTome,
 } from './memorization.js';
+import {
+  getRegistry as getVillageRegistry,
+  upsertCategory as upsertVillageCategory, deleteCategory as deleteVillageCategory,
+  upsertVillager, deleteVillager,
+  upsertLocation as upsertVillageLocation, deleteLocation as deleteVillageLocation,
+  migrateTrustedContacts, seedDefaultCategories,
+  initVillageSync, bootSync as villageBootSync,
+} from './village.js';
+import { resolveAudience, audienceTagFor, WARD_PRIVATE } from './audience.js';
+import { filterOutgoingReply } from './outgoing-filter.js';
+import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord } from './discord-gateway.js';
+import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock } from './knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -154,7 +170,7 @@ app.use(express.json({ limit: '4mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Provider chat-completions URLs live in providers.js so thalamus.js can
-// share them when it builds the env block for entity-core. See that file
+// share them when it builds the env block for Phylactery. See that file
 // for the rationale and how to add a new provider.
 import { PROVIDER_URLS } from './providers.js';
 // Tome / state-file coordination is owned by thalamus — every writer
@@ -188,7 +204,7 @@ function chatRateLimit(req, res, next) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo } = req.body;
+  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience } = req.body;
   // runToolLoop: the app sends true when the user has tools enabled.
   // The server then composes the tool list (built-ins + custom) and runs
   // the multi-round tool-call loop HERE — executing via cerebellum —
@@ -208,7 +224,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
 
   const url = PROVIDER_URLS[provider];
   if (!url) {
-    return res.status(400).json({ error: `Unknown provider: "${provider}". Expected "nanogpt", "zai", or "zai-coding".` });
+    return res.status(400).json({ error: `Unknown provider: "${provider}". Expected one of: ${Object.keys(PROVIDER_URLS).join(', ')}.` });
   }
   if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
     return res.status(400).json({ error: 'API key is required.' });
@@ -220,7 +236,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     return res.status(400).json({ error: 'Messages array is required and must not be empty.' });
   }
 
-  // Enrich with entity-core + Unruh context. Split into a static
+  // Enrich with Phylactery + Unruh context. Split into a static
   // prefix (identity + base instructions; stable across turns so the
   // upstream LLM's prefix cache hits) and a dynamic block (RAG
   // memories, graph excerpts, temporal context; varies per turn so
@@ -275,13 +291,29 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         .catch(err => console.error('[threat]   record threw:', err?.message ?? err));
     }
   }
+  // V3: resolve session audience to an effective grants object before
+  // enrichment. Fail-closed: any error defaults to WARD_PRIVATE (no gating)
+  // rather than blocking the chat. Audience only applies on the full path.
+  // audienceTag (Pillar D): durable room label used by the outgoing filter.
+  let audienceGrants = WARD_PRIVATE;
+  let audienceTag    = 'ward-private';
+  if (enrichMode === 'full' && sessionAudience && typeof sessionAudience === 'object') {
+    try {
+      const registry = await getVillageRegistry();
+      audienceGrants = resolveAudience(sessionAudience, registry);
+      audienceTag    = audienceTagFor(sessionAudience, registry);
+    } catch (err) {
+      console.error('[server] audience resolution failed (defaulting to ward-private):', err?.message ?? err);
+    }
+  }
+
   // liveTurn: only the full chat path may reconcile state (consume the
-  // surfaced session handoff, demote standing values whose entity-core
+  // surfaced session handoff, demote standing values whose Phylactery
   // anchor vanished). 'static' fetches persona only (handoff summariser);
   // 'none' skips enrichment entirely. debug-prompt calls enrich() with no
   // options, so it stays read-only.
   const enriched =
-      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null })
+      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null, audience: audienceGrants })
     : enrichMode === 'static' ? await enrich(userText, { staticOnly: true })
     : { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
 
@@ -368,7 +400,14 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // limiter — one user message costs one request against the limit no
   // matter how many tool rounds it takes.
   if (loopMode) {
-    const toolCtx     = { sessionInfo: sessionInfo && typeof sessionInfo === 'object' ? sessionInfo : null };
+    // wardPrivate gates the Village tools: full disclosure (incl. private
+    // notes) and mutations only when it's just the ward in the room. The
+    // audience tag defaults to 'ward-private' and only becomes a room tag
+    // when the session carries an audience, so this is the right signal.
+    const toolCtx     = {
+      sessionInfo: sessionInfo && typeof sessionInfo === 'object' ? sessionInfo : null,
+      wardPrivate: audienceTag === 'ward-private',
+    };
     const upstreamUrl = url;
     const authHeaders = {
       'Content-Type':  'application/json',
@@ -390,6 +429,22 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       injectedAt,
       timeAnchor,
     } : null;
+
+    // Pillar D: upstream caller for filter retries — bare text round-trip,
+    // no tool calls (tools are not needed for rewrite nudges).
+    const filterCallUpstream = async (msgs) => {
+      const r = await fetch(upstreamUrl, {
+        method:  'POST',
+        headers: authHeaders,
+        body:    JSON.stringify({ model: payload.model, messages: msgs, stream: false }),
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(`upstream ${r.status}: ${t.slice(0, 200)}`);
+      }
+      const d = await r.json();
+      return d?.choices?.[0]?.message?.content ?? '';
+    };
 
     // ── Non-streaming loop ─────────────────────────────────────────
     if (!stream) {
@@ -434,6 +489,27 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         req.off('close', onClientClose);
         if (thalamusEnvelope) data._thalamus = thalamusEnvelope;
         if (toolRounds.length > 0) data._toolRounds = toolRounds;
+        // Pillar D: semantic outgoing gate. Non-ward-private rooms only;
+        // ward-private fast-paths immediately. Mutates data.choices[0].message
+        // in-place when the filter rewrites or replaces the reply.
+        if (audienceTag !== 'ward-private') {
+          const draftText = data.choices?.[0]?.message?.content ?? '';
+          if (draftText) {
+            const filtered = await filterOutgoingReply({
+              draftText, audienceTag,
+              callUpstream: filterCallUpstream,
+              baseMessages: enrichedMessages,
+            }).catch(err => {
+              console.error('[server] outgoing filter failed (passing through):', err?.message ?? err);
+              return { text: draftText, blocked: false };
+            });
+            if (filtered.text !== draftText && data.choices?.[0]?.message) {
+              data.choices[0].message.content = filtered.text;
+              if (filtered.blocked) console.log(`[server] outgoing filter exhausted budget — safe refusal sent (audience=${audienceTag})`);
+              else                  console.log(`[server] outgoing filter rewrote reply (audience=${audienceTag})`);
+            }
+          }
+        }
         // M8 idle-mode outcome reporting: fire-and-forget after response sent.
         {
           const responseText = data.choices?.[0]?.message?.content ?? '';
@@ -720,10 +796,10 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
  * POST /api/debug-prompt
  * Body: { messages }
  * Returns the full message array that would be sent to the LLM for a given
- * messages payload — including entity-core enrichment prepended to the system
+ * messages payload — including Phylactery enrichment prepended to the system
  * message. Does NOT call any upstream LLM.
  *
- * WARNING: This endpoint returns entity-core enriched context (personal memory /
+ * WARNING: This endpoint returns Phylactery enriched context (personal memory /
  * identity data) with no authentication. Keep it disabled or firewalled in any
  * deployment outside localhost.
  */
@@ -1297,8 +1373,15 @@ app.post('/api/tomes/default/entries', async (req, res) => {
   }
 });
 
-// Hand the tome-storage capability to cerebellum's save_to_tome executor.
-initCerebellumTools({ addDefaultTomeEntry });
+// Hand the tome-storage capability + Village read/write to cerebellum's
+// executors. Village mutations from the tool path push through the same
+// write-through sync wired in startVillageSync() (mirror → Phylactery).
+initCerebellumTools({
+  addDefaultTomeEntry,
+  getVillageRegistry,
+  upsertVillager,
+  relayToDiscord,
+});
 
 // ── Memorization queue endpoints ────────────────────────────────
 
@@ -1314,12 +1397,12 @@ app.post('/api/memorize', express.text({ type: ['text/plain', 'application/json'
   if (!body || typeof body !== 'object') {
     return res.status(400).json({ error: 'Request body required.' });
   }
-  const { sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model } = body;
+  const { sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model, audienceTag } = body;
   if (!isValidUUID(sessionId))
     return res.status(400).json({ error: 'Invalid session ID.' });
   try {
     const { jobId, deduped } = await enqueueMemorization({
-      sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model,
+      sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model, audienceTag,
     });
     res.status(202).json({ jobId, deduped });
   } catch (err) {
@@ -1360,7 +1443,7 @@ app.delete('/api/memorize/:id', async (req, res) => {
 // VALID_FILENAME_RE / deriveMemorySlug are imported from cerebellum.js —
 // one source of truth shared by these routes and the tool executors.
 
-// POST /api/entity/memory — write a new memory entry to entity-core
+// POST /api/entity/memory — write a new memory entry to Phylactery
 app.post('/api/entity/memory', async (req, res) => {
   const { content, granularity = 'daily', date, title } = req.body;
   if (!content || typeof content !== 'string' || !content.trim())
@@ -1372,7 +1455,7 @@ app.post('/api/entity/memory', async (req, res) => {
 
   // Significant memories MUST be uniquely slugged or they collide with
   // each other (and with restored backups) on the date-only filename
-  // and entity-core's merge step destroys them. Derive from the title
+  // and Phylactery's merge step destroys them. Derive from the title
   // if the Familiar provided one, otherwise from the content's first
   // line. Last resort: a timestamp suffix so a save never silently
   // fails for lack of slugable characters.
@@ -1382,11 +1465,11 @@ app.post('/api/entity/memory', async (req, res) => {
   }
 
   const result = await createMemory({ content: content.trim(), granularity, date, slug });
-  if (!result.ok) return res.status(502).json({ error: result.error ?? 'entity-core unavailable' });
+  if (!result.ok) return res.status(502).json({ error: result.error ?? 'phylactery unavailable' });
   res.json({ ok: true });
 });
 
-// POST /api/entity/identity — append to or update a section of an entity-core identity file
+// POST /api/entity/identity — append to or update a section of a Phylactery identity file
 app.post('/api/entity/identity', async (req, res) => {
   const { category, filename, heading, content, mode = 'append' } = req.body;
   if (!VALID_IDENTITY_CATEGORIES.has(category))
@@ -1407,14 +1490,14 @@ app.post('/api/entity/identity', async (req, res) => {
     result = await appendIdentity({ category, filename, content: content.trim() });
   }
 
-  if (!result.ok) return res.status(502).json({ error: result.error ?? 'entity-core unavailable' });
+  if (!result.ok) return res.status(502).json({ error: result.error ?? 'phylactery unavailable' });
   res.json({ ok: true });
 });
 
-// ── Entity-core editing endpoints (Knowledge editor UI + LLM write tools) ──
+// ── Phylactery editing endpoints (Knowledge editor UI + LLM write tools) ──
 //
 // All destructive ops auto-snapshot on the thalamus side via snapshot_create
-// before calling the entity-core tool, so the Snapshots tab in the UI lets
+// before calling the Phylactery tool, so the Snapshots tab in the UI lets
 // the user roll back if something goes sideways.
 
 const VALID_GRAPH_ID_RE    = /^[\w-]{1,128}$/;
@@ -1422,14 +1505,14 @@ const VALID_SECTION_RE     = /^[\w\s\-()&'?!,.:/]{1,200}$/; // markdown headings
 const VALID_SNAPSHOT_ID_RE = /^[\w.\-:]{1,200}$/;
 
 function badRequest(res, message) { return res.status(400).json({ error: message }); }
-function gatewayDown(res, err)    { return res.status(502).json({ error: err ?? 'entity-core unavailable' }); }
+function gatewayDown(res, err)    { return res.status(502).json({ error: err ?? 'phylactery unavailable' }); }
 
 // ── Memory ────────────────────────────────────────────────────────────────
 // The :date param accepts what memory_list actually returns: a plain
 // date (daily/weekly/monthly/yearly) OR the composite `YYYY-MM-DD_slug`
 // key that significant memories list as (one named file per milestone).
 // cerebellum.parseMemoryKey splits the composite into the separate
-// date + slug parameters entity-core's read/update/delete tools expect.
+// date + slug parameters Phylactery's read/update/delete tools expect.
 app.get('/api/entity/memories', async (req, res) => {
   const { granularity, limit } = req.query;
   if (granularity && !VALID_MEMORY_GRANULARITIES.has(granularity))
@@ -1450,13 +1533,18 @@ app.get('/api/entity/memories/:granularity/:date', async (req, res) => {
 
 app.put('/api/entity/memories/:granularity/:date', async (req, res) => {
   const { granularity, date } = req.params;
-  const { content, editedBy } = req.body;
+  const { content, editedBy, audience, careWeight } = req.body;
   if (!VALID_MEMORY_GRANULARITIES.has(granularity)) return badRequest(res, 'invalid granularity');
   const key = parseMemoryKey(date);
   if (!key) return badRequest(res, 'invalid date format');
   if (typeof content !== 'string' || !content.trim()) return badRequest(res, 'content required');
   if (content.length > 16384)                       return badRequest(res, 'content exceeds 16 KB limit');
-  const result = await updateMemory({ granularity, date: key.date, slug: key.slug ?? undefined, content: content.trim(), editedBy });
+  const result = await updateMemory({
+    granularity, date: key.date, slug: key.slug ?? undefined,
+    content: content.trim(), editedBy,
+    ...(audience   !== undefined ? { audience }   : {}),
+    ...(careWeight !== undefined ? { careWeight }  : {}),
+  });
   if (!result.ok) return gatewayDown(res, result.error);
   res.json(result.result);
 });
@@ -1486,7 +1574,7 @@ app.post('/api/entity/memories/supersede', async (req, res) => {
     ? `[supersedes ${supersedes.granularity ?? 'memory'}/${supersedes.date ?? '?'}]\n${content.trim()}`
     : content.trim();
   // Same slug rule as POST /api/entity/memory — significant memories
-  // need a unique filename or entity-core's merge step destroys them.
+  // need a unique filename or Phylactery's merge step destroys them.
   let slug;
   if (granularity === 'significant') {
     slug = deriveMemorySlug(title) ?? deriveMemorySlug(content) ?? `memory-${Date.now()}`;
@@ -1637,6 +1725,52 @@ app.post('/api/entity/snapshots/:id/restore', async (req, res) => {
   res.json(result.result);
 });
 
+// ── Backup / restore (Pillar H) — "back up / restore my Familiar" ───────────
+// Single passphrase-encrypted file holding the whole self. The passphrase is
+// never stored; a lost passphrase means an unrecoverable backup (the point of
+// encryption-at-rest), which the UI must surface.
+app.post('/api/entity/backup/export', async (req, res) => {
+  const { passphrase } = req.body ?? {};
+  if (!passphrase || typeof passphrase !== 'string' || passphrase.length < 4) {
+    return badRequest(res, 'passphrase required (at least 4 characters)');
+  }
+  const result = await exportBackup({ passphrase });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result);
+});
+
+app.post('/api/entity/backup/restore', async (req, res) => {
+  const { filePath, passphrase } = req.body ?? {};
+  if (!filePath || typeof filePath !== 'string') return badRequest(res, 'filePath required');
+  if (!passphrase || typeof passphrase !== 'string') return badRequest(res, 'passphrase required');
+  const result = await restoreBackup({ filePath, passphrase });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result);
+});
+
+// Run one lifecycle pass on demand (hygiene + consolidation + graduation).
+app.post('/api/entity/lifecycle', async (req, res) => {
+  const force = req.body?.force === true;
+  const result = await runLifecyclePass({ force });
+  res.json(result);
+});
+
+// Ward remember-consent map — governs per-category memory storage policy.
+app.get('/api/entity/ward/remember', async (_req, res) => {
+  const map = await getRememberMap();
+  if (!map) return gatewayDown(res, 'phylactery not connected');
+  res.json({ map });
+});
+
+app.put('/api/entity/ward/remember', async (req, res) => {
+  const { map } = req.body ?? {};
+  if (!map || typeof map !== 'object' || Array.isArray(map))
+    return badRequest(res, 'map (object) is required');
+  const result = await setRememberMap(map);
+  if (!result?.ok) return res.status(400).json({ error: result?.errors ?? result?.error ?? 'update failed' });
+  res.json(result);
+});
+
 const PORT = Number(process.env.PORT) || 8742;
 
 // Bind address. Defaults to 0.0.0.0 so the in-UI Tailscale toggle can flip
@@ -1738,12 +1872,13 @@ function injectDynamicAtDepth(messages, dynamicContent, depth) {
   };
 }
 
-// Resolve the fields entity-core actually cares about from a settings
-// snapshot, so we can tell whether a settings PUT changed any of them.
-// Anything else (UI prefs, system prompts, etc.) doesn't require an
-// entity-core respawn and shouldn't trigger one.
-function entityCoreCredsSnapshot(settings) {
-  const id = settings?.entityCoreConnectionId ?? null;
+// Resolve the fields Phylactery cares about from a settings snapshot,
+// so we can tell whether a settings PUT changed any of them. Anything
+// else (UI prefs, system prompts, etc.) doesn't require a Phylactery
+// respawn and shouldn't trigger one.
+function phylacteryCredsSnapshot(settings) {
+  // phylacteryConnectionId is canonical (Pillar I); legacy entityCoreConnectionId still accepted.
+  const id = settings?.phylacteryConnectionId ?? settings?.entityCoreConnectionId ?? null;
   if (!id) return { id: null, apiKey: '', provider: '', model: '' };
   const conn = (settings.connections ?? []).find(c => c?.id === id);
   if (!conn) return { id, apiKey: '', provider: '', model: '' };
@@ -1754,7 +1889,7 @@ function entityCoreCredsSnapshot(settings) {
     model:    conn.model    ?? '',
   };
 }
-function entityCoreCredsEqual(a, b) {
+function phylacteryCredsEqual(a, b) {
   return a.id === b.id && a.apiKey === b.apiKey && a.provider === b.provider && a.model === b.model;
 }
 
@@ -1772,7 +1907,7 @@ app.put('/api/settings', async (req, res) => {
 
   // L2 (audit): route the prior-snapshot + write through thalamus's
   // per-file lock so two PUTs racing each other can't read each
-  // other's stale priorCreds and fire spurious entity-core respawns.
+  // other's stale priorCreds and fire spurious Phylactery respawns.
   // The atomic .tmp+rename already prevented torn-file states; the
   // lock here makes the prior-vs-next diff consistent against the
   // file each PUT actually replaces.
@@ -1781,7 +1916,7 @@ app.put('/api/settings', async (req, res) => {
     await withLock(SETTINGS_FILE, async () => {
       try {
         const raw = await fsp.readFile(SETTINGS_FILE, 'utf8');
-        priorCreds = entityCoreCredsSnapshot(JSON.parse(raw));
+        priorCreds = phylacteryCredsSnapshot(JSON.parse(raw));
       } catch { /* no prior settings — first write */ }
       const tmp = SETTINGS_FILE + '.tmp';
       await fsp.writeFile(tmp, serialised, 'utf8');
@@ -1791,14 +1926,14 @@ app.put('/api/settings', async (req, res) => {
     return res.status(500).json({ error: `failed to write settings: ${err.message}` });
   }
 
-  // If the entity-core API-key designation changed (different connection
+  // If the Phylactery API-key designation changed (different connection
   // picked, or the same connection's key/provider/model edited), respawn
   // the child so it picks up the new env. Fire-and-forget so the PUT
   // returns quickly; reconnect logs itself.
-  const nextCreds = entityCoreCredsSnapshot(settings);
-  if (!entityCoreCredsEqual(priorCreds, nextCreds)) {
-    console.log('[server] entity-core API-key designation changed — respawning');
-    reconnectEntityCore().catch(err => console.error('[server] reconnectEntityCore failed:', err.message));
+  const nextCreds = phylacteryCredsSnapshot(settings);
+  if (!phylacteryCredsEqual(priorCreds, nextCreds)) {
+    console.log('[server] Phylactery API-key designation changed — respawning');
+    reconnectPhylactery().catch(err => console.error('[server] reconnectPhylactery failed:', err.message));
   }
 
   return res.json({ ok: true });
@@ -2091,7 +2226,193 @@ app.post('/api/crisis-resources', async (_req, res) => {
   }
 });
 
-// Start the MCP children (entity-core + Unruh) at server boot rather
+// ── Village registry (V1 of Village Support) ────────────────────────
+// CRUD for categories / villagers / locations. The registry's local
+// mirror (village.json) is what gating will read; mutations write
+// through to Phylactery (canonical) via the sync wired in
+// startVillageSync() below. Validation errors surface as 400s.
+
+const villageError = (res, err) => {
+  const msg = err?.message ?? String(err);
+  const status = /unknown|required|locked|built-in|reassignTo/.test(msg) ? 400 : 500;
+  res.status(status).json({ error: msg });
+};
+
+// GET /api/discord/status — gateway observability (Village V4).
+// Lets the ward see connection state, the bot identity, the last
+// error, and turn/failure counters without reading server logs.
+app.get('/api/discord/status', (_req, res) => {
+  res.json(getDiscordStatus());
+});
+
+// Knock list (V4.x) — contact attempts from unregistered people,
+// captured by the gateway so the ward can register villagers without
+// hunting platform IDs by hand. Metadata only; never message content.
+app.get('/api/village/knocks', async (_req, res) => {
+  res.json(await listKnocks());
+});
+
+app.delete('/api/village/knocks/:platform/:id', async (req, res) => {
+  const result = await dismissKnock({ platform: req.params.platform, id: req.params.id });
+  if (!result.ok) return res.status(result.error === 'knock not found' ? 404 : 400).json({ error: result.error });
+  res.json({ ok: true });
+});
+
+// Location knock list (V4.x) — unregistered Discord channels the
+// Familiar has spoken in. Metadata only; never message content.
+app.get('/api/village/location-knocks', async (_req, res) => {
+  res.json(await listLocationKnocks());
+});
+
+// Location keys contain ':' so they ride the body, not the path.
+app.delete('/api/village/location-knocks', async (req, res) => {
+  const { key } = req.body ?? {};
+  const result = await dismissLocationKnock({ key });
+  if (!result.ok) return res.status(result.error === 'knock not found' ? 404 : 400).json({ error: result.error });
+  res.json({ ok: true });
+});
+
+app.get('/api/village', async (_req, res) => {
+  try { res.json(await getVillageRegistry()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/village/categories', async (req, res) => {
+  const { name, grants } = req.body ?? {};
+  try { res.json(await upsertVillageCategory({ name, grants })); }
+  catch (err) { villageError(res, err); }
+});
+
+app.patch('/api/village/categories/:id', async (req, res) => {
+  const { name, grants } = req.body ?? {};
+  try { res.json(await upsertVillageCategory({ id: req.params.id, name, grants })); }
+  catch (err) { villageError(res, err); }
+});
+
+app.delete('/api/village/categories/:id', async (req, res) => {
+  try { res.json(await deleteVillageCategory({ id: req.params.id, reassignTo: req.query.reassignTo })); }
+  catch (err) { villageError(res, err); }
+});
+
+// A saved villager's aliases settle any matching knocks — the person
+// is registered now, so the "knocked on the door" entry has served its
+// purpose. Fire-and-forget; a missed dismissal just leaves a stale row
+// the ward can dismiss by hand.
+function reconcileKnocks(villager) {
+  for (const a of villager?.aliases ?? []) {
+    dismissKnock({ platform: a.platform, id: a.id }).catch(() => {});
+  }
+}
+
+// A saved location settles any matching location knock.
+function reconcileLocationKnock(location) {
+  if (location?.key) dismissLocationKnock({ key: location.key }).catch(() => {});
+}
+
+app.post('/api/village/villagers', async (req, res) => {
+  const { name, categoryIds, categoryId, aliases, connection, triage,
+    pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember } = req.body ?? {};
+  try {
+    const saved = await upsertVillager({ name, categoryIds, categoryId, aliases, connection, triage,
+      pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember });
+    reconcileKnocks(saved);
+    res.json(saved);
+  }
+  catch (err) { villageError(res, err); }
+});
+
+app.patch('/api/village/villagers/:id', async (req, res) => {
+  const { name, categoryIds, categoryId, aliases, connection, triage,
+    pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember } = req.body ?? {};
+  try {
+    const saved = await upsertVillager({ id: req.params.id, name, categoryIds, categoryId, aliases, connection, triage,
+      pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember });
+    reconcileKnocks(saved);
+    res.json(saved);
+  }
+  catch (err) { villageError(res, err); }
+});
+
+app.delete('/api/village/villagers/:id', async (req, res) => {
+  try { res.json(await deleteVillager({ id: req.params.id })); }
+  catch (err) { villageError(res, err); }
+});
+
+app.post('/api/village/locations', async (req, res) => {
+  const { key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots } = req.body ?? {};
+  try {
+    const saved = await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots });
+    reconcileLocationKnock(saved);
+    res.json(saved);
+  }
+  catch (err) { villageError(res, err); }
+});
+
+app.patch('/api/village/locations', async (req, res) => {
+  // Location keys contain ':' and '/' so they ride the body, not the path.
+  const { key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots } = req.body ?? {};
+  try {
+    const saved = await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots });
+    reconcileLocationKnock(saved);
+    res.json(saved);
+  }
+  catch (err) { villageError(res, err); }
+});
+
+app.delete('/api/village/locations', async (req, res) => {
+  const { key } = req.body ?? {};
+  try { res.json(await deleteVillageLocation({ key })); }
+  catch (err) { villageError(res, err); }
+});
+
+// Wires the hybrid sync (Phylactery canonical, local mirror) and runs
+// the boot reconciliation + trusted-contacts migration. Degrades
+// gracefully: Phylactery down → mirror stays authoritative for
+// gating, writes accumulate as syncPending and replay on next boot.
+async function startVillageSync() {
+  initVillageSync({
+    push: async (json) => {
+      const content = '```json\n' + json + '\n```';
+      const result = await rewriteIdentitySection({
+        category: 'custom', filename: 'village-registry.md', section: 'Registry', content,
+      });
+      if (result.ok) return result;
+      // Section may not exist yet (first sync) — create file + section.
+      return appendIdentity({
+        category: 'custom', filename: 'village-registry.md',
+        content: `## Registry\n\n${content}`,
+      });
+    },
+    pull: async () => {
+      try {
+        const id = await getIdentityAll();
+        const file = (id?.custom ?? []).find(f => f.filename === 'village-registry.md');
+        const m = file?.content?.match(/```json\s*\n([\s\S]*?)\n```/);
+        return m ? JSON.parse(m[1]) : null;
+      } catch (err) {
+        console.warn('[village] canonical pull failed:', err?.message ?? err);
+        return null;
+      }
+    },
+  });
+  try {
+    await villageBootSync();
+    const { added } = await seedDefaultCategories();
+    if (added > 0) console.log(`[village] seeded ${added} default category/categories`);
+    const reg = await getVillageRegistry();
+    if (reg.villagers.length === 0) {
+      const contacts = readSettingsSync()?.trustedContacts;
+      if (Array.isArray(contacts) && contacts.length > 0) {
+        const { imported } = await migrateTrustedContacts(contacts);
+        if (imported > 0) console.log(`[village] migrated ${imported} trusted contact(s) into Emergency Contacts`);
+      }
+    }
+  } catch (err) {
+    console.error('[village] boot sync failed (mirror stays authoritative):', err?.message ?? err);
+  }
+}
+
+// Start the MCP children (Phylactery + Unruh) at server boot rather
 // than as a thalamus.js import side-effect. Tests and other importers
 // of thalamus's coordination helpers (withLock, modifyTomeFile, etc.)
 // don't need — and shouldn't trigger — Deno/Python spawning just to
@@ -2120,6 +2441,12 @@ const httpServer = app.listen(PORT, HOST, async () => {
   startAutonomousPondering();
   startRemindersScheduler();
   startSilenceTriage();
+  startReachout();
+  startVillageSync();
+  // Discord gateway (Village V4). Supervisor idles until the ward sets
+  // a bot token + enables the toggle in Settings; follows settings
+  // changes within 30s. Hard off-switch: PROTO_FAMILIAR_DISCORD_DISABLED=1.
+  startDiscordGateway();
 });
 
 // ── Autonomous pondering loop (step 4a) ─────────────────────────────
@@ -2184,6 +2511,9 @@ function startAutonomousPondering() {
         stakes_tier:    e.stakes_tier,
         confidence:     e.confidence,
         offered_at:     e.offered_at,
+        // Whether I actually raised this with my human (post-turn scan).
+        // Lets reflection tell "they didn't engage" from "I never spoke".
+        raised:         e.raised,
         outcome:        e.outcome,
         outcome_at:     e.outcome_at,
         state_snapshot: e.state_snapshot,
@@ -2328,10 +2658,100 @@ function startSilenceTriage() {
   console.log(`[triage] Silence triage ENABLED. Re-check defaults: severe=${DEFAULT_RECHECK_MS.severe/60_000}min, high=${DEFAULT_RECHECK_MS.high/60_000}min, moderate=${DEFAULT_RECHECK_MS.moderate/60_000}min (LLM may shorten/lengthen). calm/mild never trigger. Hard-disable with PROTO_FAMILIAR_TRIAGE_DISABLED=1.`);
 }
 
+// ── Warm reach-out loop (companionship) ─────────────────────────
+// The non-crisis counterpart to silence-triage: the Familiar reaches out
+// warmly — to my human, or to a Village member tagged warm toward it —
+// because a companion makes contact for fond and frivolous reasons too,
+// not only emergencies. Decision is an LLM call (reachout.js); delivery is
+// a ward banner (outbox kind 'reachout') or a villager DM (relayToDiscord),
+// the latter always mirrored to my human. Stands down entirely when threat
+// is elevated (triage owns that). Default-ON; toggle warmthEnabled in
+// Settings or hard-disable with PROTO_FAMILIAR_WARMTH_DISABLED=1.
+
+// Quiet hours for warm knocks — my human's configured night (local server
+// time). Start==end disables the window. Defaults to 23:00–08:00.
+function isWarmthQuietHours(now = new Date()) {
+  const s = readSettingsSync();
+  let start = Number(s?.warmthQuietHoursStart);
+  let end   = Number(s?.warmthQuietHoursEnd);
+  if (!Number.isInteger(start) || start < 0 || start > 23) start = 23;
+  if (!Number.isInteger(end)   || end   < 0 || end   > 23) end   = 8;
+  if (start === end) return false; // window disabled
+  const h = now.getHours();
+  return start < end ? (h >= start && h < end) : (h >= start || h < end);
+}
+
+function startReachout() {
+  if (process.env.PROTO_FAMILIAR_WARMTH_DISABLED === '1') {
+    console.log('[reachout] PROTO_FAMILIAR_WARMTH_DISABLED=1 — warm reach-out loop is OFF');
+    return;
+  }
+  startReachoutLoop({
+    tickMs: 10 * 60_000,
+    isEnabled: async () => {
+      const s = readSettingsSync();
+      if (s.warmthEnabled === false) return false;          // default-ON (undefined = on)
+      const conn = primaryConnectionFrom(s);
+      return !!(conn?.apiKey && conn?.provider && conn?.model);
+    },
+    getThreat,
+    getLastActivity: getLastUserActivity,
+    isQuietHours: async () => isWarmthQuietHours(),
+    getPendingTells: async () => {
+      try {
+        const intents = await getUnactedIntents({ limit: 5 });
+        return intents.filter(t => t.kind === 'tell');
+      } catch { return []; }
+    },
+    getWarmVillagers: async () => {
+      try { return getWarmVillagers(await getVillageRegistry()); }
+      catch { return []; }
+    },
+    decideReachout: decideReachoutViaLLM,
+    // Ward knock → gentle banner + push. Dedup bucket so a hiccup can't
+    // double-banner. If this knock finally says a flagged "tell", mark it.
+    deliverWardKnock: async ({ message, tell }) => {
+      const enq = await enqueueAndDispatch({
+        kind:     'reachout',
+        originId: reachoutBucketOriginId(),
+        title:    'a thought from me',
+        body:     message,
+        ts:       new Date().toISOString(),
+      });
+      if (enq?.id && !enq?.deduped && tell?.uid && Number.isInteger(tell.index)) {
+        markIntentActedOn({ uid: tell.uid, index: tell.index })
+          .catch(err => console.error('[reachout] markIntentActedOn failed:', err?.message ?? err));
+      }
+      return { ok: !!enq?.id, deduped: !!enq?.deduped };
+    },
+    // Villager reach → DM via the bot token, always mirrored to my human
+    // (no covert contact — the same guarantee relay_message carries).
+    deliverVillagerReach: async ({ villager, message }) => {
+      const res = await relayToDiscord({ recipientUserId: villager.discordId, message });
+      if (!res?.ok) return res ?? { ok: false, error: 'relay failed' };
+      await enqueueAndDispatch({
+        kind:     'relay',
+        originId: `reachout-relay:${Date.now()}:${villager.name}`,
+        title:    `I reached out to ${villager.name}`,
+        body:     `To ${villager.name}: "${message}"`,
+      }).catch(() => { /* the send happened; a mirror hiccup must not fail it */ });
+      return { ok: true };
+    },
+    onTick: (r) => {
+      if (r.reason === 'reached_ward')         console.log(`[reachout] warm knock to my human: "${r.decision?.message?.slice(0, 80)}…"`);
+      else if (r.reason === 'reached_villager') console.log(`[reachout] warm reach to ${r.villager?.name}: "${r.decision?.message?.slice(0, 60)}…"`);
+      else if (r.reason === 'delivery_failed')  console.warn(`[reachout] delivery failed (${r.target}): ${r.error}`);
+      // wait / crisis_defer / quiet_hours / in_cooldown / disabled are silent.
+    },
+    onError: (err) => console.error('[reachout]', err?.message ?? err),
+  });
+  console.log('[reachout] Warm reach-out ENABLED (default-ON). Stands down at moderate+ threat; quiet hours respected. Hard-disable with PROTO_FAMILIAR_WARMTH_DISABLED=1.');
+}
+
 // Graceful shutdown — fires on SIGTERM (stop.sh / stop.bat / docker
 // stop), SIGINT (Ctrl-C), and SIGHUP (terminal closes). Without this,
 // the memorization setIntervals would keep the event loop alive past
-// httpServer.close(), and the MCP children (entity-core, Unruh) would
+// httpServer.close(), and the MCP children (Phylactery, Unruh) would
 // be left to die from stdin EOF — which works on Unix but can be slow
 // on Windows. With this handler:
 //   1. Stop accepting new HTTP connections.
@@ -2355,7 +2775,9 @@ async function handleSignal(signal) {
   try { await stopPonderingLoop(); } catch { /* already stopped */ }
   try { await stopRemindersLoop(); } catch { /* already stopped */ }
   try { await stopSilenceTriageLoop(); } catch { /* already stopped */ }
-  try { shutdownEntityCore(); } catch { /* already disconnected */ }
+  try { await stopReachoutLoop(); } catch { /* already stopped */ }
+  try { stopDiscordGateway(); } catch { /* already stopped */ }
+  try { shutdownPhylactery(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }
   // Give the close handshakes a tiny window, then exit.
   setTimeout(() => process.exit(0), 250).unref();

@@ -1,7 +1,7 @@
 # Troubleshooting
 
 Common ways things go sideways, and what to do about each. Most failures
-fall into one of a few buckets: entity-core lost contact, the browser
+fall into one of a few buckets: Phylactery lost contact, the browser
 can't store something, the user did something the UI allows but the
 backend doesn't, or the live data drifted from what the UI cached.
 
@@ -44,12 +44,12 @@ once the new install is verified working.
 
 ### Pre-flight warnings about unreachable hosts
 
-The installer probes `github.com`, `registry.npmjs.org`, `deno.land`,
+The installer probes `github.com`, `registry.npmjs.org`,
 `astral.sh`, and `pypi.org` over TCP 443 before doing anything. Each
 unreachable host adds a line to the final summary MessageBox. The
 usual culprit is a corporate firewall (ZScaler / Netskope / etc.)
 doing TLS interception with an internal CA that the downstream tools
-(Deno, uv) don't trust. Routes to a "ask IT for a proxy bypass" or
+(uv) don't trust. Routes to a "ask IT for a proxy bypass" or
 "install Proto-Familiar on a non-corporate machine" path.
 
 ### Install log is empty / "logs are empty"
@@ -59,6 +59,23 @@ it doesn't exist, PowerShell is blocked — see the AppLocker section
 above. If the log exists but is empty, `Start-Transcript` was blocked
 (some AV configurations strip it). Try `install.bat` instead — it
 captures output via a different mechanism.
+
+### `[ERROR] Node.js install ran but node still isn't on PATH`
+
+Fixed in 0.5.3-alpha. winget now ships Node LTS as an
+archive/portable package, shimmed under
+`%LOCALAPPDATA%\Microsoft\WinGet\Links` rather than installed as an
+MSI under `Program Files\nodejs`. The installer's PATH refresh only
+knew the old MSI locations, so it couldn't see the freshly-installed
+Node and dead-ended — even though Node was fine. The installers
+(`install.ps1`, `install.bat`) and launchers (`tray.ps1`, `start.bat`)
+now re-read the persisted PATH and prime the WinGet Links dir, so the
+install completes and the first launch works without reopening a
+window.
+
+If you hit this on an older build, the message's own advice still
+works: close the window, open a new one, and re-run — the new PATH is
+persisted, so a fresh shell picks it up.
 
 ---
 
@@ -96,57 +113,50 @@ sort by Name → find `node.exe` → End task. Then run the update.
 
 ## Knowledge editor / graph
 
-### "Failed to load graph: entity-core not connected"
+### "Failed to load graph: phylactery not connected"
 
-The MCP server is down. `thalamus.js` spawns entity-core as a child
-process on Proto-Familiar startup; if it crashed or never started,
-every `/api/entity/*` endpoint returns `502 { error: 'entity-core not
-connected' }` and the Knowledge editor surfaces that text directly.
+The MCP server is down. `thalamus.js` spawns Phylactery — the in-tree
+identity layer — as a child process on Proto-Familiar startup; if it
+crashed or never started, every `/api/entity/*` endpoint returns
+`502 { error: 'phylactery not connected' }` and the Knowledge editor
+surfaces that text directly.
 
 **Fix:** restart Proto-Familiar (`npm start`). On startup, watch the
 server logs for `[thalamus]` lines — they'll say whether the child
 process spawned and connected. The most common causes are:
 
-- `deno` not on `PATH` for the shell that started Node. `start.sh`
-  adds `~/.deno/bin` to `PATH`; bare `npm start` won't.
-- entity-core path missing or moved. Set `ENTITY_CORE_PATH` to the
-  absolute path of its `src/mod.ts` if you have a non-standard layout.
-- entity-core's data directory permissions changed.
+- `uv` not installed, or not on `PATH` for the shell that started
+  Node. `start.sh` primes uv's location; a bare `npm start` from a
+  shell that doesn't have uv on PATH won't.
+- The `phylactery/.venv` hasn't been synced (a fresh checkout, or a
+  hand-edited install). Run `cd phylactery && uv sync`.
+- Phylactery's `data/` directory permissions changed.
 
-Chat still works without entity-core — `enrich()` returns an empty
+Chat still works without Phylactery — `enrich()` returns an empty
 string and every request goes through unenriched. But the Knowledge
 editor will be unusable until the MCP child reconnects.
 
-### Logs say `entity-core not found … skipping`, or it keeps reconnecting
+### Logs say the identity layer is absent or it keeps reconnecting
 
-Two distinct entity-core startup states, distinguished by what the
-`[thalamus]` logs say:
+The `[thalamus]` logs distinguish two states:
 
-- **`entity-core not found at <path> — skipping (run install.sh /
-  install.bat to clone it)`** — entity-core isn't cloned. `connect()`
-  pre-checks for the checkout (symmetric with how Unruh checks its
-  venv) and skips cleanly: one line, no retry loop. Run the installer
-  to clone it, or set `ENTITY_CORE_PATH` if you keep it somewhere
-  non-standard.
+- **Phylactery skipped at startup** — usually because `uv` isn't
+  installed or `phylactery/.venv` hasn't been synced. `connect()`
+  pre-checks for the venv (symmetric with how Unruh checks its own)
+  and skips cleanly: one line, no retry loop. **Fix:** re-run the
+  installer (`./install.sh` / `install.bat`, or just
+  `Proto-Familiar.vbs`), or — if uv is already installed — run
+  `cd phylactery && uv sync` manually, then restart Proto-Familiar.
 
-- **Repeated `Reconnecting to entity-core in …ms (attempt N/10)`** —
-  entity-core *is* cloned, but the `deno` spawn is failing. The
-  checkout exists so the skip-check passes, then the spawn errors and
-  the backoff loop runs (1s, 2s, 5s, 10s, 30s; max 10 attempts) before
-  giving up. The usual cause is **`deno` not installed, or installed
-  but not findable**. `thalamus.js` resolves `deno` from `~/.deno/bin`,
-  `~/.cargo/bin`, Homebrew, and (Windows) `%USERPROFILE%\.deno\bin`
-  before falling back to `PATH` — so this only bites when deno genuinely
-  isn't in any of those. (This is the one entity-core failure mode that
-  still spins rather than skipping: it's rare, because the installer
-  installs deno *when* it clones entity-core, so "cloned but no deno" is
-  an unusual hand-edited state.)
+- **Repeated reconnect attempts** — the venv exists so the skip-check
+  passes, but the `uv run` spawn is failing (e.g. a partial sync or a
+  missing uv binary). **Fix:** re-run the installer or `uv sync`, make
+  sure `uv` is reachable on PATH (or set `UV_BIN` to its absolute
+  path), then restart Proto-Familiar to retry — the loop doesn't
+  re-arm itself once it's given up.
 
-  **Fix:** re-run `./install.sh` / `install.bat` (it installs deno and
-  caches entity-core's deps), or install Deno yourself from
-  <https://deno.com/> and point `DENO_BIN` at the binary if it lives
-  somewhere unusual. Restart Proto-Familiar afterward to retry — the
-  loop doesn't re-arm itself once it's given up.
+Phylactery degrades to absent without breaking chat: if it can't
+start, enrichment is skipped and Proto-Familiar runs normally.
 
 ### Map view is empty or stuck on "Loading…"
 
@@ -155,7 +165,7 @@ returned and edges to nodes of other types are dropped (so the legend
 matches what's drawn). Clear the filter to see everything.
 
 If it's empty without a filter, switch to List view — if List is also
-empty, the graph genuinely has no nodes (or entity-core is down; see
+empty, the graph genuinely has no nodes (or Phylactery is down; see
 above). If List has rows but Map doesn't, click **Refresh**: Map view
 fetches its own `/api/entity/graph/full` aggregate, and a stale browser
 cache or an interrupted earlier load can leave it half-drawn.
@@ -246,16 +256,18 @@ the storage key from DevTools (`localStorage.removeItem('pf-knowledge-modal-size
 
 ### Significant memory shows "⚠ invalid date format" when clicked
 
-Affects builds before **0.4.1-alpha**. Significant memories are stored
+Affects builds before **0.4.1-alpha** (historical — the canonical
+store was entity-core at the time; Phylactery now addresses memories
+by integer `id`). Significant memories were stored
 one named file per milestone (`2026-06-11_why-melian-trusts-me.md`),
-and entity-core's listing returns that composite `date_slug` key — but
+and entity-core's listing returned that composite `date_slug` key — but
 the read/edit/delete endpoints only accepted plain dates, so clicking
 a slugged entry failed validation. Saving worked the whole time; only
 viewing/editing from the Knowledge editor was broken.
 
-Fixed in 0.4.1-alpha: the composite key is accepted everywhere and
+Fixed in 0.4.1-alpha: the composite key was accepted everywhere and
 split into the separate `date` + `slug` parameters entity-core
-expects. Update Proto-Familiar; the existing files need no migration.
+expected. Update Proto-Familiar; the existing files need no migration.
 The Familiar's own `update_memory` / `delete_memory` tools take the
 same composite key for significant memories (it's included in
 `save_memory`'s confirmation, e.g.
@@ -278,35 +290,35 @@ additive and reversible by deleting the thing you just made.
 
 ### Snapshots tab shows an old entry I want to keep forever
 
-entity-core prunes snapshots older than `ENTITY_CORE_SNAPSHOT_RETENTION_DAYS`
+Phylactery prunes snapshots older than `ENTITY_CORE_SNAPSHOT_RETENTION_DAYS`
 (default 30 days). Bump that env var before starting Proto-Familiar
 if you need longer retention.
 
 ---
 
-## Entity-core API key (consolidator)
+## Phylactery API key (consolidator)
 
 ### `[Consolidation] Failed weekly/...: No LLM API key configured (ENTITY_CORE_LLM_API_KEY or ZAI_API_KEY)`
 
-Entity-core's background consolidator runs on a schedule (weekly /
+Phylactery's background consolidator runs on a schedule (weekly /
 monthly / yearly) and needs an LLM API key of its own — distinct from
 whatever the chat path uses. The error message names the API key but
 fires whenever any of `API_KEY` / `BASE_URL` / `MODEL` is unset.
 
 **Fix:** open Proto-Familiar's **Connections** sidebar, click
-**+ entity-core** on the connection whose key + model entity-core
-should use. The badge **entity-core** appears next to the row. The
+**+ Phylactery** on the connection whose key + model Phylactery
+should use. The badge **Phylactery** appears next to the row. The
 server detects the change on the next settings save and respawns
-the entity-core child with the new env — no Proto-Familiar restart
+the Phylactery child with the new env — no Proto-Familiar restart
 needed; the next scheduled consolidation will succeed.
 
 You can pick any saved connection (any provider). It doesn't have
-to be your primary or any fallback — entity-core is independent of
+to be your primary or any fallback — Phylactery is independent of
 the chat path.
 
 ### `LLM call failed: API request failed with status 404: Not Found`
 
-Entity-core has a key + provider but the model or endpoint isn't
+Phylactery has a key + provider but the model or endpoint isn't
 serving requests. Two common causes:
 
 - The connection's `model` field doesn't exist at that provider —
@@ -314,10 +326,10 @@ serving requests. Two common causes:
   connection.
 - The connection's `provider` tag isn't in `providers.js`'s
   `PROVIDER_URLS` map, so the wrong base URL is being passed. The
-  server logs a warning at boot: `[thalamus] entity-core: provider
+  server logs a warning at boot: `[thalamus] phylactery: provider
   "<tag>" has no known URL — add it to PROVIDER_URLS in
   providers.js`. Either edit the map or pick a connection with one
-  of the supported provider tags (`nanogpt`, `zai`, `zai-coding`).
+  of the supported provider tags (`nanogpt`, `zai`, `zai-coding`, `google`).
 
 ### Designation change didn't take effect
 
@@ -325,15 +337,15 @@ Server-side respawn happens on `PUT /api/settings`, fire-and-
 forget. Check the server logs for:
 
 ```
-[server] entity-core API-key designation changed — respawning
-[thalamus] Connected to entity-core at <path> (API key from connection "<provider>")
+[server] Phylactery API-key designation changed — respawning
+[thalamus] Connected to Phylactery at <path> (API key from connection "<provider>")
 ```
 
 If you see the first line but not the second, the spawn itself
-failed — usually because `deno` isn't on PATH for the server
-process. Restart Proto-Familiar via the launcher script (which
-primes `~/.deno/bin`); a bare `npm start` from a shell without
-that path will inherit the same gap.
+failed — usually because `uv` isn't on PATH for the server
+process (or `phylactery/.venv` isn't synced). Restart Proto-Familiar
+via the launcher script (which primes uv's location); a bare
+`npm start` from a shell without uv on PATH will inherit the same gap.
 
 ---
 
@@ -386,7 +398,7 @@ Almost always one of two things:
 
 - **You installed from a downloaded ZIP, not a `git clone`.** GitHub's "Download ZIP" gives you a folder like `Proto-Familiar-main` that is **not** a git repository — there's no `.git` inside it. The installer pulls updates with `git`, so on a ZIP it silently can't, and you stay on whatever version the ZIP captured. (The "up to date" you saw may also have been **npm's** `up to date` line, which is about node modules, not the app.) The installer now detects this, warns explicitly, and prints `Branch: (not a git checkout …)` at the end.
 
-  **Fix — the one-click updater (no git needed):** double-click **`update.bat`** (Windows) or **`update.command`** (macOS), or run **`./update.sh`** (Linux). It downloads the latest version from GitHub and lays it over your folder, then runs the installer. Your settings, saved memories, tomes, chat logs, and entity-core data are **preserved** — they aren't part of the download, so they're never overwritten (and the installer auto-backs them up to `.pf-backups/` too). This is the recommended path for non-technical users.
+  **Fix — the one-click updater (no git needed):** double-click **`update.bat`** (Windows) or **`update.command`** (macOS), or run **`./update.sh`** (Linux). It downloads the latest version from GitHub and lays it over your folder, then runs the installer. Your settings, saved memories, tomes, chat logs, and Phylactery data are **preserved** — they aren't part of the download, so they're never overwritten (and the installer auto-backs them up to `.pf-backups/` too). This is the recommended path for non-technical users.
 
   **Or reinstall via git** (enables the installer's own `git pull` going forward):
 
@@ -450,12 +462,12 @@ node scripts/ensure-port-free.mjs
 ### LLM seems to ignore my recent Knowledge editor changes
 
 `thalamus.enrich()` runs once per `/api/chat` request and rebuilds the
-graph / memory / identity block from current entity-core state. So the
+graph / memory / identity block from current Phylactery state. So the
 next message after an edit reflects the change — but the current
 turn's reply is already in flight with the old context. Send another
 message (anything; "ok" works) to get a fresh enrichment.
 
-### Tool calls fail with "entity-core not connected"
+### Tool calls fail with "phylactery not connected"
 
 Same root cause as the Knowledge editor failure — see above. The LLM
 will see the error message in the tool result and can either retry

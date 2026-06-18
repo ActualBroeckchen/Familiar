@@ -8,7 +8,7 @@
 // outcomes to learn patterns for `what_lapses_cost.md`.
 //
 // Storage lives at `tomes/.surface-events.json` — per-embodiment, like
-// ponderings. The derived insights (lifted to entity-core's identity
+// ponderings. The derived insights (lifted to Phylactery's identity
 // layer) belong to the human's continuity; the raw behavioural stream
 // belongs to this instance.
 //
@@ -50,7 +50,15 @@ export const OUTCOMES = Object.freeze({
   CANCELLED:             'cancelled',
   DEFERRED:              'deferred',
   FIRED:                 'fired',
+  // I offered this to myself as a candidate, it aged out unresolved, AND
+  // I actually raised it with my human (the post-turn scan saw it in my
+  // reply) — yet nothing came of it. This says something about my human.
   UNRESPONDED:           'unresponded',
+  // I offered this to myself, it aged out unresolved, but I never actually
+  // brought it up (raised !== true). My human can't respond to something
+  // they never saw. This says something about MY surfacing, not about them
+  // — reflection must not read it as disengagement.
+  NOT_RAISED:            'not_raised',
 });
 
 // ── Locks ────────────────────────────────────────────────────────
@@ -279,11 +287,14 @@ export async function tagOutcomes({ windowItems, now = Date.now(), tomesDir = DE
       if (item && item.resolution) {
         outcome = resolutionToOutcome(item.resolution);
       } else if (now - ev.offered_at >= UNRESPONDED_THRESHOLD_MS) {
-        // Old enough to give up waiting. The task may have aged out of
-        // the window entirely (no resolution we can see) or still be
-        // unresolved; either way, my surface didn't land in a
-        // measurable way.
-        outcome = OUTCOMES.UNRESPONDED;
+        // Old enough to give up waiting, no resolution we can see. Split
+        // on whether I actually raised it: only a confirmed raise
+        // (raised === true) that went nowhere is UNRESPONDED — evidence
+        // about my human. If I never brought it up (raised false, or
+        // untagged/null = unconfirmed), it's NOT_RAISED — evidence about
+        // ME. Conflating the two is how a quiet stretch where I simply
+        // didn't speak gets misread as my human withdrawing.
+        outcome = ev.raised === true ? OUTCOMES.UNRESPONDED : OUTCOMES.NOT_RAISED;
       } else {
         skipped += 1;
         continue;

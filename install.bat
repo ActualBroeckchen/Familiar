@@ -4,23 +4,22 @@ REM
 REM The canonical Windows installer is scripts\win\install.ps1 (invoked
 REM by Proto-Familiar.vbs). This .bat exists for users whose PowerShell
 REM execution is locked down and who run .bat scripts manually instead.
-REM Keeps feature parity with install.ps1 on the essentials: Node, Deno,
-REM Git, uv, npm install, entity-core clone + deno cache, Unruh uv sync,
-REM and Desktop/Start Menu shortcut creation. winget is the preferred
+REM Keeps feature parity with install.ps1 on the essentials: Node, Git,
+REM uv, npm install, Phylactery uv sync, Unruh uv sync, and
+REM Desktop/Start Menu shortcut creation. winget is the preferred
 REM auto-install path when present; manual download URLs are surfaced
 REM as a clear fallback otherwise.
 REM
-REM Fresh install: auto-installs Node / Deno / Git / uv via winget when
-REM   available, runs npm install, clones entity-core (release tag),
-REM   pre-caches its Deno module graph, syncs Unruh's Python venv from
-REM   unruh\uv.lock, and creates Desktop + Start Menu shortcuts.
+REM Fresh install: auto-installs Node / Git / uv via winget when
+REM   available, runs npm install, syncs Phylactery's Python venv from
+REM   phylactery\uv.lock, syncs Unruh's Python venv from unruh\uv.lock,
+REM   and creates Desktop + Start Menu shortcuts.
 REM Update mode: triggered when node_modules\ already exists. Takes a
-REM   defensive backup of tomes\, logs\, entity-core data\, and the
+REM   defensive backup of tomes\, logs\, phylactery\data\, and the
 REM   Tailscale toggle config into .pf-backups\<timestamp>\ BEFORE any
 REM   git op, then pulls latest Proto-Familiar via `git pull --ff-only`,
-REM   refreshes entity-core to the pinned tag, re-runs idempotent
-REM   npm install / deno cache / uv sync. Auto-install checks rerun in
-REM   both modes so the system catches up to new requirements.
+REM   re-runs idempotent npm install / uv sync. Auto-install checks
+REM   rerun in both modes so the system catches up to new requirements.
 REM
 REM Shortcut creation is idempotent and runs in both modes — it skips
 REM each .lnk if it already exists, so update mode no longer silently
@@ -73,26 +72,6 @@ if "%ONEDRIVE_CHECK%"=="fail" (
   echo         ^(for example to C:\Proto-Familiar^) and re-run install.bat.
   exit /b 1
 )
-for %%I in ("%SCRIPT_DIR%\..") do set "PARENT_DIR=%%~fI"
-REM Resolve the entity-core sibling checkout. New installs land in
-REM `entity-core\`; older installs from before the rename used
-REM `entity-core-alpha\` and we keep using that in place to avoid
-REM silent directory moves.
-set "ENTITY_CORE_DIR_NEW=%PARENT_DIR%\entity-core"
-set "ENTITY_CORE_DIR_LEGACY=%PARENT_DIR%\entity-core-alpha"
-if exist "%ENTITY_CORE_DIR_NEW%" (
-  set "ENTITY_CORE_DIR=%ENTITY_CORE_DIR_NEW%"
-  set "ENTITY_CORE_DIR_REL=entity-core"
-) else if exist "%ENTITY_CORE_DIR_LEGACY%" (
-  set "ENTITY_CORE_DIR=%ENTITY_CORE_DIR_LEGACY%"
-  set "ENTITY_CORE_DIR_REL=entity-core-alpha"
-) else (
-  set "ENTITY_CORE_DIR=%ENTITY_CORE_DIR_NEW%"
-  set "ENTITY_CORE_DIR_REL=entity-core"
-)
-REM Release page: https://github.com/PsycherosAI/Psycheros/releases/tag/<tag>
-set "ENTITY_CORE_REPO=https://github.com/PsycherosAI/Psycheros.git"
-set "ENTITY_CORE_TAG=entity-core-v0.3.2"
 set "BACKUP_ROOT=%SCRIPT_DIR%\.pf-backups"
 
 REM --- Detect mode ---
@@ -117,20 +96,14 @@ if "!MODE!"=="update" (
   for /f %%T in ('powershell -NoProfile -Command "(Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')" 2^>nul') do set "STAMP=%%T"
   if not defined STAMP set "STAMP=backup"
   set "BACKUP_DIR=%BACKUP_ROOT%\!STAMP!"
-  call :backupIfExists      "%SCRIPT_DIR%\tomes" "tomes"
-  call :backupIfExists      "%SCRIPT_DIR%\logs"  "logs"
-  REM Probe BOTH the new entity-core dir and the pre-rename legacy
-  REM entity-core-alpha so leftover data from before the rename still
-  REM gets backed up.
-  call :backupIfExists      "%ENTITY_CORE_DIR_NEW%\packages\entity-core\data"    "entity-core\packages\entity-core\data"
-  call :backupIfExists      "%ENTITY_CORE_DIR_NEW%\data"                          "entity-core\data"
-  call :backupIfExists      "%ENTITY_CORE_DIR_LEGACY%\packages\entity-core\data" "entity-core-alpha\packages\entity-core\data"
-  call :backupIfExists      "%ENTITY_CORE_DIR_LEGACY%\data"                       "entity-core-alpha\data"
+  call :backupIfExists      "%SCRIPT_DIR%\tomes"           "tomes"
+  call :backupIfExists      "%SCRIPT_DIR%\logs"            "logs"
+  call :backupIfExists      "%SCRIPT_DIR%\phylactery\data" "phylactery\data"
   call :backupFileIfExists  "%SCRIPT_DIR%\.proto-familiar-config.json"     ".proto-familiar-config.json"
   call :backupFileIfExists  "%SCRIPT_DIR%\settings.json"                   "settings.json"
   if "!ANYTHING_BACKED_UP!"=="1" (
     echo User data backed up to !BACKUP_DIR!\
-    echo   ^(tomes\, logs\, entity-core data\, .proto-familiar-config.json, settings.json — restore by copying back if needed^)
+    echo   ^(tomes\, logs\, phylactery\data\, .proto-familiar-config.json, settings.json — restore by copying back if needed^)
   )
 )
 
@@ -175,8 +148,13 @@ if errorlevel 1 (
     echo Node.js not found - installing LTS via winget ^(per-user, no admin needed^)...
     winget install --id OpenJS.NodeJS.LTS --scope user --silent --accept-source-agreements --accept-package-agreements
     REM Refresh PATH so the just-installed node is reachable in this session.
-    for /f "tokens=2 delims==" %%a in ('"set PATH 2>nul"') do set "OLDPATH=%%a"
-    set "PATH=%LOCALAPPDATA%\Programs\nodejs;%ProgramFiles%\nodejs;%PATH%"
+    REM Re-read the persisted PATH (winget writes its change to the User
+    REM PATH) and prime the WinGet Links shim dir. Node LTS now ships from
+    REM winget as an archive/portable package shimmed under
+    REM %LOCALAPPDATA%\Microsoft\WinGet\Links — the old MSI-only paths
+    REM missed it, which dead-ended the install even though Node was fine.
+    for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "[System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')" 2^>nul`) do set "PATH=%%P"
+    set "PATH=%LOCALAPPDATA%\Microsoft\WinGet\Links;%LOCALAPPDATA%\Programs\nodejs;%ProgramFiles%\nodejs;%PATH%"
     where node >nul 2>nul
     if errorlevel 1 (
       echo [ERROR] Node.js install ran but node still isn't on PATH.
@@ -185,14 +163,34 @@ if errorlevel 1 (
     )
   ) else (
     echo [ERROR] Node.js is not installed and winget is unavailable.
-    echo         Install Node 18+ from https://nodejs.org/ and re-run install.bat.
+    echo         Install Node 22+ from https://nodejs.org/ and re-run install.bat.
     exit /b 1
   )
 )
 for /f "tokens=1 delims=." %%v in ('node -p "process.versions.node"') do set NODE_MAJOR=%%v
-if !NODE_MAJOR! LSS 18 (
-  echo [ERROR] Node.js !NODE_MAJOR! detected. Proto-Familiar needs Node 18 or newer.
-  exit /b 1
+if !NODE_MAJOR! LSS 22 (
+  echo Node.js !NODE_MAJOR! detected ^(need 22+ for Discord's native WebSocket^) - upgrading via winget...
+  if "!HAVE_WINGET!"=="1" (
+    winget upgrade --id OpenJS.NodeJS.LTS --scope user --silent --accept-source-agreements --accept-package-agreements
+    REM winget upgrade exits non-zero when "no applicable upgrade found" (already latest
+    REM per winget's view, e.g. installed from MSI outside winget). Fall back to install.
+    if errorlevel 1 (
+      winget install --id OpenJS.NodeJS.LTS --scope user --silent --accept-source-agreements --accept-package-agreements
+    )
+    REM Refresh PATH so the newly installed/upgraded node is visible in this session.
+    for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "[System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')" 2^>nul`) do set "PATH=%%P"
+    set "PATH=%LOCALAPPDATA%\Microsoft\WinGet\Links;%LOCALAPPDATA%\Programs\nodejs;%ProgramFiles%\nodejs;%PATH%"
+    for /f "tokens=1 delims=." %%v in ('node -p "process.versions.node" 2^>nul') do set NODE_MAJOR=%%v
+    if !NODE_MAJOR! LSS 22 (
+      echo [ERROR] Node.js upgrade did not reach v22+ ^(now: !NODE_MAJOR!^).
+      echo         Close this window, open a new terminal, and re-run install.bat.
+      exit /b 1
+    )
+  ) else (
+    echo [ERROR] Node.js !NODE_MAJOR! needs upgrading to 22+ but winget is unavailable.
+    echo         Install Node 22+ from https://nodejs.org/ and re-run install.bat.
+    exit /b 1
+  )
 )
 for /f %%v in ('node -v') do echo Node.js %%v found.
 
@@ -202,41 +200,14 @@ if errorlevel 1 (
   if "!HAVE_WINGET!"=="1" (
     echo Git not found - installing via winget...
     winget install --id Git.Git --scope user --silent --accept-source-agreements --accept-package-agreements
-    set "PATH=%ProgramFiles%\Git\cmd;%PATH%"
+    REM Same PATH-refresh shape as the Node step: re-read the persisted
+    REM PATH plus the WinGet Links shim dir, then the classic Git cmd dir.
+    for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "[System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')" 2^>nul`) do set "PATH=%%P"
+    set "PATH=%LOCALAPPDATA%\Microsoft\WinGet\Links;%ProgramFiles%\Git\cmd;%PATH%"
   ) else (
-    echo [WARN] Git not found and winget unavailable - entity-core clone will be skipped.
+    echo [WARN] Git not found and winget unavailable - git clone will be skipped.
     echo        Install Git from https://git-scm.com/download/win to enable it.
   )
-)
-
-REM --- Deno check (install via winget if missing, both modes) ---
-REM Look in PATH first, then in %USERPROFILE%\.deno\bin where the
-REM official deno installer writes. Adding to PATH here means the
-REM follow-up `deno cache` finds it without a shell restart.
-if exist "%USERPROFILE%\.deno\bin\deno.exe" set "PATH=%USERPROFILE%\.deno\bin;%PATH%"
-where deno >nul 2>nul
-if errorlevel 1 (
-  if "!HAVE_WINGET!"=="1" (
-    echo Deno not found - installing via winget...
-    winget install --id DenoLand.Deno --scope user --silent --accept-source-agreements --accept-package-agreements
-    if exist "%USERPROFILE%\.deno\bin\deno.exe" set "PATH=%USERPROFILE%\.deno\bin;%PATH%"
-    where deno >nul 2>nul
-    if errorlevel 1 (
-      echo [WARN] Deno install ran but deno still isn't on PATH - falling back to the official PowerShell installer.
-      powershell -NoProfile -ExecutionPolicy ByPass -Command "irm https://deno.land/install.ps1 | iex" >nul 2>nul
-      if exist "%USERPROFILE%\.deno\bin\deno.exe" set "PATH=%USERPROFILE%\.deno\bin;%PATH%"
-    )
-  ) else (
-    echo Deno not found - installing via the official PowerShell script...
-    powershell -NoProfile -ExecutionPolicy ByPass -Command "irm https://deno.land/install.ps1 | iex" >nul 2>nul
-    if exist "%USERPROFILE%\.deno\bin\deno.exe" set "PATH=%USERPROFILE%\.deno\bin;%PATH%"
-  )
-)
-where deno >nul 2>nul
-if errorlevel 1 (
-  echo [WARN] Deno still not on PATH - entity-core will be disabled until you install it from https://deno.com/.
-) else (
-  echo Deno found.
 )
 
 REM --- npm install (idempotent) ---
@@ -250,57 +221,6 @@ if errorlevel 1 (
   exit /b 1
 )
 popd
-
-REM --- entity-core: clone (install) or refresh to pinned tag (update) ---
-REM Note: entity-core's runtime data\ is gitignored at both workspace and
-REM package root, so `git checkout <tag>` never touches user data.
-if exist "%ENTITY_CORE_DIR%" (
-  if "!MODE!"=="update" if exist "%ENTITY_CORE_DIR%\.git" (
-    where git >nul 2>nul
-    if not errorlevel 1 (
-      echo Refreshing entity-core to tag %ENTITY_CORE_TAG%...
-      pushd "%ENTITY_CORE_DIR%"
-      git fetch --tags --depth 1 origin refs/tags/%ENTITY_CORE_TAG%:refs/tags/%ENTITY_CORE_TAG% >nul 2>nul
-      git checkout --quiet %ENTITY_CORE_TAG%
-      if errorlevel 1 echo [WARN] Could not refresh entity-core to %ENTITY_CORE_TAG%. Keeping current checkout.
-      popd
-    )
-  ) else (
-    echo entity-core already present at %ENTITY_CORE_DIR% - skipping clone.
-  )
-) else (
-  where git >nul 2>nul
-  if errorlevel 1 (
-    echo [WARN] git not found - skipping entity-core clone. Install git or place entity-core at %ENTITY_CORE_DIR% manually.
-  ) else (
-    echo Cloning entity-core ^(%ENTITY_CORE_TAG%^) into %ENTITY_CORE_DIR% ...
-    git clone --depth 1 --branch %ENTITY_CORE_TAG% %ENTITY_CORE_REPO% "%ENTITY_CORE_DIR%"
-    if errorlevel 1 (
-      echo [WARN] Tag clone failed; falling back to default branch.
-      git clone --depth 1 %ENTITY_CORE_REPO% "%ENTITY_CORE_DIR%"
-    )
-  )
-)
-
-REM --- entity-core dependency pre-cache (idempotent) ---
-set "ENTITY_CORE_PKG="
-if exist "%ENTITY_CORE_DIR%\packages\entity-core\src\mod.ts" (
-  set "ENTITY_CORE_PKG=%ENTITY_CORE_DIR%\packages\entity-core"
-) else if exist "%ENTITY_CORE_DIR%\src\mod.ts" (
-  set "ENTITY_CORE_PKG=%ENTITY_CORE_DIR%"
-)
-where deno >nul 2>nul
-if not errorlevel 1 if defined ENTITY_CORE_PKG (
-  echo Caching entity-core dependencies ^(only fetches what's new^)...
-  pushd "%ENTITY_CORE_PKG%"
-  deno cache src/mod.ts >nul 2>nul
-  if errorlevel 1 (
-    echo [WARN] deno cache failed - first server start will download deps before entity-core comes up.
-  ) else (
-    echo entity-core dependencies cached.
-  )
-  popd
-)
 
 REM --- uv check (auto-install if missing, in both modes) ---
 REM uv is the Python package/runtime manager Unruh uses. Astral's
@@ -323,6 +243,27 @@ if not errorlevel 1 (
   ) else (
     echo [WARN] uv auto-install failed. Unruh ^(temporal context^) will be disabled until you install uv from https://docs.astral.sh/uv/.
   )
+)
+
+REM --- Phylactery dependency sync (idempotent; fast when nothing changed) ---
+if "!HAVE_UV!"=="1" if exist "%SCRIPT_DIR%\phylactery\pyproject.toml" (
+  echo Syncing Phylactery dependencies ^(only fetches what's new^)...
+  pushd "%SCRIPT_DIR%\phylactery"
+  uv sync --quiet
+  if errorlevel 1 (
+    echo [WARN] uv sync failed for Phylactery - identity layer will be disabled until this is resolved.
+  ) else (
+    echo Phylactery dependencies synced.
+    uv run --no-sync python -c "from phylactery.db import get_conn; get_conn().close()" >nul 2>nul
+    if errorlevel 1 (
+      echo [WARN] Phylactery DB migration step skipped - it will apply on first start.
+    ) else (
+      echo Phylactery database up to date.
+    )
+  )
+  popd
+) else if exist "%SCRIPT_DIR%\phylactery\pyproject.toml" (
+  echo [WARN] Skipping Phylactery dep sync ^(uv not available^). Identity layer will be disabled until uv is installed.
 )
 
 REM --- Unruh dependency sync (idempotent; fast when nothing changed) ---
@@ -385,7 +326,7 @@ REM Completion marker. Only reached after npm install succeeded (we
 REM exit /b 1 above on failure). The launchers check for this instead
 REM of node_modules to decide whether to (re)run the installer —
 REM node_modules can exist without the installer having run (a manual
-REM `npm install`), which would skip entity-core clone + shortcut
+REM `npm install`), which would skip Phylactery sync + shortcut
 REM creation. The marker is the reliable "installer actually completed"
 REM signal. Content is the version, for debugging.
 set "PF_VERSION="

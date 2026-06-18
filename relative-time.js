@@ -261,7 +261,12 @@ export function plainInterval(target, now = Date.now()) {
  */
 export function buildTimeAnchorBlock({ now = Date.now(), lastUserMessageAt = null } = {}) {
   try {
-    const lines = [`Now: ${clockTime(now)} on ${dayAndDate(now)}.`];
+    const nowDate    = new Date(now);
+    const offsetMin  = -nowDate.getTimezoneOffset();
+    const offsetSign = offsetMin >= 0 ? '+' : '-';
+    const absMin     = Math.abs(offsetMin);
+    const offsetStr  = `UTC${offsetSign}${String(Math.floor(absMin / 60)).padStart(2, '0')}:${String(absMin % 60).padStart(2, '0')}`;
+    const lines = [`Now: ${clockTime(now)} (${offsetStr}) on ${dayAndDate(now)}.`];
     if (lastUserMessageAt) {
       const lastMs = toMs(lastUserMessageAt);
       if (Number.isFinite(lastMs)) {

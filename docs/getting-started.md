@@ -2,7 +2,7 @@
 
 ## Quickest path: one double-click
 
-Proto-Familiar ships with a one-click installer and launcher for each platform. The installer takes care of Node, Deno, Git, uv, `npm install`, the entity-core clone, and the Unruh Python venv; the launcher starts the server, opens your browser, and gives you a single button to shut everything down. Re-running the installer is safe and idempotent — shortcuts and desktop entries are only created when they don't already exist.
+Proto-Familiar ships with a one-click installer and launcher for each platform. The installer takes care of Node, Git, uv, `npm install`, and the in-tree Phylactery + Unruh Python venvs (via `uv sync`); the launcher starts the server, opens your browser, and gives you a single button to shut everything down. Re-running the installer is safe and idempotent — shortcuts and desktop entries are only created when they don't already exist.
 
 ### Windows
 
@@ -17,7 +17,7 @@ Proto-Familiar ships with a one-click installer and launcher for each platform. 
    If you don't have `git` yet, download the ZIP from GitHub, extract it, and move the resulting `Proto-Familiar` folder to `%LOCALAPPDATA%`.
 
 2. Double-click **`Proto-Familiar.vbs`** inside that folder.
-3. On first run a console window opens and auto-installs Node 18+, Deno, Git, and uv via `winget install --scope user` (no admin prompt). If winget is unavailable or a specific install fails, each tool has a fallback path: Deno + uv via their official PowerShell one-liners, Node + Git via opening the download page and waiting for you to confirm. Once prereqs are in place, the installer runs `npm install`, clones [entity-core](https://github.com/PsycherosAI/Psycheros) into the sibling directory, syncs the Unruh Python venv from `unruh/uv.lock`, and creates Desktop + Start Menu shortcuts named **Proto-Familiar**.
+3. On first run a console window opens and auto-installs Node 22+, Git, and uv via `winget install --scope user` (no admin prompt). If winget is unavailable or a specific install fails, each tool has a fallback path: uv via its official PowerShell one-liner, Node + Git via opening the download page and waiting for you to confirm. Once prereqs are in place, the installer runs `npm install`, sets up the in-tree Phylactery + Unruh Python venvs via `uv sync` (from each module's `uv.lock`), and creates Desktop + Start Menu shortcuts named **Proto-Familiar**.
 4. After install, a tray icon appears (bottom-right, you may need to click the `^` to reveal hidden icons) and your browser opens at `http://localhost:8742`.
 
 If anything goes sideways, every install run appends to `.proto-familiar-install.log` in the project root — open that file first; the failing step is usually named explicitly. The installer also pops a Windows MessageBox at the end with the outcome and the log path, so a closed console doesn't mean lost diagnostics.
@@ -31,7 +31,7 @@ If anything goes sideways, every install run appends to `.proto-familiar-install
 | Right-click → **Start / Stop / Restart** | Manage the server |
 | Right-click → **View logs** | Open `.proto-familiar.log` in Notepad |
 | Right-click → **Open install folder** | Reveal the project in Explorer |
-| Right-click → **Quit** | Stop the server (and its entity-core child) and remove the tray icon |
+| Right-click → **Quit** | Stop the server (and its Phylactery + Unruh children) and remove the tray icon |
 
 The tray icon's colour reflects state: **green** = running, **yellow** = starting, **red** = stopped.
 
@@ -41,17 +41,17 @@ The tray app is single-instance — double-clicking the shortcut a second time j
 
 1. Clone or download the repo.
 2. Double-click **`Proto-Familiar.command`** in Finder.
-3. On first run it runs `./install.sh`, which checks Node 18+, auto-installs Deno + uv via their official one-liner installers if missing, runs `npm install`, clones entity-core, and syncs the Unruh Python venv. On subsequent runs it skips straight to launching.
+3. On first run it runs `./install.sh`, which checks Node 22+ (upgrading automatically if a version manager like nvm or fnm is detected), auto-installs uv via its official one-liner installer if missing, runs `npm install`, and sets up the in-tree Phylactery + Unruh Python venvs via `uv sync`. On subsequent runs it skips straight to launching.
 4. A Terminal window opens showing server logs; your browser opens automatically at `http://localhost:8742`. The launcher auto-recycles any stale Proto-Familiar holding the port before binding.
 
-**To shut down**, press **Ctrl-C** in the Terminal window, then close it (Cmd-W). Because `node` runs in the foreground, Ctrl-C cleanly stops Proto-Familiar, entity-core, and Unruh.
+**To shut down**, press **Ctrl-C** in the Terminal window, then close it (Cmd-W). Because `node` runs in the foreground, Ctrl-C cleanly stops Proto-Familiar, Phylactery, and Unruh.
 
 > If macOS Gatekeeper warns about an unidentified developer, right-click `Proto-Familiar.command` → **Open** the first time.
 
 ### Linux
 
 1. Clone the repo.
-2. Run `./install.sh` once. It checks Node, auto-installs Deno + uv via their official one-liner installers (`curl … | sh`) if missing, runs `npm install`, clones entity-core, syncs the Unruh Python venv, and registers a `.desktop` entry under `~/.local/share/applications/` so **Proto-Familiar** appears in your app launcher / activities overview. Re-runnable — the desktop entry is created only if it doesn't already exist.
+2. Run `./install.sh` once. It checks Node, auto-installs uv via its official one-liner installer (`curl … | sh`) if missing, runs `npm install`, sets up the in-tree Phylactery + Unruh Python venvs via `uv sync`, and registers a `.desktop` entry under `~/.local/share/applications/` so **Proto-Familiar** appears in your app launcher / activities overview. Re-runnable — the desktop entry is created only if it doesn't already exist.
 3. Launch from the app menu, or run `./start.sh`. Stop with `./stop.sh`.
 
 ---
@@ -62,10 +62,9 @@ The installer handles these automatically on every platform. Install manually on
 
 | Requirement | Version | Notes |
 |---|---|---|
-| [Node.js](https://nodejs.org/) | 18 or newer | Built-in `fetch` API required |
-| [Deno](https://deno.com/) | 2 or newer | For the entity-core identity layer; auto-installed via the official installer when missing |
-| [uv](https://docs.astral.sh/uv/) | 0.4 or newer | For the Unruh temporal-context module; ships its own Python ≥ 3.11, so no system Python install needed |
-| [Git](https://git-scm.com/) | any recent | For the entity-core clone step |
+| [Node.js](https://nodejs.org/) | 22 or newer | Native WebSocket API required (Discord gateway) |
+| [uv](https://docs.astral.sh/uv/) | 0.4 or newer | For the in-tree Phylactery identity layer and the Unruh temporal-context module; ships its own Python ≥ 3.11, so no system Python install needed |
+| [Git](https://git-scm.com/) | any recent | For cloning and updating the repo |
 
 ---
 
@@ -87,11 +86,11 @@ The repo also ships three plain shell scripts you can call directly:
 
 | Script | What it does |
 |---|---|
-| `./install.sh` | First run: auto-installs Deno + uv, runs `npm install`, clones entity-core, pre-caches its Deno dep graph, syncs the Unruh Python venv from `unruh/uv.lock`, and registers the Linux desktop entry. Subsequent runs auto-detect the existing install (presence of `node_modules/`) and switch to **update mode**: `git pull --ff-only` on Proto-Familiar, refresh entity-core to the pinned tag, re-run idempotent `npm install` + `deno cache` + `uv sync`. Prereq installs and shortcut / desktop-entry creation now run in both modes (idempotent — they skip when the target already exists). |
-| `./start.sh` | Detect and recycle any stale Proto-Familiar holding the port, trigger the installer if `node_modules/` or `unruh/.venv/` is missing, prime PATH for Deno + uv, then start the server in the background, write the PID file, and open the browser. |
-| `./stop.sh` | Kill every `node server.js` rooted at this dir (covers the tracked PID and any strays). Entity-core and Unruh die with the parent. |
+| `./install.sh` | First run: auto-installs uv, runs `npm install`, and sets up the in-tree Phylactery + Unruh Python venvs via `uv sync` (from each module's `uv.lock`), then registers the Linux desktop entry. Subsequent runs auto-detect the existing install (presence of `node_modules/`) and switch to **update mode**: `git pull --ff-only` on Proto-Familiar, re-run idempotent `npm install` + `uv sync`. Prereq installs and shortcut / desktop-entry creation now run in both modes (idempotent — they skip when the target already exists). |
+| `./start.sh` | Detect and recycle any stale Proto-Familiar holding the port, trigger the installer if `node_modules/` or the Python venvs are missing, prime PATH for uv, then start the server in the background, write the PID file, and open the browser. |
+| `./stop.sh` | Kill every `node server.js` rooted at this dir (covers the tracked PID and any strays). Phylactery and Unruh die with the parent. |
 
-Windows equivalents (`install.bat`, `start.bat`, `stop.bat`, and the PowerShell installer under `scripts/win/install.ps1`) behave identically — `install.bat` detects `node_modules\` and routes to update mode the same way, auto-installs prereqs via winget (with PowerShell-installer fallbacks for Deno + uv when winget is missing), and creates Desktop + Start Menu shortcuts idempotently. The recommended Windows entry point is `Proto-Familiar.vbs` — it avoids the brief console flash and gives you the tray icon, and re-runs the installer whenever `node_modules\` or `unruh\.venv\` is missing.
+Windows equivalents (`install.bat`, `start.bat`, `stop.bat`, and the PowerShell installer under `scripts/win/install.ps1`) behave identically — `install.bat` detects `node_modules\` and routes to update mode the same way, auto-installs prereqs via winget (with a PowerShell-installer fallback for uv when winget is missing), and creates Desktop + Start Menu shortcuts idempotently. The recommended Windows entry point is `Proto-Familiar.vbs` — it avoids the brief console flash and gives you the tray icon, and re-runs the installer whenever `node_modules\` or the Python venvs are missing.
 
 `npm start` and `npm run dev` are also valid entry points. They run two prestart hooks (`scripts/ensure-unruh-deps.mjs` and `scripts/ensure-port-free.mjs`) that sync the Unruh venv and recycle any stale Proto-Familiar before binding, so launching this way has the same auto-recovery behaviour as the launcher scripts.
 
@@ -100,24 +99,24 @@ Windows equivalents (`install.bat`, `start.bat`, `stop.bat`, and the PowerShell 
 ## First-time setup
 
 1. Open the **Settings panel** (☰ icon in the top bar).
-2. Select your **Provider** (NanoGPT, Z.ai Standard, or Z.ai Coding Plan).
+2. Select your **Provider** (NanoGPT, Z.ai Standard, Z.ai Coding Plan, or Google AI Studio).
 3. Paste your **API key**.
 4. Select or type a **model name**.
 5. Start chatting.
 
 Your API key lives in `settings.json` server-side (and is mirrored to browser `localStorage` as an offline cache) and is sent only to `localhost`.
 
-### Designating a connection for entity-core
+### Designating a connection for Phylactery
 
-Entity-core's background consolidator (weekly / monthly / yearly memory summaries) needs an LLM API key of its own. Tell it which to use:
+Phylactery's background consolidator (weekly / monthly / yearly memory summaries) needs an LLM API key of its own. Tell it which to use:
 
 1. In the sidebar, open the **Connections** section.
-2. Save one or more connections via **+ Save current as connection** (any provider works — `nanogpt`, `zai`, or `zai-coding`).
-3. Click **+ entity-core** on the connection whose key + model entity-core should use. The badge **entity-core** appears next to the connection's name. Click again on the same row to clear, or on a different row to move the designation.
+2. Save one or more connections via **+ Save current as connection** (any provider works — `nanogpt`, `zai`, `zai-coding`, or `google`).
+3. Click **+ Phylactery** on the connection whose key + model Phylactery should use. The badge **Phylactery** appears next to the connection's name. Click again on the same row to clear, or on a different row to move the designation.
 
-When the designation changes, server.js detects it on the next `PUT /api/settings` and respawns the entity-core child process with the new env (`ENTITY_CORE_LLM_API_KEY`, `ENTITY_CORE_LLM_BASE_URL`, `ENTITY_CORE_LLM_MODEL`; plus `ZAI_API_KEY` / `ZAI_BASE_URL` / `ZAI_MODEL` for z.ai providers). No server restart needed — the new key takes effect on the next chat or scheduled consolidation.
+When the designation changes, server.js detects it on the next `PUT /api/settings` and respawns the Phylactery child process with the new env (`PHYLACTERY_LLM_API_KEY`, `PHYLACTERY_LLM_BASE_URL`, `PHYLACTERY_LLM_MODEL`, `PHYLACTERY_LLM_PROVIDER`; the legacy `ENTITY_CORE_LLM_*` aliases are still set too for backward compatibility, plus `ZAI_API_KEY` / `ZAI_BASE_URL` / `ZAI_MODEL` for z.ai providers). No server restart needed — the new key takes effect on the next chat or scheduled consolidation.
 
-Independent of the chat path: the connection you designate as entity-core's source doesn't have to be your primary or any fallback. You can point entity-core at any connection regardless of how chat traffic uses it.
+Independent of the chat path: the connection you designate as Phylactery's source doesn't have to be your primary or any fallback. You can point Phylactery at any connection regardless of how chat traffic uses it.
 
 ---
 
@@ -129,16 +128,15 @@ Independent of the chat path: the connection you designate as entity-core's sour
 - **macOS:** double-click `Proto-Familiar.command`, or `./install.sh` from a terminal.
 - **Linux:** `./install.sh`.
 
-**If you installed by downloading the ZIP** (folder named `Proto-Familiar-main`, no `.git` inside): the installer can't `git pull`, so use the **one-click updater** instead — double-click **`update.bat`** (Windows) / **`update.command`** (macOS) or run **`./update.sh`** (Linux). It downloads the latest version from GitHub, lays it over your folder (your settings, memories, tomes, logs, and entity-core data are preserved — they aren't in the download), and then runs the installer for dependencies + migrations. No git knowledge required. The installer also tells you which path you're on — it prints `Branch:` (or "not a git checkout") and `Version:` when it finishes.
+**If you installed by downloading the ZIP** (folder named `Proto-Familiar-main`, no `.git` inside): the installer can't `git pull`, so use the **one-click updater** instead — double-click **`update.bat`** (Windows) / **`update.command`** (macOS) or run **`./update.sh`** (Linux). It downloads the latest version from GitHub, lays it over your folder (your settings, memories, tomes, logs, and Phylactery data are preserved — they aren't in the download), and then runs the installer for dependencies + migrations. No git knowledge required. The installer also tells you which path you're on — it prints `Branch:` (or "not a git checkout") and `Version:` when it finishes.
 
 The installer detects the existing install via the `node_modules/` directory and switches to **update mode**. The flow:
 
-1. **Defensive backup** — `tomes/`, `logs/`, entity-core's `data/` directory (if non-empty), `.proto-familiar-config.json` (Tailscale toggle state), and `settings.json` (central user settings) are copied to `.pf-backups/<UTC-timestamp>/` inside the project root *before* any git operation runs. Safety net even though the git ops below are designed not to touch user data.
+1. **Defensive backup** — `tomes/`, `logs/`, Phylactery's `data/` directory (if non-empty), `.proto-familiar-config.json` (Tailscale toggle state), and `settings.json` (central user settings) are copied to `.pf-backups/<UTC-timestamp>/` inside the project root *before* any git operation runs. Safety net even though the git ops below are designed not to touch user data.
 2. **`git pull --ff-only`** on the Proto-Familiar repo. Skipped if the directory isn't a git checkout. The `--ff-only` flag means git refuses any non-fast-forward merge — if you're on a non-default branch, have local commits, or have uncommitted changes that would conflict, the pull aborts with a warning and the work tree is left exactly as you had it.
-3. **Node / Deno / Git checks**, with auto-install of anything missing (same as fresh install — your environment catches up if a new release added a requirement).
+3. **Node / Git / uv checks**, with auto-install of anything missing (same as fresh install — your environment catches up if a new release added a requirement).
 4. **`npm install`** to pick up any new Node deps.
-5. **`git fetch && git checkout <pinned tag>`** on entity-core (idempotent — only does work if the tag bumped). entity-core's runtime `data/` directory is gitignored at both the workspace and package root, so this never touches your identity files, memory markdown, or SQLite store.
-6. **`deno cache`** to pick up any new entity-core Deno deps (only fetches what's missing).
+5. **`uv sync`** on the in-tree Phylactery and Unruh modules to pick up any new Python deps (only fetches what's missing). Their runtime `data/` directories are gitignored, so this never touches your identity files, memories, or stored state.
 
 Update mode skips only the shortcut / desktop-entry creation, since those are already in place.
 
@@ -149,7 +147,7 @@ Update mode skips only the shortcut / desktop-entry creation, since those are al
 | User-saved tomes (`<uuid>.json`) | `tomes/` | Untracked filenames; git never touches them. Also copied into `.pf-backups/` |
 | Built-in tome content you edited | `tomes/ADHD-Tome.json`, etc. | If upstream changed the same file, `git pull --ff-only` refuses the merge and warns. Also copied into `.pf-backups/` |
 | Session logs | `logs/` | Gitignored. Also copied into `.pf-backups/` |
-| entity-core identity files, memory markdown, SQLite store | `entity-core/packages/entity-core/data/` (or the legacy `entity-core-alpha/…` if you installed before the rename) | Gitignored at both workspace and package roots; never touched by `git checkout <tag>`. Also copied into `.pf-backups/` |
+| Phylactery identity files, memories, knowledge graph, trackers | `phylactery/data/` (in-tree) | Gitignored; never touched by `git pull`. Also copied into `.pf-backups/` |
 | Tailscale toggle state | `.proto-familiar-config.json` | Gitignored. Also copied into `.pf-backups/` |
 | Central user settings (prompts, names, saved connections incl. API keys, tomes settings) | `settings.json` | Gitignored. Also copied into `.pf-backups/` |
 
@@ -193,9 +191,9 @@ Proto-Familiar always binds to `0.0.0.0`, but until the toggle is on a middlewar
 
 ### Security caveats
 
-- **Plain LAN (no Tailscale):** anything that can route to the port can use your API key, read entity-core context, and write to the knowledge editor. Don't enable on coffee-shop wifi.
+- **Plain LAN (no Tailscale):** anything that can route to the port can use your API key, read Phylactery context, and write to the knowledge editor. Don't enable on coffee-shop wifi.
 - **Tailscale:** other devices on your tailnet can use the proxy. If you share your tailnet with others, set up Tailscale ACLs accordingly.
-- The `/api/debug-prompt` endpoint and the entity-core knowledge editor REST API are unauthenticated. They were designed for loopback. When the toggle is on, anyone on your network gets them too.
+- The `/api/debug-prompt` endpoint and the Phylactery knowledge editor REST API are unauthenticated. They were designed for loopback. When the toggle is on, anyone on your network gets them too.
 - The toggle endpoint itself (`POST /api/tailscale`) is also unauthenticated; once the toggle is on, any device that can reach the server can toggle it back off (a self-locking misfeature) or back on. Keep it loopback-only unless you trust your network.
 
 ### Tailscale Serve / Funnel (alternative)
@@ -215,19 +213,19 @@ That exposes the loopback server over HTTPS to your tailnet without changing Pro
 | `PORT` | `8742` | HTTP port the server listens on |
 | `HOST` | `0.0.0.0` | Bind address. The runtime gate keeps non-loopback requests out until you flip the in-UI toggle — override only if you need to force a different bind. |
 | `TAILSCALE` | `0` | Seeds the persisted toggle state on first launch (when `.proto-familiar-config.json` doesn't exist yet). After that, the in-UI toggle is the source of truth. |
-| `ENTITY_CORE_PATH` | auto: probes `../entity-core/packages/entity-core/src/mod.ts`, then `../entity-core/src/mod.ts`, then the legacy `../entity-core-alpha/…` paths in the same order | Absolute path to entity-core's `src/mod.ts`. Override if your entity-core install is not in the sibling directory or to force a specific layout. |
 | `UNRUH_PATH` | auto: `./unruh/src/unruh/__main__.py` | Absolute path to Unruh's entry module. Rarely needed — Unruh ships in-tree at `./unruh/`. |
 | `UV_BIN` | auto: probes `~/.local/bin/uv`, `~/.cargo/bin/uv`, `/usr/local/bin/uv`, `/opt/homebrew/bin/uv` on Unix, and the Windows equivalents | Absolute path to the `uv` binary thalamus.js uses to spawn Unruh. Override if `uv` is installed somewhere unusual and isn't on the PATH that `node server.js` inherits. |
 
-Entity-core's own env vars (read by entity-core itself, not by Proto-Familiar; documented for completeness because the **+ entity-core** connection designation sets them automatically):
+Phylactery's own env vars (read by Phylactery itself, not by Proto-Familiar; documented for completeness because the **+ Phylactery** connection designation sets them automatically):
 
 | Variable | Set by Proto-Familiar | Purpose |
 |---|---|---|
-| `ENTITY_CORE_LLM_API_KEY` | always, from the designated connection | Bearer token for entity-core's outbound LLM calls (consolidation, embeddings) |
-| `ENTITY_CORE_LLM_BASE_URL` | always, derived from the connection's provider | Full chat-completions URL (entity-core POSTs to this exactly — no path appending) |
-| `ENTITY_CORE_LLM_MODEL` | always, from the connection | Model name for entity-core's outbound LLM calls |
-| `ENTITY_CORE_LLM_PROVIDER` | always | Informational provider tag (`nanogpt` / `zai` / `zai-coding`) |
-| `ZAI_API_KEY` / `ZAI_BASE_URL` / `ZAI_MODEL` | only when provider is `zai` or `zai-coding` | Alternate names entity-core falls back to if the `ENTITY_CORE_LLM_*` variants are unset. Setting both pairs makes any entity-core build work without re-config. |
+| `PHYLACTERY_LLM_API_KEY` | always, from the designated connection | Bearer token for Phylactery's outbound LLM calls (consolidation, embeddings) |
+| `PHYLACTERY_LLM_BASE_URL` | always, derived from the connection's provider | Full chat-completions URL (Phylactery POSTs to this exactly — no path appending) |
+| `PHYLACTERY_LLM_MODEL` | always, from the connection | Model name for Phylactery's outbound LLM calls |
+| `PHYLACTERY_LLM_PROVIDER` | always | Informational provider tag (`nanogpt` / `zai` / `zai-coding` / `google`) |
+| `ENTITY_CORE_LLM_API_KEY` / `ENTITY_CORE_LLM_BASE_URL` / `ENTITY_CORE_LLM_MODEL` | always | Legacy aliases set alongside the `PHYLACTERY_LLM_*` names so `consolidate.py` resolves either; for backward compatibility only. |
+| `ZAI_API_KEY` / `ZAI_BASE_URL` / `ZAI_MODEL` | only when provider is `zai` or `zai-coding` | Alternate names Phylactery falls back to if the `PHYLACTERY_LLM_*` variants are unset. Setting both pairs makes any Phylactery build work without re-config. |
 
 ---
 
@@ -245,15 +243,20 @@ Entity-core's own env vars (read by entity-core itself, not by Proto-Familiar; d
 - **Endpoint:** `https://api.z.ai/api/coding/paas/v4/chat/completions` (separate quota from Standard)
 - **Suggested models:** `glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`, `glm-4.5-air`
 
-All three providers use the OpenAI-compatible `chat/completions` format. The server selects the correct endpoint automatically based on your provider selection.
+### Google AI Studio — Gemini
+- **Endpoint:** `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` (Google's OpenAI-compatible surface)
+- **Suggested models:** `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.0-flash`, `gemini-2.0-flash-lite`
+- **API key:** create one at [Google AI Studio](https://aistudio.google.com/apikey); it's sent as a `Bearer` token like every other provider here.
+
+All providers use the OpenAI-compatible `chat/completions` format. The server selects the correct endpoint automatically based on your provider selection.
 
 ---
 
-## Setting up entity-core
+## Setting up Phylactery
 
-The one-click installer clones entity-core automatically and pre-caches its Deno dependencies so the first server start is instant. If you want to do it manually (or import an existing data directory), see [Entity-Core](entity-core.md).
+Phylactery — the Familiar's canonical self-store (identity files, RAG memories, knowledge graph, trackers) — ships **in-tree** at `./phylactery/`; there's no separate clone step. The one-click installer materialises its Python venv with `uv sync`, so the first server start is ready to go. If you want to set it up manually, run `cd phylactery && uv sync`.
 
-In short: entity-core lives at `../entity-core/packages/entity-core` (Deno-workspace layout) relative to Proto-Familiar, and `thalamus.js` spawns it on startup. Older sibling-directory layouts are still detected as fallbacks — the legacy top-level `../entity-core/src/mod.ts` path, and the pre-rename `../entity-core-alpha/…` checkout. If entity-core is missing or fails, enrichment is skipped and Proto-Familiar runs normally.
+In short: Phylactery lives at `./phylactery/` inside the Proto-Familiar repo, and `thalamus.js` spawns it on startup as a Python MCP child via `uv run` (exactly the way it spawns Unruh). If `uv` isn't installed or the `phylactery/.venv` hasn't been synced, Phylactery is treated as absent — enrichment is skipped and Proto-Familiar runs normally. Hard-disable it with `PROTO_FAMILIAR_PHYLACTERY_DISABLED=1`.
 
 ---
 
@@ -292,6 +295,6 @@ Bump policy (followed by AI agents working in this repo via [`CLAUDE.md`](../CLA
 | Port already in use | The launchers / `npm start` auto-recycle their own stale instance. If something else is on the port, the prestart hook tells you the holding PID — stop that process or set `PORT=8080` and re-launch. |
 | Server won't stop cleanly | `./stop.sh` (or `stop.bat`) kills every `node server.js` rooted at this dir, not just the tracked PID. If even that fails, delete `.proto-familiar.pid` by hand and re-run stop. |
 | `[thalamus] Unruh venv missing` warning | Re-run the installer (`./install.sh`, `install.bat`, or just `Proto-Familiar.vbs`) — or, if uv is already installed, run `cd unruh && uv sync` manually. Proto-Familiar boots and runs without Unruh, just without the temporal-context block. |
-| `entity-core: provider "..." has no known URL` warning | The connection you designated for entity-core uses a provider tag that isn't in `PROVIDER_URLS` in `providers.js`. Either pick a different connection or add the provider to that map. |
-| Consolidator: `No LLM API key configured (ENTITY_CORE_LLM_API_KEY or ZAI_API_KEY)` | No connection is designated as entity-core's source. Open the sidebar's Connections section and click **+ entity-core** on a connection. The respawn happens automatically. |
+| `phylactery: provider "..." has no known URL` warning | The connection you designated for Phylactery uses a provider tag that isn't in `PROVIDER_URLS` in `providers.js`. Either pick a different connection or add the provider to that map. |
+| Consolidator: `No LLM API key configured (ENTITY_CORE_LLM_API_KEY or ZAI_API_KEY)` | No connection is designated as Phylactery's source. Open the sidebar's Connections section and click **+ Phylactery** on a connection. The respawn happens automatically. |
 | Consolidator: `API request failed with status 404` | The designated connection's model doesn't exist at that provider's endpoint, or the env was set partially. Try a different model on the same provider, or re-pick the connection so the env is fully repopulated. |

@@ -6,11 +6,11 @@ REM installer can't `git pull` those, so this fetches the latest code from
 REM GitHub and lays it over the current folder, then runs install.bat for
 REM dependencies + database migrations.
 REM
-REM Your data is preserved. settings.json, logs\, saved tomes, Unruh's
-REM database, and the entity-core sibling folder are NOT part of the
-REM download, so copying the new files over the old ones can't touch them.
-REM install.bat also auto-backs up tomes\, logs\, settings, and entity-core
-REM data into .pf-backups\ before doing anything.
+REM Your data is preserved. settings.json, logs\, saved tomes, and the
+REM Unruh + Phylactery databases are NOT part of the download, so copying
+REM the new files over the old ones can't touch them. install.bat also
+REM auto-backs up tomes\, logs\, settings, and phylactery\data\ into
+REM .pf-backups\ before doing anything.
 REM
 REM If you installed with `git clone`, you don't need this - just re-run
 REM install.bat; it does `git pull` for you.

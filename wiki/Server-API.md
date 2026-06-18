@@ -1,6 +1,6 @@
 # Server API
 
-The server is implemented in `server.js` (Express, Node.js 18+, ESM).
+The server is implemented in `server.js` (Express, Node.js 22+, ESM).
 
 ## Base behavior
 
@@ -19,7 +19,7 @@ Proxy request to selected provider.
 
 **Body (main fields):**
 
-- `provider` (`nanogpt | zai | zai-coding`)
+- `provider` (`nanogpt | zai | zai-coding | google`)
 - `apiKey`
 - `model`
 - `messages`
@@ -76,9 +76,9 @@ Deletes one saved session log.
 - `POST /api/memorize/:id/ack` — mark a terminal job as seen by the UI
 - `DELETE /api/memorize/:id` — cancel a pending job
 
-### Entity-core write-through
+### Phylactery write-through
 
-- `POST /api/entity/memory` — write a long-term memory entry (`save_memory` tool)
+- `POST /api/entity/memory` — write a long-term memory entry (`save_memory` tool). The `/api/entity/*` route prefix is a legacy alias kept for compatibility; the canonical store is Phylactery.
 - `POST /api/entity/identity` — append to or update a section of an identity file (`update_identity` tool)
 
 ### Unruh (temporal context)

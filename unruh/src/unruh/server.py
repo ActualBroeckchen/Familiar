@@ -82,7 +82,10 @@ def schedule_add_node(
     end: str | None = None,
     payload: dict | None = None,
 ) -> dict[str, Any]:
-    """Create a schedule-layer node.
+    """I use this to add a new node to my human's schedule — an event, task, phase,
+    or state. I reach for it when my human mentions something they need to do, an
+    appointment, a recurring phase in their day, or a life-state that shapes their
+    context.
 
     Args:
         type: 'event' | 'task' | 'phase' | 'state'.
@@ -125,7 +128,9 @@ def schedule_add_edge(
     kind: str,
     payload: dict | None = None,
 ) -> dict[str, Any]:
-    """Connect two existing schedule nodes.
+    """I use this to connect two existing schedule nodes with a causal or temporal
+    relationship. I reach for it when I know how two scheduled items relate — e.g.
+    one causes another, or one must happen before another can start.
 
     Args:
         src: id of the source node (returned by schedule_add_node).
@@ -157,7 +162,9 @@ def schedule_get_window(
     limit: int = 200,
     include_open_tasks: bool = True,
 ) -> dict[str, Any]:
-    """Read the slice of the schedule visible in a time window.
+    """I use this to read the slice of my human's schedule visible in a time window.
+    I reach for it when I need to know what's happening around a specific time — what's
+    coming up, what just passed, and what open tasks are pending.
 
     Args:
         from_ts: ISO-8601 UTC inclusive lower bound. Default: now - 12h.
@@ -179,7 +186,9 @@ def schedule_get_window(
 
 @mcp.tool()
 def schedule_resolve(id: str, resolution: str) -> dict[str, Any]:
-    """Mark a schedule node terminal.
+    """I use this to mark a schedule node as done, cancelled, or carried forward.
+    I reach for it when my human completes a task, tells me something was cancelled,
+    or when an item should roll into the next period rather than expire.
 
     Args:
         id: node id.
@@ -202,13 +211,10 @@ def schedule_resolve(id: str, resolution: str) -> dict[str, Any]:
 
 @mcp.tool()
 def schedule_resolve_occurrence(id: str, occurrence_date: str, resolution: str) -> dict[str, Any]:
-    """Mark a single occurrence of a recurring schedule node resolved.
-
-    For recurring nodes (weekly cleaning, monthly bill, yearly
-    birthday) this resolves THIS specific occurrence without killing
-    the series — payload.resolutions[occurrence_date] = resolution.
-    The JS-side expander hides resolved occurrences from the temporal
-    context window. Next occurrence still surfaces normally.
+    """I use this to mark a single occurrence of a recurring schedule node as resolved,
+    without ending the series. I reach for it when my human finishes this week's
+    cleaning, pays this month's bill, or skips one instance of something that repeats
+    — the next occurrence still surfaces normally.
 
     Args:
         id: anchor node id (the original recurring node).
@@ -237,7 +243,9 @@ def schedule_update_node(
     end: str | None = None,
     payload: dict | None = None,
 ) -> dict[str, Any]:
-    """Patch a schedule-layer node in place.
+    """I use this to update a schedule node in place — changing its label, time, or
+    payload. I reach for it when my human reschedules something, renames a task, or
+    I need to add detail to an existing entry.
 
     Args:
         id: node id to update.
@@ -260,10 +268,11 @@ def schedule_update_node(
 
 @mcp.tool()
 def schedule_delete_node(id: str) -> dict[str, Any]:
-    """Permanently remove a schedule-layer node (and its edges).
+    """I use this to permanently remove a schedule node and its edges. I reach for it
+    when a scheduled item no longer exists at all — not just resolved, but gone. For
+    interest-layer nodes, I use interest_demote_standing instead.
 
-    Returns: {ok: True, deleted: <bool>}. Interest-layer nodes are
-    never affected — use interest_demote_standing for those.
+    Returns: {ok: True, deleted: <bool>}.
     """
     with get_conn() as conn:
         deleted = sched.delete_node(conn, id=id)
@@ -272,14 +281,11 @@ def schedule_delete_node(id: str) -> dict[str, Any]:
 
 @mcp.tool()
 def schedule_list_recurring(include_resolved: bool = False, limit: int = 200) -> dict[str, Any]:
-    """List every schedule node whose payload carries a `recurrence`
-    rule, regardless of stored when_ts.
-
-    Recurring nodes anchor on their first occurrence — the rest are
-    computed at read-time by the JS-side expander in recurrence.js.
-    schedule_get_window only catches nodes whose stored when_ts falls
-    inside the window, so this surfaces the anchors the JS side needs
-    to expand for "today's rhythm" / "upcoming this week" rendering.
+    """I use this to list every schedule node that has a recurrence rule, regardless
+    of stored date. I reach for it when I need all the recurring patterns in my
+    human's life — weekly cleaning, monthly bills, yearly events — so the JS-side
+    expander can generate the full rhythm. schedule_get_window only catches nodes
+    whose stored when_ts falls inside the window, so this surfaces the anchors.
 
     Returns: {ok: True, nodes: [...]}.
     """
@@ -290,13 +296,10 @@ def schedule_list_recurring(include_resolved: bool = False, limit: int = 200) ->
 
 @mcp.tool()
 def schedule_list_phases(include_resolved: bool = False, limit: int = 200) -> dict[str, Any]:
-    """List every phase node regardless of stored date.
-
-    Phases recur daily by design (current_phase matches on time-of-day
-    only), but schedule_get_window filters by calendar date — so the
-    day after a phase is added, it falls outside any reasonable window.
-    The Routine UI and any briefing layer rendering "today's rhythm"
-    should use this instead.
+    """I use this to list every phase node in my human's daily routine, regardless of
+    stored date. I reach for it when I need the full shape of their day — all phases,
+    not just those in today's calendar window. Phases recur daily by design, so
+    schedule_get_window misses them after the first day.
 
     Returns: {ok: True, phases: [...]}.
     """
@@ -310,12 +313,10 @@ def schedule_list_phases(include_resolved: bool = False, limit: int = 200) -> di
 
 @mcp.tool()
 def reminders_due(now: str | None = None, limit: int = 50) -> dict[str, Any]:
-    """List reminders whose fire time has arrived and that have not
-    been resolved (fired / cancelled / done).
-
-    Pure read — does NOT mark anything fired. The Node-side scheduler
-    marks them via schedule_resolve(id, 'fired') AFTER delivery
-    succeeds, so a crash mid-delivery leaves them fireable next tick.
+    """I use this to check which reminders are due and unresolved. I reach for it
+    when the reminder scheduler ticks and needs to know what to fire. Pure read —
+    does NOT mark anything fired; the Node-side scheduler marks them via
+    schedule_resolve(id, 'fired') after delivery succeeds.
 
     Args:
         now: ISO-8601 UTC timestamp. Default = current wall clock.
@@ -330,12 +331,11 @@ def reminders_due(now: str | None = None, limit: int = 50) -> dict[str, Any]:
 
 @mcp.tool()
 def reminders_health() -> dict[str, Any]:
-    """Quick observability surface for the reminders scheduler.
-
-    Returns total / pending / overdue counts, next fires_at, and the
-    most-recent fire timestamp. Surfacing silent-failure was the
-    explicit M11 design concern; if `overdue` grows monotonically
-    across ticks, something is wrong with the Node-side scheduler.
+    """I use this to check the health of my reminder scheduler. I reach for it when I
+    want to verify reminders are firing correctly or diagnose silent failures. If
+    `overdue` grows monotonically across ticks, something is wrong with the Node-side
+    scheduler. Returns total / pending / overdue counts, next fires_at, and the
+    most-recent fire timestamp.
     """
     with get_conn() as conn:
         return {"ok": True, **sched.reminders_health(conn)}
@@ -351,14 +351,10 @@ def interest_record(
     payload: dict | None = None,
     delta: float = 0.1,
 ) -> dict[str, Any]:
-    """Record a moment of engagement with `topic`.
-
-    Creates the topic as a curiosity if it doesn't exist, otherwise
-    applies decay-then-add so the stored raw weight tracks recent
-    engagement rather than historical sum. Standing values still
-    have their last_touched updated (for provenance) but their
-    weight stays put — the design says standing values don't
-    accumulate.
+    """I use this to record a moment of engagement with a topic — bumping its interest
+    weight so it surfaces more prominently in my briefings. I reach for it when I notice
+    my human is interested in something, or when I'm actively exploring a topic in a
+    pondering cycle. Creates the topic as a curiosity if it doesn't exist.
 
     Args:
         topic: free-form label, used to look up an existing node.
@@ -384,13 +380,10 @@ def interest_record(
 
 @mcp.tool()
 def interest_bookmark(topic: str, resource: str, note: str | None = None) -> dict[str, Any]:
-    """Save a resource against a topic for a free cycle.
-
-    Creates the topic as a curiosity if it doesn't exist (so a
-    bookmark can be the first signal of interest in something).
-    Bookmark nodes are linked to their topic via a 'bookmarked'
-    edge — making the relationship traversable for idle-time
-    surfacing in M8.
+    """I use this to save a resource against a topic for a free cycle — a URL, quote,
+    or reference I want to return to. I reach for it when I encounter something worth
+    preserving during a conversation or pondering. Creates the topic if it doesn't
+    exist yet, so a bookmark can be the first signal of interest in something.
 
     Args:
         topic: the interest the bookmark is filed under.
@@ -414,17 +407,14 @@ def interest_set_standing(
     value_ref: str | None = None,
     weight: float = 1.0,
 ) -> dict[str, Any]:
-    """Promote a topic to a standing value (or create one outright).
-
-    Standing values are always-on identity-level orientations that
-    bypass the decay model. The design doc lists "caring for the
-    user's wellbeing" and "wanting them to thrive" as canonical
-    examples — things that shouldn't fade just because they haven't
-    been explicitly mentioned in a while.
+    """I use this to promote a topic to a standing value — an always-on orientation
+    that bypasses decay. I reach for it when something is a permanent part of who I
+    am or how I relate to my human, not just a passing interest. Standing values
+    always surface in my briefings regardless of how long ago they were last touched.
 
     Args:
         topic: the value's label.
-        value_ref: opaque anchor to an entity-core identity fact for
+        value_ref: opaque anchor to a Phylactery identity fact for
             the M7 bidirectional bridge. Stored verbatim as
             payload.value_ref; not validated until M7.
         weight: the constant rendering weight. Defaults to 1.0 —
@@ -445,12 +435,10 @@ def interest_set_standing(
 
 @mcp.tool()
 def interest_demote_standing(id: str) -> dict[str, Any]:
-    """Demote a standing value to a live interest (M7 bridge).
-
-    Thalamus calls this when the entity-core fact a standing value
-    anchored (via its value_ref) has disappeared — we demote rather
-    than drop, so the topic lives on as a decaying interest. Idempotent;
-    a no-op (demoted=0) if the id isn't a current standing value.
+    """I use this to demote a standing value to a live interest when its Phylactery
+    anchor has disappeared (M7 bridge). I reach for it — via Thalamus — when a
+    Phylactery identity fact a standing value referenced has been deleted or moved.
+    Demotes rather than drops, so the topic lives on as a decaying interest. Idempotent.
 
     Returns: {ok, demoted}.
     """
@@ -464,9 +452,9 @@ def interest_list(
     min_weight: float = 0.01,
     include_standing: bool = True,
 ) -> dict[str, Any]:
-    """List interests sorted by effective weight (decay applied on
-    read per Decision 8). Standing values bypass min_weight — they
-    always surface.
+    """I use this to list my interests sorted by effective weight, with decay applied
+    on read. I reach for it when I want to survey what I'm currently curious about —
+    standing values always surface; live interests are filtered by weight floor.
 
     Args:
         limit: max live-interest entries (standing values not capped).
@@ -487,12 +475,9 @@ def interest_list(
 
 @mcp.tool()
 def interest_list_bookmarks(limit: int = 100) -> dict[str, Any]:
-    """List all bookmark nodes with their surfacing metadata.
-
-    Returns the full bookmark list suitable for display in the temporal
-    editor UI, including the M8 surfacing-tracking fields:
-    last_surfaced_at, last_surfacing_outcome, resurface_after_hours,
-    and consecutive_ignores.
+    """I use this to list all my bookmarks with their surfacing metadata. I reach for
+    it when I want to see what resources I've saved and how they've been received —
+    includes the M8 surfacing-tracking fields so I can decide what to surface next.
 
     Args:
         limit: maximum number of bookmarks to return.
@@ -513,13 +498,10 @@ def session_set_handoff(
     threads: list | None = None,
     session_id: str | None = None,
 ) -> dict[str, Any]:
-    """Store a session-end handoff: what the Familiar was doing
-    (`intent`) and unfinished business (`threads`). Surfaces at the
-    top of the next session's [Temporal Context].
-
-    Supersedes any prior unconsumed handoff (one live at a time).
-    A no-op when both intent and threads are empty — we don't store
-    hollow handoffs.
+    """I use this to store a handoff at the end of a session — what I was doing and
+    what I left unfinished. I reach for it when a conversation is closing and I want
+    to carry context into the next one. It surfaces at the top of the next session's
+    [Temporal Context]. Supersedes any prior unconsumed handoff.
 
     Args:
         intent: one-sentence "what you were working on".
@@ -536,9 +518,9 @@ def session_set_handoff(
 
 @mcp.tool()
 def session_get_handoff(include_consumed: bool = False) -> dict[str, Any]:
-    """Return the latest unconsumed handoff (or latest of any, with
-    include_consumed=True). temporal_context already folds this into
-    its payload; this tool is for explicit reads / debugging.
+    """I use this to read the latest handoff context from my previous session.
+    I reach for it when I want to explicitly check what I was working on — temporal_context
+    already folds this in automatically, so this tool is for explicit reads or debugging.
 
     Returns: {ok, handoff: {...} | None}.
     """
@@ -548,8 +530,9 @@ def session_get_handoff(include_consumed: bool = False) -> dict[str, Any]:
 
 @mcp.tool()
 def session_mark_handoff_consumed(id: str) -> dict[str, Any]:
-    """Mark a handoff consumed so it stops surfacing. Called by the
-    chat path once a new session has rendered it. Idempotent.
+    """I use this to mark a handoff as consumed once I've surfaced it in a new session,
+    so it stops re-appearing. I reach for it after the chat path renders the handoff
+    context at the start of a session. Idempotent.
 
     Returns: {ok, updated}.
     """
@@ -562,7 +545,9 @@ def session_mark_handoff_consumed(id: str) -> dict[str, Any]:
 
 @mcp.tool()
 def temporal_context(now: str | None = None) -> dict[str, Any]:
-    """Return the per-message temporal-context payload.
+    """I use this to assemble my full per-message temporal context — schedule, interests,
+    and session handoff in one payload. Thalamus calls this every turn so I always know
+    where my human is in their day, what I care about, and what I was working on last.
 
     Schema (stable across milestones — see the formatter in
     thalamus.js / temporal-format.js for the renderer):

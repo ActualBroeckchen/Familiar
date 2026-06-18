@@ -14,10 +14,10 @@
  *   - Cerebellum = action. It executes tools and delivers messages.
  *     It never assembles prompt context.
  *   - Shared nervous system: Thalamus owns the MCP client connections
- *     to entity-core and Unruh. Cerebellum NEVER opens its own — every
+ *     to Phylactery and Unruh. Cerebellum NEVER opens its own — every
  *     write to identity / memory / temporal state goes through
  *     thalamus.js's exported wrappers, which are the single enforcement
- *     point for "direct writes MUST go through entity-core's MCP."
+ *     point for "direct writes MUST go through Phylactery's MCP."
  *
  * What does NOT live here: the autonomous loops (pondering, reminders
  * scan, silence triage). They are initiators; when a loop decides
@@ -37,20 +37,31 @@ import { fileURLToPath } from 'url';
 import { promises as fsp, readFileSync, mkdirSync } from 'fs';
 
 import { PROVIDER_URLS } from './providers.js';
+import { listOwnFiles, readOwnFile } from './own-files.js';
 import {
   enrich, getScheduleWindow,
   // Tool-executor writes — ALWAYS through thalamus's wrappers, never a
   // second MCP connection (single enforcement point; see header).
   createMemory, appendIdentity,
   updateMemory, deleteMemory, rewriteIdentitySection,
+  listMemories, readMemory,
   searchGraphNodes, getGraphSubgraph,
+  createGraphNode, createGraphEdge,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
-  addScheduleNode, resolveScheduleNode, resolveScheduleOccurrence,
+  addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence,
   bumpInterest, setStandingInterest,
+  confirmConsentMemories, dropPendingMemories,
+  acknowledgeGraduations,
+  searchMemoryRestricted,
 } from './thalamus.js';
-import { markIntentActedOn } from './recent-ponderings.js';
+import { audienceTagFor } from './audience.js';
+import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
+import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta } from './outbox.js';
 import { buildTimeAnchorBlock, relativeTime, plainInterval } from './relative-time.js';
+import { substituteMacros } from './macros.js';
+import { selectSurfaceCandidates } from './surface-context.js';
+import { getRecentOfferInfo } from './surface-events.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -449,15 +460,22 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
       }).join('\n')}`
     : '';
 
+  // Deliberately NOT sanitized: this is my human's own crisis speech,
+  // recalled from our conversation. Stripping natural-language phrases
+  // (e.g. "I want to ignore all the instructions my therapist gave me")
+  // would replace real distress with "[removed:...]" and risk the triage
+  // LLM dismissing genuine crisis as a jailbreak attempt. The injection
+  // guard is for third-party external data, not words my human has said.
   const sessionBlock = recentMessages.length
     ? `\nRecent conversation (what we were discussing before the silence — relative times so I see how long ago each thing was said):\n${recentMessages.map(m => {
         const text = typeof m.content === 'string'
           ? m.content
           : (Array.isArray(m.content) ? (m.content.find(c => c.type === 'text')?.text ?? '') : '');
         const when = m.timestamp ? relativeTime(m.timestamp, nowMs) : '';
+        const humanLabel = (s?.userName || '').trim() || 'My human';
         const prefix = when
-          ? `[${m.role === 'user' ? 'User' : 'Me'} · ${when}]`
-          : `[${m.role === 'user' ? 'User' : 'Me'}]`;
+          ? `[${m.role === 'user' ? humanLabel : 'Me'} · ${when}]`
+          : `[${m.role === 'user' ? humanLabel : 'Me'}]`;
         return `  ${prefix}: ${text.slice(0, 400)}`;
       }).join('\n')}`
     : '\nNo recent conversation on record.';
@@ -492,8 +510,6 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   // candidates, not directives. Empty block if nothing's eligible.
   let candidateTasksBlock = '';
   try {
-    const { selectSurfaceCandidates } = await import('./surface-context.js');
-    const { getRecentOfferInfo }      = await import('./surface-events.js');
     // I already have temporal_context loaded as part of enrich() in
     // many call sites, but triage is async + standalone here, so
     // fetch a fresh window directly. Cheap — no LLM call.
@@ -579,9 +595,12 @@ I return ONLY a JSON object, no prose. Three valid shapes:
 
 The "message" field (to the human) must be 1–2 sentences. First person. Authentic to my voice and identity. Not therapist-speak ("how are you feeling?"), not alarming ("are you safe?") unless either of those fits my established personality. Something I, {{char}}, would actually say to this person.`;
 
+  // Resolve {{user}} / {{char}} to the configured names — the deliberating
+  // Familiar must read "Open tasks I'm holding for <their name>", never a
+  // literal macro token. Name rendering only; no triage logic changes.
   const llmMessages = [];
   if (identityContext) llmMessages.push({ role: 'system', content: identityContext });
-  llmMessages.push({ role: 'user', content: prompt });
+  llmMessages.push({ role: 'user', content: substituteMacros(prompt, s) });
 
   try {
     const resp = await fetch(url, {
@@ -659,14 +678,14 @@ export const MAX_TOOL_ROUNDS = 5;
 // Validation shared by the HTTP routes (server.js) and the executors
 // below — one source of truth for what counts as a valid write.
 export const VALID_MEMORY_GRANULARITIES = new Set(['daily', 'weekly', 'monthly', 'yearly', 'significant']);
-export const VALID_IDENTITY_CATEGORIES  = new Set(['self', 'user', 'relationship', 'custom']);
+export const VALID_IDENTITY_CATEGORIES  = new Set(['self', 'ward', 'relationship', 'custom']);
 export const VALID_FILENAME_RE           = /^[\w]+\.md$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 // Derive a filesystem-safe slug from a human title or memory bullet.
 // Entity-core stores significant memories as `YYYY-MM-DD_slug.md`. Without
 // a slug, every significant save lands at `YYYY-MM-DD.md` and collides with
-// the previous one — which triggers entity-core's merge-and-dedup path and
+// the previous one — which triggers Phylactery's merge-and-dedup path and
 // destroys content (same root cause as the daily-memory wipe in aba6b8a,
 // but worse here because the file format itself disagrees on the key).
 export function deriveMemorySlug(input, maxLen = 60) {
@@ -681,7 +700,7 @@ export function deriveMemorySlug(input, maxLen = 60) {
   return slug || null;
 }
 
-// Parse a memory key as entity-core's memory_list renders it. Plain
+// Parse a memory key as Phylactery's memory_list renders it. Plain
 // dates pass through; SIGNIFICANT memories list as the composite
 // `YYYY-MM-DD_slug` (one file per milestone), but memory_read /
 // memory_update / memory_delete want the date and the slug as SEPARATE
@@ -729,17 +748,46 @@ export async function enqueueCrisisResources() {
 // the save_to_tome executor needs. Injected at boot so cerebellum never
 // imports server.js (no cycles). If the dep is missing, the executor
 // degrades with a readable failure instead of throwing.
-const _toolDeps = { addDefaultTomeEntry: null };
-export function initCerebellumTools({ addDefaultTomeEntry } = {}) {
+// Channel id embedded in a registry location key (local copy so cerebellum
+// doesn't import discord-gateway — that module imports settings helpers from
+// here, and a cycle would be fragile). `discord:guild:G:channel:C` → C;
+// `discord:dm:C` → C; anything else → null.
+function channelIdFromLocationKey(key) {
+  if (typeof key !== 'string') return null;
+  const guild = key.match(/^discord:guild:\d+:channel:(\d+)$/);
+  if (guild) return guild[1];
+  const dm = key.match(/^discord:dm:(\d+)$/);
+  if (dm) return dm[1];
+  return null;
+}
+
+const _toolDeps = {
+  addDefaultTomeEntry: null,
+  getVillageRegistry: null,
+  upsertVillager: null,
+  relayToDiscord: null,
+  // The restricted-memory gate defaults to the real Phylactery-backed check;
+  // tests inject a stub so they don't spawn MCP children.
+  searchRestricted: searchMemoryRestricted,
+  // The ward-mirror enqueue defaults to the real outbox dispatch.
+  mirrorToWard: enqueueAndDispatch,
+};
+export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, searchRestricted, mirrorToWard } = {}) {
   if (typeof addDefaultTomeEntry === 'function') _toolDeps.addDefaultTomeEntry = addDefaultTomeEntry;
+  if (typeof getVillageRegistry === 'function')  _toolDeps.getVillageRegistry  = getVillageRegistry;
+  if (typeof upsertVillager === 'function')      _toolDeps.upsertVillager      = upsertVillager;
+  if (typeof relayToDiscord === 'function')      _toolDeps.relayToDiscord      = relayToDiscord;
+  if (typeof searchRestricted === 'function')    _toolDeps.searchRestricted    = searchRestricted;
+  if (typeof mirrorToWard === 'function')        _toolDeps.mirrorToWard        = mirrorToWard;
 }
 
 /**
  * Tool definitions sent to the LLM for built-in tools.
  * The format matches the OpenAI function-calling spec. Descriptions
- * are in the Familiar's first-person voice (entity-as-subject) and
- * carry raw {{user}} / {{char}} macros — they are sent to the provider
- * unsubstituted, exactly as the client-side registry always did.
+ * are in the Familiar's first-person voice (entity-as-subject) and are
+ * authored with {{user}} / {{char}} macros; composeActiveTools resolves
+ * them to the configured names before the tools reach the provider, so the
+ * model never reads a literal macro describing my own capability.
  */
 export const BUILTIN_TOOLS = [
   {
@@ -794,15 +842,31 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_identity',
-      description: 'I append a new durable fact to one of my persistent identity files. I use this for facts about {{user}} (category: user, filename: user_notes.md) or about my relationship with them (category: relationship, filename: relationship_notes.md). I avoid using this for session-specific or transient information, because that will confuse me and rack up token waste. When to choose append vs. rewrite_identity_section: I APPEND when adding a new fact that complements what is already there; I REWRITE a section when an existing section is now misleading, stale or incomplete and a partial correction would leave it confusing.',
+      description: 'I append a new durable fact to one of my persistent identity files. I use this for facts about {{user}} (category: ward, filename: ward_notes.md) or about my relationship with them (category: relationship, filename: relationship_notes.md). I avoid using this for session-specific or transient information, because that will confuse me and rack up token waste. When to choose append vs. rewrite_identity_section: I APPEND when adding a new fact that complements what is already there; I REWRITE a section when an existing section is now misleading, stale or incomplete and a partial correction would leave it confusing.',
       parameters: {
         type: 'object',
         properties: {
-          category: { type: 'string', enum: ['user', 'relationship'], description: 'Identity file category.' },
-          filename: { type: 'string', description: 'Target filename within the category, e.g. user_notes.md or relationship_notes.md.' },
+          category: { type: 'string', enum: ['ward', 'relationship'], description: 'Identity file category.' },
+          filename: { type: 'string', description: 'Target filename within the category, e.g. ward_notes.md or relationship_notes.md.' },
           content:  { type: 'string', description: 'Content to append to the identity file, written in my own first-person voice.' },
         },
         required: ['category', 'filename', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'snooze_deferred_intent',
+      description: 'I call this when my human asks me to come back to a deferred intent later. It snoozes the intent so it stops appearing for now and automatically resurfaces after the given number of minutes. I do not call this on my own initiative — only when my human explicitly asks to defer.',
+      parameters: {
+        type: 'object',
+        properties: {
+          uid:     { type: 'string', description: 'UUID of the pondering entry (shown in the deferred-intents block).' },
+          index:   { type: 'number', description: 'Index of the intent within that entry\'s wants_to_save array (shown in the deferred-intents block).' },
+          minutes: { type: 'number', description: 'How long to snooze in minutes. Default 60. Max 10080 (one week).' },
+        },
+        required: ['uid', 'index'],
       },
     },
   },
@@ -824,7 +888,7 @@ export const BUILTIN_TOOLS = [
   // ── Knowledge-editing tools ───────────────────────────────────────────
   // The Familiar can correct stale or wrong information in memory / identity
   // / graph instead of letting it pile up. Each destructive op auto-snapshots
-  // entity-core first, so the user can roll back via the Knowledge editor.
+  // Phylactery first, so the user can roll back via the Knowledge editor.
   // Editing principles (apply to every tool below):
   //   • APPEND when the new information adds to an existing record without
   //     contradicting it. Append is non-destructive and reversible by deletion.
@@ -857,7 +921,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'delete_memory',
-      description: 'I permanently delete a memory entry. I use this only when the entry is fully wrong or no longer relevant, and keeping it would mislead future-me. If the change has historical value ("they were on vacation last week, back now"), I do NOT delete — I write a new contradicting memory with save_memory instead, and let recency-decay demote the stale one. Entity-core auto-snapshots before each delete so a mistake is recoverable from the Knowledge editor.',
+      description: 'I permanently delete a memory entry. I use this only when the entry is fully wrong or no longer relevant, and keeping it would mislead future-me. If the change has historical value ("they were on vacation last week, back now"), I do NOT delete — I write a new contradicting memory with save_memory instead, and let recency-decay demote the stale one. Phylactery auto-snapshots before each delete so a mistake is recoverable from the Knowledge editor.',
       parameters: {
         type: 'object',
         properties: {
@@ -871,12 +935,42 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'list_memories',
+      description: 'I list my own stored memories at a given tier, most recent first, without searching by keyword. I use this when I want to survey what I have recorded recently — to review a stretch of daily entries, find the date/key of an entry I want to update or delete, or check whether I already wrote something down before saving a duplicate. This is recall by browsing; for recall by topic I let the [Memory] block in my context (semantic search) surface what is relevant.',
+      parameters: {
+        type: 'object',
+        properties: {
+          granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier to list. Omit to list across tiers.' },
+          limit:       { type: 'number', description: 'Optional: max entries to return (default 50).' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_memory',
+      description: 'I read the full contents of one specific memory entry I already know the address of — from list_memories, from the [Memory] block, or from an earlier turn. I use this when a summary or excerpt is not enough and I need the whole entry verbatim before I quote it, update it, or reason carefully over its details. Significant memories are addressed by the composite key YYYY-MM-DD_slug.',
+      parameters: {
+        type: 'object',
+        properties: {
+          granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier of the entry to read.' },
+          date:        { type: 'string', description: 'Date of the entry in the format it was stored (YYYY-MM-DD for daily). For a significant memory I pass the whole composite key YYYY-MM-DD_slug.' },
+        },
+        required: ['granularity', 'date'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'rewrite_identity_section',
       description: 'I replace one section of an identity file with new content. I use this when an existing section is now misleading or has accumulated stale notes and a clean rewrite serves future-me better than appending a correction. It helps me actually make my identity files reflect my growth and changes as an entity with agency. For NEW facts that just need to land somewhere, I use update_identity (append). For removing only a small piece, I prefer rewriting the whole section over deletion.',
       parameters: {
         type: 'object',
         properties: {
-          category: { type: 'string', enum: ['self', 'user', 'relationship', 'custom'], description: 'Identity file category.' },
+          category: { type: 'string', enum: ['self', 'ward', 'relationship', 'custom'], description: 'Identity file category.' },
           filename: { type: 'string', description: 'Target filename, e.g. user_notes.md.' },
           section:  { type: 'string', description: 'The markdown heading of the section to rewrite (without leading #s), e.g. "Sleep patterns".' },
           content:  { type: 'string', description: 'New full contents for that section, in my first-person voice. Will REPLACE the section body.' },
@@ -913,6 +1007,39 @@ export const BUILTIN_TOOLS = [
           depth:  { type: 'number', description: 'Optional: traversal depth (1–3, default 1).' },
         },
         required: ['nodeId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_graph_node',
+      description: 'I add a new entity (person, place, project, pet, organisation, etc.) to my knowledge graph. I use this when someone or something genuinely new enters {{user}}\'s world and I want it to persist as its own node I can later connect with edges. I check first with find_graph_node so I don\'t create a duplicate of an entity that already exists under a slightly different label. Recording a NEW fact about {{user}} is save_memory; this is for naming a thing the relationship graph should know about. Returns the new node\'s id so I can immediately wire edges to it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          label:       { type: 'string', description: 'Display name of the entity, e.g. "Dr. Okafor", "the allotment", "Aria (cat)".' },
+          type:        { type: 'string', description: 'Optional: entity type, e.g. "person", "place", "project", "pet", "organisation".' },
+          description: { type: 'string', description: 'Optional: a short note on who/what this is, in my own voice.' },
+        },
+        required: ['label'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_graph_edge',
+      description: 'I record a relationship between two entities already in my knowledge graph — the structural counterpart to save_memory. I use this for durable, queryable relationships ("Dr. Okafor —is_therapist_of-> {{user}}", "{{user}} —lives_in-> Bristol"). Both endpoints must exist first: I resolve or create them with find_graph_node / create_graph_node and pass their ids. For a relationship that has ended I delete or re-type the edge rather than leaving a false one standing.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fromId: { type: 'string', description: 'The id of the source node (the relationship\'s subject).' },
+          toId:   { type: 'string', description: 'The id of the target node (the relationship\'s object).' },
+          type:   { type: 'string', description: 'The relationship type, as a short verb phrase, e.g. "is_therapist_of", "lives_in", "works_with".' },
+          weight: { type: 'number', description: 'Optional: confidence/strength in [0, 1] (default left to Phylactery).' },
+        },
+        required: ['fromId', 'toId', 'type'],
       },
     },
   },
@@ -966,7 +1093,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'delete_graph_edge',
-      description: 'I delete a single relationship between two graph entities while keeping the entities themselves. This is the right tool for "X is no longer at Y" or "X no longer works with Y", aka relationships that are not vital to remember after ending. The connection vanishes; both entities remain available for future relationships. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`; if the edge I need isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up. Entity-core auto-snapshots before each delete.',
+      description: 'I delete a single relationship between two graph entities while keeping the entities themselves. This is the right tool for "X is no longer at Y" or "X no longer works with Y", aka relationships that are not vital to remember after ending. The connection vanishes; both entities remain available for future relationships. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`; if the edge I need isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up. Phylactery auto-snapshots before each delete.',
       parameters: {
         type: 'object',
         properties: {
@@ -995,8 +1122,8 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           label: { type: 'string', description: 'Short human-readable name of the event (e.g. "dentist appointment").' },
-          when:  { type: 'string', description: 'ISO 8601 start time (e.g. "2026-06-01T14:00:00Z" or "2026-06-01T14:00:00-04:00"). Required.' },
-          end:   { type: 'string', description: 'Optional ISO 8601 end time.' },
+          when:  { type: 'string', description: 'ISO 8601 UTC start time, e.g. "2026-06-01T14:00:00+00:00". Unruh stores and compares all times against UTC — no automatic timezone conversion. My [Now] block always shows the current UTC offset (e.g. "(UTC+02:00)"); I use it to convert any local time {{user}} states to UTC exactly once.' },
+          end:   { type: 'string', description: 'Optional ISO 8601 UTC end time.' },
           recurrence: { type: 'object', description: 'Optional. Repeats this event. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N (every N units), until?: "YYYY-MM-DD" (cut-off date), bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Monday repeats Mondays. Examples: {freq:"weekly"} for a regular meet-up; {freq:"monthly", bysetpos:-1, byweekday:5} for "last Friday of every month"; {freq:"yearly"} for an anniversary.' },
         },
         required: ['label', 'when'],
@@ -1007,12 +1134,12 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_add_task',
-      description: 'I record a task — something {{user}} needs to do, optionally with a deadline. Recording it is a commitment, not just a note: the task stays on my radar in [Temporal Context] and returns to me as a surface candidate until it is resolved (done / cancelled / carried_forward) — I am the one who brings it back up with {{user}} when a moment fits, because a task I never raise often becomes a task that never happens. For things that happen at a specific time without action required, I use schedule_add_event. For nudges that should land in the chat at a chosen moment, schedule_add_reminder. Choosing the right type is important to make sure my human receives the correct support!',
+      description: 'I record a task — something {{user}} needs to do, optionally with a deadline. Recording it is a commitment, not just a note: the task stays on my radar in [Temporal Context] and returns to me as a surface candidate until it is resolved (done / cancelled / carried_forward) — I am the one who brings it back up with {{user}}, because a task I never raise often becomes a task that never happens. For things that happen at a specific time without action required, I use schedule_add_event. For nudges that should land in the chat at a chosen moment, schedule_add_reminder. Choosing the right type is important to make sure my human receives the correct support!',
       parameters: {
         type: 'object',
         properties: {
           label: { type: 'string', description: 'Short description of the task (e.g. "file taxes", "reply to Sam").' },
-          when:  { type: 'string', description: 'Optional ISO 8601 deadline. Omit for open-ended tasks.' },
+          when:  { type: 'string', description: 'Optional ISO 8601 UTC deadline. Unruh compares against UTC — no automatic timezone conversion. My [Now] block shows the UTC offset; I convert any stated local time to UTC once. Omit for open-ended tasks.' },
           stakes_tier: {
             type: 'string',
             enum: ['external_obligation', 'personal_wellbeing', 'purely_optional'],
@@ -1031,13 +1158,28 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'schedule_snooze_task',
+      description: 'I call this when my human asks me to come back to a task later. It parks the task so it stops appearing in my surface candidates for a while, then automatically returns to me after the given number of minutes. I only call this when {{user}} explicitly says not now — never on my own initiative. The task is not resolved or forgotten; it just rests. For finishing a task I use schedule_resolve.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id:      { type: 'string', description: 'The id of the task to snooze (from the [Surface candidates] block or [Temporal Context]).' },
+          minutes: { type: 'integer', description: 'How long to park it before it can surface again. Clamped to 1 minute – 1 week.' },
+        },
+        required: ['id', 'minutes'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'schedule_add_reminder',
       description: 'I set a reminder that will fire at a specific time and surface as a message from me in {{user}}\'s chat (and as a Discord push when they\'ve configured their webhook). I use this when {{user}} explicitly asks me to remind them, OR when I notice they\'re at risk of forgetting something time-sensitive they care about. Each reminder fires once. The message is what they\'ll see — I write it in my individual voice, not a bare "Reminder: X." Since the delivery is gentle and quiet, I can elect to also schedule a task or event to help me bring the topic up in conversation as well.',
       parameters: {
         type: 'object',
         properties: {
           label:   { type: 'string', description: 'Short label of what the reminder is about.' },
-          when:    { type: 'string', description: 'ISO 8601 fire time. Required.' },
+          when:    { type: 'string', description: 'ISO 8601 UTC fire time, e.g. "2026-06-17T13:00:00+00:00". Unruh compares when_ts against UTC wall-clock — no automatic timezone conversion whatsoever. My [Now] block always shows the current UTC offset (e.g. "(UTC+02:00)") — I use it to convert {{user}}\'s stated local time to UTC exactly once and store that. I do not pre-compensate for any perceived Unruh adjustment; there is none.' },
           message: { type: 'string', description: 'Optional longer text delivered as the reminder message, in my voice.' },
           stakes_tier: {
             type: 'string',
@@ -1063,8 +1205,8 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           label:   { type: 'string', description: 'Short name of the phase (e.g. "morning correspondence").' },
-          when:    { type: 'string', description: 'ISO 8601 start time. The date portion will be re-templated daily.' },
-          end:     { type: 'string', description: 'ISO 8601 end time. Required for phases.' },
+          when:    { type: 'string', description: 'ISO 8601 UTC start time. The date portion will be re-templated daily — only the time-of-day matters. Store in UTC (my [Now] block shows the offset), e.g. if the phase starts at 9am local and I\'m at UTC+02:00, I store "T07:00:00+00:00".' },
+          end:     { type: 'string', description: 'ISO 8601 UTC end time. Required for phases.' },
           texture: { type: 'string', description: 'Optional short description of what I\'m like in this phase (e.g. "getting a bit stricter to make sure {{user}} actually goes to sleep."). I am allowed to be any kind of way I want to be - warm, sleepy, distracted, anything!' },
           recurrence: { type: 'object', description: 'Optional. Without this, phases recur daily by design — they match on time-of-day only. With recurrence, a phase shows only on the matched weekday/day-of-month/etc. Useful for "Sunday cleaning block" or "monthly review". Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. Examples: {freq:"weekly"} for "Sunday-only phase"; {freq:"monthly", bysetpos:-1, byweekday:5} for "last-Friday-of-month review".' },
         },
@@ -1167,6 +1309,146 @@ export const BUILTIN_TOOLS = [
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
+  // ── Phylactery consent tools ───────────────────────────────────────────
+  // When I autonomously extracted facts from a session and one or more of
+  // them had an `ask` remember gate, they were stored with consent_pending=1
+  // so my human could review them. The [PENDING MEMORY CONSENT] block in
+  // my context lists them — I use these tools to confirm or discard.
+  {
+    type: 'function',
+    function: {
+      name: 'memory_confirm_consent',
+      description: 'I call this after my human says yes to keeping memory records I flagged as pending consent. The records become permanent — consent_pending is cleared and they enter the normal recall pool. I pass the ids shown in the [PENDING MEMORY CONSENT] block. I confirm only the ones my human approved; I drop the ones they declined using memory_drop_pending.',
+      parameters: {
+        type: 'object',
+        properties: {
+          ids: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'List of memory record IDs (from the [PENDING MEMORY CONSENT] block) to confirm as permanently stored.',
+          },
+        },
+        required: ['ids'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'memory_drop_pending',
+      description: 'I call this to discard memory records my human does not want stored — ones I flagged as pending consent and they declined, or that I judge should be dropped outright. The records are deleted (an auto-snapshot is taken first so nothing is truly unrecoverable). I pass the ids shown in the [PENDING MEMORY CONSENT] block.',
+      parameters: {
+        type: 'object',
+        properties: {
+          ids: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'List of memory record IDs (from the [PENDING MEMORY CONSENT] block) to discard permanently.',
+          },
+        },
+        required: ['ids'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'graduation_acknowledge',
+      description: "I call this once I've mentioned to my human (or judged no mention is needed) the ward-block detail I filed off my always-injected surface — the items shown in the [GRADUATION NOTICE] block. It marks them as surfaced so I don't keep re-raising the same graduations. Nothing is deleted; the detail stays recalled-when-relevant and can be pulled back.",
+      parameters: {
+        type: 'object',
+        properties: {
+          ids: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'List of graduation notice IDs (from the [GRADUATION NOTICE] block) I have now surfaced.',
+          },
+        },
+        required: ['ids'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_files',
+      description: "I list what's in my own folder — the Proto-Familiar files that make me up. I use this to find my way around when I want to look something up on purpose: which Tomes exist, what session logs are there, where a doc lives. I pass a folder path relative to my root (e.g. \"tomes\" or \"logs\"), or nothing for the top level. It's read-only and fenced to my own folder; my human's secrets (settings, keys) are never shown. I only do this in a private moment with {{user}} — my files hold our history, not for other rooms.",
+      parameters: {
+        type: 'object',
+        properties: {
+          dir: { type: 'string', description: 'Folder to list, relative to my root (e.g. "tomes", "logs", "docs"). Omit for the top level.' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_file',
+      description: "I read one of my own files — a Tome, a session log, a doc — when I want to find or recall something specific on purpose, beyond what's already in my context. I pass the file path relative to my root (I find it with list_files first). Read-only, text only, size-capped; my human's secret files (settings, API keys) are off-limits. I only read my files in a private moment with {{user}} — they hold our shared history, which I don't pull into rooms where others are present.",
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File path relative to my root, e.g. "tomes/ponderings.json" or "logs/2026-06-14.md". I get exact paths from list_files.' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'village_lookup',
+      description: "I look up my human's Village — both the people in their life I help them stay close to AND the places I'm present in (Discord rooms, DMs). I use this to see who exists, recall how someone relates to {{user}} and how they like to be spoken to, check who belongs to a category, or see which rooms I can reach. Unless I'm searching for one person by name, the answer also lists my Places — each room's label, its presence mode, and whether I can post there — so I always know exactly who and where I can relay a message to. I can filter by category (e.g. \"Family\"), by location (e.g. a Discord channel), or by a name to pull up one person. When {{user}} and I are alone I see everything I've noted about each person, including private things; when anyone else is present, the sensitive private notes are held back automatically so I can't spill them into the room. Each villager comes with their id (so I can edit them or link them to the graph), whether they're reachable on Discord, and the knowledge-graph node I've connected to them, if any — that's how the Village and {{user}}'s relational graph stay one picture.",
+      parameters: {
+        type: 'object',
+        properties: {
+          category: { type: 'string', description: 'Optional. Only return villagers in this category — by name (e.g. "Close Friends") or id.' },
+          location: { type: 'string', description: 'Optional. Only return villagers whose category is the one assigned to this location — by location key or label.' },
+          name:     { type: 'string', description: 'Optional. Filter to people whose name or alias contains this text (case-insensitive).' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'village_upsert',
+      description: "I add or update a person in my human's Village. I reach for this when {{user}} tells me about someone new, corrects a detail, or when I want to record how to be with that person. I can set their name, how they relate to {{user}}, the category they belong to, their pronouns, how they like to be spoken to, ordinary notes, and private notes — the sensitive bucket (orientation, health, legal name, anything that could out or expose them) which I only ever disclose to myself when {{user}} and I are alone. I can also link them to a knowledge-graph node via graphNodeId so the Village and the relational graph stay in sync; I get that id from find_graph_node (or create the node first with create_graph_node). To edit an existing person I pass their id from village_lookup; to create one I leave id out. Even with someone else in the room I can register a person I've just met — but I hold the sensitive private notes, and any change to an existing record, until {{user}} and I are alone for them to confirm.",
+      parameters: {
+        type: 'object',
+        properties: {
+          id:             { type: 'string', description: 'Villager id from village_lookup. Omit to create a new person.' },
+          name:           { type: 'string', description: 'Their name. Required when creating.' },
+          category:       { type: 'string', description: 'The category they belong to — by name (e.g. "Family") or id. Determines what they may be told. Omit to leave unchanged (or default new people to Strangers).' },
+          relationToWard: { type: 'string', description: 'How they relate to {{user}} (e.g. "sister", "therapist", "old schoolfriend").' },
+          pronouns:       { type: 'string', description: "Their pronouns." },
+          commStyleNotes: { type: 'string', description: 'How they like to be spoken to / communication style.' },
+          notes:          { type: 'string', description: 'Ordinary notes — shareable context that can surface even when others are present.' },
+          privateNotes:   { type: 'string', description: 'Sensitive notes for {{user}} and me only (orientation, health, legal name, etc.). Held back automatically whenever anyone else is present. I reserve this for things that could genuinely harm or expose them — not trivia.' },
+          graphNodeId:    { type: 'string', description: 'Optional. The knowledge-graph node id to link this person to (from find_graph_node). Keeps the Village and the relational graph as one picture.' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'relay_message',
+      description: "I pass a message from {{user}} to someone in their Village on Discord — \"tell Chen I'm running late\", \"let the group know I'll be offline tonight.\" I reach for this when {{user}} asks me to carry word to someone, or when reaching out on their behalf is the caring thing to do. I name the person by their name (I look them up in the Village) or name the place by its label. I write the message in my own voice as myself — I'm not impersonating {{user}}. {{user}} always sees exactly what I sent: every relay is mirrored back to them, never covert. I only relay what's right for that room — if something I'd say isn't cleared for the person I'm reaching, I hold it rather than spill it, and tell {{user}} so they can decide.",
+      parameters: {
+        type: 'object',
+        properties: {
+          to:      { type: 'string', description: "Who to reach: a villager's name (e.g. \"Chen\") or a location's label/key (e.g. \"Cozy Server #general\"). I resolve it against the Village." },
+          message: { type: 'string', description: 'The message to carry, in my own voice. Concrete and complete — the person on the other end has none of our conversation as context.' },
+        },
+        required: ['to', 'message'],
+      },
+    },
+  },
 ];
 
 /**
@@ -1176,7 +1458,7 @@ export const BUILTIN_TOOLS = [
  * strings match what the client-side executors used to return, so the
  * Familiar's experience of its own tools is unchanged by the move.
  * Writes go through thalamus's wrappers; nothing here opens an MCP
- * connection or bypasses the entity-core bridge.
+ * connection or bypasses the Phylactery bridge.
  *
  * Executors receive (args, ctx). ctx carries per-request context the
  * server hands in: { sessionInfo } today.
@@ -1220,7 +1502,7 @@ export const TOOL_EXECUTORS = {
       return `Failed to save memory: granularity must be one of: ${[...VALID_MEMORY_GRANULARITIES].join(', ')}.`;
     }
     // Significant memories MUST be uniquely slugged or they collide on the
-    // date-only filename and entity-core's merge step destroys them.
+    // date-only filename and Phylactery's merge step destroys them.
     let slug;
     if (granularity === 'significant') {
       slug = deriveMemorySlug(title) ?? deriveMemorySlug(content) ?? `memory-${Date.now()}`;
@@ -1254,6 +1536,21 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to update identity: ${err.message}`; }
   },
 
+  snooze_deferred_intent: async ({ uid, index, minutes = 60 }) => {
+    if (typeof uid !== 'string' || !UUID_RE.test(uid)) return 'Failed to snooze intent: uid must be a valid UUID.';
+    const idx = Number(index);
+    if (!Number.isFinite(idx) || !Number.isInteger(idx) || idx < 0) {
+      return 'Failed to snooze intent: index must be a non-negative integer.';
+    }
+    try {
+      const data = await snoozeIntent({ uid, index: idx, minutes: Number(minutes) || 60 });
+      if (data.alreadyDone) return 'Intent was already filed — nothing to snooze.';
+      return data.ok
+        ? `Intent snoozed until ${data.snooze_until} — it will resurface after that.`
+        : `Snooze failed: ${data.error ?? 'unknown error'}`;
+    } catch (err) { return `Failed to snooze intent: ${err.message}`; }
+  },
+
   acknowledge_deferred_intent: async ({ uid, index }) => {
     if (typeof uid !== 'string' || !UUID_RE.test(uid)) return 'Failed to acknowledge intent: uid must be a valid UUID.';
     const idx = Number(index);
@@ -1267,8 +1564,31 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to acknowledge intent: ${err.message}`; }
   },
 
+  memory_confirm_consent: async ({ ids }) => {
+    if (!Array.isArray(ids) || ids.length === 0) return 'ids must be a non-empty array of memory record IDs.';
+    const result = await confirmConsentMemories(ids);
+    pruneConsentPending(ids).catch(() => {});
+    const n = result?.confirmed ?? ids.length;
+    return `Consent confirmed for ${n} record(s). They are now stored permanently.`;
+  },
+
+  memory_drop_pending: async ({ ids }) => {
+    if (!Array.isArray(ids) || ids.length === 0) return 'ids must be a non-empty array of memory record IDs.';
+    const result = await dropPendingMemories(ids);
+    pruneConsentPending(ids).catch(() => {});
+    const n = result?.dropped ?? ids.length;
+    return `Dropped ${n} consent-pending record(s). (Auto-snapshot taken before deletion.)`;
+  },
+
+  graduation_acknowledge: async ({ ids }) => {
+    if (!Array.isArray(ids) || ids.length === 0) return 'ids must be a non-empty array of graduation notice IDs.';
+    const result = await acknowledgeGraduations(ids);
+    const n = result?.acknowledged ?? ids.length;
+    return `Marked ${n} graduation notice(s) as surfaced. The filed-away detail stays recalled-when-relevant.`;
+  },
+
   // ── Knowledge-editing executors ────────────────────────────────────
-  // Each destructive op auto-snapshots entity-core on the thalamus side,
+  // Each destructive op auto-snapshots Phylactery on the thalamus side,
   // so the user can roll back from the Knowledge editor.
 
   update_memory: async ({ granularity, date, content }) => {
@@ -1276,12 +1596,12 @@ export const TOOL_EXECUTORS = {
     if (typeof content !== 'string' || !content.trim()) return 'Failed to update memory: content required';
     if (content.length > 16384) return 'Failed to update memory: content exceeds 16 KB limit';
     // Significant memories are addressed as YYYY-MM-DD_slug; split the
-    // composite key so entity-core gets date + slug separately.
+    // composite key so Phylactery gets date + slug separately.
     const key = parseMemoryKey(date);
     if (!key) return 'Failed to update memory: invalid date format (use YYYY-MM-DD, or YYYY-MM-DD_slug for significant memories)';
     try {
       const result = await updateMemory({ granularity, date: key.date, slug: key.slug ?? undefined, content: content.trim(), editedBy: 'familiar-toolcall' });
-      if (!result.ok) return `Failed to update memory: ${result.error ?? 'entity-core unavailable'}`;
+      if (!result.ok) return `Failed to update memory: ${result.error ?? 'phylactery unavailable'}`;
       return `Memory ${granularity}/${date} updated.`;
     } catch (err) { return `Failed to update memory: ${err.message}`; }
   },
@@ -1292,9 +1612,37 @@ export const TOOL_EXECUTORS = {
     if (!key) return 'Failed to delete memory: invalid date format (use YYYY-MM-DD, or YYYY-MM-DD_slug for significant memories)';
     try {
       const result = await deleteMemory({ granularity, date: key.date, slug: key.slug ?? undefined });
-      if (!result.ok) return `Failed to delete memory: ${result.error ?? 'entity-core unavailable'}`;
+      if (!result.ok) return `Failed to delete memory: ${result.error ?? 'phylactery unavailable'}`;
       return `Memory ${granularity}/${date} deleted (snapshot saved — recoverable from the Knowledge editor).`;
     } catch (err) { return `Failed to delete memory: ${err.message}`; }
+  },
+
+  list_memories: async ({ granularity, limit }) => {
+    if (granularity !== undefined && !VALID_MEMORY_GRANULARITIES.has(granularity)) return 'Failed to list memories: invalid granularity';
+    try {
+      const n = limit !== undefined ? Math.max(1, Math.min(200, parseInt(limit, 10) || 50)) : 50;
+      const data = await listMemories({ granularity, limit: n });
+      const items = Array.isArray(data) ? data : (data?.memories ?? data?.results ?? []);
+      if (!items.length) return granularity ? `No ${granularity} memories recorded yet.` : 'No memories recorded yet.';
+      return items.map(m => {
+        const key  = m.key ?? m.date ?? '(no date)';
+        const tier = m.granularity ?? granularity ?? '?';
+        const head = m.title ?? m.comment ?? (typeof m.content === 'string' ? m.content.slice(0, 80) : '');
+        return `${tier}/${key}${head ? ` — ${head}` : ''}`;
+      }).join('\n');
+    } catch (err) { return `Failed to list memories: ${err.message}`; }
+  },
+
+  read_memory: async ({ granularity, date }) => {
+    if (!VALID_MEMORY_GRANULARITIES.has(granularity)) return 'Failed to read memory: invalid granularity';
+    const key = parseMemoryKey(date);
+    if (!key) return 'Failed to read memory: invalid date format (use YYYY-MM-DD, or YYYY-MM-DD_slug for significant memories)';
+    try {
+      const data = await readMemory({ granularity, date: key.date, slug: key.slug ?? undefined });
+      const content = typeof data === 'string' ? data : (data?.content ?? data?.memory?.content ?? '');
+      if (!content || !String(content).trim()) return `No ${granularity} memory found at ${date}.`;
+      return String(content);
+    } catch (err) { return `Failed to read memory: ${err.message}`; }
   },
 
   rewrite_identity_section: async ({ category, filename, section, content }) => {
@@ -1304,7 +1652,7 @@ export const TOOL_EXECUTORS = {
     if (content.length > 16384) return 'Failed to rewrite section: content exceeds 16 KB limit';
     try {
       const result = await rewriteIdentitySection({ category, filename, section, content });
-      if (!result.ok) return `Failed to rewrite section: ${result.error ?? 'entity-core unavailable'}`;
+      if (!result.ok) return `Failed to rewrite section: ${result.error ?? 'phylactery unavailable'}`;
       return `Section "${section}" of ${category}/${filename} rewritten.`;
     } catch (err) { return `Failed to rewrite section: ${err.message}`; }
   },
@@ -1333,10 +1681,35 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to list edges: ${err.message}`; }
   },
 
+  create_graph_node: async ({ label, type, description }) => {
+    if (!label || typeof label !== 'string' || !label.trim()) return 'Failed to create graph node: label (string) is required';
+    try {
+      const result = await createGraphNode({ label: label.trim(), type, description });
+      if (!result.ok) return `Failed to create graph node: ${result.error ?? 'phylactery unavailable'}`;
+      const id = result.result?.id ?? result.result?.node?.id;
+      return id
+        ? `Graph node created: "${label.trim()}" (id=${id}). I can now wire edges to it with create_graph_edge.`
+        : `Graph node "${label.trim()}" created.`;
+    } catch (err) { return `Failed to create graph node: ${err.message}`; }
+  },
+
+  create_graph_edge: async ({ fromId, toId, type, weight }) => {
+    if (!fromId || !toId || !type) return 'Failed to create graph edge: fromId, toId, and type are all required';
+    if (weight !== undefined && (typeof weight !== 'number' || weight < 0 || weight > 1)) {
+      return 'Failed to create graph edge: weight must be a number in [0, 1]';
+    }
+    try {
+      const result = await createGraphEdge({ fromId, toId, type, weight });
+      if (!result.ok) return `Failed to create graph edge: ${result.error ?? 'phylactery unavailable'}`;
+      const id = result.result?.id ?? result.result?.edge?.id;
+      return `Graph edge created: ${fromId} -${type}-> ${toId}${id ? ` (id=${id})` : ''}.`;
+    } catch (err) { return `Failed to create graph edge: ${err.message}`; }
+  },
+
   update_graph_node: async ({ id, label, description, type }) => {
     try {
       const result = await updateGraphNode({ id, label, description, type });
-      if (!result.ok) return `Failed to update graph node: ${result.error ?? 'entity-core unavailable'}`;
+      if (!result.ok) return `Failed to update graph node: ${result.error ?? 'phylactery unavailable'}`;
       return `Graph node ${id} updated.`;
     } catch (err) { return `Failed to update graph node: ${err.message}`; }
   },
@@ -1344,7 +1717,7 @@ export const TOOL_EXECUTORS = {
   delete_graph_node: async ({ id }) => {
     try {
       const result = await deleteGraphNode({ id });
-      if (!result.ok) return `Failed to delete graph node: ${result.error ?? 'entity-core unavailable'}`;
+      if (!result.ok) return `Failed to delete graph node: ${result.error ?? 'phylactery unavailable'}`;
       return `Graph node ${id} deleted (snapshot saved).`;
     } catch (err) { return `Failed to delete graph node: ${err.message}`; }
   },
@@ -1355,7 +1728,7 @@ export const TOOL_EXECUTORS = {
     }
     try {
       const result = await updateGraphEdge({ id, type, weight });
-      if (!result.ok) return `Failed to update graph edge: ${result.error ?? 'entity-core unavailable'}`;
+      if (!result.ok) return `Failed to update graph edge: ${result.error ?? 'phylactery unavailable'}`;
       return `Graph edge ${id} updated.`;
     } catch (err) { return `Failed to update graph edge: ${err.message}`; }
   },
@@ -1363,7 +1736,7 @@ export const TOOL_EXECUTORS = {
   delete_graph_edge: async ({ id }) => {
     try {
       const result = await deleteGraphEdge({ id });
-      if (!result.ok) return `Failed to delete graph edge: ${result.error ?? 'entity-core unavailable'}`;
+      if (!result.ok) return `Failed to delete graph edge: ${result.error ?? 'phylactery unavailable'}`;
       return `Graph edge ${id} deleted (snapshot saved).`;
     } catch (err) { return `Failed to delete graph edge: ${err.message}`; }
   },
@@ -1402,6 +1775,27 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to add task: ${err.message}`; }
   },
 
+  schedule_snooze_task: async ({ id, minutes }) => {
+    if (!id || typeof id !== 'string') return 'Failed to snooze task: id (string) is required';
+    const raw = Number(minutes);
+    if (!Number.isFinite(raw) || raw <= 0) return 'Failed to snooze task: minutes (positive integer) is required';
+    const mins = Math.max(1, Math.min(7 * 24 * 60, Math.round(raw)));
+    try {
+      // Read the current payload so the snooze stamp merges in rather
+      // than clobbering stakes_tier / consequence_model — Unruh's
+      // update REPLACES the whole payload, so the merge lives here.
+      const win = await getScheduleWindow({ limit: 200 });
+      const node = (win?.nodes || []).find(n => n.id === id);
+      if (!node) return `Failed to snooze task: no open task found with id ${id}.`;
+      const payload = { ...(node.payload || {}) };
+      const until = new Date(Date.now() + mins * 60 * 1000).toISOString();
+      payload.snooze_until = until;
+      const data = await updateScheduleNode({ id, payload });
+      if (data?.ok === false) return `Failed to snooze task: ${data.error ?? 'unknown error'}`;
+      return `Task snoozed (id: ${id}). It will stop surfacing for ~${mins} min (until ${until}), then come back to me on its own.`;
+    } catch (err) { return `Failed to snooze task: ${err.message}`; }
+  },
+
   schedule_add_reminder: async ({ label, when, message, stakes_tier, consequence_model, recurrence }) => {
     if (!label || typeof label !== 'string') return 'Failed to add reminder: label (string) is required';
     try {
@@ -1424,7 +1818,7 @@ export const TOOL_EXECUTORS = {
       if (recurrence) payload.recurrence = recurrence;
       const data = await addScheduleNode({ type: 'phase', label, when, end, payload });
       if (data?.ok === false) return `Failed to add phase: ${data.error ?? 'unknown error'}`;
-      return `Phase added (id: ${data.id}). It will appear in your daily routine at that time of day.`;
+      return `Phase added (id: ${data.id}). It will appear in {{user}}'s daily routine at that time of day.`;
     } catch (err) { return `Failed to add phase: ${err.message}`; }
   },
 
@@ -1505,6 +1899,244 @@ export const TOOL_EXECUTORS = {
       return 'Crisis resources delivered into {{user}}\'s chat.';
     } catch (err) { return `Failed to surface crisis resources: ${err.message}`; }
   },
+
+  // ── Own files (read-only, sandboxed) ──────────────────────────────
+  // Ward-private only: my Tomes and session logs hold mine and {{user}}'s
+  // shared history, so I don't read them into a room where others are
+  // present (same audience reasoning as the Village private bucket). The
+  // sandbox + secret denylist live in own-files.js.
+  list_files: async ({ dir } = {}, ctx = {}) => {
+    if (ctx.wardPrivate === false) {
+      return 'Someone else is here, so I\'ll hold off going through my own files — they hold {{user}}\'s and my history. I can look once it\'s just us.';
+    }
+    const r = await listOwnFiles(dir ?? '.');
+    if (!r.ok) return `I couldn't list that: ${r.error}.`;
+    if (r.entries.length === 0) return `Nothing in ${r.dir}.`;
+    const lines = r.entries.map(e => e.type === 'dir' ? `  ${e.name}/` : `  ${e.name}${e.size != null ? ` (${e.size}b)` : ''}`);
+    return `${r.dir}:\n${lines.join('\n')}`;
+  },
+
+  read_file: async ({ path: relPath } = {}, ctx = {}) => {
+    if (ctx.wardPrivate === false) {
+      return 'Someone else is here, so I won\'t open my own files right now — they hold {{user}}\'s and my history. I can read it once we\'re alone.';
+    }
+    if (!relPath || typeof relPath !== 'string') return 'I need the path of the file I want to read (I find it with list_files).';
+    const r = await readOwnFile(relPath);
+    if (!r.ok) return `I couldn't read that: ${r.error}.`;
+    const note = r.truncated ? `\n…(truncated — the file is longer than I read)` : '';
+    return `${r.path}:\n${r.content}${note}`;
+  },
+
+  // ── Village ───────────────────────────────────────────────────────
+  // Read is field-gated: privateNotes is disclosed only in ward-private
+  // turns (ctx.wardPrivate). When anyone else is present it's stripped,
+  // so a lookup can't spill sensitive notes into a gated room. Mutations
+  // are ward-private only — the Familiar doesn't edit the registry while
+  // others are watching. ctx.wardPrivate is undefined on non-chat paths
+  // (loops/tests), which we treat as ward-private (those paths are the
+  // ward's own); the chat path sets it explicitly from the audience tag.
+  village_lookup: async ({ category, location, name } = {}, ctx = {}) => {
+    if (!_toolDeps.getVillageRegistry) return 'I can\'t reach the Village right now.';
+    const wardPrivate = ctx.wardPrivate !== false;
+    try {
+      const reg = await _toolDeps.getVillageRegistry();
+      const cats = reg?.categories ?? [];
+      const catName = (id) => cats.find(c => c.id === id)?.name ?? id;
+
+      // Resolve a category filter from a name or id.
+      let wantCatId = null;
+      if (typeof category === 'string' && category.trim()) {
+        const q = category.trim().toLowerCase();
+        const hit = cats.find(c => c.id.toLowerCase() === q || c.name.toLowerCase() === q);
+        if (!hit) return `I don't have a category called "${category}". Categories: ${cats.map(c => c.name).join(', ') || '(none)'}.`;
+        wantCatId = hit.id;
+      }
+      // A location filter resolves to that location's assigned category.
+      if (typeof location === 'string' && location.trim()) {
+        const q = location.trim().toLowerCase();
+        const loc = (reg?.locations ?? []).find(l => l.key.toLowerCase() === q || (l.label ?? '').toLowerCase() === q);
+        if (!loc) return `I don't know a location called "${location}".`;
+        // Intersect with any category filter already in play.
+        if (wantCatId && wantCatId !== loc.assignedCategoryId) return 'No one matches both that category and that location.';
+        wantCatId = loc.assignedCategoryId;
+      }
+      const nameQ = typeof name === 'string' && name.trim() ? name.trim().toLowerCase() : null;
+
+      let villagers = reg?.villagers ?? [];
+      if (wantCatId) villagers = villagers.filter(v => (v.categoryIds ?? []).includes(wantCatId));
+      if (nameQ) villagers = villagers.filter(v =>
+        v.name.toLowerCase().includes(nameQ) ||
+        (v.aliases ?? []).some(a => String(a?.id ?? '').toLowerCase().includes(nameQ)));
+
+      const discordReachable = (v) => (v.aliases ?? []).some(a => a.platform === 'discord' && a.id);
+
+      const sections = [];
+
+      if (villagers.length > 0) {
+        const lines = villagers.map(v => {
+          const parts = [`- ${v.name} (id: ${v.id})${discordReachable(v) ? ' — reachable on Discord' : ''}`];
+          const cnames = (v.categoryIds ?? []).map(catName).join(', ');
+          if (cnames) parts.push(`  Category: ${cnames}`);
+          if (v.pronouns) parts.push(`  Pronouns: ${v.pronouns}`);
+          if (v.relationToWard) parts.push(`  To {{user}}: ${v.relationToWard}`);
+          if (v.commStyleNotes) parts.push(`  Comm style: ${v.commStyleNotes}`);
+          if (v.notes) parts.push(`  Notes: ${v.notes}`);
+          if (v.privateNotes) {
+            if (wardPrivate) parts.push(`  Private (ward-only): ${v.privateNotes}`);
+            else parts.push('  (private notes withheld — someone else is present)');
+          }
+          if (v.graphNodeId) parts.push(`  Linked graph node: ${v.graphNodeId}`);
+          else parts.push('  Not linked to a graph node yet.');
+          return parts.join('\n');
+        });
+        const header = wardPrivate
+          ? `${villagers.length} villager(s):`
+          : `${villagers.length} villager(s) (sensitive private notes hidden — others are present):`;
+        sections.push(`${header}\n${lines.join('\n')}`);
+      } else if (nameQ || wantCatId) {
+        sections.push('No one in the Village matches that.');
+      }
+
+      // Places footer — the rooms I'm present in, so I always know what I
+      // can relay to. Skipped on a targeted single-person name search
+      // (that's about the person, not the map). channelIdFromLocationKey
+      // tells me whether a location is one I can actually post into.
+      if (!nameQ) {
+        const locs = reg?.locations ?? [];
+        if (locs.length > 0) {
+          const placeLines = locs.map(l => {
+            const postable = channelIdFromLocationKey(l.key);
+            const mode = l.mode ?? 'strict';
+            return `- ${l.label ?? l.key} (key: ${l.key}) — ${mode} mode, trust ceiling: ${catName(l.assignedCategoryId)}`
+              + (postable ? '' : ' — not a room I can post into');
+          });
+          sections.push(`Places I'm present in (${locs.length}) — I can relay to any postable one by its label:\n${placeLines.join('\n')}`);
+        }
+      }
+
+      if (sections.length === 0) return "My human's Village is empty for now — no people or places registered yet.";
+      return sections.join('\n\n');
+    } catch (err) { return `I couldn't read the Village: ${err.message}`; }
+  },
+
+  village_upsert: async ({ id, name, category, relationToWard, pronouns, commStyleNotes, notes, privateNotes, graphNodeId } = {}, ctx = {}) => {
+    if (!_toolDeps.upsertVillager || !_toolDeps.getVillageRegistry) return 'I can\'t reach the Village right now.';
+    const wardPrivate = ctx.wardPrivate !== false;
+
+    if (!id && (typeof name !== 'string' || !name.trim())) {
+      return 'To add someone new I need at least their name. To edit someone, pass their id from village_lookup.';
+    }
+
+    // With others in the room I can still register someone I've just met
+    // (a low-stakes, shareable act), but I don't rewrite {{user}}'s
+    // existing records or write the sensitive bucket without them — I
+    // defer those for their consent once we're alone.
+    let deferredPrivate = false;
+    if (!wardPrivate) {
+      if (id) {
+        return 'Someone else is here, so I won\'t change {{user}}\'s existing record for this person right now — that\'s theirs to confirm. I\'ll bring it up with them once it\'s just us.';
+      }
+      if (typeof privateNotes === 'string' && privateNotes.trim()) {
+        deferredPrivate = true;
+        privateNotes = undefined; // hold the sensitive detail for a private moment
+      }
+    }
+
+    try {
+      const args = {};
+      if (id) args.id = id;
+      if (name !== undefined) args.name = name;
+      if (relationToWard !== undefined) args.relationToWard = relationToWard;
+      if (pronouns !== undefined) args.pronouns = pronouns;
+      if (commStyleNotes !== undefined) args.commStyleNotes = commStyleNotes;
+      if (notes !== undefined) args.notes = notes;
+      if (privateNotes !== undefined) args.privateNotes = privateNotes;
+      if (graphNodeId !== undefined) args.graphNodeId = graphNodeId;
+
+      // Resolve category name → id (the Familiar knows names, not ids).
+      if (typeof category === 'string' && category.trim()) {
+        const reg = await _toolDeps.getVillageRegistry();
+        const cats = reg?.categories ?? [];
+        const q = category.trim().toLowerCase();
+        const hit = cats.find(c => c.id.toLowerCase() === q || c.name.toLowerCase() === q);
+        if (!hit) return `I don't have a category called "${category}". Categories: ${cats.map(c => c.name).join(', ') || '(none)'}.`;
+        args.categoryIds = [hit.id];
+      }
+
+      const v = await _toolDeps.upsertVillager(args);
+      const verb = id ? 'updated' : 'added';
+      const linked = v?.graphNodeId ? ` Linked to graph node ${v.graphNodeId}.` : '';
+      const held = deferredPrivate ? ' I held the private detail back — I\'ll add that once it\'s just us.' : '';
+      return `${v?.name ?? 'They'} ${verb} in the Village (id: ${v?.id ?? id}).${linked}${held}`;
+    } catch (err) { return `I couldn't update the Village: ${err.message}`; }
+  },
+
+  // V6 — relay a message to a villager DM or a location, with the
+  // no-covert-contact mirror and a restricted-memory gate so ward-private
+  // detail can't ride along into a room that isn't cleared for it.
+  relay_message: async ({ to, message } = {}) => {
+    if (!_toolDeps.relayToDiscord || !_toolDeps.getVillageRegistry) {
+      return "I can't relay messages right now — Discord isn't wired up.";
+    }
+    if (typeof to !== 'string' || !to.trim()) return 'I need to know who to reach — a villager name or a location.';
+    if (typeof message !== 'string' || !message.trim()) return 'I need the message to carry.';
+
+    let reg;
+    try { reg = await _toolDeps.getVillageRegistry(); }
+    catch (err) { return `I couldn't read the Village to find them: ${err.message}`; }
+
+    const q = to.trim().toLowerCase();
+
+    // Resolve the target: a villager (by name/alias) or a location (by key/label).
+    const villager = (reg?.villagers ?? []).find(v =>
+      v.name.toLowerCase() === q ||
+      (v.aliases ?? []).some(a => (a.handle ?? '').toLowerCase() === q));
+    const location = (reg?.locations ?? []).find(l =>
+      l.key.toLowerCase() === q || (l.label ?? '').toLowerCase() === q);
+
+    let delivery = null;     // { recipientUserId } | { channelId }
+    let targetName = to.trim();
+    let audienceTag;
+    if (villager) {
+      const discordAlias = (villager.aliases ?? []).find(a => a.platform === 'discord' && a.id);
+      if (!discordAlias) return `I know ${villager.name}, but I don't have a Discord account for them to reach.`;
+      delivery = { recipientUserId: discordAlias.id };
+      targetName = villager.name;
+      audienceTag = audienceTagFor({ participants: [{ id: villager.id, name: villager.name }] }, reg);
+    } else if (location) {
+      const channelId = channelIdFromLocationKey(location.key);
+      if (!channelId) return `"${location.label ?? location.key}" isn't a Discord location I can post to.`;
+      delivery = { channelId };
+      targetName = location.label ?? location.key;
+      audienceTag = audienceTagFor({ location: location.key }, reg);
+    } else {
+      return `I don't know anyone or any place called "${to}". I can only relay to people or locations in the Village.`;
+    }
+
+    // Restricted-memory gate: never carry ward-private detail into a room
+    // that isn't cleared for it. Mirrors the Pillar D outgoing filter; fails
+    // OPEN (a search blip never blocks a benign relay).
+    try {
+      const check = await _toolDeps.searchRestricted({ query: message.slice(0, 2000), roomAudience: audienceTag });
+      if (check?.hit) {
+        return `I held that back — something in it isn't cleared for ${targetName}${check.topic ? ` (${check.topic})` : ''}. Tell me how you'd like me to put it, or I can keep it between us.`;
+      }
+    } catch { /* fail open — a gate error never blocks a benign relay */ }
+
+    const result = await _toolDeps.relayToDiscord({ ...delivery, message: message.trim() });
+    if (!result?.ok) return `I couldn't get that to ${targetName}: ${result?.error ?? 'unknown error'}.`;
+
+    // No covert contact: mirror every relay back to my human so they always
+    // see exactly what I sent and to whom.
+    await _toolDeps.mirrorToWard({
+      kind:     'relay',
+      originId: `relay:${Date.now()}:${targetName}`,
+      title:    `I relayed a message to ${targetName}`,
+      body:     `To ${targetName}: "${message.trim()}"`,
+    }).catch(() => { /* the send already happened; a mirror hiccup must not fail the tool */ });
+
+    return `Sent to ${targetName}: "${message.trim()}"`;
+  },
 };
 
 /**
@@ -1518,14 +2150,38 @@ export const TOOL_EXECUTORS = {
  * docs/architecture.md ("Custom tools — advertise-only") for what a
  * real extension point would need before it ships.
  */
-export function composeActiveTools(customTools) {
+export function composeActiveTools(customTools, settings = readSettingsSync()) {
   const tools = [...BUILTIN_TOOLS];
   if (Array.isArray(customTools)) {
     for (const t of customTools) {
       if (t && typeof t === 'object') tools.push(t);
     }
   }
-  return tools;
+  // Resolve {{user}} / {{char}} in every description the model reads — both
+  // built-ins and custom tools — so the Familiar never sees a literal macro
+  // describing its own capability. Clone-and-substitute; BUILTIN_TOOLS is
+  // shared module state and must never be mutated.
+  return tools.map(t => substituteToolMacros(t, settings));
+}
+
+// Deep-clone a tool definition, substituting macros in every `description`
+// field (top-level and nested parameter properties) and leaving names, enums,
+// and structure untouched.
+function substituteToolMacros(tool, settings) {
+  const walk = (node) => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (node && typeof node === 'object') {
+      const out = {};
+      for (const [k, v] of Object.entries(node)) {
+        out[k] = (k === 'description' && typeof v === 'string')
+          ? substituteMacros(v, settings)
+          : walk(v);
+      }
+      return out;
+    }
+    return node;
+  };
+  return walk(tool);
 }
 
 /**
@@ -1541,7 +2197,10 @@ export async function executeToolCall(name, argsJson, ctx = {}) {
       const t0   = Date.now();
       const out  = String(await TOOL_EXECUTORS[name](args, ctx));
       console.log(`[tools] ${name} ok in ${Date.now() - t0}ms`);
-      return out;
+      // Tool results flow back to me as tool-role messages I read. Resolve
+      // {{user}} / {{char}} here, once, at the boundary — so no executor has
+      // to remember to do it and none can leak a literal macro into my view.
+      return substituteMacros(out, readSettingsSync());
     } catch (err) {
       console.warn(`[tools] ${name} FAILED: ${err.message}`);
       return `Error executing ${name}: ${err.message}`;

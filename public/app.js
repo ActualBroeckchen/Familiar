@@ -39,12 +39,22 @@ const PROVIDER_MODELS = {
     'glm-4.7',
     'glm-4.5-air',
   ],
+  // Google AI Studio via its OpenAI-compatible endpoint — bare model ids
+  // (no "models/" prefix needed on that surface).
+  google: [
+    'gemini-2.5-pro',
+    'gemini-2.5-flash',
+    'gemini-2.5-flash-lite',
+    'gemini-2.0-flash',
+    'gemini-2.0-flash-lite',
+  ],
 };
 
 const PROVIDER_DEFAULT_MODEL = {
   nanogpt:      'gpt-4o-mini',
   zai:          'glm-4.7',
   'zai-coding': 'glm-4.7',
+  google:       'gemini-2.5-flash',
 };
 
 // ── ID generation ────────────────────────────────────────────
@@ -145,12 +155,13 @@ const state = {
   streaming:         true,
   temperature:       0.8,
   maxTokens:         2048,
-  userName:          'User',
+  userName:          'My human',
   charName:          'Assistant',
   systemPrompt:      '',
   characterProfile:  '',
   userProfile:       '',
   postHistoryPrompt: '',
+  postHistoryRole:   'system',
   sessionId:               null,   // UUID, created at init or on clear
   sessionStartedAt:        null,   // ISO timestamp
   sessionEndedAt:          null,   // ISO timestamp — set when session is auto-ended
@@ -176,7 +187,7 @@ const state = {
   primaryConnectionId:     null, // id of the active/primary connection
   fallbackConnectionIds:   [],   // ordered ids tried when primary fails/returns empty
   maxEmptyRetries:         2,    // retries per connection when response is empty
-  entityCoreConnectionId:  null, // id of the connection whose API key entity-core uses
+  phylacteryConnectionId:  null, // id of the connection whose API key Phylactery uses
   // ── Prompt-cache tuning ──────────────────────────────────
   // How many messages from the end of the conversation the dynamic
   // thalamus block gets injected at. Static identity stays at the
@@ -205,6 +216,14 @@ const state = {
   ponderingEnabled:        true,
   ponderingIntervalScale:  1,
 
+  // Warm reach-outs (companionship loop). Default-ON: the Familiar
+  // reaches out warmly on its own, not only in crisis. Quiet hours are
+  // a local-time window (start==end disables it). Off via this toggle or
+  // the PROTO_FAMILIAR_WARMTH_DISABLED=1 env var on the server.
+  warmthEnabled:           true,
+  warmthQuietHoursStart:   23,
+  warmthQuietHoursEnd:     8,
+
   // Trusted contacts for silence-triage outreach (M12c). Each entry
   // is { name, channel: 'discord', webhook: 'https://discord.com/api/webhooks/…' }.
   // The triage LLM may *suggest* contacting one of these (by name) when
@@ -220,6 +239,20 @@ const state = {
   // item; the trusted-contact escalation deadline counts from confirmed
   // delivery. Empty = in-app delivery only.
   userDiscordWebhook:      '',
+
+  // Discord presence (Village V4 — gateway bot). The Familiar joins
+  // Discord as a bot: ward DMs get full context, registered villagers
+  // get gated context, guild replies only when @-mentioned. The token
+  // is server-synced so the gateway (which runs server-side) can read it.
+  discordEnabled:    false,
+  discordBotToken:   '',
+  discordWardUserId: '',
+
+  // Session audience (Village Support V2).
+  // Tracks who is physically present during this session so the Familiar
+  // can reference them and (in V3) gate knowledge appropriately.
+  // Ephemeral: not synced to the server, cleared on new session.
+  sessionAudience: { location: null, participants: [] },
 };
 
 // ── Persistence ──────────────────────────────────────────────────
@@ -236,15 +269,17 @@ const state = {
 const SERVER_SYNCED_KEYS = [
   'provider', 'apiKey', 'model', 'streaming', 'temperature', 'maxTokens',
   'userName', 'charName',
-  'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt',
+  'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
   'toolsEnabled', 'customTools',
   'tomeScanDepth', 'tomeRecursive', 'tomeMaxRecursionSteps',
   'tomeCaseSensitive', 'tomeMatchWholeWords',
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
-  'entityCoreConnectionId',
+  'phylacteryConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale',
+  'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
   'trustedContacts', 'userDiscordWebhook',
+  'discordEnabled', 'discordBotToken', 'discordWardUserId',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -320,6 +355,15 @@ function loadPersisted() {
       || state.ponderingIntervalScale < 1
       || state.ponderingIntervalScale > 10) {
     state.ponderingIntervalScale = 1;
+  }
+  if (typeof state.warmthEnabled !== 'boolean') state.warmthEnabled = true;
+  if (!Number.isInteger(state.warmthQuietHoursStart)
+      || state.warmthQuietHoursStart < 0 || state.warmthQuietHoursStart > 23) {
+    state.warmthQuietHoursStart = 23;
+  }
+  if (!Number.isInteger(state.warmthQuietHoursEnd)
+      || state.warmthQuietHoursEnd < 0 || state.warmthQuietHoursEnd > 23) {
+    state.warmthQuietHoursEnd = 8;
   }
   if (!Array.isArray(state.trustedContacts)) state.trustedContacts = [];
   migrateLegacyConnection();
@@ -433,6 +477,13 @@ async function syncSettingsFromServer() {
   for (const k of SERVER_SYNCED_KEYS) {
     if (k in effective) state[k] = effective[k];
   }
+  // Migrate field rename from 0.6.x: entityCoreConnectionId → phylacteryConnectionId.
+  // settings.json written before the rename still has the old key; the server handles
+  // it server-side too, but the UI needs its own copy so the connection picker renders.
+  if (!state.phylacteryConnectionId && effective?.entityCoreConnectionId) {
+    state.phylacteryConnectionId = effective.entityCoreConnectionId;
+    pushSettingsToServer(); // persist the renamed field immediately
+  }
   if (!Array.isArray(state.connections))           state.connections = [];
   if (!Array.isArray(state.fallbackConnectionIds)) state.fallbackConnectionIds = [];
   migrateLegacyConnection();
@@ -534,9 +585,9 @@ function migrateLegacyConnection() {
   state.fallbackConnectionIds = (state.fallbackConnectionIds || [])
     .filter(id => state.connections.find(c => c.id === id))
     .filter(id => id !== state.primaryConnectionId);
-  // Clear the entity-core designation if it points at a missing connection.
-  if (state.entityCoreConnectionId && !state.connections.find(c => c.id === state.entityCoreConnectionId)) {
-    state.entityCoreConnectionId = null;
+  // Clear the Phylactery designation if it points at a missing connection.
+  if (state.phylacteryConnectionId && !state.connections.find(c => c.id === state.phylacteryConnectionId)) {
+    state.phylacteryConnectionId = null;
   }
 }
 
@@ -609,7 +660,7 @@ function saveNewConnection(name) {
 function deleteConnection(id) {
   state.connections = state.connections.filter(c => c.id !== id);
   state.fallbackConnectionIds = state.fallbackConnectionIds.filter(x => x !== id);
-  if (state.entityCoreConnectionId === id) state.entityCoreConnectionId = null;
+  if (state.phylacteryConnectionId === id) state.phylacteryConnectionId = null;
   if (state.primaryConnectionId === id) {
     state.primaryConnectionId = state.connections[0]?.id ?? null;
     const newPrimary = getPrimaryConnection();
@@ -646,20 +697,20 @@ function toggleFallback(id, enabled) {
 }
 
 /**
- * Designate (or clear) the connection whose API key entity-core uses.
+ * Designate (or clear) the connection whose API key Phylactery uses.
  * Single-select: setting this on one connection clears it from any
  * other. Setting it to the currently-designated id clears the
  * designation entirely (so the same toggle button works for both
  * directions). server.js compares old vs new on PUT /api/settings and
- * respawns entity-core when this (or the pointed-at connection's key)
+ * respawns Phylactery when this (or the pointed-at connection's key)
  * changes — so the user sees the new key take effect on the next
  * chat message, no restart required.
  */
-function setEntityCoreConnection(id) {
-  if (state.entityCoreConnectionId === id) {
-    state.entityCoreConnectionId = null;
+function setPhylacteryConnection(id) {
+  if (state.phylacteryConnectionId === id) {
+    state.phylacteryConnectionId = null;
   } else {
-    state.entityCoreConnectionId = id;
+    state.phylacteryConnectionId = id;
   }
   saveSettings();
   renderConnectionsList();
@@ -686,7 +737,7 @@ function renderConnectionsList() {
     const isPrimary  = conn.id === state.primaryConnectionId;
     const fbIdx      = state.fallbackConnectionIds.indexOf(conn.id);
     const isFallback = fbIdx >= 0 && !isPrimary;
-    const isEntityCore = conn.id === state.entityCoreConnectionId;
+    const isEntityCore = conn.id === state.phylacteryConnectionId;
 
     const li = document.createElement('li');
     li.className = 'connection-item' + (isPrimary ? ' is-primary' : '');
@@ -705,7 +756,7 @@ function renderConnectionsList() {
     info.className = 'conn-info';
     const primaryBadge   = isPrimary    ? '<span class="conn-badge">primary</span>' : '';
     const fallbackBadge  = (!isPrimary && isFallback) ? `<span class="conn-badge fb">fallback #${fbIdx + 1}</span>` : '';
-    const entityBadge    = isEntityCore ? '<span class="conn-badge ec">entity-core</span>' : '';
+    const entityBadge    = isEntityCore ? '<span class="conn-badge ec">Phylactery</span>' : '';
     info.innerHTML =
       `<div class="conn-name">${esc(conn.name)}${primaryBadge}${fallbackBadge}${entityBadge}</div>` +
       `<div class="conn-meta">${esc(conn.provider)} / ${esc(conn.model || '—')}</div>`;
@@ -729,22 +780,22 @@ function renderConnectionsList() {
     fbBtn.addEventListener('click', () => toggleFallback(conn.id, !isFallback));
     actions.appendChild(fbBtn);
 
-    // Entity-core designation: single-select across all connections. Tells
-    // the server which API key to pass to the entity-core child process
-    // via ENTITY_CORE_LLM_API_KEY (and ZAI_API_KEY for z.ai providers).
-    // Independent of primary/fallback — you can point entity-core at any
+    // Phylactery designation: single-select across all connections. Tells
+    // the server which API key to pass to the Phylactery child process
+    // via PHYLACTERY_LLM_API_KEY (and ZAI_API_KEY for z.ai providers).
+    // Independent of primary/fallback — you can point Phylactery at any
     // connection regardless of how the chat path uses it.
     const ecBtn = document.createElement('button');
     ecBtn.type = 'button';
-    ecBtn.textContent = isEntityCore ? '✓ entity-core' : '+ entity-core';
+    ecBtn.textContent = isEntityCore ? '✓ Phylactery' : '+ Phylactery';
     ecBtn.title = isEntityCore
-      ? 'Currently the API key source for entity-core (click to clear)'
-      : 'Use this connection’s API key for entity-core';
+      ? 'Currently the API key source for Phylactery (click to clear)'
+      : "Use this connection's API key for Phylactery";
     ecBtn.setAttribute('aria-label', isEntityCore
-      ? `Clear entity-core API-key designation from "${conn.name}"`
-      : `Use "${conn.name}" as entity-core API-key source`);
+      ? `Clear Phylactery API-key designation from "${conn.name}"`
+      : `Use "${conn.name}" as Phylactery API-key source`);
     ecBtn.setAttribute('aria-pressed', isEntityCore ? 'true' : 'false');
-    ecBtn.addEventListener('click', () => setEntityCoreConnection(conn.id));
+    ecBtn.addEventListener('click', () => setPhylacteryConnection(conn.id));
     actions.appendChild(ecBtn);
 
     if (isFallback) {
@@ -903,7 +954,7 @@ async function refreshPreviousSessionEndedAt() {
  */
 function applyNameVars(text) {
   return text
-    .replace(/\{\{user\}\}/gi, state.userName || 'User')
+    .replace(/\{\{user\}\}/gi, state.userName || 'my human')
     .replace(/\{\{char\}\}/gi, state.charName || 'Assistant')
     .replace(/\{\{elapsedTime\}\}/gi, () => {
       const ms = elapsedBetweenUserMessages();
@@ -1034,7 +1085,7 @@ function _buildApiMessagesInner(userInput) {
   if (lore.before_char.length)     pushSeg('lore-before-char', joinLore(lore.before_char));
   if (state.characterProfile.trim()) pushSeg('character-profile', '[Character Profile]\n' + applyNameVars(state.characterProfile.trim()));
   if (lore.after_char.length)      pushSeg('lore-after-char',  joinLore(lore.after_char));
-  if (state.userProfile.trim())    pushSeg('user-profile',     '[User Profile]\n' + applyNameVars(state.userProfile.trim()));
+  if (state.userProfile.trim())    pushSeg('user-profile',     '[Human Profile]\n' + applyNameVars(state.userProfile.trim()));
   if (lore.sys_bottom.length)      pushSeg('lore-sys-bottom',  joinLore(lore.sys_bottom));
 
   if (systemSegments.length)
@@ -1070,13 +1121,14 @@ function _buildApiMessagesInner(userInput) {
   msgs.push({ role: 'user', content: stampContent(userInput, _pendingUserMsgTimestamp) });
 
   // ── Post-history prompt ───────────────────────────────────────
-  // role:'system' rather than role:'user' so it's semantically a
-  // priming directive (not a {{user}} turn), and so the "last
-  // role:'user' in the array" extraction server-side picks up
-  // {{user}}'s actual input. (The chat path also sends an explicit
-  // userMessage field for the same reason — belt-and-suspenders.)
-  if (state.postHistoryPrompt.trim())
-    msgs.push({ role: 'system', content: applyNameVars(state.postHistoryPrompt.trim()) });
+  // Role is user-configurable (default 'system'). The chat path always
+  // sends an explicit `userMessage` field, so the server-side "last
+  // role:'user'" fallback never picks this up regardless of role chosen.
+  if (state.postHistoryPrompt.trim()) {
+    const phr = ['system', 'user', 'assistant'].includes(state.postHistoryRole)
+      ? state.postHistoryRole : 'system';
+    msgs.push({ role: phr, content: applyNameVars(state.postHistoryPrompt.trim()) });
+  }
 
   lastBuildSegments = { systemSegments, atDepthInjections };
   return msgs;
@@ -1425,7 +1477,7 @@ let abortController = null;
 let lastSentMessages = null;
 /** Per-segment provenance for the system message of the last build. See buildApiMessages. */
 let lastBuildSegments = null;
-/** The entity-core block that the server actually prepended to the last request's system message. */
+/** The Phylactery enrichment block that the server actually prepended to the last request's system message. */
 // Last successful response's thalamus envelope, captured per-request:
 //   { static, dynamic, depth, injectedAt }
 // `static` lives at the top of the system message (cacheable prefix);
@@ -1716,18 +1768,22 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
       stream:      true,
       temperature: state.temperature,
       max_tokens:  state.maxTokens,
-      // The Familiar's post-history prompt is also a user-role message
-      // at the end of `messages`, so naively extracting "last user"
-      // server-side picks up the template instead of {{user}}'s actual
-      // text. One request per user message now - the server runs all
-      // tool rounds inside it, so threat scoring / last-activity fire
-      // exactly once.
+      // `userMessage` carries {{user}}'s actual input so the server
+      // never mistakes the post-history prompt for it, regardless of
+      // the role that prompt is sent as. One request per user message —
+      // the server runs all tool rounds inside it, so threat scoring /
+      // last-activity fire exactly once.
       ...(typeof userInput === 'string' && userInput.trim()
           ? { userMessage: userInput }
           : {}),
       // M8: previous user-message timestamp so the server can compute
       // idle duration for bookmark surfacing.
       ...(prevUserMessageAt ? { lastUserMessageAt: prevUserMessageAt } : {}),
+      // V3: session audience for knowledge gating. Only sent when there
+      // are actual participants or a location set.
+      ...((state.sessionAudience?.participants?.length || state.sessionAudience?.location)
+          ? { sessionAudience: state.sessionAudience }
+          : {}),
       ...toolLoopPayload(),
     }),
   });
@@ -1856,7 +1912,10 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
         throw err;
       }
 
-      const { content, pendingMsgs, finalShell } = result;
+      const { content: _rawContent, pendingMsgs, finalShell } = result;
+      // Strip any LLM-echoed timestamps at the commit boundary — once here
+      // keeps state.messages, the copy button, and memorization all clean.
+      const content = stripDisplayTimestamps(_rawContent);
       const trimmed = (content ?? '').trim();
       const usedTools = pendingMsgs.length > 0;
 
@@ -1916,13 +1975,15 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
       stream:      false,
       temperature: state.temperature,
       max_tokens:  state.maxTokens,
-      // See attemptStreamingOnce for why userMessage is sent explicitly:
-      // post-history prompt is also role:'user', so naive server-side
-      // extraction picks the wrong message.
+      // `userMessage` carries {{user}}'s actual input — see
+      // attemptStreamingOnce for the full rationale.
       ...(typeof userInput === 'string' && userInput.trim()
           ? { userMessage: userInput }
           : {}),
       ...(prevUserMessageAt ? { lastUserMessageAt: prevUserMessageAt } : {}),
+      ...((state.sessionAudience?.participants?.length || state.sessionAudience?.location)
+          ? { sessionAudience: state.sessionAudience }
+          : {}),
       ...toolLoopPayload(),
     }),
   });
@@ -2000,7 +2061,8 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
         throw err;
       }
 
-      const { content, pendingMsgs, timestamp } = result;
+      const { content: _rawContent, pendingMsgs, timestamp } = result;
+      const content = stripDisplayTimestamps(_rawContent);
       const trimmed   = (content ?? '').trim();
       const usedTools = pendingMsgs.length > 0;
 
@@ -2149,12 +2211,25 @@ function readSettingsFromUI() {
     const n = parseFloat($('pondering-scale').value);
     state.ponderingIntervalScale = Number.isFinite(n) && n >= 1 && n <= 10 ? n : 1;
   }
-  state.userName          = $('user-name').value.trim() || 'User';
+  if ($('warmth-toggle')) state.warmthEnabled = $('warmth-toggle').checked;
+  if ($('warmth-quiet-start')) {
+    const n = parseInt($('warmth-quiet-start').value, 10);
+    state.warmthQuietHoursStart = Number.isInteger(n) && n >= 0 && n <= 23 ? n : 23;
+  }
+  if ($('warmth-quiet-end')) {
+    const n = parseInt($('warmth-quiet-end').value, 10);
+    state.warmthQuietHoursEnd = Number.isInteger(n) && n >= 0 && n <= 23 ? n : 8;
+  }
+  state.userName          = $('user-name').value.trim() || 'My human';
   state.charName          = $('char-name').value.trim() || 'Assistant';
   state.systemPrompt      = $('system-prompt').value;
   state.characterProfile  = $('char-profile').value;
   state.userProfile       = $('user-profile').value;
   state.postHistoryPrompt = $('post-history-prompt').value;
+  if ($('post-history-role')) {
+    const v = $('post-history-role').value;
+    state.postHistoryRole = ['system', 'user', 'assistant'].includes(v) ? v : 'system';
+  }
   state.toolsEnabled      = $('tools-enabled').checked;
   state.customTools       = $('custom-tools').value;
   const scanEl = $('tome-scan-depth');
@@ -2174,6 +2249,12 @@ function readSettingsFromUI() {
   }
   const udwEl = $('user-discord-webhook');
   if (udwEl) state.userDiscordWebhook = udwEl.value.trim();
+  const denEl = $('discord-enabled');
+  if (denEl) state.discordEnabled = denEl.checked;
+  const dbtEl = $('discord-bot-token');
+  if (dbtEl) state.discordBotToken = dbtEl.value.trim();
+  const dwuEl = $('discord-ward-user-id');
+  if (dwuEl) state.discordWardUserId = dwuEl.value.trim();
   // Keep the primary connection in sync with the live Connection-section fields.
   syncFieldsToPrimaryConnection();
   saveSettings();
@@ -2195,19 +2276,26 @@ function writeSettingsToUI() {
   if ($('handoff-toggle')) setIfNotFocused($('handoff-toggle'), 'checked', state.handoffEnabled !== false);
   if ($('pondering-toggle')) setIfNotFocused($('pondering-toggle'), 'checked', state.ponderingEnabled !== false);
   if ($('pondering-scale'))  setIfNotFocused($('pondering-scale'),  'value',   state.ponderingIntervalScale ?? 1);
+  if ($('warmth-toggle'))      setIfNotFocused($('warmth-toggle'),      'checked', state.warmthEnabled !== false);
+  if ($('warmth-quiet-start')) setIfNotFocused($('warmth-quiet-start'), 'value',   state.warmthQuietHoursStart ?? 23);
+  if ($('warmth-quiet-end'))   setIfNotFocused($('warmth-quiet-end'),   'value',   state.warmthQuietHoursEnd ?? 8);
   setIfNotFocused($('temperature'),     'value',   state.temperature);
   $('temp-display').textContent = state.temperature;
   setIfNotFocused($('max-tokens'),         'value',   state.maxTokens);
   if ($('thalamus-dynamic-depth')) setIfNotFocused($('thalamus-dynamic-depth'), 'value', state.thalamusDynamicDepth ?? 4);
-  setIfNotFocused($('user-name'),          'value',   state.userName ?? 'User');
+  setIfNotFocused($('user-name'),          'value',   state.userName ?? 'My human');
   setIfNotFocused($('char-name'),          'value',   state.charName ?? 'Assistant');
   setIfNotFocused($('system-prompt'),      'value',   state.systemPrompt);
   setIfNotFocused($('char-profile'),       'value',   state.characterProfile);
   setIfNotFocused($('user-profile'),       'value',   state.userProfile);
   setIfNotFocused($('post-history-prompt'),'value',   state.postHistoryPrompt);
+  if ($('post-history-role')) setIfNotFocused($('post-history-role'), 'value', state.postHistoryRole ?? 'system');
   setIfNotFocused($('tools-enabled'),      'checked', state.toolsEnabled ?? true);
   setIfNotFocused($('custom-tools'),       'value',   state.customTools ?? '');
   setIfNotFocused($('user-discord-webhook'), 'value', state.userDiscordWebhook ?? '');
+  setIfNotFocused($('discord-enabled'),      'checked', state.discordEnabled === true);
+  setIfNotFocused($('discord-bot-token'),    'value', state.discordBotToken ?? '');
+  setIfNotFocused($('discord-ward-user-id'), 'value', state.discordWardUserId ?? '');
   setIfNotFocused($('tome-scan-depth'),       'value',   state.tomeScanDepth ?? 4);
   setIfNotFocused($('tome-recursive'),        'checked', state.tomeRecursive ?? false);
   setIfNotFocused($('tome-max-recursion'),    'value',   state.tomeMaxRecursionSteps ?? 3);
@@ -2291,6 +2379,7 @@ function startNewSession() {
   state.sessionEndedAt   = null;
   state.messages         = [];
   state.topics           = [];
+  state.sessionAudience  = { location: null, participants: [] };
   lastMessage            = null;
   state.lastMessage      = null;
   elapsedTime            = 0;
@@ -2299,6 +2388,7 @@ function startNewSession() {
   $('messages').innerHTML = '';
   updateTopicStrip();
   refreshTopicGutter();
+  updateAudienceBtn();
 }
 
 /**
@@ -2375,6 +2465,7 @@ async function memorizeSessionToTome(messages, sessionId, opts = {}) {
     provider:     state.provider,
     apiKey:       state.apiKey,
     model:        state.model,
+    audienceTag:  'ward-private',
   };
   try {
     const resp = await fetch('/api/memorize', {
@@ -2411,6 +2502,7 @@ function memorizeViaBeacon(messages, sessionId, opts = {}) {
     provider:     state.provider,
     apiKey:       state.apiKey,
     model:        state.model,
+    audienceTag:  'ward-private',
   };
   try {
     const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
@@ -2474,6 +2566,26 @@ function showMemorizationFailureNotice(reason) {
   }, 6000);
 }
 
+// Discord presence needs the server's Node runtime to expose a native
+// WebSocket (Node ≥ 22). On an older runtime the gateway silently stays
+// down — so when the ward opens the Discord section we surface a plain
+// warning that names the running version and the fix, instead of letting
+// them toggle Discord on and wonder why nothing connects.
+function renderDiscordNodeWarning(status) {
+  const el = $('discord-node-warning');
+  if (!el) return;
+  if (status && status.webSocketSupported === false) {
+    const ver = status.nodeVersion ? ` (this server is on Node ${status.nodeVersion})` : '';
+    el.innerHTML =
+      `⚠️ Discord presence needs <strong>Node 22 or newer</strong>${ver}. ` +
+      `The gateway can't open its WebSocket on this runtime and will stay offline ` +
+      `even with the toggle on. Re-run the installer to upgrade Node, then restart Proto-Familiar.`;
+    el.style.display = '';
+  } else {
+    el.style.display = 'none';
+  }
+}
+
 // ── Prompt inspector modal ───────────────────────────────────
 
 // Human-readable labels for each prompt-segment source. The CSS class
@@ -2483,8 +2595,8 @@ const PI_SOURCE_LABELS = {
   // the static block prepends the system message (cacheable prefix);
   // the dynamic block is depth-injected as its own system message so
   // changes don't invalidate the static prefix.
-  'thalamus-static':   'Entity-Core (static)',
-  'thalamus-dynamic':  'Entity-Core (dynamic @ depth)',
+  'thalamus-static':   'Phylactery (static)',
+  'thalamus-dynamic':  'Phylactery (dynamic @ depth)',
   'lore-sys-top':      'Lore · system top',
   'lore-before-char':  'Lore · before character',
   'lore-after-char':   'Lore · after character',
@@ -2538,7 +2650,7 @@ function openPromptInspector() {
   if (!lastThalamus || (!lastThalamus.static && !lastThalamus.dynamic)) {
     const note = document.createElement('p');
     note.className = 'field-hint';
-    note.textContent = 'No entity-core block in the last response. Thalamus may have returned empty (no enrichment), or the request hadn\'t completed yet — re-open after the next reply lands.';
+    note.textContent = 'No Phylactery enrichment block in the last response. Thalamus may have returned empty (no enrichment), or the request hadn\'t completed yet — re-open after the next reply lands.';
     body.appendChild(note);
   }
 
@@ -2583,7 +2695,7 @@ function openPromptInspector() {
       return;
     }
 
-    // System message: split by source. Includes the entity-core
+    // System message: split by source. Includes the Phylactery
     // STATIC block as its own first segment when present, then each
     // tracked build segment. The DYNAMIC block lives in its own
     // synthetic message at `injectedAt` (handled above), not here.
@@ -2939,14 +3051,38 @@ function init() {
     renderTrustedContacts();
   }
 
+  // Discord presence (Village V4) — show live gateway status when the
+  // section is opened. Cheap GET; failures render as a quiet dash.
+  const discordSection = document.querySelector('#section-discord .collapse-toggle');
+  if (discordSection) {
+    discordSection.addEventListener('click', async () => {
+      const el = $('discord-status');
+      if (!el) return;
+      try {
+        const s = await (await fetch('/api/discord/status')).json();
+        renderDiscordNodeWarning(s);
+        const bits = [];
+        bits.push(s.connected ? `🟢 Connected as ${s.botUser ?? 'bot'}` : (s.running ? '🟡 Starting / reconnecting…' : '⚪ Not running'));
+        if (s.turns) bits.push(`${s.turns} replies this boot`);
+        if (s.lastError) bits.push(`Last error: ${s.lastError}`);
+        el.textContent = bits.join(' · ');
+      } catch {
+        el.textContent = '—';
+      }
+    });
+  }
+
   // ── Settings field listeners ─────────────────────────────────
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
     'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle',
-    'pondering-toggle', 'pondering-scale', 'user-name', 'char-name',
+    'pondering-toggle', 'pondering-scale',
+    'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
+    'user-name', 'char-name',
     'system-prompt', 'char-profile',
-    'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
+    'user-profile', 'post-history-prompt', 'post-history-role', 'tools-enabled', 'custom-tools',
     'user-discord-webhook',
+    'discord-enabled', 'discord-bot-token', 'discord-ward-user-id',
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',
     'tome-case-sensitive', 'tome-match-whole-words',
     'max-empty-retries',
@@ -3148,7 +3284,7 @@ function init() {
   });
   $('diagnostics-download').addEventListener('click', downloadDiagnosticReport);
 
-  // Knowledge editor (entity-core)
+  // Knowledge editor (Phylactery)
   $('knowledge-btn').addEventListener('click', openKnowledgeModal);
   $('knowledge-modal-close').addEventListener('click', closeKnowledgeModal);
   // Intentionally NO backdrop-click-to-close: it fires mid-pan or while
@@ -3156,6 +3292,37 @@ function init() {
   document.querySelectorAll('.ke-tab').forEach(el => {
     el.addEventListener('click', () => keSwitchTab(el.dataset.tab));
   });
+  // Session audience (Village Support V2)
+  if ($('audience-btn')) {
+    $('audience-btn').addEventListener('click', toggleAudiencePopover);
+    $('audience-popover-close').addEventListener('click', closeAudiencePopover);
+    $('audience-add-btn').addEventListener('click', audienceAddFromInput);
+    $('audience-search').addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); audienceAddFromInput(); }
+      if (e.key === 'Escape') closeAudiencePopover();
+    });
+    document.addEventListener('click', e => {
+      const wrap = $('audience-wrap');
+      if (wrap && !wrap.contains(e.target)) closeAudiencePopover();
+    });
+    updateAudienceBtn();
+  }
+
+  // Village editor (Village Support V1)
+  if ($('village-btn')) {
+    $('village-btn').addEventListener('click', openVillageModal);
+    $('village-modal-close').addEventListener('click', closeVillageModal);
+    document.querySelectorAll('[data-village-tab]').forEach(el => {
+      el.addEventListener('click', () => vlSwitchTab(el.dataset.villageTab));
+    });
+    $('vl-people-refresh').addEventListener('click', () => vlLoadPeople());
+    $('vl-people-add').addEventListener('click', vlStartNewPerson);
+    $('vl-cat-refresh').addEventListener('click', () => vlLoadCategories());
+    $('vl-cat-add').addEventListener('click', vlStartNewCategory);
+    $('vl-loc-refresh').addEventListener('click', () => vlLoadLocations());
+    $('vl-loc-add').addEventListener('click', vlStartNewLocation);
+  }
+
   // Temporal editor (Unruh) — M9
   if ($('temporal-btn')) {
     $('temporal-btn').addEventListener('click', openTemporalModal);
@@ -3209,6 +3376,8 @@ function init() {
   $('ke-id-refresh').addEventListener('click', keLoadIdentity);
   $('ke-snap-create').addEventListener('click', keCreateSnapshot);
   $('ke-snap-refresh').addEventListener('click', keLoadSnapshots);
+  $('ke-backup-export').addEventListener('click', keExportBackup);
+  $('ke-backup-restore').addEventListener('click', keRestoreBackup);
 
   // Tomes modal
   $('tomes-btn').addEventListener('click', openTomesModal);
@@ -3878,12 +4047,13 @@ async function runAutoSummarize(session) {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({
-        sessionId: session.sessionId,
-        scope:     'session',
+        sessionId:   session.sessionId,
+        scope:       'session',
         messages,
-        provider:  state.provider,
-        apiKey:    state.apiKey,
-        model:     state.model,
+        provider:    state.provider,
+        apiKey:      state.apiKey,
+        model:       state.model,
+        audienceTag: 'ward-private',
       }),
     });
     if (!resp.ok) throw new Error(await resp.text().catch(() => `HTTP ${resp.status}`));
@@ -4175,7 +4345,7 @@ let _pendingSummaryTopic = null;
 
 async function generateTopicSummary(topic, rangeMessages) {
   const convText = rangeMessages
-    .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
+    .map(m => `${m.role === 'user' ? (state.userName || 'My human') : 'Me'}: ${m.content ?? ''}`)
     .join('\n\n');
 
   const userLabel = userNamedTopicLabel(topic);
@@ -4998,7 +5168,7 @@ function downloadDiagnosticReport() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-// ── Knowledge editor (entity-core: memories, identity, graph, snapshots) ─
+// ── Knowledge editor (Phylactery: memories, identity, graph, snapshots) ──
 //
 // Layered UI: tabs across the top, two-pane list+detail per tab. All ops
 // hit /api/entity/* endpoints; destructive ones auto-snapshot server-side
@@ -5083,7 +5253,7 @@ function keError(err, fallback) {
 }
 
 // Pull the server's real `{ error }` message out of a non-OK response.
-// Falls back to HTTP status. Surfaces 'entity-core not connected'
+// Falls back to HTTP status. Surfaces 'phylactery not connected'
 // instead of the opaque 'HTTP 502' the user used to see.
 async function keReadServerError(res) {
   try {
@@ -5108,10 +5278,14 @@ async function keLoadMemories() {
     for (const m of memories) {
       const row = document.createElement('div');
       row.className = 'ke-row';
+      const audienceBadge = (m.audience && m.audience !== 'ward-private')
+        ? `<span class="ke-badge ke-badge-audience">${esc(m.audience)}</span>` : '';
+      const cwBadge = m.care_weight
+        ? `<span class="ke-badge ke-badge-cw-${esc(m.care_weight)}">${esc(m.care_weight)}</span>` : '';
       row.innerHTML = `
-        <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date)}</div>
-        <div class="ke-row-sub">${esc((m.preview ?? '').slice(0, 140))}</div>`;
-      row.addEventListener('click', () => keOpenMemory(m.granularity, m.date));
+        <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date ?? m.key)}${audienceBadge}${cwBadge}</div>
+        <div class="ke-row-sub">${esc((m.preview ?? m.title ?? '').slice(0, 140))}</div>`;
+      row.addEventListener('click', () => keOpenMemory(m.granularity, m.date ?? m.key));
       list.appendChild(row);
     }
   } catch (err) { list.innerHTML = keError(err, 'Failed to load memories.'); }
@@ -5123,13 +5297,28 @@ async function keOpenMemory(granularity, date) {
     const res = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`);
     if (!res.ok) throw new Error(await keReadServerError(res));
     const data = await res.json();
-    const content = data.memory?.content ?? data.content ?? '';
+    const content   = data.memory?.content    ?? data.content    ?? '';
+    const audience  = data.memory?.audience   ?? data.audience   ?? 'ward-private';
+    const careWeight = data.memory?.care_weight ?? data.care_weight ?? '';
     const det = $('ke-mem-detail');
     det.innerHTML = `
       <div class="ke-detail-header">
         <h3>${esc(granularity)} · ${esc(date)}</h3>
       </div>
-      <textarea id="ke-mem-content" rows="14" class="ke-textarea">${esc(content)}</textarea>
+      <textarea id="ke-mem-content" rows="12" class="ke-textarea">${esc(content)}</textarea>
+      <div class="ke-meta-row">
+        <label class="ke-meta-label" for="ke-mem-audience">Audience</label>
+        <select id="ke-mem-audience" class="ke-select">
+          <option value="ward-private" ${audience === 'ward-private' ? 'selected' : ''}>ward-private (most restrictive)</option>
+          <option value="all" ${audience === 'all' ? 'selected' : ''}>all (any room)</option>
+        </select>
+        <label class="ke-meta-label" for="ke-mem-care-weight">Care weight</label>
+        <select id="ke-mem-care-weight" class="ke-select">
+          <option value=""     ${!careWeight             ? 'selected' : ''}>— unset</option>
+          <option value="high" ${careWeight === 'high'   ? 'selected' : ''}>high (decay-shielded, never graduates)</option>
+          <option value="low"  ${careWeight === 'low'    ? 'selected' : ''}>low</option>
+        </select>
+      </div>
       <div class="ke-actions">
         <button id="ke-mem-save"    class="btn-send">Save (overwrite)</button>
         <button id="ke-mem-super"   class="btn-secondary">Supersede with today's date</button>
@@ -5138,9 +5327,11 @@ async function keOpenMemory(granularity, date) {
       <p class="field-hint">Editing rewrites the entry in place; an auto-snapshot is taken first. "Supersede" writes a NEW dated entry that contradicts this one — recency-decay then demotes the stale entry while preserving history.</p>`;
     $('ke-mem-save').addEventListener('click', async () => {
       const body = $('ke-mem-content').value;
+      const aud = $('ke-mem-audience').value;
+      const cw  = $('ke-mem-care-weight').value;
       const r = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: body, editedBy: 'user-edit' }),
+        body: JSON.stringify({ content: body, editedBy: 'user-edit', audience: aud, careWeight: cw || null }),
       });
       if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
       keLoadMemories();
@@ -6157,9 +6348,10 @@ async function keLoadIdentity() {
     const data = await res.json();
     list.innerHTML = '';
     let any = false;
-    for (const category of ['self', 'user', 'relationship', 'custom']) {
+    for (const category of ['self', 'ward', 'relationship', 'custom']) {
       const files = data[category] ?? [];
-      if (!files.length) continue;
+      const isWard = category === 'ward';
+      if (!files.length && !isWard) continue;
       const header = document.createElement('div');
       header.className = 'ke-row-header';
       header.textContent = category;
@@ -6173,6 +6365,17 @@ async function keLoadIdentity() {
           <div class="ke-row-sub">${esc((f.content ?? '').slice(0, 100).replace(/\n/g, ' '))}</div>`;
         row.addEventListener('click', () => keOpenIdentity(category, f));
         list.appendChild(row);
+      }
+      if (isWard) {
+        // Always expose Remember settings even when there are no ward files yet.
+        any = true;
+        const rmRow = document.createElement('div');
+        rmRow.className = 'ke-row ke-row-settings';
+        rmRow.innerHTML = `
+          <div class="ke-row-title">Remember settings</div>
+          <div class="ke-row-sub">Memory storage policy per category</div>`;
+        rmRow.addEventListener('click', keOpenRememberMap);
+        list.appendChild(rmRow);
       }
     }
     if (!any) list.innerHTML = '<p class="logs-empty">No identity files yet.</p>';
@@ -6218,6 +6421,65 @@ function keOpenIdentity(category, file) {
   });
 }
 
+// ── Remember-consent map ─────────────────────────────────────────────────────
+async function keOpenRememberMap() {
+  const det = $('ke-id-detail');
+  det.innerHTML = '<p class="logs-loading">Loading remember settings…</p>';
+  try {
+    const res = await fetch('/api/entity/ward/remember');
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const data = await res.json();
+    const map = data.map ?? {};
+    const categories = ['basics', 'emotional_content', 'health_info', 'relationships', 'whereabouts'];
+    const labels = {
+      basics: 'Basics (name, age, daily facts)',
+      emotional_content: 'Emotional content (feelings, struggles)',
+      health_info: 'Health information (meds, conditions)',
+      relationships: 'Relationships (family, friends)',
+      whereabouts: 'Whereabouts (location, travel)',
+    };
+    function selFor(cat) {
+      const v = map[cat];
+      const opts = [
+        `<option value="true"  ${v === true   ? 'selected' : ''}>Store freely</option>`,
+        `<option value="ask"   ${v === 'ask'  ? 'selected' : ''}>Ask first (consent_pending)</option>`,
+        `<option value="false" ${v === false  ? 'selected' : ''}>Never store</option>`,
+      ].join('');
+      return `<select id="rm-${cat}" class="ke-select">${opts}</select>`;
+    }
+    const rows = categories.map(cat => `
+      <div class="ke-meta-row">
+        <label class="ke-meta-label" for="rm-${cat}">${esc(labels[cat])}</label>
+        ${selFor(cat)}
+      </div>`).join('');
+    det.innerHTML = `
+      <div class="ke-detail-header"><h3>Ward · Remember settings</h3></div>
+      <p class="field-hint">Controls how I handle information about <strong>my human themselves</strong>, per category.
+        (For other people in the Village, set memory consent per-person in the Village editor.)
+        "Store freely" means I remember it immediately.
+        "Ask first" means I store it as pending and surface it for confirmation.
+        "Never store" means I drop it silently — use with care.</p>
+      ${rows}
+      <div class="ke-actions">
+        <button id="ke-rm-save" class="btn-send">Save</button>
+      </div>`;
+    $('ke-rm-save').addEventListener('click', async () => {
+      const newMap = {};
+      for (const cat of categories) {
+        const raw = det.querySelector(`#rm-${cat}`)?.value;
+        newMap[cat] = raw === 'true' ? true : raw === 'false' ? false : 'ask';
+      }
+      const r = await fetch('/api/entity/ward/remember', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ map: newMap }),
+      });
+      if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
+      alert('Remember settings saved.');
+      keOpenRememberMap();
+    });
+  } catch (err) { det.innerHTML = keError(err, 'Failed to load remember settings.'); }
+}
+
 // ── Snapshots tab ───────────────────────────────────────────────────────
 async function keLoadSnapshots() {
   const list = $('ke-snap-list');
@@ -6255,6 +6517,44 @@ async function keCreateSnapshot() {
   const r = await fetch('/api/entity/snapshots', { method: 'POST' });
   if (!r.ok) { alert(`Snapshot failed: ${(await r.json()).error ?? r.status}`); return; }
   keLoadSnapshots();
+}
+
+// ── Backup / restore (Pillar H) ──────────────────────────────────────────
+async function keExportBackup() {
+  const pass = $('ke-backup-pass').value;
+  const out  = $('ke-backup-result');
+  if (!pass || pass.length < 4) { out.textContent = 'Passphrase must be at least 4 characters.'; return; }
+  out.textContent = 'Encrypting…';
+  try {
+    const r = await fetch('/api/entity/backup/export', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ passphrase: pass }),
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) throw new Error(data.error ?? r.status);
+    out.innerHTML = `Backed up to <code>${esc(data.filePath)}</code> (${Math.round((data.sizeBytes ?? 0) / 1024)} KB). Keep this file and your passphrase safe.`;
+    $('ke-backup-pass').value = '';
+  } catch (err) { out.textContent = `Backup failed: ${err.message}`; }
+}
+
+async function keRestoreBackup() {
+  const filePath = $('ke-backup-path').value.trim();
+  const pass     = $('ke-backup-restore-pass').value;
+  const out      = $('ke-backup-result');
+  if (!filePath) { out.textContent = 'Enter the backup file path to restore from.'; return; }
+  if (!pass)     { out.textContent = 'Enter the passphrase for the backup.'; return; }
+  if (!confirm('Restore from this backup? This OVERWRITES the current memory / identity / graph state entirely.')) return;
+  out.textContent = 'Restoring…';
+  try {
+    const r = await fetch('/api/entity/backup/restore', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath, passphrase: pass }),
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) throw new Error(data.error ?? r.status);
+    out.textContent = `Restored from ${data.restoredFrom}. The Familiar is reconnecting to the restored self.`;
+    $('ke-backup-restore-pass').value = '';
+  } catch (err) { out.textContent = `Restore failed: ${err.message}`; }
 }
 
 // ── Tome entry editor ─────────────────────────────────────────────
@@ -7698,6 +7998,1032 @@ function removeTrustedContact(idx) {
   state.trustedContacts = (state.trustedContacts || []).filter((_, i) => i !== idx);
   saveSettings();
   renderTrustedContacts();
+}
+
+// ── Village editor (Village Support V1) ──────────────────────────────────────
+//
+// Three-tab card editor: People · Categories · Locations.
+// Left of each tab: responsive card grid. Right: slide-in detail/edit panel.
+// All mutations go through /api/village/* and invalidate the local cache.
+
+const VL_STRANGERS = 'strangers';
+const VL_EMERGENCY = 'emergency-contacts';
+const VL_TABS      = ['people', 'categories', 'locations'];
+
+const VL_REL_FAM_LABELS = {
+  unaware:             'Unaware of the Familiar',
+  warm:                'Warm',
+  neutral:             'Neutral',
+  'tolerates-for-ward':'Tolerates (for the ward)',
+  'wary-of-ai':        'Wary of AI',
+  hostile:             'Hostile',
+};
+
+const VL_REMEMBER_CATS = [
+  { key: 'basics',           label: 'Basic info',       default: true  },
+  { key: 'emotional_content',label: 'Emotional content',default: 'ask' },
+  { key: 'health_info',      label: 'Health info',      default: 'ask' },
+  { key: 'relationships',    label: 'Relationships',    default: 'ask' },
+  { key: 'whereabouts',      label: 'Whereabouts',      default: 'ask' },
+];
+
+let _vlReg  = null;   // local registry cache; null = needs reload
+let _vlSelP = null;   // selected villager id
+let _vlSelC = null;   // selected category id
+let _vlSelL = null;   // selected location key
+
+function openVillageModal() {
+  $('village-modal').classList.remove('hidden');
+  bindResizableModal('village-modal-inner', 'pf-village-modal-size');
+  vlSwitchTab('people');
+}
+function closeVillageModal() { $('village-modal').classList.add('hidden'); }
+
+function vlSwitchTab(tab) {
+  for (const t of VL_TABS) {
+    $(`vl-pane-${t}`)?.classList.toggle('ke-pane-active', t === tab);
+  }
+  document.querySelectorAll('[data-village-tab]').forEach(el => {
+    el.classList.toggle('ke-tab-active', el.dataset.villageTab === tab);
+  });
+  if (tab === 'people')     vlLoadPeople();
+  if (tab === 'categories') vlLoadCategories();
+  if (tab === 'locations')  vlLoadLocations();
+}
+
+async function vlFetch(force = false) {
+  if (_vlReg && !force) return _vlReg;
+  const r = await fetch('/api/village');
+  if (!r.ok) throw new Error(await vlErrMsg(r));
+  _vlReg = await r.json();
+  return _vlReg;
+}
+async function vlErrMsg(r) {
+  try { const j = await r.json(); if (j?.error) return String(j.error); } catch {}
+  return `HTTP ${r.status}`;
+}
+function vlErr(msg) {
+  return `<p class="logs-error" style="padding:12px">⚠ ${esc(String(msg?.message ?? msg))}</p>`;
+}
+
+// ── People ──
+
+async function vlLoadPeople() {
+  const grid = $('vl-people-grid');
+  grid.innerHTML = '<p class="logs-loading" style="grid-column:1/-1">Loading…</p>';
+  try {
+    vlRenderPeopleGrid(await vlFetch(true));
+  } catch (err) { grid.innerHTML = vlErr(err); }
+  vlLoadKnocks();
+}
+
+// ── Knock list (V4.x) ──
+// Unregistered people who DMed / @-mentioned the Familiar on Discord.
+// The gateway captured their stable platform ID so registration is one
+// click instead of a Developer-Mode ID hunt. Binding is always the
+// ward's explicit act here — knocking grants nothing.
+
+async function vlLoadKnocks() {
+  const box = $('vl-knocks');
+  if (!box) return;
+  try {
+    const r = await fetch('/api/village/knocks');
+    vlRenderKnocks(r.ok ? await r.json() : []);
+  } catch { box.classList.add('hidden'); }
+}
+
+function vlRenderKnocks(knocks) {
+  const box = $('vl-knocks');
+  if (!box) return;
+  if (!Array.isArray(knocks) || !knocks.length) {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  const villagers = _vlReg?.villagers ?? [];
+  box.classList.remove('hidden');
+  box.innerHTML = `<div class="vl-knocks-head">🚪 Knocked on the door <span class="field-hint">— unregistered people who DMed or @-mentioned your Familiar. They stay Strangers until you bind them.</span></div>`
+    + knocks.map((k, i) => {
+      const who = esc(k.displayName || k.handle || k.id);
+      const sub = [
+        k.handle && k.displayName ? `@${esc(k.handle)}` : '',
+        esc(k.platform ?? ''),
+        k.context === 'guild' ? 'in a server' : 'via DM',
+        `${k.count ?? 1}×, last ${k.lastSeenAt ? new Date(k.lastSeenAt).toLocaleString() : '?'}`,
+      ].filter(Boolean).join(' · ');
+      const options = ['<option value="">+ New person…</option>']
+        .concat(villagers.map(v => `<option value="${esc(v.id)}">${esc(v.name)}</option>`))
+        .join('');
+      return `<div class="vl-knock" data-ki="${i}">
+        <div class="vl-knock-info">
+          <div class="vl-knock-name">${who} <span class="vl-knock-id">${esc(k.id)}</span></div>
+          <div class="vl-knock-sub">${sub}</div>
+        </div>
+        <div class="vl-knock-actions">
+          <select class="vl-knock-target" aria-label="Register as">${options}</select>
+          <button class="btn-secondary vl-knock-bind" type="button">Register</button>
+          <button class="btn-ghost vl-knock-me" type="button" title="This is my own Discord account">This is me</button>
+          <button class="btn-ghost vl-knock-x" type="button" title="Dismiss (they can knock again — nothing is blocked)">×</button>
+        </div>
+      </div>`;
+    }).join('');
+
+  box.querySelectorAll('.vl-knock').forEach(row => {
+    const k = knocks[Number(row.dataset.ki)];
+    row.querySelector('.vl-knock-bind').addEventListener('click', () => {
+      const targetId = row.querySelector('.vl-knock-target').value;
+      if (targetId) vlAttachKnock(k, targetId);
+      else vlStartNewPersonFromKnock(k);
+    });
+    row.querySelector('.vl-knock-me').addEventListener('click', () => vlClaimKnockAsWard(k));
+    row.querySelector('.vl-knock-x').addEventListener('click', () => vlDismissKnock(k));
+  });
+}
+
+async function vlDismissKnock(k, { silent = false } = {}) {
+  if (!silent && !confirm(`Dismiss ${k.handle || k.id}? They can knock again — nothing is blocked.`)) return;
+  try {
+    await fetch(`/api/village/knocks/${encodeURIComponent(k.platform)}/${encodeURIComponent(k.id)}`, { method: 'DELETE' });
+  } catch { /* best-effort */ }
+  vlLoadKnocks();
+}
+
+/** "New person…" — open the detail panel prefilled with the knock's
+ *  name + alias. The knock auto-clears on save (server reconciles
+ *  knocks against new aliases). */
+function vlStartNewPersonFromKnock(k) {
+  vlStartNewPerson();
+  const nameEl = $('vl-p-name');
+  if (nameEl) nameEl.value = k.displayName || k.handle || '';
+  const container = $('vl-p-aliases');
+  if (container) {
+    const div = document.createElement('div');
+    div.innerHTML = vlAliasRowHtml(container.querySelectorAll('.vl-alias-row').length, k.platform, k.id, k.handle ?? '');
+    const row = div.firstElementChild;
+    row.querySelector('.vl-alias-rm').addEventListener('click', () => row.remove());
+    container.appendChild(row);
+  }
+}
+
+/** Attach the knock's alias to an existing villager. */
+async function vlAttachKnock(k, villagerId) {
+  const v = _vlReg?.villagers.find(x => x.id === villagerId);
+  if (!v) return;
+  if (!confirm(`Attach this Discord account to ${v.name}? Their messages will then carry ${v.name}'s access.`)) return;
+  const aliases = [
+    ...(v.aliases ?? []),
+    { platform: k.platform, id: k.id, ...(k.handle ? { handle: k.handle } : {}) },
+  ];
+  try {
+    const r = await fetch(`/api/village/villagers/${encodeURIComponent(villagerId)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ aliases }),
+    });
+    if (!r.ok) throw new Error(await vlErrMsg(r));
+    _vlReg = null;
+    vlRenderPeopleGrid(await vlFetch(true));
+    vlLoadKnocks();
+  } catch (err) { alert(`Error: ${err.message}`); }
+}
+
+/** "This is me" — claim the knock as the ward's own Discord account. */
+async function vlClaimKnockAsWard(k) {
+  if (!confirm(`Set ${k.handle || k.id} as YOUR Discord account? Your Familiar will treat DMs from this ID as you, with full private context.`)) return;
+  state.discordWardUserId = k.id;
+  saveSettings();
+  const el = $('discord-ward-user-id');
+  if (el) el.value = k.id;
+  await vlDismissKnock(k, { silent: true });
+}
+
+function vlRenderPeopleGrid(reg) {
+  const grid = $('vl-people-grid');
+  if (!reg.villagers.length) {
+    grid.innerHTML = '<p class="vl-chip-dim" style="grid-column:1/-1;padding:12px">No villagers yet. Click "+ Add person".</p>';
+    return;
+  }
+  const catMap = new Map(reg.categories.map(c => [c.id, c]));
+  grid.innerHTML = reg.villagers.map(v => {
+    const chips = (v.categoryIds ?? []).map(cid => {
+      const c = catMap.get(cid);
+      return c ? `<span class="vl-chip${c.builtin ? ' vl-chip-green' : ''}">${esc(c.name)}</span>` : '';
+    }).join('');
+    const aliasSub = v.aliases?.length
+      ? `<div class="vl-card-sub">${v.aliases.map(a => esc(a.platform)).join(' · ')}</div>` : '';
+    return `<div class="vl-card${_vlSelP === v.id ? ' vl-sel' : ''}" data-vid="${esc(v.id)}" tabindex="0" role="button" aria-label="${esc(v.name)}">
+      <div class="vl-card-name" title="${esc(v.name)}">${esc(v.name)}</div>
+      <div class="vl-chips">${chips || '<span class="vl-chip-dim">unregistered</span>'}</div>
+      ${aliasSub}
+    </div>`;
+  }).join('');
+  grid.querySelectorAll('.vl-card').forEach(el => {
+    el.addEventListener('click', () => vlSelectPerson(el.dataset.vid));
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); vlSelectPerson(el.dataset.vid); }
+    });
+  });
+}
+
+function vlSelectPerson(id) {
+  _vlSelP = id;
+  $('vl-people-grid').querySelectorAll('.vl-card').forEach(el => {
+    el.classList.toggle('vl-sel', el.dataset.vid === id);
+  });
+  vlRenderPersonDetail(_vlReg?.villagers.find(v => v.id === id) ?? null);
+  vlOpenDetail('vl-people-detail');
+}
+
+function vlStartNewPerson() {
+  _vlSelP = null;
+  $('vl-people-grid').querySelectorAll('.vl-card').forEach(el => el.classList.remove('vl-sel'));
+  vlRenderPersonDetail(null);
+  vlOpenDetail('vl-people-detail');
+}
+
+function vlRememberRowHtml(cat, currentVal) {
+  const val = currentVal !== undefined ? currentVal : cat.default;
+  const opts = [
+    { v: true,   cls: 'vl-rem-free',  label: 'Free'  },
+    { v: 'ask',  cls: 'vl-rem-ask',   label: 'Ask'   },
+    { v: false,  cls: 'vl-rem-never', label: 'Never' },
+  ];
+  const btns = opts.map(o =>
+    `<button class="vl-rem-btn ${o.cls}${o.v === val ? ' vl-rem-on' : ''}" data-cat="${esc(cat.key)}" data-val="${o.v}" type="button">${o.label}</button>`
+  ).join('');
+  return `<div class="vl-rem-row"><span class="vl-rem-label">${esc(cat.label)}</span><div class="vl-rem-toggle">${btns}</div></div>`;
+}
+
+function vlRenderPersonDetail(villager) {
+  const detail = $('vl-people-detail');
+  const reg = _vlReg;
+  if (!reg) return;
+  const isNew = !villager;
+  const selIds = new Set(villager?.categoryIds ?? []);
+  const nonStrangerCats = reg.categories.filter(c => c.id !== VL_STRANGERS);
+
+  const catToggles = nonStrangerCats.map(c =>
+    `<button class="vl-cat-toggle${selIds.has(c.id) ? ' vl-on' : ''}" data-cid="${esc(c.id)}" type="button">${esc(c.name)}</button>`
+  ).join('');
+
+  const aliasRows = (villager?.aliases ?? []).map((a, i) => vlAliasRowHtml(i, a.platform, a.id, a.handle ?? '')).join('');
+
+  const relFamOptions = Object.entries(VL_REL_FAM_LABELS).map(([val, label]) => {
+    const sel = (villager?.relationToFamiliar ?? 'unaware') === val ? ' selected' : '';
+    return `<option value="${esc(val)}"${sel}>${esc(label)}</option>`;
+  }).join('');
+
+  const remRows = VL_REMEMBER_CATS.map(cat =>
+    vlRememberRowHtml(cat, villager?.remember?.[cat.key])
+  ).join('');
+
+  const graphNodeHtml = (!isNew && villager.graphNodeId)
+    ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">Graph node: <code>${esc(villager.graphNodeId)}</code></div>`
+    : '';
+
+  detail.innerHTML = `
+    <div class="vl-detail-head">${isNew ? 'Add person' : esc(villager.name)}</div>
+    <div>
+      <div class="vl-field-label">Name</div>
+      <input type="text" id="vl-p-name" value="${isNew ? '' : esc(villager.name)}" placeholder="e.g. Chen" style="width:100%">
+    </div>
+    <div>
+      <div class="vl-field-label">Pronouns <span class="field-hint">(optional)</span></div>
+      <input type="text" id="vl-p-pronouns" value="${isNew ? '' : esc(villager.pronouns ?? '')}" placeholder="e.g. she/her, they/them" style="width:100%">
+    </div>
+    <div>
+      <div class="vl-field-label">Categories <span class="field-hint">(can overlap)</span></div>
+      <div class="vl-cat-toggles" id="vl-p-cat-toggles">${catToggles || '<span class="vl-chip-dim">No categories defined yet.</span>'}</div>
+    </div>
+    <div>
+      <div class="vl-field-label">Relation to the ward</div>
+      <input type="text" id="vl-p-rel-ward" value="${isNew ? '' : esc(villager.relationToWard ?? '')}" placeholder="e.g. college roommate, therapist" style="width:100%">
+    </div>
+    <div>
+      <div class="vl-field-label">Stance toward me <span class="field-hint">(how they relate to the Familiar)</span></div>
+      <select id="vl-p-rel-fam" style="width:100%">${relFamOptions}</select>
+    </div>
+    <div>
+      <div class="vl-field-label">Platform aliases <span class="field-hint">(matched by stable ID, not handle)</span></div>
+      <div id="vl-p-aliases" style="display:flex;flex-direction:column;gap:5px">${aliasRows}</div>
+      <div class="vl-add-row"><button class="btn-ghost" id="vl-p-alias-add" type="button" style="font-size:0.8rem">+ Alias</button></div>
+    </div>
+    <div>
+      <div class="vl-field-label">Connection note</div>
+      <input type="text" id="vl-p-conn" value="${isNew ? '' : esc(villager.connection ?? '')}" placeholder="How do you know them?" style="width:100%">
+    </div>
+    <div>
+      <div class="vl-field-label">Communication style <span class="field-hint">(optional)</span></div>
+      <input type="text" id="vl-p-comm" value="${isNew ? '' : esc(villager.commStyleNotes ?? '')}" placeholder="e.g. direct, uses sarcasm, prefers short messages" style="width:100%">
+    </div>
+    <div>
+      <div class="vl-field-label">Notes <span class="field-hint">(optional — shareable; the Familiar may use these even when others are present)</span></div>
+      <textarea id="vl-p-notes" placeholder="Anything else worth knowing…" style="width:100%;min-height:3.5em;resize:vertical">${isNew ? '' : esc(villager.notes ?? '')}</textarea>
+    </div>
+    <div>
+      <div class="vl-field-label">Private notes <span class="field-hint">(ward-only — for sensitive things like orientation, health, or a legal name. The Familiar sees these only when it's just you two; held back automatically when anyone else is present. Not for trivia.)</span></div>
+      <textarea id="vl-p-private-notes" placeholder="Sensitive context, for you and the Familiar only…" style="width:100%;min-height:3.5em;resize:vertical">${isNew ? '' : esc(villager.privateNotes ?? '')}</textarea>
+    </div>
+    <div>
+      <div class="vl-field-label">Memory consent <span class="field-hint">(what I may store about this person — for my human's own settings, see Knowledge → Identity → ward → Remember settings)</span></div>
+      <div id="vl-p-remember" class="vl-rem-grid">${remRows}</div>
+    </div>
+    ${graphNodeHtml}
+    <div class="vl-actions">
+      <button class="btn-send" id="vl-p-save" type="button">${isNew ? 'Add person' : 'Save'}</button>
+      ${!isNew ? `<button class="btn-danger" id="vl-p-del" type="button">Delete</button>` : ''}
+      <button class="btn-ghost vl-detail-back" id="vl-p-back" type="button" style="display:none">← Back</button>
+    </div>
+    <div class="vl-status" id="vl-p-status"></div>
+  `;
+
+  detail.querySelectorAll('.vl-cat-toggle').forEach(btn =>
+    btn.addEventListener('click', () => btn.classList.toggle('vl-on'))
+  );
+  $('vl-p-alias-add').addEventListener('click', () => {
+    const container = $('vl-p-aliases');
+    const i = container.querySelectorAll('.vl-alias-row').length;
+    const div = document.createElement('div');
+    div.innerHTML = vlAliasRowHtml(i, '', '', '');
+    const row = div.firstElementChild;
+    row.querySelector('.vl-alias-rm').addEventListener('click', () => row.remove());
+    container.appendChild(row);
+  });
+  detail.querySelectorAll('.vl-alias-rm').forEach(btn =>
+    btn.addEventListener('click', () => btn.closest('.vl-alias-row').remove())
+  );
+  detail.querySelectorAll('.vl-rem-toggle').forEach(group => {
+    group.querySelectorAll('.vl-rem-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        group.querySelectorAll('.vl-rem-btn').forEach(b => b.classList.remove('vl-rem-on'));
+        btn.classList.add('vl-rem-on');
+      });
+    });
+  });
+  $('vl-p-save').addEventListener('click', () => vlSavePerson(villager?.id ?? null));
+  $('vl-p-del')?.addEventListener('click', () => vlDeletePerson(villager.id));
+  vlBindBackBtn('vl-p-back', 'vl-people-detail');
+}
+
+function vlAliasRowHtml(i, platform, id, handle) {
+  return `<div class="vl-alias-row" data-aidx="${i}">
+    <input type="text" placeholder="platform" value="${esc(platform)}" class="vl-alias-plat">
+    <input type="text" placeholder="stable id" value="${esc(id)}" class="vl-alias-id">
+    <input type="text" placeholder="handle" value="${esc(handle)}" class="vl-alias-hdl">
+    <button class="btn-ghost vl-alias-rm" type="button" title="Remove" style="padding:2px 7px">×</button>
+  </div>`;
+}
+
+async function vlSavePerson(id) {
+  const status = $('vl-p-status');
+  const name = $('vl-p-name').value.trim();
+  if (!name) { status.textContent = 'Name is required.'; return; }
+  const categoryIds = [...document.querySelectorAll('#vl-p-cat-toggles .vl-cat-toggle.vl-on')].map(b => b.dataset.cid);
+  const aliases = [...document.querySelectorAll('#vl-p-aliases .vl-alias-row')]
+    .map(row => ({
+      platform: row.querySelector('.vl-alias-plat')?.value.trim() ?? '',
+      id:       row.querySelector('.vl-alias-id')?.value.trim() ?? '',
+      handle:   row.querySelector('.vl-alias-hdl')?.value.trim() || undefined,
+    }))
+    .filter(a => a.platform && a.id);
+  const connection = $('vl-p-conn').value.trim();
+  const pronouns = $('vl-p-pronouns')?.value.trim() || undefined;
+  const relationToWard = $('vl-p-rel-ward')?.value.trim() || undefined;
+  const relationToFamiliar = $('vl-p-rel-fam')?.value || 'unaware';
+  const commStyleNotes = $('vl-p-comm')?.value.trim() || undefined;
+  const notes = $('vl-p-notes')?.value.trim() || undefined;
+  const privateNotes = $('vl-p-private-notes')?.value.trim() || undefined;
+  const remember = {};
+  document.querySelectorAll('#vl-p-remember .vl-rem-btn.vl-rem-on').forEach(btn => {
+    const rawVal = btn.dataset.val;
+    remember[btn.dataset.cat] = rawVal === 'true' ? true : rawVal === 'false' ? false : 'ask';
+  });
+  status.textContent = 'Saving…';
+  try {
+    const r = await fetch(
+      id ? `/api/village/villagers/${encodeURIComponent(id)}` : '/api/village/villagers',
+      { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, categoryIds, aliases, connection,
+          pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, remember }) },
+    );
+    if (!r.ok) throw new Error(await vlErrMsg(r));
+    const saved = await r.json();
+    status.textContent = '✓ Saved';
+    _vlReg = null;
+    const reg = await vlFetch(true);
+    _vlSelP = saved.id;
+    vlRenderPeopleGrid(reg);
+    vlRenderPersonDetail(reg.villagers.find(v => v.id === saved.id) ?? null);
+    setTimeout(() => { const s = $('vl-p-status'); if (s) s.textContent = ''; }, 2000);
+  } catch (err) { status.textContent = `Error: ${err.message}`; }
+}
+
+async function vlDeletePerson(id) {
+  const v = _vlReg?.villagers.find(x => x.id === id);
+  if (!v || !confirm(`Remove ${v.name} from your village?`)) return;
+  const status = $('vl-p-status');
+  status.textContent = 'Deleting…';
+  try {
+    const r = await fetch(`/api/village/villagers/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error(await vlErrMsg(r));
+    _vlReg = null; _vlSelP = null;
+    $('vl-people-detail').innerHTML = '<p style="color:var(--text-dim);font-size:0.85rem;padding:4px">Select a person or click &ldquo;+ Add person&rdquo;.</p>';
+    vlCloseDetail('vl-people-detail');
+    vlRenderPeopleGrid(await vlFetch(true));
+  } catch (err) { status.textContent = `Error: ${err.message}`; }
+}
+
+// ── Categories ──
+
+async function vlLoadCategories() {
+  const grid = $('vl-cat-grid');
+  grid.innerHTML = '<p class="logs-loading" style="grid-column:1/-1">Loading…</p>';
+  try {
+    vlRenderCatGrid(await vlFetch(true));
+  } catch (err) { grid.innerHTML = vlErr(err); }
+}
+
+function vlRenderCatGrid(reg) {
+  const grid = $('vl-cat-grid');
+  grid.innerHTML = reg.categories.map(c => {
+    const grants = Object.entries(c.grants ?? {});
+    const grantHtml = grants.length
+      ? grants.map(([k, v]) =>
+          `<span class="${typeof v === 'string' ? 'vl-grant-chip vl-grant-chip-str' : 'vl-grant-chip'}">${esc(typeof v === 'string' ? `${k}: ${v}` : k)}</span>`
+        ).join('')
+      : `<span class="vl-grant-none">no grants</span>`;
+    const badge = c.id === VL_STRANGERS ? ' 🔒' : c.builtin ? ' ⚙' : '';
+    return `<div class="vl-card${_vlSelC === c.id ? ' vl-sel' : ''}" data-cid="${esc(c.id)}" tabindex="0" role="button" aria-label="${esc(c.name)}">
+      <div class="vl-card-name" title="${esc(c.name)}">${esc(c.name)}${badge}</div>
+      <div class="vl-grant-chips">${grantHtml}</div>
+    </div>`;
+  }).join('');
+  grid.querySelectorAll('.vl-card').forEach(el => {
+    el.addEventListener('click', () => vlSelectCategory(el.dataset.cid));
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); vlSelectCategory(el.dataset.cid); }
+    });
+  });
+}
+
+function vlSelectCategory(id) {
+  _vlSelC = id;
+  $('vl-cat-grid').querySelectorAll('.vl-card').forEach(el =>
+    el.classList.toggle('vl-sel', el.dataset.cid === id)
+  );
+  vlRenderCatDetail(_vlReg?.categories.find(c => c.id === id) ?? null);
+  vlOpenDetail('vl-cat-detail');
+}
+
+function vlStartNewCategory() {
+  _vlSelC = null;
+  $('vl-cat-grid').querySelectorAll('.vl-card').forEach(el => el.classList.remove('vl-sel'));
+  vlRenderCatDetail(null);
+  vlOpenDetail('vl-cat-detail');
+}
+
+function vlRenderCatDetail(cat) {
+  const detail = $('vl-cat-detail');
+  const isNew    = !cat;
+  const isLocked = cat?.id === VL_STRANGERS;
+  const isBuiltin = cat?.builtin && !isNew;
+
+  const grantRows = Object.entries(cat?.grants ?? {}).map(([k, v], i) =>
+    vlGrantRowHtml(i, k, typeof v === 'string' ? 'str' : 'bool', typeof v === 'string' ? v : (v ? 'true' : 'false'), isLocked)
+  ).join('');
+
+  detail.innerHTML = `
+    <div class="vl-detail-head">${isNew ? 'New category' : esc(cat.name)}</div>
+    ${isLocked ? `<p class="vl-note">🔒 The floor — everyone unrecognized resolves here. Grants are permanently locked to empty.</p>` : ''}
+    <div>
+      <div class="vl-field-label">Name${isBuiltin ? ' <span class="vl-lock">(fixed)</span>' : ''}</div>
+      <input type="text" id="vl-c-name" value="${isNew ? '' : esc(cat.name)}" placeholder="e.g. Close Friends" style="width:100%"${isBuiltin ? ' disabled' : ''}>
+    </div>
+    <div>
+      <div class="vl-field-label">Grants <span class="field-hint">(what this category lets someone know or see)</span></div>
+      <div id="vl-c-grants" style="display:flex;flex-direction:column;gap:5px">${grantRows}</div>
+      ${!isLocked ? `<div class="vl-add-row"><button class="btn-ghost" id="vl-c-grant-add" type="button" style="font-size:0.8rem">+ Grant</button></div>` : ''}
+    </div>
+    ${!isLocked ? `
+    <div class="vl-actions">
+      <button class="btn-send" id="vl-c-save" type="button">${isNew ? 'Create' : 'Save'}</button>
+      ${!isNew && !cat.builtin ? `<button class="btn-danger" id="vl-c-del" type="button">Delete</button>` : ''}
+      <button class="btn-ghost vl-detail-back" id="vl-c-back" type="button" style="display:none">← Back</button>
+    </div>` : ''}
+    <div class="vl-status" id="vl-c-status"></div>
+  `;
+
+  if (!isLocked) {
+    $('vl-c-grant-add').addEventListener('click', () => {
+      const container = $('vl-c-grants');
+      const i = container.querySelectorAll('.vl-grant-row').length;
+      const div = document.createElement('div');
+      div.innerHTML = vlGrantRowHtml(i, '', 'bool', 'true', false);
+      const row = div.firstElementChild;
+      row.querySelector('.vl-grant-rm')?.addEventListener('click', () => row.remove());
+      container.appendChild(row);
+    });
+    detail.querySelectorAll('.vl-grant-rm').forEach(btn =>
+      btn.addEventListener('click', () => btn.closest('.vl-grant-row').remove())
+    );
+    $('vl-c-save').addEventListener('click', () => vlSaveCategory(cat?.id ?? null, isBuiltin));
+    $('vl-c-del')?.addEventListener('click', () => vlDeleteCategory(cat.id));
+    vlBindBackBtn('vl-c-back', 'vl-cat-detail');
+  }
+}
+
+function vlGrantRowHtml(i, key, type, val, disabled) {
+  const d = disabled ? ' disabled' : '';
+  return `<div class="vl-grant-row" data-gidx="${i}">
+    <input type="text" placeholder="grant key" value="${esc(key)}" class="vl-grant-key"${d}>
+    <select class="vl-grant-type"${d}>
+      <option value="bool"${type === 'bool' ? ' selected' : ''}>bool</option>
+      <option value="str"${type === 'str' ? ' selected' : ''}>string</option>
+    </select>
+    <input type="text" placeholder="true / value" value="${esc(val)}" class="vl-grant-val"${d}>
+    ${!disabled ? `<button class="btn-ghost vl-grant-rm" type="button" title="Remove" style="padding:2px 7px">×</button>` : '<span></span>'}
+  </div>`;
+}
+
+function vlReadGrants() {
+  const grants = {};
+  document.querySelectorAll('#vl-c-grants .vl-grant-row').forEach(row => {
+    const key = row.querySelector('.vl-grant-key')?.value.trim();
+    const type = row.querySelector('.vl-grant-type')?.value;
+    const val  = row.querySelector('.vl-grant-val')?.value.trim();
+    if (!key) return;
+    grants[key] = type === 'str' ? val : (val.toLowerCase() !== 'false' && val !== '0');
+  });
+  return grants;
+}
+
+async function vlSaveCategory(id, nameDisabled) {
+  const status = $('vl-c-status');
+  const nameVal = $('vl-c-name')?.value.trim();
+  if (!id && !nameVal) { status.textContent = 'Name is required.'; return; }
+  const grants = vlReadGrants();
+  const body = id
+    ? { grants, ...(nameDisabled ? {} : { name: nameVal }) }
+    : { name: nameVal, grants };
+  status.textContent = 'Saving…';
+  try {
+    const r = await fetch(
+      id ? `/api/village/categories/${encodeURIComponent(id)}` : '/api/village/categories',
+      { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+    );
+    if (!r.ok) throw new Error(await vlErrMsg(r));
+    const saved = await r.json();
+    status.textContent = '✓ Saved';
+    _vlReg = null;
+    const reg = await vlFetch(true);
+    _vlSelC = saved.id;
+    vlRenderCatGrid(reg);
+    vlRenderCatDetail(reg.categories.find(c => c.id === saved.id) ?? null);
+    setTimeout(() => { const s = $('vl-c-status'); if (s) s.textContent = ''; }, 2000);
+  } catch (err) { status.textContent = `Error: ${err.message}`; }
+}
+
+async function vlDeleteCategory(id) {
+  const cat = _vlReg?.categories.find(c => c.id === id);
+  if (!cat) return;
+  const wouldBeEmpty = (_vlReg?.villagers ?? []).filter(v =>
+    v.categoryIds?.includes(id) && v.categoryIds.filter(x => x !== id).length === 0
+  );
+  let reassignTo = null;
+  if (wouldBeEmpty.length > 0) {
+    const others = (_vlReg?.categories ?? []).filter(c => c.id !== id);
+    const pick = prompt(
+      `${wouldBeEmpty.length} person(s) only have this category.\n\nEnter the name of a category to move them to (or leave blank for Strangers):\n\n${others.map(c => c.name).join(', ')}`,
+    );
+    if (pick === null) return;
+    const target = pick.trim() ? others.find(c => c.name.toLowerCase() === pick.trim().toLowerCase()) : null;
+    if (pick.trim() && !target) { alert('Category not found.'); return; }
+    reassignTo = target?.id ?? VL_STRANGERS;
+  } else if (!confirm(`Delete "${cat.name}"?`)) return;
+
+  const status = $('vl-c-status');
+  status.textContent = 'Deleting…';
+  try {
+    const qs = reassignTo ? `?reassignTo=${encodeURIComponent(reassignTo)}` : '';
+    const r = await fetch(`/api/village/categories/${encodeURIComponent(id)}${qs}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error(await vlErrMsg(r));
+    _vlReg = null; _vlSelC = null;
+    $('vl-cat-detail').innerHTML = '<p style="color:var(--text-dim);font-size:0.85rem;padding:4px">Select a category to view or edit.</p>';
+    vlCloseDetail('vl-cat-detail');
+    vlRenderCatGrid(await vlFetch(true));
+  } catch (err) { status.textContent = `Error: ${err.message}`; }
+}
+
+// ── Location knock list (V4.x) ──
+
+async function vlLoadLocationKnocks() {
+  const box = $('vl-location-knocks');
+  if (!box) return;
+  try {
+    const r = await fetch('/api/village/location-knocks');
+    vlRenderLocationKnocks(r.ok ? await r.json() : []);
+  } catch { box.classList.add('hidden'); }
+}
+
+function vlRenderLocationKnocks(knocks) {
+  const box = $('vl-location-knocks');
+  if (!box) return;
+  if (!Array.isArray(knocks) || !knocks.length) {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  box.classList.remove('hidden');
+  box.innerHTML = `<div class="vl-knocks-head">🚪 Knocked on the door <span class="field-hint">— Discord channels your Familiar has spoken in that aren't registered yet. Register them to set an access ceiling.</span></div>`
+    + knocks.map((k, i) => {
+      const channelId = k.channelId || (k.key.split(':channel:')[1] ?? '');
+      const guildId   = k.guildId   || (k.key.match(/guild:([^:]+)/)?.[1] ?? '');
+      const displayKey = channelId ? `#${channelId}` : k.key;
+      const sub = [
+        guildId ? `guild ${guildId}` : '',
+        esc(k.platform ?? ''),
+        `${k.count ?? 1}×, last ${k.lastSeenAt ? new Date(k.lastSeenAt).toLocaleString() : '?'}`,
+      ].filter(Boolean).join(' · ');
+      return `<div class="vl-knock" data-lki="${i}">
+        <div class="vl-knock-info">
+          <div class="vl-knock-name">${esc(displayKey)} <span class="vl-knock-id">${esc(k.key)}</span></div>
+          <div class="vl-knock-sub">${sub}</div>
+        </div>
+        <div class="vl-knock-actions">
+          <button class="btn-secondary vl-loc-knock-register" type="button">Register</button>
+          <button class="btn-ghost vl-loc-knock-x" type="button" title="Dismiss (the channel can knock again — nothing is blocked)">×</button>
+        </div>
+      </div>`;
+    }).join('');
+
+  box.querySelectorAll('.vl-knock').forEach(row => {
+    const k = knocks[Number(row.dataset.lki)];
+    row.querySelector('.vl-loc-knock-register').addEventListener('click', () => vlRegisterFromLocationKnock(k));
+    row.querySelector('.vl-loc-knock-x').addEventListener('click', () => vlDismissLocationKnock(k));
+  });
+}
+
+async function vlDismissLocationKnock(k, { silent = false } = {}) {
+  if (!silent && !confirm(`Dismiss knock from ${k.key}? It can knock again — nothing is blocked.`)) return;
+  try {
+    await fetch('/api/village/location-knocks', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: k.key }),
+    });
+  } catch { /* best-effort */ }
+  vlLoadLocationKnocks();
+}
+
+/** Open the new-location panel prefilled with the knock's key. */
+function vlRegisterFromLocationKnock(k) {
+  vlStartNewLocation();
+  const keyEl = $('vl-l-key');
+  if (keyEl) keyEl.value = k.key;
+  const labelEl = $('vl-l-label');
+  if (labelEl) {
+    const channelId = k.channelId || (k.key.split(':channel:')[1] ?? '');
+    labelEl.value = channelId ? `Discord #${channelId}` : '';
+  }
+}
+
+// ── Locations ──
+
+async function vlLoadLocations() {
+  const list = $('vl-loc-list');
+  list.innerHTML = '<p class="logs-loading">Loading…</p>';
+  try {
+    vlRenderLocList(await vlFetch(true));
+  } catch (err) { list.innerHTML = vlErr(err); }
+  vlLoadLocationKnocks();
+}
+
+function vlRenderLocList(reg) {
+  const list = $('vl-loc-list');
+  if (!reg.locations.length) {
+    list.innerHTML = '<p class="vl-chip-dim" style="padding:12px">No locations yet. Click "+ Add location".</p>';
+    return;
+  }
+  const catMap = new Map(reg.categories.map(c => [c.id, c]));
+  list.innerHTML = reg.locations.map(l => {
+    const cat = catMap.get(l.assignedCategoryId);
+    const chip = cat ? `<span class="vl-chip${cat.builtin ? ' vl-chip-green' : ''}" style="flex-shrink:0">${esc(cat.name)}</span>` : '';
+    const mode = ['strict', 'lurk', 'active'].includes(l.mode) ? l.mode : 'strict';
+    const modeChip = mode !== 'strict'
+      ? `<span class="vl-chip" style="flex-shrink:0" title="Presence mode">${esc(mode)}</span>` : '';
+    const botChip = l.readBots === true
+      ? `<span class="vl-chip" style="flex-shrink:0" title="Reads other bots & Familiars">🤖</span>` : '';
+    return `<div class="vl-loc-card${_vlSelL === l.key ? ' vl-sel' : ''}" data-lkey="${esc(l.key)}" tabindex="0" role="button">
+      <div class="vl-loc-label" title="${esc(l.label)}">${esc(l.label)}</div>
+      <div class="vl-loc-key"   title="${esc(l.key)}">${esc(l.key)}</div>
+      ${modeChip}${botChip}${chip}
+    </div>`;
+  }).join('');
+  list.querySelectorAll('.vl-loc-card').forEach(el => {
+    el.addEventListener('click', () => vlSelectLocation(el.dataset.lkey));
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); vlSelectLocation(el.dataset.lkey); }
+    });
+  });
+}
+
+function vlSelectLocation(key) {
+  _vlSelL = key;
+  $('vl-loc-list').querySelectorAll('.vl-loc-card').forEach(el =>
+    el.classList.toggle('vl-sel', el.dataset.lkey === key)
+  );
+  vlRenderLocDetail(_vlReg?.locations.find(l => l.key === key) ?? null);
+  vlOpenDetail('vl-loc-detail');
+}
+
+function vlStartNewLocation() {
+  _vlSelL = null;
+  $('vl-loc-list').querySelectorAll('.vl-loc-card').forEach(el => el.classList.remove('vl-sel'));
+  vlRenderLocDetail(null);
+  vlOpenDetail('vl-loc-detail');
+}
+
+function vlRenderLocDetail(loc) {
+  const detail = $('vl-loc-detail');
+  const reg = _vlReg;
+  if (!reg) return;
+  const isNew = !loc;
+  const catOpts = reg.categories.map(c =>
+    `<option value="${esc(c.id)}"${loc?.assignedCategoryId === c.id ? ' selected' : ''}>${esc(c.name)}</option>`
+  ).join('');
+
+  // Connection dropdown — lets the ward assign a specific API connection
+  // (e.g. a throttled key for public Discord rooms) instead of the primary.
+  const connOpts = [
+    `<option value=""${!loc?.connectionId ? ' selected' : ''}>— use default —</option>`,
+    ...(state.connections ?? []).map(c => {
+      const label = c.name || c.provider || c.id;
+      return `<option value="${esc(c.id)}"${loc?.connectionId === c.id ? ' selected' : ''}>${esc(label)}</option>`;
+    }),
+  ].join('');
+
+  detail.innerHTML = `
+    <div class="vl-detail-head">${isNew ? 'Add location' : esc(loc.label)}</div>
+    <div>
+      <div class="vl-field-label">Key <span class="field-hint">(unique, e.g. discord:guild:123:channel:456)</span></div>
+      <input type="text" id="vl-l-key" value="${isNew ? '' : esc(loc.key)}" placeholder="discord:guild:…" style="width:100%"${!isNew ? ' readonly' : ''}>
+    </div>
+    <div>
+      <div class="vl-field-label">Label</div>
+      <input type="text" id="vl-l-label" value="${isNew ? '' : esc(loc.label)}" placeholder="e.g. #general in Chen's server" style="width:100%">
+    </div>
+    <div>
+      <div class="vl-field-label">Trust ceiling <span class="field-hint">(anyone here is treated as at most this)</span></div>
+      <select id="vl-l-cat" style="width:100%">${catOpts}</select>
+    </div>
+    <div>
+      <div class="vl-field-label">Connection <span class="field-hint">(optional — use a specific API key for this location)</span></div>
+      <select id="vl-l-conn" style="width:100%">${connOpts}</select>
+    </div>
+    <div>
+      <div class="vl-field-label">Rate limit (messages/hour, optional)</div>
+      <input type="number" id="vl-l-rate" value="${loc?.rateLimit?.perHour ?? ''}" placeholder="unlimited" min="0" step="1" style="width:100%">
+    </div>
+    <div>
+      <div class="vl-field-label">Presence <span class="field-hint">(how the Familiar behaves in this room)</span></div>
+      <select id="vl-l-mode" style="width:100%">
+        <option value="strict">Strict — only replies when @-mentioned</option>
+        <option value="lurk">Lurk — reads the room, replies when addressed</option>
+        <option value="active">Active — can chime in without being mentioned</option>
+      </select>
+    </div>
+    <div id="vl-l-active-opts" style="display:none;padding-left:8px;border-left:2px solid var(--border,#333)">
+      <div class="vl-field-label">Active cadence</div>
+      <select id="vl-l-active-strategy" style="width:100%">
+        <option value="llm">Familiar's judgment — decides each time whether to speak</option>
+        <option value="tiers">Activity tiers — paces itself to how busy the room is</option>
+      </select>
+      <div class="vl-field-label" style="margin-top:6px">Min seconds between unprompted replies</div>
+      <input type="number" id="vl-l-active-cooldown" value="${loc?.activeCooldownSec ?? ''}" placeholder="60" min="0" step="5" style="width:100%">
+      <p class="field-hint">A hard floor on unprompted turns, so active presence stays affordable. The hourly rate limit above still applies on top.</p>
+    </div>
+    <div>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="vl-l-readbots">
+        <span class="vl-field-label" style="margin:0">Read other bots &amp; Familiars here</span>
+      </label>
+      <p class="field-hint">Off by default. On = the Familiar sees and can answer other bots/Familiars in this room (it still never answers itself; loops are paced by the cooldown and rate limit above). Use for shared Familiar channels.</p>
+    </div>
+    <div class="vl-actions">
+      <button class="btn-send" id="vl-l-save" type="button">${isNew ? 'Add location' : 'Save'}</button>
+      ${!isNew ? `<button class="btn-danger" id="vl-l-del" type="button">Delete</button>` : ''}
+      <button class="btn-ghost vl-detail-back" id="vl-l-back" type="button" style="display:none">← Back</button>
+    </div>
+    <div class="vl-status" id="vl-l-status"></div>
+  `;
+
+  // Presence mode: <select>s can't carry a selected attr via the template
+  // above without string-building, so set the values and wire the
+  // active-options reveal here after the markup lands.
+  const modeSel = $('vl-l-mode');
+  if (modeSel) {
+    modeSel.value = ['strict', 'lurk', 'active'].includes(loc?.mode) ? loc.mode : 'strict';
+    const stratSel = $('vl-l-active-strategy');
+    if (stratSel) stratSel.value = loc?.activeStrategy === 'tiers' ? 'tiers' : 'llm';
+    const toggleActiveOpts = () => {
+      const box = $('vl-l-active-opts');
+      if (box) box.style.display = modeSel.value === 'active' ? '' : 'none';
+    };
+    modeSel.addEventListener('change', toggleActiveOpts);
+    toggleActiveOpts();
+  }
+  const readBotsBox = $('vl-l-readbots');
+  if (readBotsBox) readBotsBox.checked = loc?.readBots === true;
+
+  $('vl-l-save').addEventListener('click', () => vlSaveLocation(loc?.key ?? null));
+  $('vl-l-del')?.addEventListener('click', () => vlDeleteLocation(loc.key));
+  vlBindBackBtn('vl-l-back', 'vl-loc-detail');
+}
+
+async function vlSaveLocation(key) {
+  const status = $('vl-l-status');
+  const locKey  = $('vl-l-key').value.trim();
+  if (!locKey) { status.textContent = 'Key is required.'; return; }
+  const label  = $('vl-l-label').value.trim() || locKey;
+  const assignedCategoryId = $('vl-l-cat').value;
+  const connectionId = $('vl-l-conn')?.value || null;
+  const rateRaw = $('vl-l-rate').value.trim();
+  const rateLimit = rateRaw ? { perHour: parseInt(rateRaw, 10) } : null;
+  const mode = $('vl-l-mode')?.value || 'strict';
+  const activeStrategy = $('vl-l-active-strategy')?.value || 'llm';
+  const cdRaw = $('vl-l-active-cooldown')?.value.trim();
+  const activeCooldownSec = cdRaw ? parseInt(cdRaw, 10) : undefined;
+  const readBots = $('vl-l-readbots')?.checked === true;
+  status.textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/village/locations', {
+      method: key ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: locKey, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots }),
+    });
+    if (!r.ok) throw new Error(await vlErrMsg(r));
+    const saved = await r.json();
+    status.textContent = '✓ Saved';
+    _vlReg = null;
+    const reg = await vlFetch(true);
+    _vlSelL = saved.key;
+    vlRenderLocList(reg);
+    vlRenderLocDetail(reg.locations.find(l => l.key === saved.key) ?? null);
+    vlLoadLocationKnocks();
+    setTimeout(() => { const s = $('vl-l-status'); if (s) s.textContent = ''; }, 2000);
+  } catch (err) { status.textContent = `Error: ${err.message}`; }
+}
+
+async function vlDeleteLocation(key) {
+  if (!confirm(`Delete location "${key}"?`)) return;
+  const status = $('vl-l-status');
+  status.textContent = 'Deleting…';
+  try {
+    const r = await fetch('/api/village/locations', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key }),
+    });
+    if (!r.ok) throw new Error(await vlErrMsg(r));
+    _vlReg = null; _vlSelL = null;
+    $('vl-loc-detail').innerHTML = '<p style="color:var(--text-dim);font-size:0.85rem;padding:4px">Select a location to view or edit.</p>';
+    vlCloseDetail('vl-loc-detail');
+    vlRenderLocList(await vlFetch(true));
+  } catch (err) { status.textContent = `Error: ${err.message}`; }
+}
+
+// ── Mobile detail-panel helpers ──
+
+function vlOpenDetail(id) {
+  const el = $(id);
+  if (!el) return;
+  el.classList.add('vl-open');
+  // Show back button only on mobile
+  el.querySelectorAll('.vl-detail-back').forEach(b => {
+    b.style.display = window.matchMedia('(max-width: 767px)').matches ? '' : 'none';
+  });
+}
+function vlCloseDetail(id) { $(id)?.classList.remove('vl-open'); }
+function vlBindBackBtn(btnId, panelId) {
+  const btn = $(btnId);
+  if (!btn) return;
+  btn.style.display = window.matchMedia('(max-width: 767px)').matches ? '' : 'none';
+  btn.addEventListener('click', () => vlCloseDetail(panelId));
+}
+
+// ── Session audience (Village Support V2) ────────────────────────────────────
+//
+// Tracks who is physically present during the session. The Familiar is aware
+// of them (referenced in context) and V3 will use the list for knowledge
+// gating. State lives in `state.sessionAudience` and is cleared on new session.
+
+let _audienceReg = null; // cached village registry for the popover
+
+function toggleAudiencePopover() {
+  const popover = $('audience-popover');
+  if (!popover) return;
+  if (popover.classList.contains('hidden')) openAudiencePopover();
+  else closeAudiencePopover();
+}
+
+function openAudiencePopover() {
+  const popover = $('audience-popover');
+  if (!popover) return;
+  popover.classList.remove('hidden');
+  $('audience-btn').setAttribute('aria-expanded', 'true');
+  $('audience-btn').classList.add('active');
+  audiencePopulateDatalist();
+  renderAudienceChips();
+  $('audience-search').focus();
+}
+
+function closeAudiencePopover() {
+  const popover = $('audience-popover');
+  if (!popover) return;
+  popover.classList.add('hidden');
+  $('audience-btn').setAttribute('aria-expanded', 'false');
+  $('audience-btn').classList.remove('active');
+}
+
+async function audiencePopulateDatalist() {
+  try {
+    if (!_audienceReg) {
+      const r = await fetch('/api/village');
+      if (r.ok) _audienceReg = await r.json();
+    }
+    const dl = $('audience-datalist');
+    if (!dl || !_audienceReg) return;
+    dl.innerHTML = (_audienceReg.villagers ?? []).map(v =>
+      `<option value="${esc(v.name)}">`
+    ).join('');
+  } catch { /* network blip — datalist stays empty, free-text still works */ }
+}
+
+function audienceAddFromInput() {
+  const input = $('audience-search');
+  const name  = input?.value.trim();
+  if (!name) return;
+
+  // Resolve to a villager id if the name matches; else store the raw name.
+  const villager = (_audienceReg?.villagers ?? []).find(v => v.name.toLowerCase() === name.toLowerCase());
+  const id = villager?.id ?? null;
+
+  const audience = state.sessionAudience ?? { location: null, participants: [] };
+  const already  = audience.participants.some(p => (typeof p === 'string' ? p : p.id) === (id ?? name));
+  if (already) { input.value = ''; return; }
+
+  audience.participants = [...audience.participants, id ? { id, name: villager.name } : { id: null, name }];
+  state.sessionAudience = audience;
+  saveSettings();
+  renderAudienceChips();
+  updateAudienceBtn();
+  input.value = '';
+}
+
+function audienceRemove(identifier) {
+  const audience = state.sessionAudience ?? { location: null, participants: [] };
+  audience.participants = audience.participants.filter(p => {
+    const key = (typeof p === 'string' ? p : p.name);
+    return key !== identifier;
+  });
+  state.sessionAudience = audience;
+  saveSettings();
+  renderAudienceChips();
+  updateAudienceBtn();
+}
+
+function renderAudienceChips() {
+  const container = $('audience-participants');
+  if (!container) return;
+  const participants = state.sessionAudience?.participants ?? [];
+  if (!participants.length) {
+    container.innerHTML = '<span style="font-size:0.76rem;color:var(--text-dim)">No one added yet.</span>';
+    return;
+  }
+  container.innerHTML = participants.map(p => {
+    const name = typeof p === 'string' ? p : p.name;
+    return `<div class="audience-chip">
+      <span>${esc(name)}</span>
+      <button data-name="${esc(name)}" title="Remove" aria-label="Remove ${esc(name)}">×</button>
+    </div>`;
+  }).join('');
+  container.querySelectorAll('button[data-name]').forEach(btn =>
+    btn.addEventListener('click', () => audienceRemove(btn.dataset.name))
+  );
+}
+
+function updateAudienceBtn() {
+  const btn = $('audience-btn');
+  const label = $('audience-label');
+  if (!btn || !label) return;
+  const participants = state.sessionAudience?.participants ?? [];
+  if (!participants.length) {
+    label.textContent = 'Present';
+    btn.classList.remove('active');
+    return;
+  }
+  const names = participants.map(p => (typeof p === 'string' ? p : p.name));
+  label.textContent = names.length <= 2 ? names.join(', ') : `${names[0]} +${names.length - 1}`;
+  btn.classList.add('active');
 }
 
 

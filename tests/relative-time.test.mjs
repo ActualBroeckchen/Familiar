@@ -134,10 +134,10 @@ test('dayAndDate: weekday + month + day, no year by default', () => {
 
 // ── buildTimeAnchorBlock ───────────────────────────────────────────
 
-test('buildTimeAnchorBlock: always includes the [Now] header + clock + weekday/date', () => {
+test('buildTimeAnchorBlock: always includes the [Now] header + clock + UTC offset + weekday/date', () => {
   const block = buildTimeAnchorBlock({ now: NOW });
   assert.match(block, /^\[Now\]/);
-  assert.match(block, /Now: 2:30pm on Thursday, June 4\./);
+  assert.match(block, /Now: 2:30pm \(UTC[+-]\d{2}:\d{2}\) on Thursday, June 4\./);
 });
 
 test('buildTimeAnchorBlock: adds last-message line with absolute clock + interval', () => {

@@ -25,7 +25,7 @@
       </div>
       <div class="topbar-right">
         <span id="status-badge" class="status-badge" title="Connection status">●</span>
-        <button id="prompt-inspector-btn" class="icon-btn" aria-label="Inspect last prompt — color-coded by source (entity-core, lore, base)" title="Inspect last prompt (color-coded by source)">
+        <button id="prompt-inspector-btn" class="icon-btn" aria-label="Inspect last prompt — color-coded by source (Phylactery, lore, base)" title="Inspect last prompt (color-coded by source)">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
         </button>
         <div class="tailscale-wrap">
@@ -74,6 +74,7 @@
               <option value="nanogpt">NanoGPT</option>
               <option value="zai">Z.ai — Standard API</option>
               <option value="zai-coding">Z.ai — Coding Plan</option>
+              <option value="google">Google AI Studio — Gemini</option>
             </select>
           </div>
 
@@ -131,6 +132,23 @@
             <label for="pondering-scale">Pondering interval scale</label>
             <input type="number" id="pondering-scale" value="1" min="1" max="10" step="0.5">
             <div class="field-hint">Multiplies the base ponder interval. 1× = default cadence (30 min – 6 hr). 2× doubles every interval (1 hr – 12 hr). Use this to dial token cost down without disabling entirely. Only stretches, never speeds up.</div>
+          </div>
+
+          <div class="field-row">
+            <label for="warmth-toggle">Warm reach-outs</label>
+            <input type="checkbox" id="warmth-toggle" checked>
+          </div>
+          <div class="field-hint">When on, your Familiar reaches out warmly on its own — not just in a crisis. A gentle "thinking of you", following up on something you mentioned, or saying hi to a Villager tagged <em>warm toward it</em> (you always see a mirror of anything it sends out). It stands down automatically when concern is elevated (the crisis check-in handles that), and respects the quiet hours below. Off skips all non-crisis outreach.</div>
+
+          <div class="field">
+            <label>Quiet hours (no warm knocks)</label>
+            <div style="display:flex;align-items:center;gap:6px">
+              <input type="number" id="warmth-quiet-start" value="23" min="0" max="23" step="1" style="width:4em" aria-label="Quiet hours start">
+              <span style="color:var(--text-dim)">to</span>
+              <input type="number" id="warmth-quiet-end" value="8" min="0" max="23" step="1" style="width:4em" aria-label="Quiet hours end">
+              <span style="color:var(--text-dim);font-size:0.85rem">(24-hour, local)</span>
+            </div>
+            <div class="field-hint">The Familiar won't send warm reach-outs during this window. Set both to the same number to disable quiet hours. Crisis check-ins are never silenced by this.</div>
           </div>
         </div>
 
@@ -224,9 +242,17 @@
             <span class="chevron">▾</span>
           </button>
           <div class="section-content" id="content-posthist">
-            <p class="field-hint">Injected as a final user message after the conversation history, right before the AI responds. Use for in-character direction or formatting instructions.</p>
+            <p class="field-hint">Injected after the conversation history, right before the AI responds. Use for in-character direction or formatting instructions. Choose the role it's sent as below.</p>
             <textarea id="post-history-prompt" rows="4" placeholder="e.g. [Write {{char}}'s next reply, staying in character.]"></textarea>
             <div class="field-actions">
+              <label class="field-label" style="margin-right:auto;display:flex;align-items:center;gap:0.4em;font-size:0.82em">
+                Role
+                <select id="post-history-role" style="font-size:1em">
+                  <option value="system">system</option>
+                  <option value="user">user</option>
+                  <option value="assistant">assistant</option>
+                </select>
+              </label>
               <button class="btn-secondary import-btn" data-target="post-history-prompt">↑ Import file</button>
               <button class="btn-ghost clear-field-btn" data-target="post-history-prompt">✕ Clear</button>
             </div>
@@ -319,10 +345,10 @@
           </div>
         </div>
 
-        <!-- Knowledge editor (entity-core) -->
+        <!-- Knowledge editor (Phylactery) -->
         <div class="sidebar-section collapsible collapsed" id="section-knowledge">
           <button class="section-label collapse-toggle" aria-expanded="false" aria-controls="content-knowledge">
-            Knowledge (entity-core)
+            Knowledge (Phylactery)
             <span class="chevron">▾</span>
           </button>
           <div class="section-content" id="content-knowledge">
@@ -353,6 +379,46 @@
               <button id="contact-add" class="btn-secondary">+ Add</button>
             </div>
             <p class="field-hint" style="margin-top: 6px"><strong>How to make a Discord webhook:</strong> on the contact's side, in their Discord server's channel settings → Integrations → Webhooks → New Webhook → Copy URL. Paste it here.</p>
+          </div>
+        </div>
+
+        <!-- Discord presence (Village V4 — gateway bot) -->
+        <div class="sidebar-section collapsible collapsed" id="section-discord">
+          <button class="section-label collapse-toggle" aria-expanded="false" aria-controls="content-discord">
+            Discord presence
+            <span class="chevron">▾</span>
+          </button>
+          <div class="section-content" id="content-discord">
+            <div id="discord-node-warning" class="field-warning" style="display: none"></div>
+            <div class="field checkbox-field">
+              <label><input type="checkbox" id="discord-enabled"> Enable Discord presence</label>
+            </div>
+            <div class="field">
+              <label for="discord-bot-token">Bot token <span class="label-hint">(from the Developer Portal)</span></label>
+              <input type="password" id="discord-bot-token" placeholder="Bot token…" spellcheck="false" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="discord-ward-user-id">My Discord user ID <span class="label-hint">(so your Familiar knows it's you)</span></label>
+              <input type="text" id="discord-ward-user-id" placeholder="e.g. 123456789012345678" spellcheck="false">
+            </div>
+            <p class="field-hint">Your Familiar joins Discord as this bot: it answers your DMs with full context, answers DMs from registered Villagers with only what their category grants, and replies in server channels <em>only when @-mentioned</em> — with the room's assigned trust ceiling applied (unassigned rooms are treated as Strangers). Unregistered users' DMs are ignored.</p>
+            <p class="field-hint"><strong>Setup:</strong> Developer Portal → your application → Bot → enable the <em>Message Content</em> privileged intent, copy the token, invite the bot to your server. Your user ID: Discord Settings → Advanced → Developer Mode, then right-click yourself → Copy User ID.</p>
+            <p class="field-hint">All Discord conversations land in Session logs, same as web chats — nothing is hidden from you. Hard off-switch: <code>PROTO_FAMILIAR_DISCORD_DISABLED=1</code>.</p>
+            <div id="discord-status" class="field-hint" style="margin-top: 6px"></div>
+          </div>
+        </div>
+
+        <!-- Village (Village Support) -->
+        <div class="sidebar-section collapsible collapsed" id="section-village">
+          <button class="section-label collapse-toggle" aria-expanded="false" aria-controls="content-village">
+            Village
+            <span class="chevron">▾</span>
+          </button>
+          <div class="section-content" id="content-village">
+            <p class="field-hint">Manage the people in your Familiar's social safety net — trust categories, villagers with platform aliases, and locations.</p>
+            <div class="action-row" style="margin-top:4px">
+              <button id="village-btn" class="btn-secondary">🏘 Open Village editor</button>
+            </div>
           </div>
         </div>
 
@@ -406,6 +472,25 @@
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
               <span class="btn-new-topic-label">Topic</span>
             </button>
+            <!-- Session audience indicator (Village Support V2) -->
+            <div class="audience-wrap" id="audience-wrap">
+              <button id="audience-btn" class="btn-audience" title="Who's here with you?" aria-label="Session audience" aria-expanded="false" aria-controls="audience-popover">
+                🏘 <span id="audience-label">Present</span>
+              </button>
+              <div id="audience-popover" class="audience-popover hidden" role="dialog" aria-label="Who's present in this session">
+                <div class="audience-popover-head">
+                  <span class="audience-popover-title">Who's here with you?</span>
+                  <button id="audience-popover-close" class="icon-btn" aria-label="Close" style="font-size:0.8rem">✕</button>
+                </div>
+                <div id="audience-participants" class="audience-participants"></div>
+                <div class="audience-add-row">
+                  <input type="text" id="audience-search" placeholder="Add a name…" autocomplete="off" list="audience-datalist">
+                  <datalist id="audience-datalist"></datalist>
+                  <button id="audience-add-btn" class="btn-secondary" style="flex-shrink:0">Add</button>
+                </div>
+                <p class="field-hint" style="margin-top:4px;font-size:0.74rem">People listed here are present with you right now. Your Familiar will be aware of them this session.</p>
+              </div>
+            </div>
           </div>
           <div class="input-row">
             <textarea
@@ -530,7 +615,7 @@
     </div>
   </div>
 
-  <!-- Knowledge editor modal (entity-core) -->
+  <!-- Knowledge editor modal (Phylactery) -->
   <div class="modal-backdrop hidden" id="knowledge-modal" role="dialog" aria-modal="true" aria-labelledby="knowledge-modal-title">
     <div class="modal modal-wide modal-resizable" id="knowledge-modal-inner">
       <div class="modal-header">
@@ -623,6 +708,21 @@
             <button id="ke-snap-refresh" class="btn-ghost">Refresh</button>
           </div>
           <div class="ke-list ke-list-full" id="ke-snap-list"></div>
+
+          <div class="ke-backup-card">
+            <h3>Back up / restore my Familiar</h3>
+            <p class="field-hint">A single encrypted file holding the whole self — identity, memory, graph, trackers. It's locked with a passphrase you choose; keep it somewhere safe. <strong>The passphrase is never stored — if you lose it, the backup can't be opened.</strong></p>
+            <div class="ke-backup-row">
+              <input type="password" id="ke-backup-pass" placeholder="Passphrase (min 4 chars)" autocomplete="new-password" spellcheck="false">
+              <button id="ke-backup-export" class="btn-secondary">Back up now</button>
+            </div>
+            <div id="ke-backup-result" class="field-hint"></div>
+            <div class="ke-backup-row">
+              <input type="text" id="ke-backup-path" placeholder="Backup file path to restore from" spellcheck="false">
+              <input type="password" id="ke-backup-restore-pass" placeholder="Passphrase" autocomplete="off" spellcheck="false">
+              <button id="ke-backup-restore" class="btn-ghost">Restore…</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1067,6 +1167,80 @@
             <span id="te-handoff-summary" class="field-hint" style="margin-left:auto"></span>
           </div>
           <div class="ke-list" id="te-handoff-list" style="height: calc(100% - 40px); overflow:auto"></div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Village editor modal (Village Support V1) -->
+  <div class="modal-backdrop hidden" id="village-modal" role="dialog" aria-modal="true" aria-labelledby="village-modal-title">
+    <div class="modal modal-wide modal-resizable" id="village-modal-inner">
+      <div class="modal-header">
+        <h2 class="modal-title" id="village-modal-title">Village</h2>
+        <button class="icon-btn modal-close" id="village-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="ke-tabs" role="tablist">
+        <button class="ke-tab ke-tab-active" data-village-tab="people"     role="tab">People</button>
+        <button class="ke-tab"               data-village-tab="categories" role="tab">Categories</button>
+        <button class="ke-tab"               data-village-tab="locations"  role="tab">Locations</button>
+      </div>
+      <div class="modal-body ke-body">
+
+        <!-- PEOPLE PANE -->
+        <div class="ke-pane ke-pane-active" id="vl-pane-people">
+          <div class="ke-toolbar">
+            <button id="vl-people-refresh" class="btn-ghost">Refresh</button>
+            <button id="vl-people-add" class="btn-secondary" style="margin-left:auto">+ Add person</button>
+          </div>
+          <!-- Knock list: unregistered people who DMed / @-mentioned the
+               Familiar on Discord. Identity metadata only — binding is
+               always the ward's explicit act. Hidden when empty. -->
+          <div id="vl-knocks" class="vl-knocks hidden"></div>
+          <div class="vl-split">
+            <div class="vl-card-grid" id="vl-people-grid">
+              <p class="logs-loading" style="grid-column:1/-1">Loading…</p>
+            </div>
+            <div class="vl-detail" id="vl-people-detail">
+              <p style="color:var(--text-dim);font-size:0.85rem">Select a person or click &ldquo;+ Add person&rdquo;.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- CATEGORIES PANE -->
+        <div class="ke-pane" id="vl-pane-categories">
+          <div class="ke-toolbar">
+            <button id="vl-cat-refresh" class="btn-ghost">Refresh</button>
+            <button id="vl-cat-add" class="btn-secondary" style="margin-left:auto">+ Add category</button>
+          </div>
+          <div class="vl-split">
+            <div class="vl-card-grid" id="vl-cat-grid">
+              <p class="logs-loading" style="grid-column:1/-1">Loading…</p>
+            </div>
+            <div class="vl-detail" id="vl-cat-detail">
+              <p style="color:var(--text-dim);font-size:0.85rem">Select a category to view or edit.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- LOCATIONS PANE -->
+        <div class="ke-pane" id="vl-pane-locations">
+          <div class="ke-toolbar">
+            <button id="vl-loc-refresh" class="btn-ghost">Refresh</button>
+            <button id="vl-loc-add" class="btn-secondary" style="margin-left:auto">+ Add location</button>
+          </div>
+          <!-- Location knock list (V4.x) — unregistered Discord channels the
+               Familiar has spoken in, captured so the ward can register them
+               without hunting guild/channel IDs. Hidden when empty. -->
+          <div id="vl-location-knocks" class="vl-knocks hidden"></div>
+          <div class="vl-split">
+            <div class="vl-loc-list" id="vl-loc-list">
+              <p class="logs-loading">Loading…</p>
+            </div>
+            <div class="vl-detail" id="vl-loc-detail">
+              <p style="color:var(--text-dim);font-size:0.85rem">Select a location to view or edit.</p>
+            </div>
+          </div>
         </div>
 
       </div>

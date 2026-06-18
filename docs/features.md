@@ -33,7 +33,7 @@ Open with **☰** in the top bar.
 
 | Setting | Description |
 |---|---|
-| Provider | NanoGPT, Z.ai Standard, or Z.ai Coding Plan |
+| Provider | NanoGPT, Z.ai Standard, Z.ai Coding Plan, or Google AI Studio (Gemini) |
 | API Key | Your provider API key (sent to `localhost` only; never logged) |
 | Model | Model name — choose from the dropdown or type any valid name |
 | Streaming | Enable/disable SSE streaming |
@@ -50,7 +50,7 @@ The **Connections** sidebar section keeps multiple named provider / key / model 
 |---|---|
 | **Primary** (radio, mutually exclusive) | The connection used for the chat path. Selecting it copies its fields into the active Provider / API Key / Model inputs. |
 | **+ fallback** | Adds this connection to the ordered fallback list. When the primary returns an empty response or fails, the client retries in fallback order. Arrows let you reorder. |
-| **+ entity-core** (single-select across all rows) | Designates this connection's API key + model for entity-core's background consolidator. Triggers a server-side respawn of the entity-core child with the new env on save — no Proto-Familiar restart needed. See [Entity-Core → API key designation](entity-core.md#api-key-designation). |
+| **+ Phylactery** (single-select across all rows) | Designates this connection's API key + model for Phylactery's background consolidator. Triggers a server-side respawn of the Phylactery child with the new env on save — no Proto-Familiar restart needed. See [Phylactery → design](phylactery-design.md). |
 
 The list syncs across devices via `settings.json` along with the rest of your settings (Tailscale-mediated).
 
@@ -102,7 +102,7 @@ See [Tool Calling](tool-calling.md) for the full reference.
 | Enable tool use | Whether to send the tools array with each request |
 | Custom tools | Paste a JSON array of OpenAI function-calling definitions |
 
-Built-in tools: `get_datetime`, `get_session_info`, `save_to_tome`, `save_memory`, `update_identity`. The two entity-core tools (`save_memory`, `update_identity`) degrade gracefully when entity-core is unreachable. See [Tool Calling](tool-calling.md) for parameter details.
+Built-in tools: `get_datetime`, `get_session_info`, `save_to_tome`, `save_memory`, `update_identity`. The two Phylactery tools (`save_memory`, `update_identity`) degrade gracefully when Phylactery is unreachable. See [Tool Calling](tool-calling.md) for parameter details.
 
 ---
 
@@ -133,9 +133,9 @@ See [Sessions & Memorization](sessions.md) for the full reference.
 
 ---
 
-## Knowledge editor (entity-core)
+## Knowledge editor (Phylactery)
 
-Click **🧠 Open Knowledge editor** under the "Knowledge (entity-core)" sidebar section to browse and edit the long-term state that thalamus enriches every prompt with. The modal is **resizable** (drag the bottom-right corner; the size is remembered in localStorage) and only the ✕ closes it — clicks outside are ignored so a pan / resize-drag past the edge can't dismiss the window. Four tabs:
+Click **🧠 Open Knowledge editor** under the "Knowledge (Phylactery)" sidebar section to browse and edit the long-term state that thalamus enriches every prompt with. The modal is **resizable** (drag the bottom-right corner; the size is remembered in localStorage) and only the ✕ closes it — clicks outside are ignored so a pan / resize-drag past the edge can't dismiss the window. Four tabs:
 
 - **Memories** — list by granularity, click to view full content, edit-and-save (overwrites in place), delete, or **Supersede with today's date** (writes a new contradicting entry so the recency-decay scoring demotes the stale one while preserving history).
 - **Graph** — two view modes via the toolbar's List / Map toggle.
@@ -144,7 +144,7 @@ Click **🧠 Open Knowledge editor** under the "Knowledge (entity-core)" sidebar
   - **Inline editor popover.** Clicking a dot opens an editor card anchored next to it — label / type / description with a Type-field datalist, Save / Delete, the node's edges (each with weight `[0.50]`-style display and ✎ inline-edit / ✕ delete buttons), and a **+ Add edge from this node** section with target-label autocomplete (resolved against the live node-label index), relationship-type autocomplete, and a weight slider. The popover is draggable by its header so it can be moved off the dot it covers; the dragged position survives Save re-renders, and resets when a different node is opened.
   - **CRUD parity.** Add, edit, and delete work the same in both views and go through the same `keGraphAttachEdgesUI` handler.
 - **Identity** — list every identity file (self / user / relationship / custom). Click one to see its markdown sections; each section has its own textarea and a per-section Save that calls `identity_rewrite_section`. Top-of-file content (before any heading) is read-only — edit the file by hand if you need to change it.
-- **Snapshots** — list every entity-core snapshot, restore any one (replaces the current state), or **＋ Create snapshot now**. Auto-snapshots are taken before every destructive op in the other tabs and from every LLM editing tool call, so this tab is the safety net.
+- **Snapshots** — list every Phylactery snapshot, restore any one (replaces the current state), or **＋ Create snapshot now**. Auto-snapshots are taken before every destructive op in the other tabs and from every LLM editing tool call, so this tab is the safety net.
 
 Every destructive HTTP call goes through `thalamus.js` wrappers that call `snapshot_create` before the underlying MCP tool, so the user never needs to remember to back up before a delete. Creates (new node, new edge) do not auto-snapshot — they are additive and reversible by deleting.
 
@@ -154,7 +154,7 @@ The Familiar can do the same edits autonomously via the seven editing tools desc
 
 ## Temporal context (Unruh)
 
-A sibling Python MCP module (`unruh/`, alpha) adds a `[Temporal Context]` block to the dynamic enrichment — the Familiar's sense of *when* it is and *what's been going on*, distinct from entity-core's identity/memory layer. It runs as its own child process (`uv run python -m unruh`) and degrades gracefully: if it isn't installed or is down, the block is simply absent. Design rationale lives in [`unruh-design.md`](unruh-design.md); the three layers it surfaces:
+A sibling Python MCP module (`unruh/`, alpha) adds a `[Temporal Context]` block to the dynamic enrichment — the Familiar's sense of *when* it is and *what's been going on*, distinct from Phylactery's identity/memory layer. It runs as its own child process (`uv run python -m unruh`) and degrades gracefully: if it isn't installed or is down, the block is simply absent. Design rationale lives in [`unruh-design.md`](unruh-design.md); the three layers it surfaces:
 
 ### Schedule
 
@@ -184,7 +184,7 @@ The line names both the absolute clock time of the prior message AND the elapsed
 
 Two kinds, both rendered under the temporal block:
 
-- **Standing values** — always-on identity-level orientations (e.g. "caring for the user's wellbeing"). They never decay, so they surface every turn. A standing value can be **anchored to an entity-core identity fact** (a `value_ref` like `entity-core:self/my_wants.md#Caring for the user`); on each turn Thalamus checks the anchor still exists, and if you've since deleted that fact from the Knowledge editor, the standing value is **demoted to a live interest** (kept, but now subject to decay) rather than silently dropped. This is the structural side of the design's "redundancy is intentional" — a standing value stays standing only while the identity fact it mirrors is alive.
+- **Standing values** — always-on identity-level orientations (e.g. "caring for the user's wellbeing"). They never decay, so they surface every turn. A standing value can be **anchored to a Phylactery identity fact** (a `value_ref` like `entity-core:self/my_wants.md#Caring for the user` — the `entity-core:` scheme prefix is unchanged from the retired backend); on each turn Thalamus checks the anchor still exists, and if you've since deleted that fact from the Knowledge editor, the standing value is **demoted to a live interest** (kept, but now subject to decay) rather than silently dropped. This is the structural side of the design's "redundancy is intentional" — a standing value stays standing only while the identity fact it mirrors is alive.
 - **Live interests** — topics the Familiar engages with accrue **weight** automatically: longer replies and topics the conversation keeps returning to bump it (the signal comes from your open [Topic](topics.md) markers). Weight **decays** when a topic goes untouched (≈5-day half-life), so a passing curiosity fades within a couple of weeks while a sustained interest climbs into "active pursuit". Bookmarks are a supplementary explicit signal.
 
 Interests are read-only from the UI today; they accrue from chat and surface in the prompt. Tuning constants (decay rate, accrual scales) are code-level for now.
@@ -222,8 +222,8 @@ Last session:
 
 Click the **🔍** button in the top bar after sending a message to see the complete prompt that was actually sent to the LLM on the previous turn, color-coded by source:
 
-- **Entity-Core (static)** (purple) — the cacheable identity prefix prepended to the system message
-- **Entity-Core (dynamic @ depth)** (teal) — the per-turn block (memories / graph / temporal) depth-injected as its own system message at the cache-friendly position. See [`architecture.md#prompt-cache-aware-assembly`](architecture.md#prompt-cache-aware-assembly) for why these are split
+- **Phylactery (static)** (purple) — the cacheable identity prefix prepended to the system message
+- **Phylactery (dynamic @ depth)** (teal) — the per-turn block (memories / graph / temporal) depth-injected as its own system message at the cache-friendly position. See [`architecture.md#prompt-cache-aware-assembly`](architecture.md#prompt-cache-aware-assembly) for why these are split
 - **System prompt**, **Character profile**, **User profile** — the configured base segments
 - **Lore — system top / before character / after character / system bottom / injected at depth** — every Tome entry the activation engine matched, grouped by injection position
 - **Post-history prompt** — the trailing user instruction (if configured)

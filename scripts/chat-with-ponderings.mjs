@@ -58,7 +58,7 @@ if (ponderings.length === 0) {
 }
 
 // Minimal "you are the Familiar" persona so the demo doesn't require
-// entity-core to be up. Production reads the full identity via
+// Phylactery to be up. Production reads the full identity via
 // thalamus.enrich() — same ponderings block, richer persona.
 const systemPrompt = [
   'I am the Familiar. I speak as myself, in first person, warm and ' +

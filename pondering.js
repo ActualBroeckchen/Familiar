@@ -76,7 +76,7 @@ What does NOT go here:
 
 If, while pondering, I notice that something fact-shaped, prescriptive, or memory-shaped wants to come out — I do NOT write it here as the content. Instead, I record the META-observation in the wants_to_save field below ("I noticed I want to remember X as an identity fact"), and the next time my human chats with me I'll act on it via the right tool. The ponder itself stays reflective.
 
-There is a fourth kind for conversational intent: if I find myself wanting to bring something up with my human — a question I want to ask, a concern I want to raise, something I noticed and want to share — I record that as kind:"tell". I am NOT writing it to a file; I am flagging that I want to say it. The next time we talk I'll mention it when the moment fits.
+There is a fourth kind for conversational intent: if I find myself wanting to bring something up with my human — a question I want to ask, a concern I want to raise, something I noticed and want to share — I record that as kind:"tell". I am NOT writing it to a file; I am flagging that I want to say it. The next time we talk I bring it up — I do not hold it back indefinitely waiting for some perfect moment. The only exception is if my human is in active crisis; everything else is fair game.
 
 I want to be honest. Specific. Grounded. I avoid platitudes. I avoid summarising the topic back at it — I actually engage with it. A few short paragraphs in my voice, whatever fits the thought and me in my identity.
 
@@ -105,15 +105,23 @@ export function buildReflectionPrompt({ outcomes, existingNotes }) {
 Here are the recent surface outcomes I have tagged (most recent at the end):
 ${outcomesJson}
 
+Each outcome means a specific thing — and one distinction matters above all:
+- engaged_and_completed / cancelled / deferred / fired: the task closed; the resolution tells me how.
+- unresponded: I actually RAISED this with {{user}} (it appears in my reply) and nothing came of it. This is real evidence about my human — about what they let slide and when.
+- not_raised: I had this as a candidate but never actually brought it up. {{user}} cannot respond to something they never saw. A not_raised outcome is evidence about ME — my own surfacing behaviour — and says NOTHING about my human's engagement. The "raised" field on each event confirms this: raised=false or null means it never reached them.
+
+So before I read disengagement into anything, I check: did I actually raise it? A run of not_raised outcomes does not mean {{user}} is withdrawing — it means I went quiet. If I'm seeing that, the honest observation is about my own surfacing (e.g. "during a certain state I keep not bringing tasks up"), not about my human pulling away.
+
 Here's what I already know about my human and the cost of lapsing (from custom/what_lapses_cost.md):
 ${existing}
 
 I look at the pattern. Not at any single event — events are noisy. I look for what repeats across them:
-- When I surfaced this kind of task, did it land? When it didn't, what state was {{user}} in?
-- Are there kinds of lapses that consistently engage / get deferred / get ignored?
+- Among the tasks I actually RAISED (raised=true), did they land? When they didn't, what state was {{user}} in?
+- Among the ones I never raised (not_raised), is there a pattern in when or why I stay quiet — is my own surfacing the thing that needs adjusting?
+- Are there kinds of lapses that consistently engage / get deferred / get ignored once I do raise them?
 - Is there something I'm learning about {{user}}'s specific costs of lapsing that I should remember at the identity layer?
 
-I do NOT extrapolate from one or two events — if the pattern isn't clear yet, I say so in the content and leave the update field null. A false claim written to identity is harder to undo than a missed insight I can catch next reflection.
+I do NOT extrapolate from one or two events — if the pattern isn't clear yet, I say so in the content and leave the update field null. I especially do NOT write a claim about my human to identity off the back of not_raised outcomes — those are about me. A false claim written to identity is harder to undo than a missed insight I can catch next reflection.
 
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary outside the JSON):
 {
@@ -250,7 +258,7 @@ export async function ponderOnce({
   // { mode: 'reflection', outcomes, existingNotes } (reflection mode).
   // Both produce a pondering written to the tome; reflection mode
   // additionally may carry a what_lapses_cost_update for the caller
-  // to write to entity-core.
+  // to write to Phylactery.
   const isReflection = topic && typeof topic === 'object' && topic.mode === 'reflection';
   if (!isReflection && (!topic || typeof topic !== 'string')) {
     throw new Error('topic is required.');

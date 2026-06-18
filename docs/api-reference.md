@@ -14,7 +14,7 @@ Proxies a chat completion request to the selected LLM provider. Supports both st
 
 ```json
 {
-  "provider":    "nanogpt | zai | zai-coding",
+  "provider":    "nanogpt | zai | zai-coding | google",
   "apiKey":      "sk-...",
   "model":       "gpt-4o-mini",
   "messages":    [{ "role": "user", "content": "Hello" }],
@@ -28,7 +28,7 @@ Proxies a chat completion request to the selected LLM provider. Supports both st
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `provider` | string | Yes | One of `"nanogpt"`, `"zai"`, `"zai-coding"` |
+| `provider` | string | Yes | One of `"nanogpt"`, `"zai"`, `"zai-coding"`, `"google"` |
 | `apiKey` | string | Yes | Your API key for the chosen provider |
 | `model` | string | Yes | Model name (e.g. `"gpt-4o-mini"`, `"glm-4.7"`) |
 | `messages` | array | Yes | OpenAI-compatible messages array |
@@ -44,12 +44,12 @@ Proxies a chat completion request to the selected LLM provider. Supports both st
 | `lastUserMessageAt` | string | No | ISO timestamp of the *previous* user message — feeds the `[Now]` time anchor and idle-duration bookmark surfacing. |
 | `enrich` | boolean/string | No | Enrichment mode. `true`/omitted = full (identity + memory + graph + temporal, and consume any surfaced session handoff); `"static"` = persona/identity only (no memory/temporal, no handoff consumption — used by the handoff summariser so its note is in character without the dynamic context); `false` = none. |
 
-**Enrichment:** Before forwarding, the server calls `thalamus.js:enrich()`, which returns the entity-core + Unruh context split into two parts for prompt-cache efficiency (see [`architecture.md`](architecture.md#prompt-cache-aware-assembly)):
+**Enrichment:** Before forwarding, the server calls `thalamus.js:enrich()`, which returns the Phylactery + Unruh context split into two parts for prompt-cache efficiency (see [`architecture.md`](architecture.md#prompt-cache-aware-assembly)):
 
 - **`static`** — base instructions + identity files. Prepended to the system message (stable across turns, so the provider's prefix cache covers it).
 - **`dynamic`** — RAG memories, knowledge-graph excerpt, and Unruh temporal context. Injected as a separate `system` message `depth` positions from the end of the conversation, so per-turn churn doesn't invalidate the static prefix. Depth comes from the `thalamusDynamicDepth` setting (default 4).
 
-If entity-core and Unruh are both unavailable, the request proceeds without enrichment.
+If Phylactery and Unruh are both unavailable, the request proceeds without enrichment.
 
 **Streaming response (`stream: true`):**
 
@@ -88,7 +88,7 @@ Returns the provider's JSON response with the provider's original HTTP status co
 
 ### `POST /api/debug-prompt`
 
-Returns the full enriched message array that would be sent to the LLM for a given conversation payload — including the entity-core context block — **without** making any upstream API call. Available for offline previewing. The live prompt inspector no longer uses this endpoint; it reads the `_thalamus` envelope that `POST /api/chat` attaches to every response, so it reflects the actual injection rather than a re-derived preview.
+Returns the full enriched message array that would be sent to the LLM for a given conversation payload — including the Phylactery context block — **without** making any upstream API call. Available for offline previewing. The live prompt inspector no longer uses this endpoint; it reads the `_thalamus` envelope that `POST /api/chat` attaches to every response, so it reflects the actual injection rather than a re-derived preview.
 
 **Request body:**
 
@@ -102,7 +102,7 @@ Returns the full enriched message array that would be sent to the LLM for a give
 { "messages": [...] }
 ```
 
-The same messages array with entity-core enrichment prepended to the system message (or inserted as a new system message if none was present).
+The same messages array with Phylactery enrichment prepended to the system message (or inserted as a new system message if none was present).
 
 **Error responses:**
 
@@ -681,9 +681,9 @@ Cancel a pending job. Jobs already in `processing` cannot be cancelled.
 
 ---
 
-## Entity-core
+## Identity & memory (Phylactery)
 
-These endpoints write through to the entity-core MCP subprocess via `thalamus.js`. They are exposed for the built-in `save_memory` and `update_identity` tools and degrade gracefully (`502`) when entity-core is unavailable.
+These endpoints write through to the Phylactery MCP subprocess via `thalamus.js`. The `/api/entity/*` route prefix is a legacy name kept stable for client compatibility — it predates the retired entity-core backend and was not renamed when Phylactery replaced it. They are exposed for the built-in `save_memory` and `update_identity` tools and degrade gracefully (`502`) when Phylactery is unavailable.
 
 ### `POST /api/entity/memory`
 
@@ -712,7 +712,7 @@ Writes a new memory entry to the long-term memory system.
 | Status | Condition |
 |---|---|
 | `400` | Missing/blank `content`, `content` exceeds 8 KB, or invalid `granularity` |
-| `502` | entity-core unavailable |
+| `502` | Phylactery unavailable |
 
 ---
 
@@ -747,17 +747,17 @@ Appends to or updates a section of an identity file.
 | Status | Condition |
 |---|---|
 | `400` | Invalid category, filename, missing content, or missing heading when `mode = update_section` |
-| `502` | entity-core unavailable |
+| `502` | Phylactery unavailable |
 
 ---
 
 ### Knowledge editor endpoints
 
-The endpoints below back the **Knowledge editor** modal in the sidebar and the LLM-callable editing tools (`update_memory`, `delete_memory`, `rewrite_identity_section`, `update_graph_node`, `delete_graph_node`, `update_graph_edge`, `delete_graph_edge`). Every destructive op (`PUT`, `PATCH`, `DELETE`) auto-snapshots entity-core before the underlying MCP call, so a mistake is always recoverable via the snapshots endpoints. All return `502` when entity-core is unavailable; reads return entity-core's JSON verbatim.
+The endpoints below back the **Knowledge editor** modal in the sidebar and the LLM-callable editing tools (`update_memory`, `delete_memory`, `rewrite_identity_section`, `update_graph_node`, `delete_graph_node`, `update_graph_edge`, `delete_graph_edge`). Every destructive op (`PUT`, `PATCH`, `DELETE`) auto-snapshots Phylactery before the underlying MCP call, so a mistake is always recoverable via the snapshots endpoints. All return `502` when Phylactery is unavailable; reads return Phylactery's JSON verbatim.
 
 #### Memory
 
-The `:date` segment accepts what `memory_list` actually returns: a plain date (`YYYY-MM-DD`, `YYYY-MM`, `YYYY`, or `YYYY-Www`) — or, for **significant** memories, the composite key `YYYY-MM-DD_slug` (one named file per milestone, e.g. `2026-06-11_why-melian-trusts-me`). The server splits the composite into the separate `date` + `slug` parameters entity-core's read/update/delete tools expect (since 0.4.1-alpha; before that, slugged keys were rejected with `invalid date format`).
+The `:date` segment accepts what `memory_list` actually returns: a plain date (`YYYY-MM-DD`, `YYYY-MM`, `YYYY`, or `YYYY-Www`) — or, for **significant** memories, the composite key `YYYY-MM-DD_slug` (one named file per milestone, e.g. `2026-06-11_why-melian-trusts-me`). The server splits the composite into the separate `date` + `slug` parameters Phylactery's read/update/delete tools expect (since 0.4.1-alpha; before that, slugged keys were rejected with `invalid date format`).
 
 | Method & path | Purpose | Body / query |
 |---|---|---|

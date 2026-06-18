@@ -318,6 +318,22 @@ body {
   line-height: 1.4;
 }
 
+/* Inline warning banner inside a settings section (e.g. the Discord
+   section flags a too-old Node runtime that can't open the gateway). */
+.field-warning {
+  font-size: 0.78rem;
+  color: var(--warn-color);
+  background: color-mix(in srgb, var(--warn-color) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn-color) 45%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin-bottom: 9px;
+  line-height: 1.45;
+}
+.field-warning code {
+  font-style: normal;
+}
+
 /* Range input */
 input[type="range"] {
   width: 100%;
@@ -1630,6 +1646,21 @@ button { cursor: pointer; font-family: var(--font); }
   background: var(--surface);
   flex-wrap: wrap;
 }
+.ke-backup-card {
+  margin: 16px; padding: 14px 16px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.ke-backup-card h3 { margin: 0 0 6px; font-size: 0.95rem; }
+.ke-backup-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.ke-backup-row input {
+  flex: 1 1 180px; min-width: 140px;
+  font-size: 0.85rem; padding: 5px 8px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text);
+}
+#ke-backup-result { margin-top: 10px; }
+#ke-backup-result code { word-break: break-all; }
 .ke-toolbar label { font-size: 0.82rem; color: var(--text-dim); display: flex; gap: 6px; align-items: center; }
 .ke-toolbar select, .ke-toolbar input[type="text"] {
   font-size: 0.85rem;
@@ -1675,6 +1706,30 @@ button { cursor: pointer; font-family: var(--font); }
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
+.ke-row-settings { opacity: 0.85; font-style: italic; }
+.ke-meta-row {
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 8px; margin-bottom: 10px;
+}
+.ke-meta-label {
+  font-size: 0.82rem; color: var(--text-dim);
+  min-width: 100px; flex-shrink: 0;
+}
+.ke-select {
+  font-size: 0.85rem; padding: 4px 8px;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text);
+  flex: 1 1 180px; min-width: 140px;
+}
+.ke-badge {
+  display: inline-block; margin-left: 6px;
+  font-size: 0.7rem; padding: 1px 5px;
+  border-radius: 3px; vertical-align: middle;
+  font-weight: 600; letter-spacing: 0.04em;
+}
+.ke-badge-audience { background: var(--accent-dim, #1c3a5e); color: var(--accent, #7ab4f5); }
+.ke-badge-cw-high   { background: #3a1c1c; color: #f5a07a; }
+.ke-badge-cw-low    { background: var(--surface); color: var(--text-dim); }
 
 .ke-detail-header { margin-bottom: 12px; }
 .ke-detail-header h3 { margin: 0; font-size: 1rem; color: var(--text); }
@@ -2683,4 +2738,382 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
   #user-input {
     max-height: 25dvh;
   }
+}
+
+/* ── Village editor ──────────────────────────────────────────── */
+
+.vl-split {
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Left column: card grid (people / categories) or row list (locations) */
+.vl-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
+  align-content: start;
+  gap: 10px;
+  padding: 12px;
+  overflow-y: auto;
+}
+.vl-loc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px;
+  overflow-y: auto;
+}
+
+/* Card shared base */
+.vl-card {
+  background: var(--surface-raise);
+  border: 1.5px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 11px 12px;
+  cursor: pointer;
+  transition: border-color 0.12s, box-shadow 0.12s;
+  min-width: 0;
+  user-select: none;
+}
+.vl-card:hover      { border-color: var(--accent); }
+.vl-card.vl-sel     { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+.vl-card-name {
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 6px;
+}
+.vl-card-sub {
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  margin-top: 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Chips row */
+.vl-chips { display: flex; flex-wrap: wrap; gap: 3px; }
+.vl-chip {
+  font-size: 0.70rem;
+  padding: 1px 6px;
+  border-radius: 100px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vl-chip-green {
+  background: color-mix(in srgb, var(--success-color) 18%, transparent);
+  color: var(--success-color);
+}
+.vl-chip-dim { font-size: 0.74rem; color: var(--text-muted); font-style: italic; }
+
+/* Grant chips inside category cards */
+.vl-grant-chips { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 6px; }
+.vl-grant-chip {
+  font-size: 0.70rem;
+  padding: 1px 6px;
+  border-radius: 100px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+.vl-grant-chip-str {
+  background: color-mix(in srgb, var(--warn-color) 14%, transparent);
+  color: var(--warn-color);
+}
+.vl-grant-none { font-size: 0.74rem; color: var(--text-muted); font-style: italic; }
+.vl-cat-badge {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+/* Location row cards */
+.vl-loc-card {
+  background: var(--surface-raise);
+  border: 1.5px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 9px 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: border-color 0.12s;
+  min-width: 0;
+  user-select: none;
+}
+.vl-loc-card:hover      { border-color: var(--accent); }
+.vl-loc-card.vl-sel     { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+.vl-loc-label {
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vl-loc-key {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Right panel: detail / edit form */
+.vl-detail {
+  border-left: 1px solid var(--border-light);
+  overflow-y: auto;
+  padding: 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+.vl-detail-head {
+  font-size: 0.96rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+.vl-field-label {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.055em;
+  margin-bottom: 5px;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.vl-field-label .field-hint {
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 0.76rem;
+}
+.vl-field-label .vl-lock {
+  font-size: 0.8em;
+  opacity: 0.7;
+}
+
+/* Multi-select category toggles */
+.vl-cat-toggles { display: flex; flex-wrap: wrap; gap: 5px; }
+.vl-cat-toggle {
+  font-size: 0.78rem;
+  padding: 3px 10px;
+  border-radius: 100px;
+  border: 1.5px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: border-color 0.1s, background 0.1s, color 0.1s;
+}
+.vl-cat-toggle:hover { border-color: var(--accent); color: var(--text); }
+.vl-cat-toggle.vl-on { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+
+/* Alias grid row: platform | id | handle | remove */
+.vl-alias-row {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) minmax(0,1.2fr) minmax(0,1fr) auto;
+  gap: 5px;
+  align-items: center;
+}
+.vl-alias-row input { font-size: 0.82rem; }
+
+/* Grant row: key | type | value | remove */
+.vl-grant-row {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) auto minmax(0,1fr) auto;
+  gap: 5px;
+  align-items: center;
+}
+.vl-grant-row input,
+.vl-grant-row select { font-size: 0.82rem; }
+
+.vl-add-row { display: flex; gap: 6px; margin-top: 3px; }
+.vl-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.vl-note { font-size: 0.78rem; color: var(--text-dim); line-height: 1.5; }
+.vl-status { font-size: 0.82rem; min-height: 1.1em; }
+
+/* Memory consent grid (Pillar G) */
+.vl-rem-grid { display: flex; flex-direction: column; gap: 5px; }
+.vl-rem-row  { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.vl-rem-label {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  min-width: 9em;
+  flex-shrink: 0;
+}
+.vl-rem-toggle { display: flex; gap: 3px; }
+.vl-rem-btn {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 100px;
+  border: 1.5px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: border-color 0.1s, background 0.1s, color 0.1s;
+}
+.vl-rem-btn:hover { border-color: var(--accent); color: var(--text); }
+.vl-rem-free.vl-rem-on  { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+.vl-rem-ask.vl-rem-on   { background: color-mix(in srgb, orange 18%, transparent); color: #c97c00; border-color: #c97c00; }
+.vl-rem-never.vl-rem-on { background: color-mix(in srgb, var(--danger, #c0392b) 15%, transparent); color: var(--danger, #c0392b); border-color: var(--danger, #c0392b); }
+
+/* Knock list (V4.x) — pending unregistered contacts above the grid */
+.vl-knocks {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-alt, rgba(128, 128, 128, 0.06));
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.vl-knocks.hidden { display: none; }
+.vl-knocks-head { font-size: 0.82rem; font-weight: 600; }
+.vl-knock {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.vl-knock-info { flex: 1 1 14em; min-width: 0; }
+.vl-knock-name { font-size: 0.86rem; font-weight: 600; overflow-wrap: anywhere; }
+.vl-knock-id   { font-size: 0.72rem; font-weight: 400; color: var(--text-dim); }
+.vl-knock-sub  { font-size: 0.74rem; color: var(--text-dim); }
+.vl-knock-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.vl-knock-actions select { font-size: 0.78rem; max-width: 11em; }
+.vl-knock-actions .btn-secondary,
+.vl-knock-actions .btn-ghost { font-size: 0.78rem; padding: 3px 9px; }
+
+@media (max-width: 767px) {
+  .vl-split {
+    grid-template-columns: 1fr;
+    position: relative;
+  }
+  .vl-detail {
+    display: none;
+    position: absolute;
+    inset: 0;
+    background: var(--surface);
+    border-left: none;
+    z-index: 5;
+    padding: 16px;
+  }
+  .vl-detail.vl-open { display: flex; }
+}
+
+/* ── Session audience (Village Support V2) ───────────────────── */
+
+.audience-wrap {
+  position: relative;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.btn-audience {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  font-size: 0.76rem;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 100px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.12s, border-color 0.12s;
+}
+.btn-audience:hover { color: var(--text); border-color: var(--border); }
+.btn-audience.active { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+
+.audience-popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  width: 280px;
+  background: var(--surface-raise);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  z-index: 48;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.audience-popover.hidden { display: none; }
+
+.audience-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.audience-popover-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.audience-participants {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-height: 24px;
+}
+.audience-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.76rem;
+  padding: 2px 8px 2px 9px;
+  border-radius: 100px;
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.audience-chip button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  font-size: 0.8em;
+  opacity: 0.7;
+  line-height: 1;
+}
+.audience-chip button:hover { opacity: 1; }
+
+.audience-add-row {
+  display: flex;
+  gap: 6px;
+}
+.audience-add-row input {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.82rem;
 }

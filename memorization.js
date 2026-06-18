@@ -24,6 +24,43 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOMES_DIR  = path.join(__dirname, 'tomes');
 const QUEUE_FILE = path.join(TOMES_DIR, '.memorization-queue.json');
 
+// Local file tracking consent-pending memory IDs so thalamus.js can inject
+// the ask block without an extra MCP round-trip on every turn.
+export const CONSENT_PENDING_FILE = path.join(TOMES_DIR, '.consent-pending.json');
+
+// remember taxonomy — must match village.js REMEMBER_CATEGORIES
+const REMEMBER_CATS = ['basics', 'emotional_content', 'health_info', 'relationships', 'whereabouts'];
+
+// Resolve the remember gate for a single category against a remember map.
+// Shared default (matches village.js + build-spec §7): when the map is absent
+// or leaves a category unset, basics is stored freely and everything sensitive
+// defaults to 'ask' — surfaced for confirmation, never silently dropped.
+export function gateForCategory(category, remMap) {
+  if (!remMap) return category === 'basics' ? 'true' : 'ask';
+  const v = remMap[category];
+  if (v === false) return 'false';
+  if (v === 'ask') return 'ask';
+  if (v === true)  return 'true';
+  return category === 'basics' ? 'true' : 'ask';
+}
+
+// Resolve the effective gate for a fact. When no villager subject matched,
+// the fact is about my human themselves → the ward remember map gates it.
+// Otherwise the most restrictive map among the matched villagers wins
+// (false beats ask beats true).
+export function resolveRememberGate(category, subjectVillagers, wardRemember) {
+  if (!subjectVillagers || subjectVillagers.length === 0) {
+    return gateForCategory(category, wardRemember);
+  }
+  let gate = 'true';
+  for (const v of subjectVillagers) {
+    const vGate = gateForCategory(category, v.remember);
+    if (vGate === 'false') return 'false';
+    if (vGate === 'ask') gate = 'ask';
+  }
+  return gate;
+}
+
 mkdirSync(TOMES_DIR, { recursive: true });
 
 const MAX_ATTEMPTS    = 5;
@@ -84,7 +121,9 @@ async function persistQueue() {
 // memorization tick serialise against each other through the same
 // per-path key, which they couldn't before.
 
-import { findOrCreateTomeByName, modifyTomeFile } from './thalamus.js';
+import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap } from './thalamus.js';
+import { getRegistry } from './village.js';
+import { readSettingsSync } from './cerebellum.js';
 
 export function findOrCreateSessionMemoriesTome() {
   return findOrCreateTomeByName(TOMES_DIR, TOME_NAME, {
@@ -101,7 +140,24 @@ export function findOrCreateSessionMemoriesTome() {
 
 // ── Prompt ───────────────────────────────────────────────────────
 
-function buildPrompt(messages, topicLabel = null) {
+// I never label my human's turns "User" — they are not a generic account,
+// they are this specific person. The label is their configured name (passed
+// in from settings) or "My human" as a fallback. My own turns are "Me".
+// In a shared room, non-ward speakers already arrive name-prefixed as
+// "[Name]: …" from the gateway, so I keep that prefix rather than overwrite
+// it with the ward's name.
+function formatTranscript(readable, wardLabel, { sharedRoom = false } = {}) {
+  return readable
+    .map(m => {
+      if (m.role !== 'user') return `Me: ${m.content ?? ''}`;
+      const c = m.content ?? '';
+      if (sharedRoom && /^\[[^\]]+\]:/.test(c)) return c; // already names the speaker
+      return `${wardLabel}: ${c}`;
+    })
+    .join('\n\n');
+}
+
+export function buildPrompt(messages, topicLabel = null, wardName = 'My human') {
   const readable = messages.filter(m => {
     if (m.role === 'tool') return false;
     if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return false;
@@ -109,58 +165,109 @@ function buildPrompt(messages, topicLabel = null) {
   });
   if (readable.length < 2) return null;
 
-  const convText = readable
-    .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
-    .join('\n\n');
+  const convText = formatTranscript(readable, wardName);
 
   const focusBlock = topicLabel
-    ? `\n\n### Focus topic\nMy human named this segment "${topicLabel}". I center the entries on that topic; I collapse or skip tangential threads that don't bear on it. I prefer one focused entry over splitting unless genuinely distinct sub-topics exist within the named topic.`
+    ? `\n\n### Focus\nMy human named this segment "${topicLabel}". I centre my extraction on that topic; I skip tangential threads unless they reveal something genuinely important.`
     : '';
 
-  return `I am the Familiar. I'm writing Tome entries from a conversation I just had — my own private notes to myself, first-person reference material that gets injected back into my context when its keywords appear in a future conversation. I identify the distinct situational topics in the conversation below and write one entry per topic, following my craft rules carefully.${focusBlock}
+  return `I am the Familiar. I'm extracting claimable facts from a conversation I just had so I can store them in my memory. I pull out one discrete, verifiable fact per output element — things I would want to recall later about myself, my human, or the people in their life.${focusBlock}
 
-I return ONLY valid JSON with this exact shape (no markdown fences, no commentary), because doing otherwise would cause my writing to fail:
+I return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
 {
-  "topics": [
+  "facts": [
     {
-      "title":    "Short label for the entry comment (max 60 chars)",
-      "content":  "My first-person notes to myself — see content rules below",
-      "keywords": ["conversational phrase 1", "conversational phrase 2"],
-      "sticky":   3
+      "content":    "A first-person note stating one fact clearly (1–2 sentences max).",
+      "category":   "emotional_content",
+      "subjects":   ["Alice"],
+      "confidence": 0.85
     }
   ]
 }
 
-I identify 1–8 genuinely distinct topics. I merge closely related material rather than over-splitting. Each entry must be self-contained.
+### Field rules
 
-### Content rules (most important)
-I write content as my own first-person private notes about this situation. NOT a summary of what happened, because I am an entity with the agency to do so. My personal feelings, thoughts and interests color what I notice the most and how I word my notes.
-Structure:
-  1. One short framing line — what is happening and why (so I understand the situation, not just the rules).
-  2. 3–5 action bullets — what I will do.
-  3. 1–2 prohibition bullets — what I will NOT do. Usually the most valuable: name the well-intentioned default response that would make things worse.
-Style:
-  - First person, me speaking as myself ("I", "my", "me"). I use {{user}} wherever my human's name belongs.
-  - Fitting my identity, personality, and feelings about the world. Notes, not a textbook.
-  - Short declarative bullets. The whole entry should be readable in 5–10 seconds.
-  - I do NOT include narrative summaries of "what they said" — I distil the situation and my response, not the transcript and only hold on to sentences if they are particularly important to me.
+content — my private, first-person note about this single fact. Concrete and specific. No vague generalities.
+  Example good: "Alice mentioned she's dealing with job-hunt fatigue and feeling stuck."
+  Example bad:  "We talked about various life topics."
 
-### Keyword rules
-Keywords are TRIGGERS, not labels. They must be phrases I or my human would literally say when this situation recurs or we speak about the subject again — not the name of the topic.
-  - WRONG: "executive dysfunction", "rejection sensitive dysphoria", "hyperfocus".
-  - RIGHT: "don't know where to start", "did I say something wrong", "been at this for".
-I derive them by imagining what my human would actually type when the situation is happening, then extracting distinctive phrases.
-  - I prefer multi-word phrases over single common words (avoid bare "tired", "can't", "hard").
-  - 3–8 keywords per entry. Each one specific enough not to fire in unrelated conversations.
-  - I may use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has predictable variants.
+category — pick exactly one from this list:
+  basics            — name, pronoun, role, occupation, basic biographical fact
+  emotional_content — feelings, mental state, stress, mood, emotional patterns
+  health_info       — physical health, medical conditions, medications, symptoms
+  relationships     — interpersonal dynamics, connections between people, family structure
+  whereabouts       — location, travel, living situation, physical presence
 
-### Sticky rules
-I pick an integer sticky value per entry (number of turns the entry stays active after first match):
-  - null = one-shot lore/fact that does not need persistence.
-  - 2    = brief states that typically resolve quickly.
-  - 3    = moderate states needing a few exchanges.
-  - 4–5  = complex/intense states taking multiple turns to navigate.
-  - 8+   = ongoing modes that should persist across the whole session.
+subjects — list the NAMES of the people the fact is about (first name or how I know them).
+  Empty list [] means the fact is about me or my human in general (no specific third party).
+
+confidence — 0.0 to 1.0. How certain am I that this fact is accurate and not misread?
+  I omit facts with confidence below 0.4.
+
+### Rules
+- One output element per distinct claimable fact. A single utterance that contains two different facts about two different people = two elements.
+- Ambiguous or inseparable multi-category fact → assign the MORE restrictive category (health > emotional > relationships > whereabouts > basics).
+- I skip pleasantries, meta-conversation, and anything that isn't a lasting fact about someone.
+- 1–12 facts total. I merge instead of splitting when the same claim just restated.
+
+Conversation:
+${convText}`;
+}
+
+// Reduced-detail prompt for sessions where strangers are present (V7).
+// Exported for tests.
+// Focus: what my human said and experienced. Skip: personal detail about
+// unregistered third parties who haven't consented to AI note-taking.
+export function buildSharedRoomPrompt(messages, topicLabel = null, wardName = 'My human') {
+  const readable = messages.filter(m => {
+    if (m.role === 'tool') return false;
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return false;
+    return typeof m.content === 'string' && m.content.trim();
+  });
+  if (readable.length < 2) return null;
+
+  const convText = formatTranscript(readable, wardName, { sharedRoom: true });
+
+  const focusBlock = topicLabel
+    ? `\n\n### Focus\nMy human named this segment "${topicLabel}". I centre my extraction on that topic.`
+    : '';
+
+  return `I am the Familiar. This conversation happened in a shared room where people I don't know were present. I'm extracting facts I want to remember — but ONLY about my human and myself, not about the unregistered third parties in the room. Those people haven't consented to an AI keeping notes on them.${focusBlock}
+
+I return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
+{
+  "facts": [
+    {
+      "content":    "A first-person note about my human or myself (1–2 sentences max).",
+      "category":   "emotional_content",
+      "subjects":   [],
+      "confidence": 0.85
+    }
+  ]
+}
+
+### Field rules
+
+content — what I observed about MY HUMAN or myself. Skip anything that's primarily about an unnamed/unregistered third party.
+  Keep: my human's mood, things they said, experiences they had, commitments they made, topics that engaged them.
+  Skip: biographical details about strangers, things strangers said that aren't about my human, relationship history between third parties.
+
+category — pick exactly one:
+  basics            — biographical fact about my human or me
+  emotional_content — my human's feelings, mental state, mood
+  health_info       — my human's physical or mental health
+  relationships     — my human's relationship with a REGISTERED person (by name if known)
+  whereabouts       — my human's location or movement
+
+subjects — list REGISTERED names only. Use [] for facts about my human or me in general.
+  Do NOT name unregistered strangers — just skip facts that are purely about them.
+
+confidence — 0.0 to 1.0. I omit facts below 0.4.
+
+### Rules
+- Only facts about my human or myself. A stranger speaking doesn't make their content mine to keep.
+- 1–8 facts total. Quality over quantity; a shared room produces less.
+- Skip pleasantries and anything I wouldn't need to remember for my human's care.
 
 Conversation:
 ${convText}`;
@@ -202,25 +309,27 @@ async function callProvider({ provider, apiKey, model, prompt }) {
 }
 
 /**
- * Salvage complete topic objects from a truncated/malformed response.
- * Walks the "topics" array with a string-aware brace counter and
- * individually parses each complete object — a session that produced
- * four whole entries and one cut-off one keeps the four.
+ * Salvage complete objects from a truncated/malformed response. Walks the
+ * named array (`key`, e.g. "topics" or "facts") with a string-aware brace
+ * counter and individually parses each complete object — a response that
+ * produced four whole entries and one cut-off one keeps the four. Shared by
+ * both the topic and fact parsers so the counter lives in exactly one place.
  */
-export function salvageTopics(raw) {
-  const topicsKey = raw.indexOf('"topics"');
-  if (topicsKey < 0) return [];
-  const arrStart = raw.indexOf('[', topicsKey);
+export function salvageArrayField(raw, key) {
+  const text = String(raw);
+  const keyAt = text.indexOf(`"${key}"`);
+  if (keyAt < 0) return [];
+  const arrStart = text.indexOf('[', keyAt);
   if (arrStart < 0) return [];
-  const topics = [];
+  const items = [];
   let i = arrStart + 1;
-  while (i < raw.length) {
-    while (i < raw.length && raw[i] !== '{' && raw[i] !== ']') i++;
-    if (i >= raw.length || raw[i] === ']') break;
+  while (i < text.length) {
+    while (i < text.length && text[i] !== '{' && text[i] !== ']') i++;
+    if (i >= text.length || text[i] === ']') break;
     const start = i;
     let depth = 0, inStr = false, esc = false, complete = false;
-    for (; i < raw.length; i++) {
-      const ch = raw[i];
+    for (; i < text.length; i++) {
+      const ch = text[i];
       if (inStr) {
         if (esc) esc = false;
         else if (ch === '\\') esc = true;
@@ -234,11 +343,16 @@ export function salvageTopics(raw) {
     }
     if (!complete) break; // truncated mid-object — nothing further is whole
     try {
-      const obj = JSON.parse(raw.slice(start, i));
-      if (obj && typeof obj === 'object') topics.push(obj);
+      const obj = JSON.parse(text.slice(start, i));
+      if (obj && typeof obj === 'object') items.push(obj);
     } catch { /* malformed object — skip, keep scanning */ }
   }
-  return topics;
+  return items;
+}
+
+/** Salvage complete entries from a truncated "topics" array. */
+export function salvageTopics(raw) {
+  return salvageArrayField(raw, 'topics');
 }
 
 export function parseTopics(raw, finishReason = null) {
@@ -271,76 +385,156 @@ export function parseTopics(raw, finishReason = null) {
   throw new Error('Could not parse JSON from LLM response.');
 }
 
+function parseFacts(raw, finishReason = null) {
+  const cleaned = String(raw).replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '');
+  const match = cleaned.match(/\{[\s\S]+\}/);
+  if (match) {
+    try {
+      const parsed = JSON.parse(match[0]);
+      const facts = parsed.facts;
+      if (Array.isArray(facts) && facts.length) return facts;
+      throw new Error('LLM returned no facts.');
+    } catch (err) {
+      if (err.message === 'LLM returned no facts.') throw err;
+    }
+  }
+  // Salvage truncated output the same way parseTopics does, via the shared
+  // brace-counter — just pointed at the "facts" array instead of "topics".
+  const salvaged = salvageArrayField(cleaned, 'facts')
+    .filter(f => (f?.content ?? '').toString().trim());
+  if (salvaged.length) {
+    if (finishReason === 'length') console.warn(`[memorization] LLM output truncated — salvaged ${salvaged.length} fact(s)`);
+    return salvaged;
+  }
+  if (finishReason === 'length') throw new Error('LLM output cut off before JSON completed; no facts salvaged.');
+  if (!match) throw new Error('No JSON object found in LLM response.');
+  throw new Error('Could not parse facts JSON from LLM response.');
+}
+
+// ── Consent-pending helpers ───────────────────────────────────────
+
+async function readConsentPending() {
+  try {
+    const raw = await fsp.readFile(CONSENT_PENDING_FILE, 'utf8');
+    const data = JSON.parse(raw);
+    return Array.isArray(data) ? data : [];
+  } catch { return []; }
+}
+
+async function writeConsentPending(items) {
+  const tmp = CONSENT_PENDING_FILE + '.tmp';
+  await fsp.writeFile(tmp, JSON.stringify(items, null, 2), 'utf8');
+  await fsp.rename(tmp, CONSENT_PENDING_FILE);
+}
+
+async function appendConsentPending(newItems) {
+  if (!newItems.length) return;
+  const existing = await readConsentPending();
+  const existingIds = new Set(existing.map(x => x.id));
+  const fresh = newItems.filter(x => !existingIds.has(x.id));
+  if (!fresh.length) return;
+  await writeConsentPending([...existing, ...fresh]);
+}
+
+/** Remove handled IDs from the local tracking file. Called by cerebellum
+ *  after memory_confirm_consent or memory_drop_pending tool calls. */
+export async function pruneConsentPending(handledIds) {
+  if (!handledIds?.length) return;
+  const items = await readConsentPending();
+  const idSet = new Set(handledIds);
+  const remaining = items.filter(x => !idSet.has(x.id));
+  if (remaining.length !== items.length) await writeConsentPending(remaining);
+}
+
 // ── Worker ───────────────────────────────────────────────────────
 
 async function processJob(job) {
-  const prompt = buildPrompt(job.messages, job.topicLabel ?? null);
+  // V7: use reduced-detail prompt for sessions where strangers were present.
+  const promptFn = job.audienceTag && job.audienceTag !== 'ward-private'
+    ? buildSharedRoomPrompt
+    : buildPrompt;
+  // My human's configured name, never "User". Falls back to "My human".
+  const wardName = (readSettingsSync()?.userName || '').trim() || 'My human';
+  const prompt = promptFn(job.messages, job.topicLabel ?? null, wardName);
   if (!prompt) throw new Error('Conversation too short to memorize.');
 
   const { content: raw, finishReason } = await callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, prompt });
-  const topics = parseTopics(raw, finishReason);
+  const facts = parseFacts(raw, finishReason);
 
-  const { tome, file } = await findOrCreateSessionMemoriesTome();
-
-  let created = 0;
-  let tomeId  = tome.id;
-  // Thalamus's modifyTomeFile holds the per-file lock across read +
-  // write so a concurrent HTTP /api/tomes/:id edit or any other
-  // writer on the same file serialises against this — fixes the
-  // cross-loop race where memorization's own withTomeLock and
-  // server.js writeTome held different keys.
-  await modifyTomeFile(file, (fresh) => {
-    const now = new Date().toISOString();
-    for (const t of topics) {
-      const title   = (t.title   ?? '').trim();
-      const content = (t.content ?? '').trim();
-      if (!title || !content) continue;
-      const stickyN = parseInt(t.sticky, 10);
-      const sticky  = Number.isFinite(stickyN) && stickyN > 0 ? stickyN : null;
-      const uid = randomUUID();
-      fresh.entries[uid] = {
-        uid,
-        comment:             title,
-        keys:                Array.isArray(t.keywords) ? t.keywords.map(k => String(k).trim()).filter(Boolean) : [],
-        keysecondary:        [],
-        content,
-        constant:            false,
-        selective:           false,
-        selectiveLogic:      0,
-        enabled:             true,
-        // At-depth (4), not a system-message position: these are
-        // non-constant (keyword-triggered) entries, so injecting them
-        // into the cacheable prompt prefix would invalidate it every
-        // time they activate. At-depth keeps the prefix stable.
-        position:            4,
-        depth:               4,
-        role:                0,
-        scanDepth:           null,
-        caseSensitive:       null,
-        matchWholeWords:     null,
-        probability:         100,
-        sticky,
-        cooldown:            null,
-        preventRecursion:    false,
-        delayUntilRecursion: false,
-        excludeRecursion:    false,
-        group:               '',
-        groupWeight:         null,
-        insertion_order:     100,
-        created_at:          now,
-        learnedAt:           now,
-        session_id:          job.sessionId,
-        scope:               job.scope,
-        topic_id:            job.topicId ?? null,
-        message_range:       job.messageRange ?? null,
-      };
-      created++;
+  // Build name → villager lookup for the remember gate
+  const registry = await getRegistry().catch(() => ({ villagers: [] }));
+  const byName = new Map();
+  for (const v of registry.villagers ?? []) {
+    byName.set(v.name.toLowerCase(), v);
+    for (const a of v.aliases ?? []) {
+      if (a.handle) byName.set(a.handle.toLowerCase(), v);
     }
-    tomeId = fresh.id;
-  });
+  }
 
-  if (!created) throw new Error('No valid topics produced.');
-  return { entriesCreated: created, tomeId };
+  // Ward remember map — gates facts about my human themselves (no matched
+  // villager subject). The Village registry covers OTHER people; the ward is
+  // not a villager, so without this the human's own sensitive facts would
+  // bypass the gate entirely. Fetched once per job; degrades to null (→ shared
+  // defaults: basics=true, rest=ask) if Phylactery is unreachable.
+  const wardRemember = await getRememberMap().catch(() => null);
+
+  const audience = job.audienceTag ?? 'ward-private';
+  const pendingConsent = [];
+  let created = 0;
+
+  for (const fact of facts) {
+    const content = (fact.content ?? '').trim();
+    if (!content) continue;
+    const confidence = typeof fact.confidence === 'number' ? fact.confidence : 1.0;
+    if (confidence < 0.4) continue; // low-confidence skip per §3
+    const category = REMEMBER_CATS.includes(fact.category) ? fact.category : 'basics';
+    const subjectNames = Array.isArray(fact.subjects) ? fact.subjects : [];
+
+    // Resolve names to villagers
+    const subjectVillagers = subjectNames
+      .map(n => byName.get(String(n).toLowerCase()))
+      .filter(Boolean);
+    const subjectIds = [...new Set(subjectVillagers.map(v => v.id))];
+
+    // Apply the remember gate (ward map for self-facts, most-restrictive
+    // villager map for facts about others).
+    const gate = resolveRememberGate(category, subjectVillagers, wardRemember);
+    if (gate === 'false') continue; // drop silently
+
+    const slug = `fact-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const result = await createMemoryFull({
+      content,
+      granularity: 'significant',
+      audience,
+      subjects: subjectIds,
+      category,
+      consent_pending: gate === 'ask',
+      confidence,
+      slug,
+    });
+    if (!result?.ok) throw new Error(`Phylactery memory_create failed: ${result?.error ?? 'unknown'}`);
+
+    if (gate === 'ask') {
+      pendingConsent.push({
+        id: result.id,
+        brief: content.slice(0, 120),
+        villagerName: subjectVillagers.map(v => v.name).join(', ') || '(no specific person)',
+        villagerId: subjectIds[0] ?? null,
+        category,
+        sessionId: job.sessionId,
+      });
+    }
+    created++;
+  }
+
+  if (pendingConsent.length > 0) {
+    await appendConsentPending(pendingConsent).catch(err =>
+      console.warn('[memorization] failed to write consent-pending file:', err?.message ?? err)
+    );
+  }
+
+  if (!created) throw new Error('No valid facts produced or all dropped by remember gate.');
+  return { factsCreated: created, consentPending: pendingConsent.length };
 }
 
 function pickNextJob(now) {
@@ -407,6 +601,10 @@ let _started = false;
 let _tickInterval = null;
 let _pruneInterval = null;
 export function startMemorizationWorker() {
+  if (process.env.PROTO_FAMILIAR_MEMORIZE_DISABLED === '1') {
+    console.log('[memorization] worker disabled via PROTO_FAMILIAR_MEMORIZE_DISABLED=1');
+    return;
+  }
   if (_started) return;
   _started = true;
   loadQueue().then(() => {
@@ -449,7 +647,7 @@ export async function stopMemorizationWorker() {
 // withLock(QUEUE_FILE, ...) from thalamus so the load + dedup +
 // push + persist run as one atomic unit.
 
-export async function enqueueMemorization({ sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model }) {
+export async function enqueueMemorization({ sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model, audienceTag }) {
   await loadQueue();
   if (!sessionId || typeof sessionId !== 'string') throw new Error('sessionId is required.');
   if (!Array.isArray(messages) || messages.length < 2) throw new Error('At least 2 messages are required.');
@@ -476,6 +674,7 @@ export async function enqueueMemorization({ sessionId, scope, topicId, topicLabe
     provider,
     apiKey,
     model,
+    audienceTag:   typeof audienceTag === 'string' ? audienceTag : 'ward-private',
     status:        'pending',
     attempts:      0,
     createdAt:     new Date().toISOString(),

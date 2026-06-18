@@ -4,7 +4,7 @@
 
 Cerebellum is the Familiar's motor module — the single owner of everything flowing **outward**: tool execution, message delivery, escalation. It is the efferent counterpart to Thalamus, which owns everything flowing **inward** (identity, memory, graph, temporal context).
 
-It is not an MCP child like entity-core or Unruh. It is a Node-side module (`cerebellum.js`) that sits between the Familiar's decisions and the world those decisions touch — files, schedules, webhooks, other humans.
+It is not an MCP child like Phylactery or Unruh. It is a Node-side module (`cerebellum.js`) that sits between the Familiar's decisions and the world those decisions touch — files, schedules, webhooks, other humans.
 
 ---
 
@@ -32,7 +32,7 @@ The name is apt beyond the metaphor's surface: the biological cerebellum doesn't
 
 **Thalamus = perception. Cerebellum = action. Neither does the other's job.**
 
-They share one nervous system, though: Thalamus owns the MCP client connections to entity-core and Unruh, and it is the single enforcement point for the rule that direct writes to identity or memory MUST go through entity-core's MCP. Cerebellum never opens its own connections — every tool executor that writes rides Thalamus's exported wrappers (`createMemory`, `addScheduleNode`, …). One enforcement point, not two.
+They share one nervous system, though: Thalamus owns the MCP client connections to Phylactery and Unruh, and it is the single enforcement point for the rule that direct writes to identity or memory MUST go through Phylactery's MCP. Cerebellum never opens its own connections — every tool executor that writes rides Thalamus's exported wrappers (`createMemory`, `addScheduleNode`, …). One enforcement point, not two.
 
 The dependency arrow points one way: cerebellum imports from thalamus, never the reverse, and neither imports `server.js`. Where cerebellum needs a capability that server.js owns (the tome-file storage layer behind `save_to_tome`), server.js hands it in at boot via `initCerebellumTools()` — capability injection instead of an import cycle.
 

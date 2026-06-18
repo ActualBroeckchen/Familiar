@@ -160,6 +160,29 @@ test('passesHardGates: un-raised offers get the SHORT window — silence never b
   );
 });
 
+test('passesHardGates: an active snooze blocks the task across tiers; expired snooze does not', () => {
+  const future = new Date(NOW + 60 * 60 * 1000).toISOString();
+  for (const tier of ['external_obligation', 'personal_wellbeing', 'purely_optional']) {
+    assert.equal(
+      passesHardGates(
+        { id: 't1', payload: { snooze_until: future } },
+        { threat: calm, routinePhaseLabel: '', surfacingHistory: {}, now: NOW, stakesTier: tier },
+      ),
+      false,
+      `active snooze should block ${tier} (my human said not now)`,
+    );
+  }
+  const past = new Date(NOW - 60 * 1000).toISOString();
+  assert.equal(
+    passesHardGates(
+      { id: 't1', payload: { snooze_until: past } },
+      { threat: calm, routinePhaseLabel: '', surfacingHistory: {}, now: NOW, stakesTier: 'personal_wellbeing' },
+    ),
+    true,
+    'expired snooze must let the task surface again',
+  );
+});
+
 // ── Candidate selection ────────────────────────────────────────────
 
 test('selectSurfaceCandidates: returns nothing when no open tasks', async () => {
@@ -253,7 +276,7 @@ test('formatSurfaceCandidatesBlock: includes label, framing, prompts probe on lo
   assert.match(block, /once, naturally, refusable/);
 });
 
-test('formatSurfaceCandidatesBlock: header names BOTH costs and carries no bias-toward-quiet', () => {
+test('formatSurfaceCandidatesBlock: explicit green/red conditions, cost of silence named, no bias-toward-quiet', () => {
   const block = formatSurfaceCandidatesBlock([
     {
       id: 't1', label: 'eat lunch', type: 'task',
@@ -261,11 +284,20 @@ test('formatSurfaceCandidatesBlock: header names BOTH costs and carries no bias-
       taskSpecific: null, confidence: 'medium', ageDays: null,
     },
   ]);
-  // Both costs, at equal weight (CLAUDE.md proactivity rule 2).
-  assert.match(block, /raising a task can cut across/i, 'cost of acting must be named');
-  assert.match(block, /never gets raised often becomes a task that never gets done/i, 'cost of silence must be named');
+  // Cost of silence named (CLAUDE.md proactivity rule 2). For an ADHD
+  // ward the header is deliberately tuned toward action: it names the
+  // cost of intrusion via the RED LIGHT list, and the cost of silence
+  // as the task that waits forever.
+  assert.match(block, /the task waits forever/i, 'cost of silence must be named');
+  assert.match(block, /a missed task costs .* more than a check-in they can wave off/i,
+    'silence outweighing a refusable check-in must be explicit');
+  // Explicit inclusion + exclusion conditions, so the servile-default
+  // model can't read vagueness as "better stay quiet" (rule 1 + the
+  // recorded servile-default failure).
+  assert.match(block, /GREEN LIGHT/);
+  assert.match(block, /RED LIGHT/);
   // Identity framing, not permission framing (rule 4).
-  assert.match(block, /Holding these is part of how I care/i);
+  assert.match(block, /mine to act on/i);
   // Regression guard: the bias-toward-quiet language that shipped once
   // (and mirrors the recorded 1.5h-silence failure) must never return.
   assert.doesNotMatch(block, /None of these need to be mentioned|let them rest|bias toward (staying )?quiet|only .{0,40}when the answer feels obvious|err on the side of not/i);

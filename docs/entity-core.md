@@ -1,8 +1,15 @@
 # Entity-Core Identity Layer
 
+> **⚠️ RETIRED.** As of the Phylactery milestone, entity-core has been retired and fully
+> replaced by the in-tree **Phylactery** store (`./phylactery/`, a Python MCP service run via
+> `uv`). Phylactery now owns the canonical self — identity files, RAG memories, knowledge graph,
+> and trackers. See [`docs/phylactery-design.md`](phylactery-design.md). This page is kept only
+> for historical reference and one-time migration from a legacy entity-core install; nothing
+> below describes the current runtime.
+
 ## What Is Entity-Core?
 
-[entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) is a Deno-based MCP (Model Context Protocol) server that manages persistent identity files, RAG memories, and a knowledge graph for a named AI entity. Proto-Familiar connects to it through `thalamus.js` to ground every LLM request in stable, long-term context that survives session boundaries.
+[entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.4.0) is a Deno-based MCP (Model Context Protocol) server that manages persistent identity files, RAG memories, and a knowledge graph for a named AI entity. Proto-Familiar connects to it through `thalamus.js` to ground every LLM request in stable, long-term context that survives session boundaries.
 
 This integration is **optional** — the app runs fully without it. When entity-core is unavailable, `thalamus.js` logs the error and returns an empty string, and every chat request proceeds without enrichment.
 
@@ -175,7 +182,7 @@ The one-click installers handle the clone for you (`Proto-Familiar.vbs` on Windo
 
 1. Clone entity-core as a sibling directory next to Proto-Familiar:
    ```bash
-   git clone --depth 1 --branch entity-core-v0.2.2 https://github.com/PsycherosAI/Psycheros.git ../entity-core
+   git clone --depth 1 --branch entity-core-v0.4.0 https://github.com/PsycherosAI/Psycheros.git ../entity-core
    ```
    Psycheros is a Deno workspace at this tag, so entity-core itself lives at `../entity-core/packages/entity-core/`. Older releases kept it at the repo root (`../entity-core/src/mod.ts`). `thalamus.js` probes both layouts and prefers the workspace path. Pre-rename installs that used `../entity-core-alpha/` are still detected as a fallback so existing setups keep working without a directory move.
 

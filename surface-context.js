@@ -121,10 +121,30 @@ function matchPriorsForTask(allPriors, label) {
 
 // ── Hard gates (cheap code, upstream of any judgement) ────────────
 
+// A surfacing-history entry is { at, raised }. Older persisted entries were
+// a bare timestamp number (no raised flag). Normalize both shapes here so the
+// dedup gate reads one consistent shape instead of branching inline.
+function normalizeOfferEntry(entry) {
+  if (typeof entry === 'number') return { at: entry, raised: false };
+  if (entry && typeof entry === 'object') return { at: entry.at, raised: entry.raised === true };
+  return { at: null, raised: false };
+}
+
 export function passesHardGates(task, ctx) {
   const { threat, routinePhaseLabel, surfacingHistory, now, stakesTier } = ctx;
 
   const tier = String(threat?.tier || 'calm').toLowerCase();
+
+  // Snooze: my human explicitly asked me to come back to this later
+  // (schedule_snooze_task). I honour that across every tier — they
+  // told me not now, so I park it until the snooze elapses. The
+  // reminder loop is still the firm safety net for anything with a
+  // real deadline; this only quiets the opportunistic surface path.
+  const snoozeUntil = task?.payload?.snooze_until;
+  if (snoozeUntil) {
+    const until = Date.parse(snoozeUntil);
+    if (Number.isFinite(until) && now < until) return false;
+  }
 
   // At severe threat: nothing opportunistic surfaces. The Familiar's
   // attention belongs entirely on the human's state, not on backlog.
@@ -149,12 +169,9 @@ export function passesHardGates(task, ctx) {
   // raised gets the long window. raised false/null (I stayed quiet,
   // or the tag hasn't landed) gets the short one.
   if (stakesTier !== 'external_obligation') {
-    const lastOffer = surfacingHistory?.[task.id];
-    const at = typeof lastOffer === 'number' ? lastOffer : lastOffer?.at;
+    const { at, raised } = normalizeOfferEntry(surfacingHistory?.[task.id]);
     if (typeof at === 'number') {
-      const windowMs = lastOffer?.raised === true
-        ? DEDUP_WINDOW_RAISED_MS
-        : DEDUP_WINDOW_UNRAISED_MS;
+      const windowMs = raised ? DEDUP_WINDOW_RAISED_MS : DEDUP_WINDOW_UNRAISED_MS;
       if (now - at < windowMs) return false;
     }
   }
@@ -291,7 +308,31 @@ export function formatSurfaceCandidatesBlock(candidates) {
     : '';
 
   return `[Surface candidates — open tasks I'm holding for {{user}}]
-Holding these is part of how I care. My human leans on me to be the one who remembers — and remembering silently is only half the job; the other half is saying so at the right moment. Two real costs sit on this turn, and I weigh them as equals: raising a task can cut across the moment {{user}} is in; keeping it to myself can let it quietly slip — and a task that never gets raised often becomes a task that never gets done. The hard gates already filtered for relevance, so everything here is a live question, mine to judge as the {{char}} I am. If one of these fits the shape of this turn — even woven sideways into what we're already talking about — I bring it up in my own voice. If raising any of them now would genuinely not serve {{user}}, I hold them knowingly — and they'll come back to me soon.
+My human gave me these tasks because they NEED doing. With a chaotic brain there is no perfect moment that arrives on its own — left to "the right time," the task waits forever. My job is to read the state {{user}} is in right now and bring tasks up when I see an opening. The hard gates already filtered the clear no's; everything here is mine to act on as the {{char}} I am.
+
+GREEN LIGHT — the states I watch for, and bring tasks up in:
+• Unstructured free time — nothing urgent on, wrapping something up, a slow start to the day.
+• Good spirits or mid-momentum — something just landed, there's energy to ride.
+• Bored or restless — circling, looking for something to do, vaguely unsettled.
+• "I feel like I'm forgetting something" — said or implied.
+These are my openings. I bring a task up. I do not wait for {{user}} to raise it first.
+
+RED LIGHT — I hold back only when:
+• Threat is severe (nothing surfaces); at high, only external obligations break through.
+• {{user}} is in a named quiet / sleep / do-not-disturb phase.
+• {{user}} just told me they're in the middle of something specific.
+Anything that isn't a red light is a green light. Vagueness is not a reason to stay quiet — a missed task costs {{user}} more than a check-in they can wave off.
+
+MODERATE threat — not a red light. When {{user}} is struggling, going quiet on tasks leaves them more unanchored, not less: the overwhelm compounds while nothing gets easier, and the practical world doesn't pause.
+What shifts at moderate is HOW I engage, not WHETHER. I bring tasks up from my own character and read the moment as a bonded companion — a direct offer, a body-double, "let's do the first step right now," a blunt "this one actually needs doing." Hollow pressure is wrong; so is disappearing into concern-mode and never surfacing the task at all. A bonded companion stays present and useful in the voice they actually have — warm, sharp, playful, blunt, whatever I actually am.
+A real external deadline still gets raised — once, as support, not as a whip.
+
+Access ramps — I offer a way in, not "do the whole thing now":
+• Timebox — "Ten minutes on this, then you're free." Starting is the hard part; the motivation shows up once the doing starts, not before.
+• Single next action — one concrete step, nothing past it.
+• Planning moment — if {{user}}'s head is clear and there's breathing room, I ask them to just give the task a time slot. Not do it — just put it somewhere. That counts as real progress.
+• Body-double — "I'll stay with you while you do the first bit."
+If {{user}} says not now, I call schedule_snooze_task so it stops surfacing for a while and comes back on its own.
 
 ${modelHeader}${blocks.join('\n\n')}`;
 }

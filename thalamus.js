@@ -1,16 +1,16 @@
 /**
- * thalamus.js — entity-core bridge for Proto-Familiar
+ * thalamus.js — Phylactery bridge for Proto-Familiar
  *
  * Mirrors Psycheros's context-building approach (src/entity/context.ts +
  * src/rag/context-builder.ts):
  *
- *   1. All identity categories (self, user, relationship, custom), each file
+ *   1. All identity categories (self, ward, relationship, custom), each file
  *      wrapped in its promptLabel XML tags and sorted in canonical order.
  *   2. base_instructions.md placed first if present (no section header).
  *   3. Relevant memories formatted with score and source.
  *   4. Knowledge graph context via node search + 1-hop edge traversal.
  *
- * If entity-core is unreachable for any reason, enrich() logs the error
+ * If Phylactery is unreachable for any reason, enrich() logs the error
  * and returns '' so the request continues without enrichment.
  */
 
@@ -31,39 +31,18 @@ const PKG_VERSION = (() => {
   catch { return 'unknown'; }
 })();
 
-// Resolve the entity-core entry point.
-//
-// Sibling directory: new installs land at `../entity-core/`. Older
-// installs from before the rename used `../entity-core-alpha/`; we
-// still probe that as a fallback to avoid breaking existing setups.
-//
-// Inside the checkout: the Psycheros repo became a Deno workspace at
-// entity-core-v0.2.x, with entity-core living at packages/entity-core/.
-// Older sibling checkouts kept it at the repo root, so probe both.
-//
-// $ENTITY_CORE_PATH wins over all probes.
-const ENTITY_CORE_DIRS = [
-  path.resolve(__dirname, '../entity-core'),
-  path.resolve(__dirname, '../entity-core-alpha'),
-];
-function probeEntry() {
-  for (const dir of ENTITY_CORE_DIRS) {
-    const workspace = path.join(dir, 'packages', 'entity-core', 'src', 'mod.ts');
-    if (existsSync(workspace)) return workspace;
-    const legacy = path.join(dir, 'src', 'mod.ts');
-    if (existsSync(legacy)) return legacy;
-  }
-  // Default to the modern layout in the new dir so error messages point
-  // at where a fresh install would land.
-  return path.join(ENTITY_CORE_DIRS[0], 'packages', 'entity-core', 'src', 'mod.ts');
-}
+// Consent-pending tracking file — written by memorization.js, read here so the
+// Familiar sees pending ask-gate items without an extra MCP call every turn.
+const CONSENT_PENDING_FILE = path.join(__dirname, 'tomes', '.consent-pending.json');
 
-const ENTITY_CORE_ENTRY = process.env.ENTITY_CORE_PATH ?? probeEntry();
-
-// Project root of entity-core (parent of src/).
-// entity-core resolves its ./data directory relative to cwd, so we must
-// start it from its own root, not from wherever node server.js was launched.
-const ENTITY_CORE_ROOT = path.dirname(path.dirname(ENTITY_CORE_ENTRY));
+// Phylactery — the canonical in-tree self-store. Ships at ./phylactery/
+// (subdirectory, same pattern as Unruh). Launched via `uv run python -m
+// phylactery` with cwd set to phylactery/ so its ./data/ resolves.
+// PROTO_FAMILIAR_PHYLACTERY_DISABLED=1 hard-kills it; the off-switch is
+// required by the graceful-degradation rule (every loop ships with one).
+const PHYLACTERY_ROOT      = path.resolve(__dirname, 'phylactery');
+const PHYLACTERY_PYPROJECT = path.join(PHYLACTERY_ROOT, 'pyproject.toml');
+const PHYLACTERY_VENV      = path.join(PHYLACTERY_ROOT, '.venv');
 
 // Unruh — the temporal-context specialist. Ships in-tree at ./unruh/
 // (subdirectory rather than sibling repo; see docs/unruh-implementation-plan.md
@@ -109,39 +88,9 @@ function resolveUvBinary() {
   return isWin ? 'uv.exe' : 'uv'; // last-resort PATH lookup
 }
 
-// Resolve `deno` to an absolute path, same rationale as resolveUvBinary.
-// This matters for `npm start` specifically: unlike the launcher scripts
-// (start.sh / start.bat / Proto-Familiar.command / tray.ps1) which prime
-// PATH with ~/.deno/bin before spawning node, `npm start` inherits only
-// the invoking shell's PATH. Deno's installer writes to ~/.deno/bin and
-// appends it to the shell *profile*, so a shell that hasn't been reloaded
-// since install won't have it — and a bare `command: 'deno'` then fails
-// with ENOENT, silently disabling entity-core. Probing the known install
-// locations first makes entity-core robust regardless of PATH state.
-// DENO_BIN env var overrides everything.
-function resolveDenoBinary() {
-  if (process.env.DENO_BIN && existsSync(process.env.DENO_BIN)) return process.env.DENO_BIN;
-  const home = os.homedir();
-  const isWin = process.platform === 'win32';
-  const candidates = isWin
-    ? [
-        path.join(home, '.deno', 'bin', 'deno.exe'),                     // official installer default
-        path.join(process.env.LOCALAPPDATA ?? '', 'deno', 'deno.exe'),
-        path.join(home, '.cargo', 'bin', 'deno.exe'),
-      ]
-    : [
-        path.join(home, '.deno', 'bin', 'deno'),                         // official installer default
-        path.join(home, '.cargo', 'bin', 'deno'),
-        '/usr/local/bin/deno',
-        '/opt/homebrew/bin/deno',                                        // Apple-silicon Homebrew
-      ];
-  for (const c of candidates) { if (c && existsSync(c)) return c; }
-  return isWin ? 'deno.exe' : 'deno'; // last-resort PATH lookup
-}
-
 // Path to the central settings file. server.js owns the read/write
 // surface (PUT /api/settings) but we read it here at spawn time to pick
-// up the API-key designation for entity-core. Read is sync and small.
+// up the API-key designation for Phylactery. Read is sync and small.
 const SETTINGS_FILE = path.join(__dirname, 'settings.json');
 
 // ── Tome / state-file coordination ─────────────────────────────────
@@ -268,50 +217,38 @@ export async function findOrCreateTomeByName(tomesDir, name, defaultStruct) {
   });
 }
 
-// Despite the name, entity-core's ENTITY_CORE_LLM_BASE_URL env var is
-// actually the FULL endpoint including /chat/completions — its
-// createLLMClient does `fetch(baseUrl, { method: 'POST' })` with no
-// path appending. So we pass the same chat-completions URLs server.js
-// uses for its proxy. Shared via ./providers.js to keep one source.
+// Phylactery's consolidate.py reads PHYLACTERY_LLM_* first, falling back
+// to ENTITY_CORE_LLM_* aliases for continuity. The full chat-completions
+// URL (not just the base) is what these vars want — same as the old
+// Phylactery contract. Shared via ./providers.js.
 import { PROVIDER_URLS } from './providers.js';
 
 /**
- * Build the env block passed to the entity-core child process based on
- * the saved-connection the user designated as the entity-core source
- * (`entityCoreConnectionId` in settings.json).
+ * Build the env block passed to the Phylactery child process based on
+ * the saved-connection the user designated (`entityCoreConnectionId` in
+ * settings.json — field name kept for backwards compat until Pillar I).
  *
  * Returns {} when no designation exists, the pointed-at connection is
- * missing, or its API key is empty. Entity-core then runs without an
- * API key — same as before this wiring existed — so the change is
- * additive and safe.
+ * missing, or its API key is empty — Phylactery then starts without LLM
+ * creds (consolidation will fail, but identity/memory reads still work).
  *
- * Entity-core's createLLMClient() (packages/entity-core/src/llm/client.ts
- * in the upstream Psycheros repo, release entity-core-v0.2.2) reads
- * three env vars and returns null if ANY are missing — causing the
- * misleading "No LLM API key configured" error from the consolidator
- * even when only the base URL or model is the missing one. We
- * therefore have to set all three.
- *
- * Env mapping:
- *   ENTITY_CORE_LLM_API_KEY    — always set when designation resolves
- *   ENTITY_CORE_LLM_BASE_URL   — full chat-completions URL from PROVIDER_URLS
- *   ENTITY_CORE_LLM_MODEL      — model id from the connection
- *   ENTITY_CORE_LLM_PROVIDER   — provider tag (informational)
- *   ZAI_API_KEY / ZAI_BASE_URL / ZAI_MODEL  — only when the designated
- *     connection is a z.ai provider; entity-core treats these as
- *     equivalent fallback names, but setting both pairs makes builds
- *     that read either work without re-config.
+ * Env mapping (both primary and fallback aliases set so every consumer
+ * finds what it needs):
+ *   PHYLACTERY_LLM_API_KEY   — primary
+ *   ENTITY_CORE_LLM_API_KEY  — fallback alias (consolidate.py reads both)
+ *   (same pattern for BASE_URL, MODEL, PROVIDER)
+ *   ZAI_* — only when provider is zai / zai-coding
  */
-// Internal — exposed for diagnostic logging only. Earlier iterations
-// exported this for an out-of-tree smoke test that no longer exists.
-function loadEntityCoreEnv() {
+function loadPhylacteryEnv() {
   let settings;
   try {
     settings = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
   } catch {
     return {}; // no settings.json yet (fresh install) or unreadable
   }
-  const id = settings.entityCoreConnectionId;
+  // phylacteryConnectionId is the canonical field name (Pillar I); fall back
+  // to the legacy entityCoreConnectionId so old settings.json files still work.
+  const id = settings.phylacteryConnectionId ?? settings.entityCoreConnectionId;
   if (!id) return {};
   const conn = (settings.connections ?? []).find(c => c?.id === id);
   if (!conn) return {};
@@ -322,10 +259,14 @@ function loadEntityCoreEnv() {
   const baseUrl  = PROVIDER_URLS[provider] ?? '';
 
   const env = {
+    PHYLACTERY_LLM_API_KEY:  apiKey,
+    PHYLACTERY_LLM_BASE_URL: baseUrl,
+    PHYLACTERY_LLM_MODEL:    model,
+    PHYLACTERY_LLM_PROVIDER: provider,
+    // Fallback aliases so consolidate.py's ENTITY_CORE_LLM_* path also resolves
     ENTITY_CORE_LLM_API_KEY:  apiKey,
     ENTITY_CORE_LLM_BASE_URL: baseUrl,
     ENTITY_CORE_LLM_MODEL:    model,
-    ENTITY_CORE_LLM_PROVIDER: provider,
   };
   if (provider === 'zai' || provider === 'zai-coding') {
     env.ZAI_API_KEY  = apiKey;
@@ -337,12 +278,12 @@ function loadEntityCoreEnv() {
 
 /** @type {import('@modelcontextprotocol/sdk/client/index.js').Client | null} */
 let mcpClient = null;
-let entityCoreShuttingDown = false;
-let entityCoreReconnectAttempts = 0;
+let phylacteryShuttingDown = false;
+let phylacteryReconnectAttempts = 0;
 /** @type {Promise<void> | null} */
-let entityCoreReconnectInFlight = null;          // mutex for reconnect path
-const ENTITY_CORE_RECONNECT_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
-const ENTITY_CORE_RECONNECT_MAX_ATTEMPTS = 10;
+let phylacteryReconnectInFlight = null;          // mutex for reconnect path
+const PHYLACTERY_RECONNECT_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
+const PHYLACTERY_RECONNECT_MAX_ATTEMPTS = 10;
 
 /** @type {import('@modelcontextprotocol/sdk/client/index.js').Client | null} */
 let unruhClient = null;
@@ -357,7 +298,7 @@ const SELF_ORDER = [
   'my_identity.md', 'my_persona.md', 'my_personhood.md',
   'my_wants.md', 'my_mechanics.md',
 ];
-const USER_ORDER = [
+const WARD_ORDER = [
   'user_identity.md', 'user_life.md', 'user_beliefs.md',
   'user_preferences.md', 'user_patterns.md', 'user_notes.md',
 ];
@@ -367,19 +308,22 @@ const RELATIONSHIP_ORDER = [
 
 // ── Connection ────────────────────────────────────────────────────────────────
 
-async function connect() {
-  // Skip cleanly when entity-core isn't installed, mirroring
-  // connectUnruh's pre-check. Without this, a missing checkout (fresh
-  // clone before install.sh runs, or a user who skipped the
-  // entity-core clone) lets the spawn fail with ENOENT, which fires
-  // onclose, which spins scheduleEntityCoreReconnect through all 10
-  // attempts over ~3 minutes — pure log noise for a permanent
-  // condition that a retry can't fix. Returning here means no
-  // transport, no onclose, no retry loop. A real reconnect after a
-  // transient crash still proceeds (the checkout exists, so this
-  // check passes).
-  if (!existsSync(ENTITY_CORE_ENTRY)) {
-    console.log('[thalamus] entity-core not found at', ENTITY_CORE_ENTRY, '— skipping (run install.sh / install.bat to clone it)');
+async function connectPhylactery() {
+  if (process.env.PROTO_FAMILIAR_PHYLACTERY_DISABLED === '1') {
+    console.log('[thalamus] Phylactery disabled via PROTO_FAMILIAR_PHYLACTERY_DISABLED=1');
+    return;
+  }
+  // Pre-checks mirror connectUnruh: source file and venv must both exist
+  // before we attempt a spawn. Missing pyproject.toml = not installed yet
+  // (run install.sh). Missing .venv = installed but `uv sync` not run.
+  // In either case returning here means no transport, no onclose, no
+  // retry loop — the reconnect machinery fires only on transient crashes.
+  if (!existsSync(PHYLACTERY_PYPROJECT)) {
+    console.log('[thalamus] Phylactery source not found at', PHYLACTERY_ROOT, '— skipping (run install.sh / install.bat to set it up)');
+    return;
+  }
+  if (!existsSync(PHYLACTERY_VENV)) {
+    console.warn('[thalamus] Phylactery venv missing at', PHYLACTERY_VENV, '— run `cd phylactery && uv sync` to enable identity layer');
     return;
   }
 
@@ -387,24 +331,21 @@ async function connect() {
   // reconnect after a settings change picks up the new key without a
   // server restart. StdioClientTransport merges this with PATH/HOME/etc
   // (DEFAULT_INHERITED_ENV_VARS), so we don't clobber the shell env.
-  const ecEnv = loadEntityCoreEnv();
-  const haveKey = Object.prototype.hasOwnProperty.call(ecEnv, 'ENTITY_CORE_LLM_API_KEY');
-  // Surface partial-config gotchas explicitly: entity-core's createLLMClient
-  // returns null (→ "No LLM API key configured" error from the consolidator)
-  // when any of api_key / base_url / model is missing. A blank base_url
-  // typically means the connection's provider tag isn't in PROVIDER_URLS.
-  if (haveKey && !ecEnv.ENTITY_CORE_LLM_BASE_URL) {
-    console.warn(`[thalamus] entity-core: provider "${ecEnv.ENTITY_CORE_LLM_PROVIDER}" has no known URL — add it to PROVIDER_URLS in providers.js`);
+  const phEnv = loadPhylacteryEnv();
+  const haveKey = Object.prototype.hasOwnProperty.call(phEnv, 'PHYLACTERY_LLM_API_KEY');
+  if (haveKey && !phEnv.PHYLACTERY_LLM_BASE_URL) {
+    console.warn(`[thalamus] phylactery: provider "${phEnv.PHYLACTERY_LLM_PROVIDER}" has no known URL — add it to PROVIDER_URLS in providers.js`);
   }
-  if (haveKey && !ecEnv.ENTITY_CORE_LLM_MODEL) {
-    console.warn('[thalamus] entity-core: designated connection has no model set — consolidation will fail');
+  if (haveKey && !phEnv.PHYLACTERY_LLM_MODEL) {
+    console.warn('[thalamus] phylactery: designated connection has no model set — consolidation will fail');
   }
 
+  const uvBin = resolveUvBinary();
   const transport = new StdioClientTransport({
-    command: resolveDenoBinary(),
-    args: ['run', '-A', '--unstable-cron', ENTITY_CORE_ENTRY],
-    cwd: ENTITY_CORE_ROOT,
-    env: ecEnv,
+    command: uvBin,
+    args: ['run', '--no-sync', 'python', '-m', 'phylactery'],
+    cwd: PHYLACTERY_ROOT,
+    env: phEnv,
   });
 
   const client = new Client(
@@ -413,88 +354,87 @@ async function connect() {
   );
 
   client.onclose = () => {
-    console.error('[thalamus] entity-core connection closed');
+    console.error('[thalamus] Phylactery connection closed');
     mcpClient = null;
     // Auto-reconnect with backoff on unexpected close — mirrors the
     // Unruh path. Skipped when we're tearing down on purpose (settings
     // change or server shutdown).
-    if (entityCoreShuttingDown) return;
-    scheduleEntityCoreReconnect();
+    if (phylacteryShuttingDown) return;
+    schedulePhylacteryReconnect();
   };
 
   await client.connect(transport);
   mcpClient = client;
-  entityCoreReconnectAttempts = 0; // successful connect resets backoff
+  phylacteryReconnectAttempts = 0; // successful connect resets backoff
   console.log(
-    '[thalamus] Connected to entity-core at', ENTITY_CORE_ENTRY,
-    haveKey ? `(API key from connection "${ecEnv.ENTITY_CORE_LLM_PROVIDER}")` : '(no API key — designate one in the Connections sidebar)',
+    '[thalamus] Connected to Phylactery at', PHYLACTERY_ROOT,
+    haveKey ? `(API key from connection "${phEnv.PHYLACTERY_LLM_PROVIDER}")` : '(no API key — designate one in the Connections sidebar)',
   );
 }
 
 // Reconnect with exponential backoff on unexpected close — same shape
 // as scheduleUnruhReconnect. Capped to avoid spinning forever when
-// entity-core is fundamentally broken. Skips when a settings-change
+// Phylactery is fundamentally broken. Skips when a settings-change
 // reconnect is already in flight (no need to double up).
-function scheduleEntityCoreReconnect() {
-  if (entityCoreShuttingDown) return;
-  if (entityCoreReconnectInFlight) return;
-  if (entityCoreReconnectAttempts >= ENTITY_CORE_RECONNECT_MAX_ATTEMPTS) {
-    console.error(`[thalamus] entity-core reconnect gave up after ${ENTITY_CORE_RECONNECT_MAX_ATTEMPTS} attempts — restart Proto-Familiar to retry`);
+function schedulePhylacteryReconnect() {
+  if (phylacteryShuttingDown) return;
+  if (phylacteryReconnectInFlight) return;
+  if (phylacteryReconnectAttempts >= PHYLACTERY_RECONNECT_MAX_ATTEMPTS) {
+    console.error(`[thalamus] Phylactery reconnect gave up after ${PHYLACTERY_RECONNECT_MAX_ATTEMPTS} attempts — restart Proto-Familiar to retry`);
     return;
   }
-  const delay = ENTITY_CORE_RECONNECT_BACKOFF_MS[Math.min(entityCoreReconnectAttempts, ENTITY_CORE_RECONNECT_BACKOFF_MS.length - 1)];
-  entityCoreReconnectAttempts += 1;
-  console.log(`[thalamus] Reconnecting to entity-core in ${delay}ms (attempt ${entityCoreReconnectAttempts}/${ENTITY_CORE_RECONNECT_MAX_ATTEMPTS})`);
+  const delay = PHYLACTERY_RECONNECT_BACKOFF_MS[Math.min(phylacteryReconnectAttempts, PHYLACTERY_RECONNECT_BACKOFF_MS.length - 1)];
+  phylacteryReconnectAttempts += 1;
+  console.log(`[thalamus] Reconnecting to Phylactery in ${delay}ms (attempt ${phylacteryReconnectAttempts}/${PHYLACTERY_RECONNECT_MAX_ATTEMPTS})`);
   setTimeout(() => {
-    connect().catch(err => {
-      console.error('[thalamus] entity-core reconnect failed:', err.message);
-      scheduleEntityCoreReconnect();
+    connectPhylactery().catch(err => {
+      console.error('[thalamus] Phylactery reconnect failed:', err.message);
+      schedulePhylacteryReconnect();
     });
   }, delay).unref?.(); // unref so the timer doesn't keep the process alive
 }
 
 /**
- * Tear down the current entity-core child and re-spawn it with a fresh
- * env (so a settings change to `entityCoreConnectionId` or the pointed-
- * at connection's apiKey takes effect immediately). Safe to call when
- * no client is currently connected — behaves as a plain connect().
+ * Tear down the current Phylactery child and re-spawn it with a fresh
+ * env (so a settings change to the designated connection or its apiKey
+ * takes effect immediately). Safe to call when no client is connected —
+ * behaves as a plain connectPhylactery().
  *
  * Two callers can fire this in quick succession (rapid settings PUTs
- * while a chat is in flight, the user clicking the +entity-core toggle
- * on different rows quickly). A single in-flight promise serialises
+ * while a chat is in flight). A single in-flight promise serialises
  * them so concurrent calls don't orphan a child process.
  */
-export async function reconnectEntityCore() {
-  if (entityCoreReconnectInFlight) return entityCoreReconnectInFlight;
-  entityCoreReconnectInFlight = (async () => {
-    entityCoreShuttingDown = true;
+export async function reconnectPhylactery() {
+  if (phylacteryReconnectInFlight) return phylacteryReconnectInFlight;
+  phylacteryReconnectInFlight = (async () => {
+    phylacteryShuttingDown = true;
     try {
       if (mcpClient) {
         try { await mcpClient.close?.(); } catch { /* best-effort */ }
         mcpClient = null;
       }
     } finally {
-      entityCoreShuttingDown = false;
+      phylacteryShuttingDown = false;
     }
     try {
-      await connect();
-      entityCoreReconnectAttempts = 0;
+      await connectPhylactery();
+      phylacteryReconnectAttempts = 0;
     } catch (err) {
-      console.error('[thalamus] entity-core reconnect failed:', err.message);
+      console.error('[thalamus] Phylactery reconnect failed:', err.message);
       // Fall back to backoff retries — the user's settings change
-      // will eventually take effect when entity-core comes back.
-      scheduleEntityCoreReconnect();
+      // will eventually take effect when Phylactery comes back.
+      schedulePhylacteryReconnect();
     }
   })();
   try {
-    await entityCoreReconnectInFlight;
+    await phylacteryReconnectInFlight;
   } finally {
-    entityCoreReconnectInFlight = null;
+    phylacteryReconnectInFlight = null;
   }
 }
 
 // Unruh runs as an independent stdio child. Its failures must not affect
-// entity-core's enrichment path — connectUnruh() is best-effort and the
+// Phylactery's enrichment path — connectUnruh() is best-effort and the
 // rest of enrich() degrades gracefully when unruhClient is null.
 //
 // Probe both the source tree AND the venv: the source file ships with the
@@ -566,8 +506,8 @@ export function shutdownUnruh() {
   unruhShuttingDown = true;
   try { unruhClient?.close?.(); } catch { /* best-effort */ }
 }
-export function shutdownEntityCore() {
-  entityCoreShuttingDown = true;
+export function shutdownPhylactery() {
+  phylacteryShuttingDown = true;
   try { mcpClient?.close?.(); } catch { /* best-effort */ }
 }
 
@@ -675,7 +615,7 @@ export async function demoteStanding({ id }) {
  * Promote a topic to a standing value — an always-on orientation that
  * bypasses the normal decay. Used when the Familiar (or the user)
  * wants something to anchor behaviour permanently. weight defaults
- * to 1.0; value_ref is an opaque pointer to an entity-core identity
+ * to 1.0; value_ref is an opaque pointer to a Phylactery identity
  * fact (M7 bridge validates it on a live turn).
  */
 export async function setStandingInterest({ topic, weight = 1.0, value_ref }) {
@@ -959,7 +899,7 @@ export async function recordHandoff({ intent, threads, sessionId } = {}) {
 }
 
 /**
- * Spawn the MCP children (entity-core + Unruh) and return a promise
+ * Spawn the MCP children (Phylactery + Unruh) and return a promise
  * that resolves once both connection attempts have settled (resolved
  * OR rejected — failures are logged + scheduled for reconnect, not
  * re-thrown). Idempotent: the first caller triggers spawn; every
@@ -980,8 +920,8 @@ export function startThalamus() {
   if (_startPromise) return _startPromise;
   _startPromise = (async () => {
     await Promise.allSettled([
-      connect().catch(err => {
-        console.error('[thalamus] Failed to start entity-core:', err.message);
+      connectPhylactery().catch(err => {
+        console.error('[thalamus] Failed to start Phylactery:', err.message);
       }),
       connectUnruh().catch(err => {
         console.error('[thalamus] Failed to start Unruh:', err.message);
@@ -1112,6 +1052,7 @@ import {
   getRecentOfferInfo,
   tagOutcomes,
 } from './surface-events.js';
+import { WARD_PRIVATE, isGranted, stripGatedSections, fetchEligibility } from './audience.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
 function sortFiles(files, order) {
@@ -1141,7 +1082,7 @@ function identitySection(files, order) {
 // ── enrich ────────────────────────────────────────────────────────────────────
 
 /**
- * Build entity-core + Unruh context for a user message, split into a
+ * Build Phylactery + Unruh context for a user message, split into a
  * static prefix and a dynamic block for cache-aware prompt assembly.
  *
  *   static  — base_instructions + all identity files (self / user /
@@ -1163,7 +1104,7 @@ function identitySection(files, order) {
  *   liveTurn   — this is a real chat turn (only /api/chat sets it), so
  *                side-effecting reconciliations are allowed: consume a
  *                surfaced session handoff, and demote standing values
- *                whose entity-core anchor has vanished. debug-prompt and
+ *                whose Phylactery anchor has vanished. debug-prompt and
  *                the handoff summariser leave it false → read-only.
  *   staticOnly — fetch only the identity layer (persona), skipping
  *                memory / graph / temporal. Used by the handoff
@@ -1183,7 +1124,7 @@ function identitySection(files, order) {
  * @param {string} userMessage
  * @returns {Promise<{ static: string, dynamic: string, surfacedBookmarks: any[] }>}
  */
-export async function enrich(userMessage, { liveTurn = false, staticOnly = false, lastUserMessageAt = null } = {}) {
+export async function enrich(userMessage, { liveTurn = false, staticOnly = false, lastUserMessageAt = null, audience = WARD_PRIVATE } = {}) {
   const EMPTY = { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
   await startThalamus();
   if (!mcpClient && !unruhClient) return EMPTY;
@@ -1210,24 +1151,42 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // Fire all queries in parallel but independently — a failure in any
     // one of them must not prevent the others from being injected.
     // Promise.allSettled never rejects. Unruh is queried alongside
-    // entity-core; either or both may be absent and the rest still works.
-    if (mcpClient) console.log(`[thalamus] → entity-core: identity_get_all${staticOnly ? '' : ', memory_search, graph_node_search'}`);
-    if (unruhClient && !staticOnly) console.log('[thalamus] → unruh: temporal_context');
+    // Phylactery; either or both may be absent and the rest still works.
+    // V3 knowledge gate: determine which fetches are permitted for this
+    // session's audience. WARD_PRIVATE means no gating (today's behavior).
+    // Absent grant = denied → skip the fetch entirely (gate-before-fetch).
+    // fetchEligibility holds the fail-closed ladder rules: 'shared'
+    // memories and 'coarse' schedule gate OFF until their narrowing
+    // machinery (audience-tagged memories / coarse renderer) exists.
+    const eligibility = fetchEligibility(audience);
+    const gated = !eligibility.wardPrivate;
+    const doMemory   = eligibility.memory;
+    const doGraph    = eligibility.graph;
+    const doTemporal = eligibility.temporal;
+
+    if (mcpClient) {
+      const extras = staticOnly ? '' : [
+        doMemory  ? 'memory_search'      : null,
+        doGraph   ? 'graph_node_search'  : null,
+      ].filter(Boolean).join(', ');
+      console.log(`[thalamus] → phylactery: identity_get_all${extras ? `, ${extras}` : ''}${gated ? ' [gated]' : ''}`);
+    }
+    if (unruhClient && !staticOnly && doTemporal) console.log('[thalamus] → unruh: temporal_context');
     const entityCorePromises = mcpClient ? [
       mcpClient.callTool({ name: 'identity_get_all', arguments: {} }),
-      staticOnly ? Promise.reject(new Error('skipped (staticOnly)'))
+      (staticOnly || !doMemory) ? Promise.reject(new Error(staticOnly ? 'skipped (staticOnly)' : 'skipped (ungated: memories)'))
         : mcpClient.callTool({
             name: 'memory_search',
             arguments: { query: userMessage, instanceId: 'proto-familiar', maxResults: 5 },
           }),
-      staticOnly ? Promise.reject(new Error('skipped (staticOnly)'))
+      (staticOnly || !doGraph) ? Promise.reject(new Error(staticOnly ? 'skipped (staticOnly)' : 'skipped (ungated: graph)'))
         : mcpClient.callTool({
             name: 'graph_node_search',
             arguments: { query: userMessage, limit: 10, minScore: 0.3 },
           }),
-    ] : [Promise.reject(new Error('entity-core not connected')),
-         Promise.reject(new Error('entity-core not connected')),
-         Promise.reject(new Error('entity-core not connected'))];
+    ] : [Promise.reject(new Error('phylactery not connected')),
+         Promise.reject(new Error('phylactery not connected')),
+         Promise.reject(new Error('phylactery not connected'))];
 
     // Cap Unruh's contribution to the chat path so a slow / hung query can
     // never block the LLM call. The underlying MCP request keeps running in
@@ -1252,7 +1211,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     }
     if (isIdle) console.log(`[thalamus] idle mode active (last user msg: ${lastUserMessageAt})`);
     const unruhArgs = { now: nowTs, ...(isIdle ? { mode: 'idle' } : {}) };
-    const unruhPromise = (unruhClient && !staticOnly)
+    const unruhPromise = (unruhClient && !staticOnly && doTemporal)
       ? Promise.race([
           unruhClient.callTool({ name: 'temporal_context', arguments: unruhArgs }),
           new Promise((_, reject) => setTimeout(
@@ -1260,22 +1219,28 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
             UNRUH_CALL_TIMEOUT_MS,
           ).unref?.()),
         ])
-      : Promise.reject(new Error(staticOnly ? 'skipped (staticOnly)' : 'unruh not connected'));
+      : Promise.reject(new Error(staticOnly ? 'skipped (staticOnly)' : (!doTemporal ? 'skipped (ungated: schedule)' : 'unruh not connected')));
 
     const [idSettled, memSettled, graphSettled, temporalSettled] = await Promise.allSettled([
       ...entityCorePromises,
       unruhPromise,
     ]);
 
-    if (idSettled.status       === 'fulfilled') console.log('[thalamus] ← entity-core: identity_get_all — ok');
-    else if (mcpClient)                         console.error('[thalamus] identity_get_all failed:', idSettled.reason?.message ?? idSettled.reason);
+    if (idSettled.status       === 'fulfilled') console.log('[thalamus] ← phylactery: identity_get_all — ok');
+    else if (mcpClient)                         console.error('[thalamus] phylactery identity_get_all failed:', idSettled.reason?.message ?? idSettled.reason);
     if (!staticOnly) {
-      if (memSettled.status      === 'fulfilled') console.log('[thalamus] ← entity-core: memory_search — ok');
-      else if (mcpClient)                        console.error('[thalamus] memory_search failed:', memSettled.reason?.message ?? memSettled.reason);
-      if (graphSettled.status    === 'fulfilled') console.log('[thalamus] ← entity-core: graph_node_search — ok');
-      else if (mcpClient)                        console.error('[thalamus] graph_node_search failed:', graphSettled.reason?.message ?? graphSettled.reason);
-      if (temporalSettled.status === 'fulfilled') console.log('[thalamus] ← unruh: temporal_context — ok');
-      else if (unruhClient)                      console.error('[thalamus] temporal_context failed:', temporalSettled.reason?.message ?? temporalSettled.reason);
+      if (doMemory) {
+        if (memSettled.status === 'fulfilled') console.log('[thalamus] ← phylactery: memory_search — ok');
+        else if (mcpClient)                   console.error('[thalamus] phylactery memory_search failed:', memSettled.reason?.message ?? memSettled.reason);
+      }
+      if (doGraph) {
+        if (graphSettled.status === 'fulfilled') console.log('[thalamus] ← phylactery: graph_node_search — ok');
+        else if (mcpClient)                      console.error('[thalamus] phylactery graph_node_search failed:', graphSettled.reason?.message ?? graphSettled.reason);
+      }
+      if (doTemporal) {
+        if (temporalSettled.status === 'fulfilled') console.log('[thalamus] ← unruh: temporal_context — ok');
+        else if (unruhClient)                       console.error('[thalamus] temporal_context failed:', temporalSettled.reason?.message ?? temporalSettled.reason);
+      }
     }
 
     const idResult       = idSettled.status       === 'fulfilled' ? idSettled.value       : null;
@@ -1303,9 +1268,22 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         : '';
       const selfFiles = (id.self ?? []).filter(f => f.filename !== 'base_instructions.md');
       selfContent = identitySection(selfFiles, SELF_ORDER);
-      userContent = identitySection(id.user ?? [], USER_ORDER);
-      relContent  = identitySection(id.relationship ?? [], RELATIONSHIP_ORDER);
-      custContent = identitySection(id.custom ?? [], []);
+      // V3 identity gate: user/rel/custom files are ward-private by default.
+      // identityBasic grant admits the unmarked sections; section markers
+      // (<!-- gate: CLASS --> ... <!-- /gate -->) gate sensitive sub-sections.
+      // Absent or not-granted identityBasic → these layers are entirely blank.
+      if (!gated || isGranted('identityBasic', audience)) {
+        const applyMarkers = files => files.map(f => ({
+          ...f,
+          content: stripGatedSections(f.content ?? '', audience),
+        }));
+        userContent = identitySection(applyMarkers(id.ward ?? []), WARD_ORDER);
+        relContent  = identitySection(applyMarkers(id.relationship ?? []), RELATIONSHIP_ORDER);
+        // village-registry.md is the canonical Village registry (routing +
+        // gating data synced from village.js) — machine state, not identity
+        // prose. It must never render into the prompt.
+        custContent = identitySection(applyMarkers((id.custom ?? []).filter(f => f.filename !== 'village-registry.md')), []);
+      }
     } catch (err) {
       console.error('[thalamus] identity assembly failed (defaulting to empty):', err?.message ?? err);
     }
@@ -1350,7 +1328,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (graphNodes.length > 0) {
       // Traverse 1 hop from top-3 nodes; ignore individual failures
       const traversalNodes = graphNodes.slice(0, 3);
-      console.log(`[thalamus] → entity-core: graph_subgraph ×${traversalNodes.length}`);
+      console.log(`[thalamus] → phylactery: graph_subgraph ×${traversalNodes.length}`);
       const traversals = await Promise.allSettled(
         traversalNodes.map(n =>
           mcpClient.callTool({
@@ -1359,7 +1337,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
           })
         )
       );
-      console.log(`[thalamus] ← entity-core: graph_subgraph (${traversals.filter(r => r.status === 'fulfilled').length}/${traversalNodes.length} ok)`);
+      console.log(`[thalamus] ← phylactery: graph_subgraph (${traversals.filter(r => r.status === 'fulfilled').length}/${traversalNodes.length} ok)`);
 
       const nodeLabels = new Map(graphNodes.map(n => [n.id, n.label]));
       const nodeDescs  = new Map(graphNodes.map(n => [n.id, n.description ?? '']));
@@ -1493,24 +1471,24 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       }).catch(err => console.error('[thalamus] mark handoff consumed failed:', err?.message ?? err));
     }
 
-    // ── Standing-value → entity-core bridge (M7) ──────────────────────────
-    // A standing value can anchor to an entity-core identity fact via a
+    // ── Standing-value → Phylactery bridge (M7) ───────────────────────────
+    // A standing value can anchor to a Phylactery identity fact via a
     // `value_ref` (e.g. "entity-core:self/my_wants.md#Caring…"). If that
     // fact has disappeared, demote the standing value to a live interest
     // (don't drop it). Thalamus mediates because it alone holds both
-    // sides — entity-core's identity (`id`) and Unruh's interests.
+    // sides — Phylactery's identity (`id`) and Unruh's interests.
     //
     // Two guards against false mass-demotion:
     //   1. liveTurn — only reconcile on a real chat turn (a read-only
     //      debug-prompt preview must not mutate state).
-    //   2. identityLooksReal — entity-core must have returned actual
+    //   2. identityLooksReal — Phylactery must have returned actual
     //      identity content. `idResult` being non-null isn't enough:
     //      an error / non-JSON payload parses to `id = {}`, against
     //      which EVERY ref would read "missing" → mass demote. Require
     //      at least one non-empty identity category before trusting a
     //      "missing" verdict. (Erring toward not-demoting is the safe
     //      direction — a stale standing value is cheaper than wrongly
-    //      stripping every value because entity-core hiccuped.)
+    //      stripping every value because Phylactery hiccuped.)
     if (liveTurn && unruhClient && identityHasContent(id)) {
       for (const sv of (temporalPayload?.interests?.standing ?? [])) {
         const ref = sv?.value_ref;
@@ -1539,7 +1517,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     const staticSections = [];
     if (baseContent)   staticSections.push(baseContent);
     if (selfContent)   staticSections.push(`---\nMy self files (from identity/self/ directory):\n\n${selfContent}`);
-    if (userContent)   staticSections.push(`---\nFiles on my human (from identity/user/ directory):\n\n${userContent}`);
+    if (userContent)   staticSections.push(`---\nFiles on my human (from identity/ward/ directory):\n\n${userContent}`);
     if (relContent)    staticSections.push(`---\nRelationship files (from identity/relationship/ directory):\n\n${relContent}`);
     if (custContent)   staticSections.push(`---\nCustom files (from identity/custom/ directory):\n\n${custContent}`);
 
@@ -1547,7 +1525,9 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // Best-effort, never blocks: a bad read or missing tome silently
     // contributes nothing. Skipped on staticOnly the same as the other
     // dynamic sources, so handoff-summary turns stay lean.
-    const ponderings = staticOnly
+    // Ward-private only: the Familiar's inner life is not shared in gated
+    // sessions — ponderings are per-embodiment thoughts, not public data.
+    const ponderings = (staticOnly || gated)
       ? []
       : await getRecentPonderings().catch(err => {
           console.error('[thalamus] getRecentPonderings failed:', err?.message ?? err);
@@ -1560,8 +1540,9 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // cycles but hasn't yet acted on. Only on live turns so debug-prompt
     // previews and handoff summaries don't consume the dedup state.
     // Best-effort; failure → silent omission.
+    // Ward-private only: task surface candidates are the ward's own task list.
     let deferredIntentsBlock = '';
-    if (liveTurn && !staticOnly) {
+    if (liveTurn && !staticOnly && !gated) {
       try {
         const intents = await getUnactedIntents({ limit: 5 });
         deferredIntentsBlock = formatDeferredIntentsBlock(intents);
@@ -1580,7 +1561,9 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // ("if it fits"). Crisis-resource line is added at severe tier only.
     // Best-effort; failure → silent omission, same posture as the rest of
     // enrich(). Skipped on staticOnly.
-    const threat = staticOnly
+    // careState is ward-private (never grantable per design) — skip for
+    // any non-ward audience.
+    const threat = (staticOnly || gated)
       ? { weight: 0, tier: 'calm', disabled: false }
       : await getThreat().catch(err => {
           console.error('[thalamus] getThreat failed:', err?.message ?? err);
@@ -1598,12 +1581,14 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     //
     //    Skipped on staticOnly (handoff-summary turns don't surface
     //    candidates — wrong context, wrong moment).
+    //    Ward-private only: surface candidates are the ward's task list,
+    //    never shared in gated sessions.
     // surfacedTasks is hoisted at function scope so the outer catch
     // can surface it; reset to [] here in case a previous turn's value
     // leaked through (it can't — this is fresh per call — but defensive).
     let surfaceCandidatesBlock = '';
     surfacedTasks = [];
-    if (!staticOnly) {
+    if (!staticOnly && !gated) {
       try {
         const windowItems = Array.isArray(temporalPayload?.schedule?.window)
           ? temporalPayload.schedule.window
@@ -1673,9 +1658,16 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // today and "two days ago" tomorrow, without anyone re-writing it.
     let timeAnchorBlock = '';
     try {
-      const nowMs = Date.now();
+      const nowMs   = Date.now();
+      const nowDate = new Date(nowMs);
+      // UTC offset — e.g. "+02:00" or "-05:00". getTimezoneOffset() returns
+      // the NEGATIVE of the UTC offset in minutes (e.g. UTC+2 → -120).
+      const offsetMin  = -nowDate.getTimezoneOffset();
+      const offsetSign = offsetMin >= 0 ? '+' : '-';
+      const absMin     = Math.abs(offsetMin);
+      const offsetStr  = `UTC${offsetSign}${String(Math.floor(absMin / 60)).padStart(2, '0')}:${String(absMin % 60).padStart(2, '0')}`;
       const lines = [
-        `Now: ${clockTime(nowMs)} on ${dayAndDate(nowMs)}.`,
+        `Now: ${clockTime(nowMs)} (${offsetStr}) on ${dayAndDate(nowMs)}.`,
       ];
       if (lastUserMessageAt) {
         const lastMs = new Date(lastUserMessageAt).getTime();
@@ -1688,12 +1680,63 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       console.error('[thalamus] time anchor assembly failed:', err?.message ?? err);
     }
 
+    // ── Consent-pending block (Pillar C ask-gate) ─────────────────────────
+    // Read the local file — cheap, no MCP round-trip — and inject a block
+    // so I know to ask my human before the session ends. Only for ward-private
+    // sessions (consent is between me and my human, not a shared room).
+    let consentPendingBlock = '';
+    if (!staticOnly && !gated) {
+      try {
+        const cpRaw = await fsp.readFile(CONSENT_PENDING_FILE, 'utf8').catch(() => null);
+        if (cpRaw) {
+          const cpItems = JSON.parse(cpRaw);
+          if (Array.isArray(cpItems) && cpItems.length > 0) {
+            const lines = [
+              `[PENDING MEMORY CONSENT — ${cpItems.length} memory record(s) from a recent session are waiting for my human's approval before I keep them permanently.]`,
+              'Items:',
+              ...cpItems.map((x, i) =>
+                `  ${i + 1}. About ${x.villagerName || 'someone'} (${x.category ?? 'unknown category'}): ${x.brief ?? ''}  [id: ${x.id}]`
+              ),
+              'If my human says to keep them, I call memory_confirm_consent with the id(s); if not, memory_drop_pending.',
+            ];
+            consentPendingBlock = lines.join('\n');
+          }
+        }
+      } catch {
+        /* best-effort — no consent block on parse error */
+      }
+    }
+
+    // ── Graduation-notice block (Pillar H, ward-consulted non-blocking) ───
+    // After I file ward-block detail off my always-injected surface, I let my
+    // human know in my own voice so they can pull anything back. TTL-cached so
+    // this costs at most one MCP call per few minutes; ward-private turns only.
+    let graduationBlock = '';
+    if (!staticOnly && !gated) {
+      try {
+        const gradItems = await listPendingGraduations();
+        if (Array.isArray(gradItems) && gradItems.length > 0) {
+          const lines = [
+            `[GRADUATION NOTICE — I recently filed ${gradItems.length} piece(s) of detail about my human off my always-injected surface into my recalled-when-relevant memory. Nothing is lost; I can pull any of it back. This is mine to mention in my own voice when a natural moment opens — non-blocking, never a reason to stall, and never the thing I lead with.]`,
+            'Filed away:',
+            ...gradItems.map((x, i) => `  ${i + 1}. ${x.summary ?? ''}  [id: ${x.id}]`),
+            'When I have mentioned these (or judged they need no mention), I call graduation_acknowledge with the id(s) so I do not re-raise them.',
+          ];
+          graduationBlock = lines.join('\n');
+        }
+      } catch {
+        /* best-effort — no graduation block on error */
+      }
+    }
+
     const dynamicSections = [];
     if (timeAnchorBlock)        dynamicSections.push(timeAnchorBlock);
     if (memLines)               dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
     if (graphLines)             dynamicSections.push(`Relevant Knowledge from Graph:\n${graphLines}`);
     if (ponderingsBlock)        dynamicSections.push(ponderingsBlock);
     if (deferredIntentsBlock)   dynamicSections.push(deferredIntentsBlock);
+    if (consentPendingBlock)    dynamicSections.push(consentPendingBlock);
+    if (graduationBlock)        dynamicSections.push(graduationBlock);
     if (careBlock)              dynamicSections.push(careBlock);
     if (temporalLines)          dynamicSections.push(`[Temporal Context]\n${temporalLines}`);
     if (surfaceCandidatesBlock) dynamicSections.push(surfaceCandidatesBlock);
@@ -1714,11 +1757,13 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       custContent            ? 'cust'     : null,
       memLines               ? 'mem'      : null,
       graphLines             ? 'graph'    : null,
-      ponderingsBlock        ? 'pondering': null,
-      deferredIntentsBlock   ? 'intents'  : null,
-      careBlock              ? 'care'     : null,
-      temporalLines          ? 'temporal' : null,
-      surfaceCandidatesBlock ? 'surface'  : null,
+      ponderingsBlock        ? 'pondering'  : null,
+      deferredIntentsBlock   ? 'intents'    : null,
+      consentPendingBlock    ? 'consent'    : null,
+      graduationBlock        ? 'graduation' : null,
+      careBlock              ? 'care'       : null,
+      temporalLines          ? 'temporal'   : null,
+      surfaceCandidatesBlock ? 'surface'    : null,
     ].filter(Boolean).join(',');
     if (totalChars === 0) {
       console.warn('[thalamus] enrich() produced no content — identity files may be empty and no memories found');
@@ -1796,21 +1841,20 @@ export async function reportSurfacingOutcomes({ responseText, bookmarks }) {
 }
 
 /**
- * Create a new memory entry in entity-core.
+ * Create a new memory entry in Phylactery.
  *
- * `slug` is required by entity-core for significant memories — their
- * storage filename is `YYYY-MM-DD_slug.md`, so without it every save
- * lands at the same path and entity-core's merge logic destroys
- * earlier content. The caller (server.js POST /api/entity/memory) is
- * responsible for ensuring `slug` is set whenever `granularity ===
- * 'significant'`; we forward whatever it gives us.
+ * `slug` is required for significant memories — their composite key is
+ * `YYYY-MM-DD_slug`, so without it every save appends to the same entry.
+ * The caller (server.js POST /api/entity/memory) is responsible for
+ * ensuring `slug` is set whenever `granularity === 'significant'`; we
+ * forward whatever it gives us.
  *
  * @param {{ content: string, granularity: string, date?: string, slug?: string, instanceId?: string }} opts
  * @returns {Promise<{ ok: boolean, error?: string }>}
  */
 export async function createMemory({ content, granularity = 'daily', date, slug, instanceId = 'proto-familiar' }) {
   await startThalamus();
-  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
     const today = new Date().toISOString().slice(0, 10);
     const args = { content, granularity, date: date ?? today, instanceId };
@@ -1825,13 +1869,174 @@ export async function createMemory({ content, granularity = 'daily', date, slug,
 }
 
 /**
- * Append content to an entity-core identity file.
+ * Full-field memory create — used by the memorization worker (Pillar C).
+ * Accepts audience, subjects, category, consent_pending, confidence.
+ * Returns { ok, id?, error? }.
+ */
+export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, consent_pending = false, confidence = 1.0 }) {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const args = { content, granularity, date: date ?? today, audience, subjects, consent_pending, confidence };
+    if (slug) args.slug = slug;
+    if (category) args.category = category;
+    const raw = await mcpClient.callTool({ name: 'memory_create', arguments: args });
+    // Parse the returned string to extract the id (format: "Memory saved id=<id>.")
+    const text = raw?.content?.find(c => c.type === 'text')?.text ?? '';
+    const idMatch = text.match(/id=([a-f0-9]+)/);
+    const id = idMatch?.[1] ?? null;
+    console.log(`[thalamus] createMemoryFull() ${granularity}${slug ? ` (${slug})` : ''}${consent_pending ? ' [consent_pending]' : ''}`);
+    return { ok: true, id };
+  } catch (err) {
+    console.error('[thalamus] createMemoryFull failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Confirm consent for the given memory IDs (Pillar C ask-path).
+ * Returns { ok, confirmed }.
+ */
+export async function confirmConsentMemories(ids) {
+  return callTool('memory_confirm_consent', { ids }).catch(err => {
+    console.warn('[thalamus] confirmConsentMemories failed:', err?.message ?? err);
+    return { ok: false };
+  });
+}
+
+/**
+ * Drop (hard-delete) consent-pending memories the ward declined (Pillar C).
+ * Returns { ok, dropped }.
+ */
+export async function dropPendingMemories(ids) {
+  return callTool('memory_drop_pending', { ids }).catch(err => {
+    console.warn('[thalamus] dropPendingMemories failed:', err?.message ?? err);
+    return { ok: false };
+  });
+}
+
+/**
+ * Pillar D outgoing filter: check a draft reply for restricted content.
+ * Returns { hit: boolean, topic?: string, score?: number }.
+ * Always resolves (never rejects) — fails open with { hit: false }.
+ */
+export async function searchMemoryRestricted({ query, roomAudience, threshold = 0.70 }) {
+  try {
+    return await callTool('memory_search_restricted', {
+      query,
+      roomAudience,
+      threshold,
+      maxResults: 3,
+    });
+  } catch (err) {
+    console.warn('[thalamus] searchMemoryRestricted failed (failing open):', err?.message ?? err);
+    return { hit: false };
+  }
+}
+
+// ── Graduation surfacing (Pillar H) ──────────────────────────────────────────
+// Graduations are rare, so we don't pay an MCP round-trip every turn. A short
+// TTL cache means at most one list call per GRADUATION_TTL_MS even on a busy
+// chat; the cache is invalidated immediately on acknowledge.
+const GRADUATION_TTL_MS = 5 * 60 * 1000;
+let _gradCache = { at: 0, items: [] };
+
+/**
+ * List ward-block detail I've graduated but not yet mentioned to my human.
+ * TTL-cached. Best-effort: returns [] if Phylactery is unavailable.
+ * @returns {Promise<Array<{id,filename,memoryId,summary,createdAt}>>}
+ */
+export async function listPendingGraduations({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && now - _gradCache.at < GRADUATION_TTL_MS) return _gradCache.items;
+  try {
+    const res = await callTool('graduation_list_pending', {});
+    const items = Array.isArray(res?.items) ? res.items : [];
+    _gradCache = { at: now, items };
+    return items;
+  } catch (err) {
+    console.warn('[thalamus] listPendingGraduations failed:', err?.message ?? err);
+    _gradCache = { at: now, items: [] };
+    return [];
+  }
+}
+
+/**
+ * Mark ward-block graduation mentions as surfaced. Invalidates the cache.
+ * @returns {Promise<{ ok: boolean, acknowledged?: number }>}
+ */
+export async function acknowledgeGraduations(ids) {
+  _gradCache = { at: 0, items: [] };
+  return callTool('graduation_acknowledge', { ids }).catch(err => {
+    console.warn('[thalamus] acknowledgeGraduations failed:', err?.message ?? err);
+    return { ok: false };
+  });
+}
+
+/**
+ * Run one lifecycle pass on demand (hygiene + consolidation + graduation).
+ * @returns {Promise<object>}
+ */
+export async function runLifecyclePass({ force = false } = {}) {
+  return callTool('lifecycle_pass', { force }).catch(err => {
+    console.warn('[thalamus] runLifecyclePass failed:', err?.message ?? err);
+    return { ok: false, error: err?.message ?? String(err) };
+  });
+}
+
+/**
+ * Passphrase-encrypted single-file backup of the whole Familiar.
+ * @returns {Promise<{ ok: boolean, filePath?: string, sizeBytes?: number, error?: string }>}
+ */
+export async function exportBackup({ passphrase }) {
+  return callTool('backup_export', { passphrase }).catch(err => {
+    console.warn('[thalamus] exportBackup failed:', err?.message ?? err);
+    return { ok: false, error: err?.message ?? String(err) };
+  });
+}
+
+/**
+ * Restore the whole Familiar from a passphrase-encrypted backup, then reconnect.
+ * @returns {Promise<{ ok: boolean, restoredFrom?: string, error?: string }>}
+ */
+export async function restoreBackup({ filePath, passphrase }) {
+  const res = await callTool('backup_restore', { filePath, passphrase }).catch(err => {
+    console.warn('[thalamus] restoreBackup failed:', err?.message ?? err);
+    return { ok: false, error: err?.message ?? String(err) };
+  });
+  if (res?.ok) {
+    // The live DB was swapped underneath us — reconnect the MCP child.
+    await reconnectPhylactery().catch(err =>
+      console.warn('[thalamus] reconnect after restore failed:', err?.message ?? err));
+  }
+  return res;
+}
+
+// ── Ward remember-consent map (Pillar I) ─────────────────────────────────────
+
+export async function getRememberMap() {
+  return callTool('remember_map_get', {}).catch(err => {
+    console.warn('[thalamus] getRememberMap failed (degraded):', err?.message ?? err);
+    return null;
+  });
+}
+
+export async function setRememberMap(map) {
+  return callTool('remember_map_set', { map }).catch(err => {
+    console.warn('[thalamus] setRememberMap failed:', err?.message ?? err);
+    return { ok: false, error: err?.message ?? String(err) };
+  });
+}
+
+/**
+ * Append content to a Phylactery identity file.
  * @param {{ category: string, filename: string, content: string }} opts
  * @returns {Promise<{ ok: boolean, error?: string }>}
  */
 export async function appendIdentity({ category, filename, content }) {
   await startThalamus();
-  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
     await mcpClient.callTool({
       name: 'identity_append',
@@ -1846,14 +2051,14 @@ export async function appendIdentity({ category, filename, content }) {
 }
 
 /**
- * Append content to a specific markdown section of an entity-core identity file.
+ * Append content to a specific markdown section of a Phylactery identity file.
  * Auto-creates the section if the heading doesn't exist.
  * @param {{ category: string, filename: string, heading: string, content: string }} opts
  * @returns {Promise<{ ok: boolean, error?: string }>}
  */
 export async function updateIdentitySection({ category, filename, heading, content }) {
   await startThalamus();
-  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
     await mcpClient.callTool({
       name: 'identity_update_section',
@@ -1871,19 +2076,18 @@ export async function updateIdentitySection({ category, filename, heading, conte
 //
 // Every destructive op (update / delete / rewrite) auto-snapshots first via
 // snapshot_create so the user has a one-click undo path through the
-// snapshot_restore tool. Snapshots themselves are pruned by entity-core's own
-// retention policy (ENTITY_CORE_SNAPSHOT_RETENTION_DAYS, default 30 days),
-// so this doesn't leak storage.
+// snapshot_restore tool. Snapshots are pruned by Phylactery's own retention
+// policy (default 30 days) so this doesn't leak storage.
 
 const PROTO_INSTANCE_ID = 'proto-familiar';
 
 async function callTool(name, args = {}) {
   await startThalamus();
-  if (!mcpClient) throw new Error('entity-core not connected');
+  if (!mcpClient) throw new Error('phylactery not connected');
   const t0 = Date.now();
-  console.log(`[thalamus] → entity-core: ${name}`);
+  console.log(`[thalamus] → phylactery: ${name}`);
   const result = await mcpClient.callTool({ name, arguments: args });
-  console.log(`[thalamus] ← entity-core: ${name} (${Date.now() - t0}ms)`);
+  console.log(`[thalamus] ← phylactery: ${name} (${Date.now() - t0}ms)`);
   return parseToolText(result, {});
 }
 
@@ -1906,7 +2110,7 @@ export async function listMemories({ granularity, limit = 50, offset = 0 } = {})
 export async function readMemory({ granularity, date, slug }) {
   // slug: significant memories live one-file-per-milestone as
   // {date}_{slug}.md; passing the slug addresses the exact file instead
-  // of letting entity-core fall back to first-match-by-date.
+  // of letting Phylactery fall back to first-match-by-date.
   return callTool('memory_read', { granularity, date, ...(slug ? { slug } : {}) });
 }
 
@@ -1927,7 +2131,7 @@ export async function getGraphSubgraph({ nodeId, depth = 1 }) {
 }
 
 // Aggregate every node and every edge into one payload for the Map view.
-// entity-core has no "list all edges" tool, so we walk each node's 1-hop
+// Phylactery has no "list all edges" tool, so we walk each node's 1-hop
 // subgraph and deduplicate edges by id. Concurrency is capped so we don't
 // open hundreds of simultaneous tool calls against the MCP server, and
 // edges to nodes outside the (possibly type-filtered) visible set are
@@ -1966,16 +2170,17 @@ export async function listSnapshots() {
 
 // ── Writes (auto-snapshot before destructive) ────────────────────────────────
 
-export async function updateMemory({ granularity, date, slug, content, editedBy = PROTO_INSTANCE_ID }) {
+export async function updateMemory({ granularity, date, slug, content, editedBy = PROTO_INSTANCE_ID, audience, careWeight }) {
   await startThalamus();
-  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   await autoSnapshot(`memory_update ${granularity}/${date}${slug ? `_${slug}` : ''}`);
   try {
-    // slug matters for significant memories: entity-core's memory_update
-    // preserves the existing entry's slug on a date-only match, but an
-    // explicit slug addresses the exact {date}_{slug}.md file when
-    // several milestones share a date.
-    const result = await callTool('memory_update', { granularity, date, content, editedBy, ...(slug ? { slug } : {}) });
+    const args = { granularity, date, content, editedBy,
+      ...(slug       ? { slug }       : {}),
+      ...(audience   ? { audience }   : {}),
+      ...(careWeight !== undefined ? { careWeight } : {}),
+    };
+    const result = await callTool('memory_update', args);
     console.log(`[thalamus] updateMemory ${granularity}/${date}${slug ? `_${slug}` : ''}`);
     return { ok: true, result };
   } catch (err) {
@@ -1986,7 +2191,7 @@ export async function updateMemory({ granularity, date, slug, content, editedBy 
 
 export async function deleteMemory({ granularity, date, instanceId, slug }) {
   await startThalamus();
-  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   await autoSnapshot(`memory_delete ${granularity}/${date}`);
   try {
     const result = await callTool('memory_delete', { granularity, date, instanceId, slug });
@@ -2000,7 +2205,7 @@ export async function deleteMemory({ granularity, date, instanceId, slug }) {
 
 export async function rewriteIdentitySection({ category, filename, section, content, instanceId = PROTO_INSTANCE_ID }) {
   await startThalamus();
-  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   await autoSnapshot(`identity_rewrite_section ${category}/${filename}#${section}`);
   try {
     const result = await callTool('identity_rewrite_section', { category, filename, section, content, instanceId });
@@ -2014,7 +2219,7 @@ export async function rewriteIdentitySection({ category, filename, section, cont
 
 export async function createGraphNode({ label, type, description, instanceId = PROTO_INSTANCE_ID }) {
   await startThalamus();
-  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
     const args = { instanceId };
     if (label       !== undefined) args.label       = label;
@@ -2031,7 +2236,7 @@ export async function createGraphNode({ label, type, description, instanceId = P
 
 export async function createGraphEdge({ fromId, toId, type, weight, instanceId = PROTO_INSTANCE_ID }) {
   await startThalamus();
-  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
     const args = { fromId, toId, instanceId };
     if (type   !== undefined) args.type   = type;
@@ -2047,7 +2252,7 @@ export async function createGraphEdge({ fromId, toId, type, weight, instanceId =
 
 export async function updateGraphNode({ id, label, description, type, instanceId = PROTO_INSTANCE_ID }) {
   await startThalamus();
-  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   await autoSnapshot(`graph_node_update ${id}`);
   try {
     const args = { id, instanceId };
@@ -2065,7 +2270,7 @@ export async function updateGraphNode({ id, label, description, type, instanceId
 
 export async function deleteGraphNode({ id, permanent = false }) {
   await startThalamus();
-  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   await autoSnapshot(`graph_node_delete ${id}`);
   try {
     const result = await callTool('graph_node_delete', { id, permanent });
@@ -2079,7 +2284,7 @@ export async function deleteGraphNode({ id, permanent = false }) {
 
 export async function updateGraphEdge({ id, type, weight, instanceId = PROTO_INSTANCE_ID }) {
   await startThalamus();
-  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   await autoSnapshot(`graph_edge_update ${id}`);
   try {
     const args = { id, instanceId };
@@ -2096,7 +2301,7 @@ export async function updateGraphEdge({ id, type, weight, instanceId = PROTO_INS
 
 export async function deleteGraphEdge({ id }) {
   await startThalamus();
-  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   await autoSnapshot(`graph_edge_delete ${id}`);
   try {
     const result = await callTool('graph_edge_delete', { id });
@@ -2112,7 +2317,7 @@ export async function deleteGraphEdge({ id }) {
 
 export async function createSnapshot() {
   await startThalamus();
-  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
     const result = await callTool('snapshot_create', {});
     return { ok: true, result };
@@ -2123,7 +2328,7 @@ export async function createSnapshot() {
 
 export async function restoreSnapshot({ snapshotId }) {
   await startThalamus();
-  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
     const result = await callTool('snapshot_restore', { snapshotId });
     return { ok: true, result };

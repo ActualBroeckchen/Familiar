@@ -1,31 +1,36 @@
 /**
- * Standing-value → entity-core reference resolution (Milestone 7).
+ * Standing-value → Phylactery reference resolution (Milestone 7).
  *
  * A standing value in Unruh's interest layer can carry a `value_ref`
- * that anchors it to a fact in entity-core's identity layer, so the
+ * that anchors it to a fact in Phylactery's identity layer, so the
  * design's "redundancy is intentional" claim is structural rather than
  * a coincidence of wording. Thalamus is the mediator: it already
- * fetches both entity-core's identity and Unruh's interests in
+ * fetches both Phylactery's identity and Unruh's interests in
  * enrich(), so it cross-checks the refs there and asks Unruh to demote
  * any whose anchor has disappeared.
  *
  * Reference format (string, stable-identifier anchored):
  *
- *   entity-core:<category>/<filename>[#<section>]
+ *   entity-core:<category>/<filename>[#<section>]    (legacy; still resolved)
+ *   phylactery:<category>/<filename>[#<section>]     (new canonical form)
  *
  *   e.g.  entity-core:self/my_wants.md
- *         entity-core:self/my_wants.md#Caring for the user's wellbeing
+ *         phylactery:ward/ward_notes.md#Sleep patterns
  *
- * <category> is one of entity-core's identity categories (self / user /
- * relationship / custom); <filename> is the markdown file; the optional
- * <section> anchors to a heading within it. Only `entity-core:` refs are
- * resolvable here — anything else is "not applicable" so the caller
- * leaves it alone (never demotes a ref it doesn't understand).
+ * <category> is one of Phylactery's identity categories (self / ward /
+ * relationship / custom); legacy refs using 'user' are normalised to
+ * 'ward' at resolve time. <filename> is the markdown file; the optional
+ * <section> anchors to a heading within it. Only `entity-core:` and
+ * `phylactery:` refs are resolvable here — anything else is
+ * "not applicable" so the caller leaves it alone (never demotes a ref
+ * it doesn't understand).
  *
  * Pure functions, no I/O — unit-tested in tests/entity-ref.test.mjs.
  */
 
-const VALID_CATEGORIES = new Set(['self', 'user', 'relationship', 'custom']);
+// Legacy 'user' kept so entity-core:user/... refs still parse; the resolver
+// normalises user → ward before looking up in the identity object.
+const VALID_CATEGORIES = new Set(['self', 'user', 'ward', 'relationship', 'custom']);
 
 /**
  * True only if `identity` (an identity_get_all result) actually carries
@@ -43,18 +48,19 @@ export function identityHasContent(identity) {
 
 /**
  * Parse a value_ref string into its parts, or null if it isn't a
- * well-formed entity-core ref.
- * @returns {{ source:'entity-core', category:string, filename:string, section:string|null } | null}
+ * well-formed entity-core or phylactery ref.
+ * @returns {{ source:'entity-core'|'phylactery', category:string, filename:string, section:string|null } | null}
  */
 export function parseEntityCoreRef(ref) {
   if (typeof ref !== 'string') return null;
-  const m = ref.match(/^entity-core:([^/]+)\/([^#]+?)(?:#(.*))?$/);
+  const m = ref.match(/^(entity-core|phylactery):([^/]+)\/([^#]+?)(?:#(.*))?$/);
   if (!m) return null;
-  const category = m[1].trim();
-  const filename = m[2].trim();
-  const section = (m[3] ?? '').trim() || null;
+  const source   = m[1];
+  const category = m[2].trim();
+  const filename = m[3].trim();
+  const section  = (m[4] ?? '').trim() || null;
   if (!VALID_CATEGORIES.has(category) || !filename) return null;
-  return { source: 'entity-core', category, filename, section };
+  return { source, category, filename, section };
 }
 
 /** True if the markdown `content` still contains `section` — either as a
@@ -72,20 +78,24 @@ function contentHasAnchor(content, section) {
 }
 
 /**
- * Resolve a value_ref against entity-core's identity data.
+ * Resolve a value_ref against Phylactery's identity data.
  *
  * @param {string} ref           the standing value's value_ref
- * @param {object} identity      entity-core identity_get_all result,
- *                               shaped { self:[{filename,content}], user:[…], … }
+ * @param {object} identity      Phylactery identity_get_all result,
+ *                               shaped { self:[{filename,content}], ward:[…], … }
+ *                               Legacy entity-core:user/... refs are normalised
+ *                               to 'ward' at resolve time so they still match.
  * @returns {'not-applicable'|'valid'|'missing'}
- *   - 'not-applicable': not an entity-core ref → caller leaves it alone
+ *   - 'not-applicable': not an entity-core/phylactery ref → caller leaves it alone
  *   - 'valid':          the anchored fact is present
  *   - 'missing':        the ref parses but its target is gone → demote
  */
 export function resolveEntityCoreRef(ref, identity) {
   const parsed = parseEntityCoreRef(ref);
   if (!parsed) return 'not-applicable';
-  const files = identity?.[parsed.category];
+  // Normalise legacy 'user' category → 'ward' (Pillar F rename).
+  const cat = parsed.category === 'user' ? 'ward' : parsed.category;
+  const files = identity?.[cat];
   if (!Array.isArray(files)) return 'missing';
   const file = files.find(f => f && f.filename === parsed.filename);
   if (!file) return 'missing';

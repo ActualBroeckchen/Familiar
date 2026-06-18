@@ -2,8 +2,8 @@
 /**
  * scripts/import-entity.js
  *
- * Imports an existing entity-core data directory into the local instance
- * managed by Familiar, overwriting the current data.
+ * Imports an existing entity-core data directory into Phylactery by
+ * invoking the Python migration module.
  *
  * Usage:
  *   npm run import-entity -- --from /path/to/entity-core
@@ -14,19 +14,19 @@
  * (looks for a data/ subdirectory) or directly to a data directory
  * (looks for self/, memories/, or graph.db inside it).
  *
- * The destination is resolved the same way thalamus.js finds entity-core:
- *   1. $ENTITY_CORE_PATH  (env var pointing to entity-core's src/mod.ts)
- *   2. ../entity-core (sibling directory, default for new installs)
- *   3. ../entity-core-alpha (legacy sibling name, kept for back-compat)
- * Then reads that install's .env for ENTITY_CORE_DATA_DIR, defaulting to ./data.
+ * The migration is performed by:
+ *   cd <phylacteryRoot> && uv run python -m phylactery.migrate_from_entity_core \
+ *       --source <sourceDataDir>
  *
- * Requires Node.js 18+ (uses fs.cpSync).
+ * The Python script is idempotent — safe to run more than once.
+ * It snapshots Phylactery before any writes.
  */
 
-import { existsSync, cpSync, mkdirSync, readFileSync, readdirSync } from 'fs';
-import { resolve, dirname, basename, join } from 'path';
+import { existsSync, readFileSync } from 'fs';
+import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { createInterface } from 'readline';
+import { spawnSync } from 'child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -39,8 +39,8 @@ function getArg(name) {
   return idx >= 0 ? args[idx + 1] : undefined;
 }
 
-const fromArg  = getArg('--from');
-const skipConfirm = args.includes('--yes') || args.includes('-y');
+const fromArg      = getArg('--from');
+const skipConfirm  = args.includes('--yes') || args.includes('-y');
 
 if (!fromArg) {
   console.error('Usage: npm run import-entity -- --from <path> [--yes]');
@@ -71,9 +71,9 @@ if (looksLikeDataDir(fromAbs)) {
   sourceDataDir = fromAbs;
 } else if (looksLikeEntityCoreRoot(fromAbs)) {
   // Read the source's own .env to find its ENTITY_CORE_DATA_DIR
-  const srcDataDir = readEnvVar(join(fromAbs, '.env'), 'ENTITY_CORE_DATA_DIR')
+  const srcEnvDataDir = readEnvVar(join(fromAbs, '.env'), 'ENTITY_CORE_DATA_DIR')
     ?? join(fromAbs, 'data');
-  sourceDataDir = resolve(fromAbs, srcDataDir);
+  sourceDataDir = resolve(fromAbs, srcEnvDataDir);
 } else {
   console.error(
     `Cannot identify "${fromAbs}" as an entity-core root or data directory.\n` +
@@ -89,66 +89,40 @@ if (!existsSync(sourceDataDir)) {
   process.exit(1);
 }
 
-// ── Resolve destination data directory ───────────────────────────────────────
+// ── Resolve Phylactery root ───────────────────────────────────────────────────
 
-// Mirror the same resolution logic as thalamus.js:
-//   $ENTITY_CORE_PATH (mod.ts) → its root is two levels up.
-//   Otherwise probe each sibling dir (../entity-core, then the legacy
-//   ../entity-core-alpha) for the Deno-workspace layout first, then
-//   the legacy top-level layout.
-const entityCorePath = process.env.ENTITY_CORE_PATH;
-let entityCoreRoot;
-if (entityCorePath) {
-  entityCoreRoot = resolve(dirname(dirname(entityCorePath)));
-} else {
-  const siblingDirs = [
-    resolve(__dirname, '..', '..', 'entity-core'),
-    resolve(__dirname, '..', '..', 'entity-core-alpha'),
-  ];
-  entityCoreRoot = null;
-  for (const dir of siblingDirs) {
-    const workspace = join(dir, 'packages', 'entity-core');
-    if (existsSync(join(workspace, 'src', 'mod.ts'))) { entityCoreRoot = workspace; break; }
-    if (existsSync(join(dir,       'src', 'mod.ts'))) { entityCoreRoot = dir;       break; }
-  }
-  // Default to the workspace layout under the new dir for clear errors.
-  if (!entityCoreRoot) {
-    entityCoreRoot = join(siblingDirs[0], 'packages', 'entity-core');
-  }
+// The Phylactery package lives two levels up from scripts/ (i.e. at the
+// Proto-Familiar repo root) and then into phylactery/.
+const phylacteryRoot = resolve(__dirname, '..', 'phylactery');
+if (!existsSync(phylacteryRoot)) {
+  console.error(`Phylactery root not found at: ${phylacteryRoot}`);
+  console.error('Run the installer to set up Phylactery first.');
+  process.exit(1);
 }
 
-const destEnvPath = join(entityCoreRoot, '.env');
-const destDataRelative = readEnvVar(destEnvPath, 'ENTITY_CORE_DATA_DIR') ?? './data';
-const destDataDir = resolve(entityCoreRoot, destDataRelative);
-
-// ── Sanity checks ─────────────────────────────────────────────────────────────
-
-if (resolve(sourceDataDir) === resolve(destDataDir)) {
-  console.error('Source and destination are the same directory. Nothing to do.');
-  process.exit(0);
-}
-
-const sourceItems = readdirSync(sourceDataDir);
+// ── Print plan + confirm ──────────────────────────────────────────────────────
 
 console.log('');
-console.log('  Source  :', sourceDataDir);
-console.log('  Dest    :', destDataDir);
-console.log('  Items   :', sourceItems.join(', ') || '(empty)');
+console.log('  Source     :', sourceDataDir);
+console.log('  Phylactery :', phylacteryRoot);
 console.log('');
-console.log('  WARNING : This will OVERWRITE the destination data directory.');
-console.log('            Stop the Familiar server before proceeding to avoid');
-console.log('            file conflicts with the running entity-core process.');
+console.log('  The Python migration script will:');
+console.log('    1. Snapshot Phylactery before any writes (safe to run again).');
+console.log('    2. Import identity markdown files (entity-core user/ → ward category).');
+console.log('    3. Import memory markdown files (all tiers, date-key preserved).');
+console.log('    4. Import graph.db nodes and edges.');
+console.log('    5. Set audience=ward-private on all migrated records.');
 console.log('');
-
-// ── Confirmation ──────────────────────────────────────────────────────────────
+console.log('  This is idempotent — already-migrated records are skipped.');
+console.log('');
 
 async function confirm(question) {
   if (skipConfirm) return true;
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise(resolve => {
+  return new Promise(res => {
     rl.question(question, answer => {
       rl.close();
-      resolve(answer.trim().toLowerCase() === 'y');
+      res(answer.trim().toLowerCase() === 'y');
     });
   });
 }
@@ -159,20 +133,25 @@ if (!ok) {
   process.exit(0);
 }
 
-// ── Copy ──────────────────────────────────────────────────────────────────────
+// ── Invoke migration ──────────────────────────────────────────────────────────
 
-console.log('\nCopying...');
-mkdirSync(destDataDir, { recursive: true });
+console.log('\nRunning migration…\n');
 
-cpSync(sourceDataDir, destDataDir, {
-  recursive: true,
-  force: true,
-  // Preserve timestamps so entity-core's recency ranking stays accurate.
-  preserveTimestamps: true,
-});
+const result = spawnSync(
+  'uv',
+  ['run', 'python', '-m', 'phylactery.migrate_from_entity_core', '--source', sourceDataDir],
+  {
+    cwd:   phylacteryRoot,
+    stdio: 'inherit',
+  },
+);
 
-console.log('Done. entity-core data imported successfully.');
-console.log('Start Familiar normally — thalamus.js will pick up the new data on next launch.');
+if (result.error) {
+  console.error('\nFailed to spawn uv:', result.error.message);
+  process.exit(1);
+}
+
+process.exit(result.status ?? 0);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

@@ -1,13 +1,13 @@
 {
   "name": "proto-familiar",
-  "version": "0.4.14-alpha",
-  "description": "Lightweight LLM frontend for z.ai and NanoGPT",
+  "version": "0.6.39-alpha",
+  "description": "Lightweight LLM frontend for z.ai, NanoGPT, and Google AI Studio",
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "prestart": "node scripts/ensure-unruh-deps.mjs && node scripts/ensure-port-free.mjs",
+    "prestart": "node scripts/ensure-phylactery-deps.mjs && node scripts/ensure-unruh-deps.mjs && node scripts/ensure-port-free.mjs",
     "start": "node server.js",
-    "predev": "node scripts/ensure-unruh-deps.mjs && node scripts/ensure-port-free.mjs",
+    "predev": "node scripts/ensure-phylactery-deps.mjs && node scripts/ensure-unruh-deps.mjs && node scripts/ensure-port-free.mjs",
     "dev": "node --watch server.js",
     "test": "node --test tests/*.test.mjs",
     "import-entity": "node scripts/import-entity.js",
@@ -18,6 +18,6 @@
     "express": "^4.18.2"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   }
 }

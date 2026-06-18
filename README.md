@@ -16,16 +16,15 @@ If you want to join the efforts and follow the development closely, you can join
 
 The current version lives in `package.json` as the single source of truth; the server reads it at boot and exposes it via `/api/version`, `/api/health`, the startup banner, and the sidebar footer badge.
 
-A lightweight, self-hosted chat UI for [z.ai](https://api.z.ai) and [NanoGPT](https://nano-gpt.com). Runs entirely on your machine — your API key never leaves `localhost`.
+A lightweight, self-hosted chat UI for [z.ai](https://api.z.ai), [NanoGPT](https://nano-gpt.com), and [Google AI Studio](https://aistudio.google.com). Runs entirely on your machine — your API key never leaves `localhost`.
 
 ### Requirements
 
 The one-click installer handles every prerequisite on supported platforms (auto-installing via `winget` on Windows or the official one-liner installers elsewhere). Install manually only if you prefer to drive each tool yourself:
 
 - [Node.js](https://nodejs.org/) 18 or newer
-- [Deno](https://deno.com/) 2+ (for the entity-core identity layer)
-- [uv](https://docs.astral.sh/uv/) (for the Unruh temporal-context module; ships its own Python)
-- [Git](https://git-scm.com/) (for cloning entity-core)
+- [uv](https://docs.astral.sh/uv/) (for the in-tree Phylactery identity layer and the Unruh temporal-context module; ships its own Python)
+- [Git](https://git-scm.com/)
 
 ### Quick Start (one double-click)
 
@@ -39,9 +38,9 @@ The one-click installer handles every prerequisite on supported platforms (auto-
 
 | OS | First-run | Launch | Stop |
 |---|---|---|---|
-| **Windows** | Double-click `Proto-Familiar.vbs`. The installer auto-installs Node, Deno, Git, and uv via `winget` (no admin needed — `--scope user`); when winget is missing or fails, each tool falls back to its official one-liner or download page. Then runs `npm install`, clones entity-core, syncs Unruh's Python venv, and creates Desktop + Start Menu shortcuts (idempotently — re-running picks up anything missing without overwriting what's there). | Double-click the **Proto-Familiar** Desktop shortcut (or `Proto-Familiar.vbs`). A tray icon appears; the browser opens automatically. Left-click the icon to re-open the browser. | Right-click the tray icon → **Quit**. Cleanly stops Proto-Familiar, entity-core, and Unruh. |
-| **macOS** | Double-click `Proto-Familiar.command` in Finder. First run installs dependencies (Deno via the official installer, uv via Astral's one-liner); subsequent runs just start it. | Double-click `Proto-Familiar.command`. Browser opens automatically. The launcher auto-recycles any stale Proto-Familiar holding the port before starting. | Press **Ctrl-C** in the Terminal window, then close it. |
-| **Linux** | Run `./install.sh` once. It auto-installs Deno + uv (via the official one-liner installers), runs `npm install`, clones entity-core, syncs Unruh's Python venv, and registers a **Proto-Familiar** entry in your application menu. | Search **Proto-Familiar** in your app launcher, or `./start.sh`. | `./stop.sh` |
+| **Windows** | Double-click `Proto-Familiar.vbs`. The installer auto-installs Node, Git, and uv via `winget` (no admin needed — `--scope user`); when winget is missing or fails, each tool falls back to its official one-liner or download page. Then runs `npm install` and sets up the in-tree Phylactery + Unruh Python venvs via `uv sync`, and creates Desktop + Start Menu shortcuts (idempotently — re-running picks up anything missing without overwriting what's there). | Double-click the **Proto-Familiar** Desktop shortcut (or `Proto-Familiar.vbs`). A tray icon appears; the browser opens automatically. Left-click the icon to re-open the browser. | Right-click the tray icon → **Quit**. Cleanly stops Proto-Familiar, Phylactery, and Unruh. |
+| **macOS** | Double-click `Proto-Familiar.command` in Finder. First run installs dependencies (uv via Astral's one-liner, then the Phylactery + Unruh venvs via `uv sync`); subsequent runs just start it. | Double-click `Proto-Familiar.command`. Browser opens automatically. The launcher auto-recycles any stale Proto-Familiar holding the port before starting. | Press **Ctrl-C** in the Terminal window, then close it. |
+| **Linux** | Run `./install.sh` once. It auto-installs uv (via the official one-liner installer), runs `npm install`, sets up the in-tree Phylactery + Unruh Python venvs via `uv sync`, and registers a **Proto-Familiar** entry in your application menu. | Search **Proto-Familiar** in your app launcher, or `./start.sh`. | `./stop.sh` |
 
 Everything runs locally at **http://localhost:8742** — your API key never leaves your machine. Set `PORT=8080` (env var, or `PORT=8080 ./start.sh`) to change the port. Any way you launch — double-click, `./start.sh`, or `npm start` — Proto-Familiar will auto-recycle a stale instance of itself holding the port before binding, and trigger the installer if Node deps or Unruh's venv are missing.
 
@@ -49,7 +48,7 @@ Everything runs locally at **http://localhost:8742** — your API key never leav
 
 **Central settings:** prompts, names, model picks, and saved connections (including API keys) live in `settings.json` on the machine running the server, not in each browser. Opening Proto-Familiar on a second device pulls the same configuration from the server, so you don't have to re-enter anything. Edits sync back on every change; the browser's `localStorage` is just a fast offline cache.
 
-**Updating an existing install:** if you `git clone`d, re-run the same installer — it detects `node_modules/` and switches to update mode. **If you installed from a downloaded ZIP** (no `.git`), the installer can't `git pull`; use the one-click updater instead — double-click `update.bat` (Windows) / `update.command` (macOS) or run `./update.sh` (Linux), which downloads the latest and lays it over your folder while preserving settings, memories, tomes, and logs. Either way: Before any git op runs, `tomes/`, `logs/`, entity-core's `data/` directory, `.proto-familiar-config.json` (Tailscale toggle state), and `settings.json` (central user settings) are copied to `.pf-backups/<timestamp>/` as a safety net. Then `git pull --ff-only` on Proto-Familiar (refuses non-FF merges; your work tree stays put on conflict), `git fetch && checkout <pinned tag>` on entity-core (whose `data/` is gitignored, never touched), idempotent `npm install` + `deno cache` + `uv sync` (the Unruh Python venv). Node / Deno / Git / uv are reinstalled if missing in either mode; shortcut and desktop-entry creation are now idempotent too — re-running picks up anything that's missing without overwriting what's there. See [docs/getting-started.md#updating-an-existing-install](docs/getting-started.md#updating-an-existing-install) for the protection table.
+**Updating an existing install:** if you `git clone`d, re-run the same installer — it detects `node_modules/` and switches to update mode. **If you installed from a downloaded ZIP** (no `.git`), the installer can't `git pull`; use the one-click updater instead — double-click `update.bat` (Windows) / `update.command` (macOS) or run `./update.sh` (Linux), which downloads the latest and lays it over your folder while preserving settings, memories, tomes, and logs. Either way: Before any git op runs, `tomes/`, `logs/`, Phylactery's `data/` directory, `.proto-familiar-config.json` (Tailscale toggle state), and `settings.json` (central user settings) are copied to `.pf-backups/<timestamp>/` as a safety net. Then `git pull --ff-only` on Proto-Familiar (refuses non-FF merges; your work tree stays put on conflict), and idempotent `npm install` + `uv sync` (the in-tree Phylactery and Unruh Python venvs, whose `data/` is gitignored, never touched). Node / Git / uv are reinstalled if missing in either mode; shortcut and desktop-entry creation are now idempotent too — re-running picks up anything that's missing without overwriting what's there. See [docs/getting-started.md#updating-an-existing-install](docs/getting-started.md#updating-an-existing-install) for the protection table.
 
 **Manual / advanced:**
 
@@ -88,9 +87,9 @@ Project wiki pages are available in [`/wiki`](wiki/):
 
 | Feature | Details |
 |---|---|
-| **Providers** | NanoGPT (OpenAI-compatible) · Z.ai Standard API · Z.ai Coding Plan |
-| **Saved connections** | Multiple named provider/key/model combos in the Connections sidebar. Mark one **Primary**, any others **fallback** (ordered list, tried when primary returns empty), and one **entity-core** — its API key is passed to the entity-core child as `ENTITY_CORE_LLM_API_KEY` so its consolidator can call out for embeddings / weekly summaries. Changing the designation re-spawns entity-core automatically, no restart needed |
-| **Entity-core enrichment** | Automatically grounds every request in a local [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.3.2) MCP server. The context is split for prompt-cache efficiency: a **static** block (full identity layer, XML-wrapped) is prepended to the system message, while a **dynamic** block (RAG memories + knowledge-graph excerpt + temporal context) is depth-injected so per-turn churn doesn't invalidate the cached prefix. Depth is the `thalamusDynamicDepth` setting (default 4) |
+| **Providers** | NanoGPT (OpenAI-compatible) · Z.ai Standard API · Z.ai Coding Plan · Google AI Studio (Gemini) |
+| **Saved connections** | Multiple named provider/key/model combos in the Connections sidebar. Mark one **Primary**, any others **fallback** (ordered list, tried when primary returns empty), and one **+ Phylactery** — its API key is passed to the Phylactery child as `PHYLACTERY_LLM_API_KEY` so its consolidator can call out for embeddings / weekly summaries. Changing the designation re-spawns Phylactery automatically, no restart needed |
+| **Phylactery enrichment** | Automatically grounds every request in the in-tree Phylactery MCP server (`./phylactery/`). The context is split for prompt-cache efficiency: a **static** block (full identity layer, XML-wrapped) is prepended to the system message, while a **dynamic** block (RAG memories + knowledge-graph excerpt + temporal context) is depth-injected so per-turn churn doesn't invalidate the cached prefix. Depth is the `thalamusDynamicDepth` setting (default 4) |
 | **Temporal context (Unruh)** | Sibling Python MCP module (`unruh/`, alpha — see [`docs/unruh-design.md`](docs/unruh-design.md)) that adds a `[Temporal Context]` block with three layers: **schedule** (current phase + upcoming events/tasks/reminders, with **recurrence** — daily / weekly / monthly / yearly, plus advanced patterns like "last Friday of every month" via `bysetpos`+`byweekday`, plus per-occurrence resolution so this week's cleaning done doesn't kill next week's), **interests** (standing values that always surface + live interests that accrue weight from chat engagement and decay over days), and **session handoff** (at session end the conversation is summarised into an intent + open threads, surfaced at the top of the next session so the Familiar resumes mid-thought). The handoff summary is opt-out via the **Session handoff** setting. When you've been quiet for **30 minutes**, the next message enters *idle mode*: up to 3 due bookmarks surface in `[Temporal Context]` for the Familiar to weave in naturally; each surfacing outcome is tracked (engaged / ignored) and resurface intervals adapt automatically (engaged → longer; ignored → shorter; 3+ consecutive ignores → topic weight decay). Every timestamped surface (schedule items, RAG memories, ponderings, handoff) renders through `relative-time.js` so the Familiar reads "tomorrow at 10am" / "yesterday at 4pm" / "in 30 minutes" rather than ISO arithmetic; a `[Now]` block lands at the very tail of every prompt (after chat history + post-history prompt) anchoring current wall-clock time + how long since the last user message |
 | **Autonomous pondering** | The Familiar wakes on its own cadence during idle periods, picks an interest with weight-proportional sampling, ponders it via the LLM, and writes a real timestamped entry to the **Familiar's Ponderings** tome. Cadence (30 min – 6 hr) shortens when interest weight is high; ponderings get injected into chat context the next time you talk, so the Familiar can reference its own real thoughts honestly. Toggle in Settings → "Autonomous pondering"; stretch intervals via "Pondering interval scale"; hard-disable with `PROTO_FAMILIAR_PONDERING_DISABLED=1`. See [`docs/caring-spine-build-plan.md`](docs/caring-spine-build-plan.md) |
 | **Threat detection & care check** | A pattern-based crisis-signal detector scores every user message into five tiers (severe / high / moderate / mild / safety). The score feeds a decaying scalar tracker (3-day half-life, capped, audit history); elevated tiers shorten pondering cadence and inject a `[CARE CHECK]` block into chat context that asks the Familiar to be more present (at severe: with 988 / Samaritans / findahelpline.com references visible). **Heuristic, not clinical** — never a substitute for human care. Three off-switches: Settings reset button, `PROTO_FAMILIAR_THREAT_DISABLED=1` env var, or just leave it on. See [`docs/threat-detection.md`](docs/threat-detection.md) |
@@ -99,10 +98,10 @@ Project wiki pages are available in [`/wiki`](wiki/):
 | **Silence triage & trusted-contact outreach** | When threat is elevated (moderate or above — calm/mild never trigger), a 5-min triage loop asks the LLM "should I reach out, gently?" There is deliberately no hardcoded silence floor — the LLM judges with full context; its own `nextCheckInMs` (or per-tier defaults: severe=15min, high=30min, moderate=60min) sets the cool-down between deliberations. The decision uses the Familiar's full identity context and the most recent session messages — no blind deliberating. The LLM decides — `wait` is honored. On reach-out: warm 1–2 sentence note delivered as a chat message (and Discord push when configured). Trusted-contact delivery is **deferred**: when you've configured **trusted contacts** (sidebar section, Discord-webhook based), the LLM may suggest contacting one by name; the system gives you an acknowledgement window first — counted from when the check-in is confirmed delivered to you, falling back to enqueue time when no push channel is set — and only escalates to the contact's webhook if the deadline passes without a response. The exact message is always duplicated into your outbox so there is no covert contact. Every triage decision is appended to `logs/triage-events.jsonl` (readable via `GET /api/triage-events`) so you can review what happened after the fact. Hard-disable with `PROTO_FAMILIAR_TRIAGE_DISABLED=1` |
 | **Live crisis outreach (tool-initiated)** | During an active conversation the Familiar can invoke three tools without waiting for silence: `show_crisis_resources` surfaces international hotlines in the chat (988, Crisis Text Line, Samaritans, Lifeline AU, findahelpline.com — deduplicated to one per hour); `get_trusted_contacts` lists who is configured; `contact_trusted_person` delivers immediately to a named contact via their Discord webhook. Every outbound is mirrored into your chat (and pushed to your own webhook when configured) — nothing is covert. Separate from the silence-triage loop: designed for the case where the user is actively talking but clearly in danger. See [docs/tool-calling.md#crisis-outreach-tools](docs/tool-calling.md#crisis-outreach-tools) |
 | **Temporal editor** | Sidebar **🕰 Open Temporal editor** modal with six tabs: **Interests** (live + standing weights with decay metadata, manual bump / demote; **Bookmarks** sub-section shows each bookmark's idle-surfacing history — outcome badge, consecutive-ignore count, adaptive resurface interval), **Threat** (current tier + audit history + reset button), **Ponderings** (read or delete autonomous entries), **Schedule** with a **List / Calendar** view toggle (List = upcoming events / tasks / reminders with + Add and resolve/delete; Calendar = month-grid Mon-start, click-day-to-create, recurring events expand visually with a ↻ prefix, resolved per-occurrence entries strike through), **Routine** (phase definitions with cadence tags for non-daily phases, edit in place + "Help me figure out my rhythm" pre-fills a starter prompt into the chat), **Handoff** (current session-end note + mark-consumed) |
-| **Knowledge editor** | Sidebar **🧠 Open Knowledge editor** modal with four tabs: Memories (browse / edit / delete / supersede by date), Graph (full CRUD on nodes and edges across two view modes — see next row), Identity (per-section editor across self / user / relationship / custom files), Snapshots (one-click restore of any auto- or user-created snapshot). Resizable from the bottom-right corner with the size remembered per-modal; only the ✕ closes it. Every destructive op auto-snapshots entity-core first |
+| **Knowledge editor** | Sidebar **🧠 Open Knowledge editor** modal with four tabs: Memories (browse / edit / delete / supersede by date), Graph (full CRUD on nodes and edges across two view modes — see next row), Identity (per-section editor across self / user / relationship / custom files), Snapshots (one-click restore of any auto- or user-created snapshot). Resizable from the bottom-right corner with the size remembered per-modal; only the ✕ closes it. Every destructive op auto-snapshots Phylactery first |
 | **Knowledge graph (Map view)** | The Graph tab's **List / Map** toggle switches to a canvas rendering of the entire graph as colored dots and curves. Node hue encodes type (deterministic per-graph palette spread across 24 hues so adjacent type names don't collide); edge hue encodes relationship type, with saturation / lightness / alpha scaled to the edge's weight. Wheel to zoom, drag to pan, hover for a tooltip (hit-tested against the actual Bézier curve), zoom past ~1.4× to see every label. Click a dot to open a draggable popover editor: label / type / description with autocompletion, a weighted edge list with inline ✎ edit and ✕ delete, and an **+ Add edge** form with target-label and relationship-type autocompletion. **+ Node** in the toolbar creates a node inline. Layout preserves positions across reloads so adding an edge doesn't reshuffle the map |
 | **Diagnostics report** | Sidebar **🩺 Generate diagnostic report** opens a client-side plain-text snapshot — system info (UA, hardware, network, viewport, timezone), Proto-Familiar state (provider, model, session, counts), a live `/api/health` round-trip, the last sent prompt's provenance, and a bounded ring buffer of recent in-app events (errors, console warnings, send/receive checkpoints, tool executions). Copy or download as `.txt`. Nothing leaves the browser. Common failure modes and their fixes live in [`docs/troubleshooting.md`](docs/troubleshooting.md) |
-| **Prompt inspector** | Click the 🔍 button in the top bar after any message to see the complete prompt actually sent to the LLM, color-coded by source — entity-core **static** block (purple) and depth-injected **dynamic** block (teal), each captured live from the response rather than re-derived, plus each lorebook injection by position, base system / character / user profile, post-history prompt, and the conversation history |
+| **Prompt inspector** | Click the 🔍 button in the top bar after any message to see the complete prompt actually sent to the LLM, color-coded by source — Phylactery **static** block (purple) and depth-injected **dynamic** block (teal), each captured live from the response rather than re-derived, plus each lorebook injection by position, base system / character / user profile, post-history prompt, and the conversation history |
 | **Streaming** | Server-sent event streaming by default; toggle off for full-response mode |
 | **Prompt macros** | `{{user}}` / `{{char}}` insert configured names; `{{elapsedTime}}` is the time between the two most recent user messages in this session (so the LLM can detect when the user returns after a long absence — surfaces once both messages are in saved history); `{{timeSinceLastSession}}` is the gap since the previous session ended. All durations render as `5m`, `2h 14m`, `3d 4h`, etc. |
 | **System prompt** | Free-text field or import from `.txt` / `.md` / `.json` |
@@ -143,7 +142,11 @@ Suggested models: `glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`, `glm-4.5`, `glm-
 
 Suggested models: `glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`, `glm-4.5-air`
 
-All three providers share the same OpenAI-compatible `chat/completions` format; the server selects the correct endpoint based on your provider choice.
+**Google AI Studio — Gemini** — `https://generativelanguage.googleapis.com` (OpenAI-compatible surface). Get a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
+
+Suggested models: `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.0-flash`, `gemini-2.0-flash-lite`
+
+All providers share the same OpenAI-compatible `chat/completions` format; the server selects the correct endpoint based on your provider choice.
 
 ---
 
@@ -227,8 +230,8 @@ The **Enable tool use** checkbox controls whether each request opts into the ser
 | `get_datetime` | Returns the current local date, time, and timezone. |
 | `get_session_info` | Returns session start time, message count, provider, model, and ms since last message. |
 | `save_to_tome` | Saves a fact learned during the conversation as a new entry in the first enabled Tome, with trigger keywords for future activation. |
-| `save_memory` | Writes a new time-stamped entry to entity-core's long-term memory at the chosen granularity (`daily`/`weekly`/`monthly`/`yearly`/`significant`). |
-| `update_identity` | Appends a durable fact to one of entity-core's identity files (`user_notes.md` or `relationship_notes.md`). |
+| `save_memory` | Writes a new time-stamped entry to Phylactery's long-term memory at the chosen granularity (`daily`/`weekly`/`monthly`/`yearly`/`significant`). |
+| `update_identity` | Appends a durable fact to one of Phylactery's identity files (`user_notes.md` or `relationship_notes.md`). |
 | `find_graph_node` | Looks up the underlying graph id for an entity by name (e.g. `"Chen"` → `1747...c4d8`). Used before the editing tools when the entity isn't in the prompt's graph-ids legend. |
 | `find_graph_edges` | Lists a node's 1-hop edges with their ids, ready to paste into the edge editing tools. |
 | `update_memory` | Overwrites an existing memory entry to correct an inaccuracy. Auto-snapshots first. |
@@ -239,7 +242,7 @@ The **Enable tool use** checkbox controls whether each request opts into the ser
 | `update_graph_edge` | Changes a relationship's type or weight. |
 | `delete_graph_edge` | Removes one relationship between two entities while keeping the entities. Auto-snapshots first. |
 
-The table above shows the knowledge-management core; the full registry is **25 tools** — these plus the seven temporal tools (`schedule_add_event/task/reminder/phase`, `schedule_resolve`, `interest_bump`, `interest_set_standing`), `acknowledge_deferred_intent`, and the three crisis-outreach tools — all described in [`docs/tool-calling.md`](docs/tool-calling.md). Every tool degrades gracefully if its backing peer (entity-core / Unruh) is unreachable: the failure comes back to the model as a readable string, never as an error in your chat. Each editing tool's description carries first-person guidance on when to append vs. update vs. delete — the model is told to err toward preservation when uncertain, and to supersede stale memories with a newer dated entry rather than deleting outright when the change has historical value. The enriched prompt's graph block ends with a compact id legend so common edits don't need a `find_graph_*` round-trip.
+The table above shows the knowledge-management core; the full registry is **25 tools** — these plus the seven temporal tools (`schedule_add_event/task/reminder/phase`, `schedule_resolve`, `interest_bump`, `interest_set_standing`), `acknowledge_deferred_intent`, and the three crisis-outreach tools — all described in [`docs/tool-calling.md`](docs/tool-calling.md). Every tool degrades gracefully if its backing peer (Phylactery / Unruh) is unreachable: the failure comes back to the model as a readable string, never as an error in your chat. Each editing tool's description carries first-person guidance on when to append vs. update vs. delete — the model is told to err toward preservation when uncertain, and to supersede stale memories with a newer dated entry rather than deleting outright when the change has historical value. The enriched prompt's graph block ends with a compact id legend so common edits don't need a `find_graph_*` round-trip.
 
 #### Custom tools
 
@@ -347,7 +350,7 @@ Proxies a chat request to the chosen provider.
 **Request body:**
 ```json
 {
-  "provider":    "nanogpt | zai | zai-coding",
+  "provider":    "nanogpt | zai | zai-coding | google",
   "apiKey":      "sk-...",
   "model":       "gpt-4o-mini",
   "messages":    [{ "role": "user", "content": "Hello" }],
@@ -365,7 +368,7 @@ Returns the full enriched message array that would be sent to the LLM for a give
 
 **Request body:** `{ "messages": [...] }` — the same messages array that would go to `/api/chat`.
 
-**Response:** `{ "messages": [...] }` — the same array with entity-core enrichment prepended to the system message.
+**Response:** `{ "messages": [...] }` — the same array with Phylactery enrichment prepended to the system message.
 
 #### `POST /api/log`
 Creates or overwrites the log file for a session.
@@ -416,7 +419,7 @@ The lorebook is a multi-Tome system: each Tome is an independent JSON file in `t
 
 Queue endpoints for server-side memorization jobs. Full shapes in [`docs/api-reference.md`](docs/api-reference.md#session-memorization).
 
-#### Entity-core — `POST /api/entity/memory`, `POST /api/entity/identity`
+#### Phylactery — `POST /api/entity/memory`, `POST /api/entity/identity`
 
 Write-through endpoints used by the `save_memory` and `update_identity` built-in tools. Full shapes in [`docs/api-reference.md`](docs/api-reference.md#entity-core).
 
@@ -431,7 +434,7 @@ Feed the temporal-context layer. `/api/interest/engage` records a turn's engagem
 ```
 /
 ├── server.js                    Express server — chat proxy + log/tome/memorize/entity API (Node.js 18+, ESM)
-├── thalamus.js                  entity-core MCP bridge — enriches every LLM request (inward)
+├── thalamus.js                  Phylactery MCP bridge — enriches every LLM request (inward)
 ├── cerebellum.js                Motor module — tool registry/executors/loop, deliveries, escalation (outward)
 ├── memorization.js              Persistent server-side memorization queue + worker
 ├── package.json
@@ -439,7 +442,7 @@ Feed the temporal-context layer. `/api/interest/engage` records a turn's engagem
 │
 ├── Proto-Familiar.vbs           Windows tray-icon launcher (one-click entry point)
 ├── Proto-Familiar.command       macOS double-click launcher
-├── install.sh / install.bat     Bash / batch installer (deps + entity-core clone)
+├── install.sh / install.bat     Bash / batch installer (deps + Phylactery/Unruh venv sync (uv))
 ├── start.sh / start.bat         Bash / batch launcher (background, opens browser)
 ├── stop.sh / stop.bat           Bash / batch shutdown
 │
@@ -447,7 +450,7 @@ Feed the temporal-context layer. `/api/interest/engage` records a turn's engagem
 ├── tomes/                       Per-Tome JSON files (memorization queue lives here too, git-ignored)
 │
 ├── scripts/
-│   ├── import-entity.js         Import an existing entity-core data directory
+│   ├── import-entity.js         Import/convert a legacy entity-core data directory (migration tooling)
 │   ├── import-tome.js           Convert a SillyTavern lorebook export to a Proto-Familiar Tome
 │   ├── linux/install-desktop-entry.sh   Register Proto-Familiar in the Linux app menu
 │   └── win/{install,tray}.ps1   PowerShell installer + tray app (called by the .vbs launcher)
@@ -464,13 +467,13 @@ Feed the temporal-context layer. `/api/interest/engage` records a turn's engagem
 
 ---
 
-### Entity-Core Identity Layer
+### Phylactery Identity Layer
 
-Familiar optionally connects to a local [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) MCP server to ground every LLM request in persistent identity and memory. This is wired through `thalamus.js`.
+Familiar grounds every LLM request in the Familiar's persistent identity and memory via **Phylactery**, the canonical self-store that ships **in-tree** at `./phylactery/` (a Python package run with `uv`). There's no clone step — the one-click installer materialises Phylactery's venv with `uv sync` on first run; to set it up by hand, run `cd phylactery && uv sync`. The layer is wired through `thalamus.js`.
 
 #### How it works
 
-On startup, `thalamus.js` spawns entity-core as a child process over stdio using the MCP protocol, with its working directory set to the entity-core project root so it reads the correct `data/` directory. Before each LLM call in `POST /api/chat`, the server calls `enrich(userMessage)`, which fires three MCP tool calls independently (failures in one do not block the others):
+On startup, `thalamus.js` spawns Phylactery as a child process over stdio using the MCP protocol — via `uv run` from `./phylactery/`, exactly the way it spawns Unruh — so it reads the correct `data/` directory. Before each LLM call in `POST /api/chat`, the server calls `enrich(userMessage)`, which fires three MCP tool calls independently (failures in one do not block the others):
 
 | MCP tool | What it fetches |
 |---|---|
@@ -508,28 +511,27 @@ Relevant Knowledge from Graph:
 …
 ```
 
-Each identity file is wrapped in XML tags named after the file's `promptLabel` (e.g. `<my_identity>`, `<my_persona>`). Files are sorted in the same canonical order entity-core uses internally.
+Each identity file is wrapped in XML tags named after the file's `promptLabel` (e.g. `<my_identity>`, `<my_persona>`). Files are sorted in the canonical self / ward / relationship / custom order.
 
-If entity-core is unreachable, `enrich()` logs the problem and returns an empty string — the request proceeds normally without enrichment. Individual tool failures (e.g. graph search unavailable) are also logged and silently skipped without affecting the other sections.
+If Phylactery is unreachable (for example `uv` isn't installed or `phylactery/.venv` hasn't been synced), `enrich()` logs the problem and returns an empty string — the request proceeds normally without enrichment. The three MCP calls fan out independently, so an individual tool failure (e.g. graph search unavailable) is logged and silently skipped without affecting the other sections. Hard-disable the whole layer with `PROTO_FAMILIAR_PHYLACTERY_DISABLED=1`.
 
 #### Prompt inspector
 
-To see exactly what was sent to the LLM on the previous turn — including the full entity-core block, every lorebook injection, and the conversation history — click the **⊕ magnifying glass** button in the top bar. The inspector renders each segment color-coded by source: the entity-core block (Thalamus) is captured from a `_thalamus` envelope the server attaches to every `/api/chat` response (so it reflects the live enrichment, not a re-derived preview), and the lorebook / system / character / user / post-history segments come from `buildApiMessages`'s recorded provenance. Each segment shows a labelled chip and a left-rule in its source color; per-message Copy buttons stay available for the raw text.
+To see exactly what was sent to the LLM on the previous turn — including the full Phylactery block, every lorebook injection, and the conversation history — click the **⊕ magnifying glass** button in the top bar. The inspector renders each segment color-coded by source: the Phylactery block (Thalamus) is captured from a `_thalamus` envelope the server attaches to every `/api/chat` response (so it reflects the live enrichment, not a re-derived preview), and the lorebook / system / character / user / post-history segments come from `buildApiMessages`'s recorded provenance. Each segment shows a labelled chip and a left-rule in its source color; per-message Copy buttons stay available for the raw text.
 
 #### Setup
 
-1. Clone [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) as a sibling directory at the release tag:
-   ```bash
-   git clone --depth 1 --branch entity-core-v0.2.2 https://github.com/PsycherosAI/Psycheros.git ../entity-core
-   ```
-2. Follow its README to populate `data/` with identity files and memories.
-3. Start Familiar normally — `thalamus.js` spawns entity-core automatically.
+There's nothing to clone — Phylactery is part of this repo, at `./phylactery/`. Setup is just materialising its Python venv:
 
-To use a non-default path, set `ENTITY_CORE_PATH` to the absolute path of `src/mod.ts` inside your entity-core install before starting the server.
+```bash
+cd phylactery && uv sync
+```
 
-#### Importing an existing entity-core
+The one-click installer does this for you on first run. After that, start Familiar normally — `thalamus.js` spawns Phylactery automatically via `uv run` on startup. If `uv` isn't installed or the venv hasn't been synced, Phylactery is treated as absent: enrichment is skipped and Proto-Familiar runs normally. Hard-disable the layer with `PROTO_FAMILIAR_PHYLACTERY_DISABLED=1`.
 
-If you already have an entity-core data directory from another machine or embodiment, you can overwrite the local one with:
+#### Migrating from a legacy entity-core
+
+Earlier builds backed the identity layer with a separate Deno **entity-core** install cloned as a sibling directory. If you're coming from one of those, a one-time migration converts that old data directory into Phylactery's in-tree store:
 
 ```bash
 # From an entity-core root (auto-detects the data/ subdirectory)
@@ -542,7 +544,7 @@ npm run import-entity -- --from /path/to/entity-core/data
 npm run import-entity -- --from /path/to/entity-core --yes
 ```
 
-The script resolves the destination using the same logic as `thalamus.js` (`$ENTITY_CORE_PATH` → `../entity-core`). It reads both installs' `.env` files for `ENTITY_CORE_DATA_DIR` overrides, preserves timestamps so recency ranking stays accurate, and stops you if source and destination are the same. **Stop the Familiar server before running this** to avoid write conflicts with the running entity-core process.
+This is only for users migrating off the old Deno entity-core — fresh installs don't need it. **Stop the Familiar server before running this** to avoid write conflicts with the running Phylactery process.
 
 #### Importing a SillyTavern lorebook
 
@@ -569,7 +571,7 @@ The script renames SillyTavern fields to their Proto-Familiar equivalents (`key�
 - **Path traversal prevention:** All file-backed endpoints (session logs, Tomes, entity writes) validate IDs against a strict UUID regex before constructing any file path.
 - **Rate limiting:** `POST /api/chat` is limited to 20 requests per minute per IP (in-memory, no external dependency) to protect against accidental exposure and runaway tool-call loops.
 - **Prompt inspector endpoint:** `POST /api/debug-prompt` returns the full enriched context — entity memories, identity data, and the assembled system message — with no authentication. It is a development tool; do not expose it publicly.
-- **Entity-core permissions:** `thalamus.js` spawns entity-core with Deno's `-A` (all-permissions) flag. This is the easiest setup for a local personal tool. If you run the server in a shared or networked environment, consider restricting entity-core to a scoped permission set (e.g. `--allow-read=<data-dir> --allow-write=<data-dir> --allow-env`) once you have verified the minimum your build requires.
+- **Phylactery & Unruh subprocesses:** `thalamus.js` spawns Phylactery and Unruh as local stdio children (Python, via `uv`), each reading only its own data directory. Neither opens a network listener — they communicate with Proto-Familiar over the MCP protocol on stdin/stdout, so there is no extra surface to lock down beyond the data dirs they own.
 - **Local-only by default:** The server binds to all interfaces on the configured port but is not intended to be exposed to the internet without additional authentication.
 - **No telemetry:** Nothing is phoned home. The only outbound traffic is the proxied LLM request to the provider you configure.
 
@@ -682,5 +684,5 @@ SillyTavern's universal adapter architecture. Chat Completions API (OpenAI-compa
 
 ## Acknowledgements
 
-Huge thanks to **[zarilewis](https://github.com/zarilewis)** for creating [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) — the MCP server that powers Familiar's identity and memory layer. entity-core provides the persistent self-model, RAG memory, and knowledge graph that make it possible for Familiar to maintain consistent character values, voice, and relational context across conversations. None of the identity injection work in this project would exist without it.
+Huge thanks to **[zarilewis](https://github.com/zarilewis)** for the original design of [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.4.0) and of **Phylactery**, the in-tree MCP server that powers Familiar's identity and memory layer. Phylactery provides the persistent self-model, RAG memory, and knowledge graph that make it possible for Familiar to maintain consistent character values, voice, and relational context across conversations. None of the identity injection work in this project would exist without it.
 

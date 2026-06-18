@@ -2,7 +2,7 @@
 
 ## Connection
 
-- **Provider:** NanoGPT, Z.ai Standard, or Z.ai Coding Plan
+- **Provider:** NanoGPT, Z.ai Standard, Z.ai Coding Plan, or Google AI Studio (Gemini)
 - **API Key:** sent to local server, then proxied upstream
 - **Model:** free-form input with provider-based suggestions
 - **Streaming:** on/off toggle
@@ -11,7 +11,7 @@
 - **Context-cache depth:** how deep the dynamic enrichment block is injected (`thalamusDynamicDepth`, default 4) — keeps the cacheable identity prefix stable
 - **Session handoff:** opt-out toggle for the end-of-session summary that lets the next session resume mid-thought (`handoffEnabled`, default on)
 
-Saved connections (named provider/key/model combos with primary / fallback / entity-core designations) also live in the sidebar — see [docs/features.md](../docs/features.md#saved-connections-sidebar).
+Saved connections (named provider/key/model combos with primary / fallback / Phylactery designations) also live in the sidebar — see [docs/features.md](../docs/features.md#saved-connections-sidebar).
 
 ## Prompt layering
 
@@ -21,7 +21,7 @@ The app builds context from:
 2. Character Profile
 3. User Profile
 4. Conversation history
-5. Post-History Prompt (final user instruction before generation)
+5. Post-History Prompt (final instruction before generation; role selectable — system (default), user, or assistant)
 
 All prompt fields support file import from `.txt`, `.md`, or `.json`.
 
@@ -31,9 +31,9 @@ All prompt fields support file import from `.txt`, `.md`, or `.json`.
 - 24 built-in tools across a few groups:
   - **Context:** `get_datetime`, `get_session_info`
   - **Tomes:** `save_to_tome`
-  - **Entity-core memory:** `save_memory`, `update_memory`, `delete_memory`
-  - **Entity-core identity:** `update_identity`, `rewrite_identity_section`
-  - **Entity-core graph:** `find_graph_node`, `find_graph_edges`, `update_graph_node`, `delete_graph_node`, `update_graph_edge`, `delete_graph_edge`
+  - **Phylactery memory:** `save_memory`, `update_memory`, `delete_memory`
+  - **Phylactery identity:** `update_identity`, `rewrite_identity_section`
+  - **Phylactery graph:** `find_graph_node`, `find_graph_edges`, `update_graph_node`, `delete_graph_node`, `update_graph_edge`, `delete_graph_edge`
   - **Temporal (schedule):** `schedule_add_event`, `schedule_add_task`, `schedule_add_reminder`, `schedule_add_phase`, `schedule_resolve` — all accept a `recurrence` param so the Familiar can set "weekly Sunday cleaning" or "last Friday of every month" from chat; `schedule_resolve` accepts an optional `occurrence_date` to resolve one instance of a recurring node without killing the series
   - **Temporal (interests):** `interest_bump`, `interest_set_standing`
   - **Care / crisis:** `get_trusted_contacts`, `contact_trusted_person`, `show_crisis_resources`
@@ -45,6 +45,13 @@ See [docs/tool-calling.md](../docs/tool-calling.md) for each tool's parameters a
 ## Temporal context (Unruh)
 
 The optional Unruh module adds a `[Temporal Context]` block: a schedule (with recurrence — daily / weekly / monthly / yearly / "last Friday of every month" / etc. — and per-occurrence resolution), weighted/decaying interests + always-on standing values, and session-to-session intent handoff. The Schedule tab in the Temporal editor has a **List / Calendar** view toggle; calendar view is a click-to-create month grid. A `[Now]` block at the tail of every prompt anchors the Familiar in current wall-clock time + how long since the last user message. Full detail in [docs/features.md → Temporal context](../docs/features.md#temporal-context-unruh).
+
+## Discord & the Village
+
+The Familiar can also be present on Discord — in your DMs, in registered
+villagers' DMs, and in guild channels with per-room **presence modes**
+(strict / lurk / active), plus message relay. Set it up in Settings and
+the **Village** tab. Full guide: [Discord & the Village](Discord-and-Village.md).
 
 ## Sessions and logs
 

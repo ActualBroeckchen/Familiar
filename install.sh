@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 # Proto-Familiar installer (macOS / Linux)
 #
-# Fresh install: installs Node deps, auto-installs Deno + uv (if
-#   missing), clones entity-core (release tag) as a sibling directory,
-#   pre-caches its Deno module graph, syncs Unruh's Python venv from
-#   unruh/uv.lock, and registers a desktop entry on Linux.
+# Fresh install: installs Node deps, auto-installs uv (if missing),
+#   syncs Phylactery's Python venv from phylactery/uv.lock, syncs
+#   Unruh's Python venv from unruh/uv.lock, and registers a desktop
+#   entry on Linux.
 #
 # Update mode: triggered automatically when node_modules/ already exists.
-#   Pulls latest Proto-Familiar (git pull --ff-only), refreshes
-#   entity-core to the pinned tag, re-runs idempotent npm install +
-#   deno cache + uv sync. Re-runs Node / Deno / uv checks (and
-#   auto-installs anything missing) in both modes so the system catches
-#   up to new requirements.
+#   Pulls latest Proto-Familiar (git pull --ff-only), re-runs idempotent
+#   npm install + uv sync (Phylactery + Unruh). Re-runs Node / uv checks
+#   (and auto-installs anything missing) in both modes so the system
+#   catches up to new requirements.
 #
 # Desktop entry creation is idempotent and runs in both modes: it
 # creates the entry only when it doesn't already exist, so a fresh
@@ -20,32 +19,16 @@
 # shortcut.
 #
 # User-data safety: BEFORE any git operation in update mode the installer
-# takes a defensive copy of tomes/, logs/, and entity-core's data/ into
+# takes a defensive copy of tomes/, logs/, and phylactery/data/ into
 # .pf-backups/<timestamp>/ inside the project root. Independent of git's
 # own protections (untracked files left alone, --ff-only refusing
-# dirty-conflict merges, entity-core's data/ being gitignored), this
-# gives a clear recovery path if anything goes sideways.
+# dirty-conflict merges, phylactery/data/ being gitignored), this gives
+# a clear recovery path if anything goes sideways.
 
 set -e
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PARENT_DIR="$( cd "$SCRIPT_DIR/.." && pwd )"
-# Resolve the entity-core sibling checkout. New installs land in
-# `entity-core/`; older installs from before the rename used
-# `entity-core-alpha/` and we keep using that in place to avoid silent
-# directory moves.
-ENTITY_CORE_DIR_NEW="$PARENT_DIR/entity-core"
-ENTITY_CORE_DIR_LEGACY="$PARENT_DIR/entity-core-alpha"
-if [ -d "$ENTITY_CORE_DIR_NEW" ]; then
-  ENTITY_CORE_DIR="$ENTITY_CORE_DIR_NEW"
-elif [ -d "$ENTITY_CORE_DIR_LEGACY" ]; then
-  ENTITY_CORE_DIR="$ENTITY_CORE_DIR_LEGACY"
-else
-  ENTITY_CORE_DIR="$ENTITY_CORE_DIR_NEW"
-fi
-# The release lives at https://github.com/PsycherosAI/Psycheros/releases/tag/<tag>
-ENTITY_CORE_REPO="https://github.com/PsycherosAI/Psycheros.git"
-ENTITY_CORE_TAG="entity-core-v0.3.2"
 BACKUP_ROOT="$SCRIPT_DIR/.pf-backups"
 
 say() { printf '\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -77,17 +60,10 @@ if [ "$MODE" = "update" ]; then
   STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
   BACKUP_DIR="$BACKUP_ROOT/$STAMP"
   ANYTHING_BACKED_UP=0
-  # Directories. Explicitly probe BOTH the new entity-core dir and the
-  # pre-rename entity-core-alpha so a user with leftover legacy data
-  # still gets it backed up (resolved $ENTITY_CORE_DIR only points at
-  # one of them).
   for src in \
     "$SCRIPT_DIR/tomes" \
     "$SCRIPT_DIR/logs" \
-    "$ENTITY_CORE_DIR_NEW/packages/entity-core/data" \
-    "$ENTITY_CORE_DIR_NEW/data" \
-    "$ENTITY_CORE_DIR_LEGACY/packages/entity-core/data" \
-    "$ENTITY_CORE_DIR_LEGACY/data"; do
+    "$SCRIPT_DIR/phylactery/data"; do
     if [ -d "$src" ] && [ -n "$(ls -A "$src" 2>/dev/null)" ]; then
       mkdir -p "$BACKUP_DIR"
       rel="$(echo "$src" | sed "s|^$PARENT_DIR/||")"
@@ -112,7 +88,7 @@ if [ "$MODE" = "update" ]; then
   done
   if [ "$ANYTHING_BACKED_UP" = "1" ]; then
     say "User data backed up to $BACKUP_DIR/"
-    say "  (tomes/, logs/, entity-core data/, .proto-familiar-config.json, settings.json — restore by copying back if needed)"
+    say "  (tomes/, logs/, phylactery/data/, .proto-familiar-config.json, settings.json — restore by copying back if needed)"
   fi
 fi
 
@@ -134,100 +110,121 @@ if [ "$MODE" = "update" ]; then
   fi
 fi
 
-# --- Node.js check (install if missing, in both modes) ------------------
-if ! command -v node >/dev/null 2>&1; then
-  die "Node.js is not installed. Install Node 18+ from https://nodejs.org/ and re-run."
-fi
-NODE_MAJOR=$(node -p "process.versions.node.split('.')[0]")
-if [ "$NODE_MAJOR" -lt 18 ]; then
-  die "Node.js $NODE_MAJOR detected. Proto-Familiar needs Node 18 or newer."
-fi
-say "Node.js $(node -v) found."
+# --- Node.js check (upgrade via version manager if below minimum) --------
+# Node 22+ is required for the Discord gateway's native WebSocket API.
+# All other features run on Node 18+, but upgrading everyone to 22 avoids
+# a silent half-broken Discord feature on older installs.
+NODE_MIN_MAJOR=22
 
-# --- Deno check (auto-install if missing, in both modes) ----------------
-# Look in PATH first, then in the common install location the official
-# script writes to. We add ~/.deno/bin to PATH for the rest of this run
-# so post-install steps see it without needing a shell restart; start.sh
-# does the same probe at launch time.
-if [ -d "$HOME/.deno/bin" ]; then PATH="$HOME/.deno/bin:$PATH"; fi
-if command -v deno >/dev/null 2>&1; then
-  say "Deno $(deno --version | head -n1) found."
-  HAVE_DENO=1
-else
-  if command -v curl >/dev/null 2>&1; then
-    say "Deno not found — installing via the official script (writes to ~/.deno)..."
-    if curl -fsSL https://deno.land/install.sh | sh -s -- --yes >/dev/null 2>&1; then
-      PATH="$HOME/.deno/bin:$PATH"
-      if command -v deno >/dev/null 2>&1; then
-        say "Deno $(deno --version | head -n1) installed."
-        HAVE_DENO=1
-      else
-        warn "Deno install ran but 'deno' is still not on PATH. Open a new terminal and re-run, or install manually from https://deno.com/."
-        HAVE_DENO=0
-      fi
+# Attempt to install/switch to Node $NODE_MIN_MAJOR via a user-scoped
+# version manager. Never touches Homebrew or system/apt Node — those are
+# shared tooling with blast radius beyond this project.
+# Returns 0 if an attempt ran (success or failure); 1 if no VM was found.
+_try_upgrade_node() {
+  # ── nvm (shell function; must source its init script) ──────────────
+  _NVM_SH=""
+  if [ -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh" ]; then
+    _NVM_SH="${NVM_DIR:-$HOME/.nvm}/nvm.sh"
+  fi
+  if [ -n "$_NVM_SH" ]; then
+    say "nvm detected — installing Node $NODE_MIN_MAJOR via nvm..."
+    # shellcheck disable=SC1090
+    . "$_NVM_SH"
+    if nvm install "$NODE_MIN_MAJOR" && nvm use "$NODE_MIN_MAJOR"; then
+      say "nvm: Node $(node -v 2>/dev/null || echo '?') active."
     else
-      warn "Deno auto-install failed. entity-core will be disabled until you install Deno 2+ from https://deno.com/."
-      HAVE_DENO=0
+      warn "nvm install $NODE_MIN_MAJOR failed — see output above."
     fi
+    return 0
+  fi
+
+  # ── fnm (binary; writes env into current shell via eval) ───────────
+  if command -v fnm >/dev/null 2>&1; then
+    say "fnm detected — installing Node $NODE_MIN_MAJOR via fnm..."
+    if fnm install "$NODE_MIN_MAJOR" && fnm use "$NODE_MIN_MAJOR"; then
+      eval "$(fnm env --shell bash 2>/dev/null)" || true
+      say "fnm: Node $(node -v 2>/dev/null || echo '?') active."
+    else
+      warn "fnm install $NODE_MIN_MAJOR failed — see output above."
+    fi
+    return 0
+  fi
+
+  # ── asdf nodejs plugin ──────────────────────────────────────────────
+  if command -v asdf >/dev/null 2>&1; then
+    if asdf plugin list 2>/dev/null | grep -q '^nodejs$'; then
+      say "asdf detected — installing Node latest:$NODE_MIN_MAJOR via asdf..."
+      if asdf install nodejs "latest:$NODE_MIN_MAJOR" && \
+         asdf global nodejs "latest:$NODE_MIN_MAJOR"; then
+        say "asdf: Node $(node -v 2>/dev/null || echo '?') active."
+      else
+        warn "asdf install nodejs latest:$NODE_MIN_MAJOR failed — see output above."
+      fi
+      return 0
+    fi
+  fi
+
+  return 1  # no version manager found
+}
+
+if ! command -v node >/dev/null 2>&1; then
+  NODE_MAJOR=0
+else
+  NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo 0)"
+fi
+
+if [ "$NODE_MAJOR" -lt "$NODE_MIN_MAJOR" ]; then
+  if [ "$NODE_MAJOR" -eq 0 ]; then
+    say "Node.js not found — looking for a version manager..."
   else
-    warn "Neither 'deno' nor 'curl' available. entity-core needs Deno 2+; install from https://deno.com/ if you want the identity layer."
-    HAVE_DENO=0
+    say "Node.js $(node -v 2>/dev/null) found — need ${NODE_MIN_MAJOR}+ (Discord requires native WebSocket)."
+  fi
+
+  if ! _try_upgrade_node; then
+    # No version manager — hard-fail with clear upgrade instructions.
+    UNAME_S="$(uname -s 2>/dev/null || echo unknown)"
+    printf '\033[1;31mXX Node.js %d+ required (detected: %s).\033[0m\n' \
+      "$NODE_MIN_MAJOR" "${NODE_MAJOR:-not found}"
+    echo "   Install nvm (user-scoped, no sudo) then re-run:"
+    echo "     curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash"
+    echo "     source ~/.nvm/nvm.sh"
+    echo "     nvm install ${NODE_MIN_MAJOR}"
+    echo "   Then:  bash install.sh"
+    if [ "$UNAME_S" = "Darwin" ]; then
+      echo ""
+      echo "   Or via Homebrew (system-wide):"
+      echo "     brew install node@${NODE_MIN_MAJOR}"
+      echo "     brew link --overwrite --force node@${NODE_MIN_MAJOR}"
+    else
+      echo ""
+      echo "   Or via nodesource PPA (system-wide, needs sudo):"
+      echo "     curl -fsSL https://deb.nodesource.com/setup_${NODE_MIN_MAJOR}.x | sudo -E bash -"
+      echo "     sudo apt-get install -y nodejs"
+    fi
+    exit 1
+  fi
+
+  # Re-check after the version manager ran.
+  if ! command -v node >/dev/null 2>&1; then
+    NODE_MAJOR=0
+  else
+    NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo 0)"
+  fi
+
+  if [ "$NODE_MAJOR" -lt "$NODE_MIN_MAJOR" ]; then
+    printf '\033[1;31mXX Version manager ran but Node %d+ not active (now: %s).\033[0m\n' \
+      "$NODE_MIN_MAJOR" "${NODE_MAJOR:-not found}"
+    echo "   Complete the upgrade with:  nvm use ${NODE_MIN_MAJOR}  (or fnm use ${NODE_MIN_MAJOR})"
+    echo "   Then re-run:  bash install.sh"
+    exit 1
   fi
 fi
+
+say "Node.js $(node -v) ready."
 
 # --- npm install (idempotent; fast when nothing changed) ----------------
 say "Running npm install..."
 ( cd "$SCRIPT_DIR" && npm install )
-
-# --- entity-core: clone (install) or refresh to pinned tag (update) ----
-# Note: entity-core's runtime data/ directory is gitignored at both the
-# workspace root and the package root, so `git checkout <tag>` never
-# touches user identity files, memory markdown, or the SQLite store.
-if [ -d "$ENTITY_CORE_DIR" ]; then
-  if [ "$MODE" = "update" ] && [ -d "$ENTITY_CORE_DIR/.git" ] && command -v git >/dev/null 2>&1; then
-    say "Refreshing entity-core to tag $ENTITY_CORE_TAG..."
-    if ! ( cd "$ENTITY_CORE_DIR" && git fetch --tags --depth 1 origin "refs/tags/$ENTITY_CORE_TAG:refs/tags/$ENTITY_CORE_TAG" 2>/dev/null && git checkout --quiet "$ENTITY_CORE_TAG" ); then
-      warn "Could not refresh entity-core to $ENTITY_CORE_TAG (local changes or network). Keeping current checkout."
-    fi
-  else
-    say "entity-core already present at $ENTITY_CORE_DIR — skipping clone."
-  fi
-else
-  if command -v git >/dev/null 2>&1; then
-    say "Cloning entity-core ($ENTITY_CORE_TAG) into $ENTITY_CORE_DIR ..."
-    if git clone --depth 1 --branch "$ENTITY_CORE_TAG" "$ENTITY_CORE_REPO" "$ENTITY_CORE_DIR"; then
-      say "entity-core cloned at tag $ENTITY_CORE_TAG."
-    else
-      warn "Tag clone failed; falling back to default branch."
-      git clone --depth 1 "$ENTITY_CORE_REPO" "$ENTITY_CORE_DIR" || warn "Clone failed. You can clone it manually later."
-    fi
-  else
-    warn "git not found — skipping entity-core clone. Install git or place entity-core at $ENTITY_CORE_DIR manually."
-  fi
-fi
-
-# --- entity-core dependency pre-cache (idempotent) ---------------------
-# Psycheros is a Deno workspace; entity-core lives at packages/entity-core/
-# (older releases kept it at the repo root). Probe both; the workspace
-# path wins. `deno cache` only fetches what's missing, so this is safe
-# to re-run in update mode after a tag bump.
-ENTITY_CORE_PKG_DIR=""
-if [ -f "$ENTITY_CORE_DIR/packages/entity-core/src/mod.ts" ]; then
-  ENTITY_CORE_PKG_DIR="$ENTITY_CORE_DIR/packages/entity-core"
-elif [ -f "$ENTITY_CORE_DIR/src/mod.ts" ]; then
-  ENTITY_CORE_PKG_DIR="$ENTITY_CORE_DIR"
-fi
-
-if [ -n "$ENTITY_CORE_PKG_DIR" ] && [ "$HAVE_DENO" = "1" ]; then
-  say "Caching entity-core dependencies (only fetches what's new)..."
-  if ( cd "$ENTITY_CORE_PKG_DIR" && deno cache src/mod.ts >/dev/null 2>&1 ); then
-    say "entity-core dependencies cached."
-  else
-    warn "deno cache failed — first server start will download deps before entity-core comes up."
-  fi
-elif [ -n "$ENTITY_CORE_PKG_DIR" ]; then
-  warn "Skipping entity-core dep pre-cache (Deno not available). First server start will download them."
-fi
 
 # --- uv check (auto-install if missing, in both modes) -----------------
 # uv is the Python package/runtime manager Unruh uses. The official
@@ -259,6 +256,25 @@ else
     warn "Neither 'uv' nor 'curl' available. Unruh needs uv; install from https://docs.astral.sh/uv/."
     HAVE_UV=0
   fi
+fi
+
+# --- Phylactery dependency sync (idempotent; fast when nothing changed) -
+# Materialises phylactery/.venv from phylactery/uv.lock. Also applies
+# pending DB migrations so a schema change is in place before first start.
+if [ "$HAVE_UV" = "1" ] && [ -f "$SCRIPT_DIR/phylactery/pyproject.toml" ]; then
+  say "Syncing Phylactery dependencies (only fetches what's new)..."
+  if ( cd "$SCRIPT_DIR/phylactery" && uv sync --quiet ); then
+    say "Phylactery dependencies synced."
+    if ( cd "$SCRIPT_DIR/phylactery" && uv run --no-sync python -c "from phylactery.db import get_conn; get_conn().close()" >/dev/null 2>&1 ); then
+      say "Phylactery database up to date."
+    else
+      warn "Phylactery DB migration step skipped — it will apply on first start."
+    fi
+  else
+    warn "uv sync failed for Phylactery — identity layer will be disabled until this is resolved."
+  fi
+elif [ -f "$SCRIPT_DIR/phylactery/pyproject.toml" ]; then
+  warn "Skipping Phylactery dep sync (uv not available). Identity layer will be disabled until uv is installed."
 fi
 
 # --- Unruh dependency sync (idempotent; fast when nothing changed) -----
@@ -323,8 +339,8 @@ esac
 # would have exited above on failure). The launchers check for this
 # instead of node_modules to decide whether to (re)run the installer —
 # node_modules can exist without the installer ever having run (a manual
-# `npm install`), which would skip entity-core clone + shortcut/desktop-
-# entry creation. The marker is the reliable "installer actually
+# `npm install`), which would skip shortcut/desktop-entry creation and
+# Phylactery/Unruh venv sync. The marker is the reliable "installer actually
 # completed" signal. Content is the version, for debugging / future
 # version-aware logic.
 PF_VERSION="$(node -p "require('$SCRIPT_DIR/package.json').version" 2>/dev/null || echo unknown)"
@@ -357,9 +373,6 @@ esac
 echo "  Stop:          ./stop.sh  (or close the launcher window on macOS)"
 echo "  Trouble?       see docs/troubleshooting.md"
 echo
-if [ "$HAVE_DENO" = "0" ]; then
-  warn "Reminder: install Deno before first start if you want entity-core enrichment."
-fi
 if [ "${HAVE_UV:-0}" = "0" ]; then
-  warn "Reminder: install uv before first start if you want Unruh (temporal context)."
+  warn "Reminder: install uv before first start if you want Phylactery (identity layer) and Unruh (temporal context)."
 fi

@@ -1,5 +1,7 @@
 # Unruh — Design Document
 
+> **Historical note:** this document predates the Phylactery milestone (0.6.x). References to "entity-core" describe the canonical store as it was at design time; that role is now Phylactery. The design reasoning is preserved as-is.
+
 ## What It Is
 
 Unruh is a planned cognitive module for the Familiar system. Its role is to give Familiar a meaningful relationship with time — not time as coordinates ("it is 10:07") but time as lived context: what today means, what yesterday left unresolved, what tomorrow casts a shadow over.

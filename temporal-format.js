@@ -190,7 +190,7 @@ export function formatTemporalContext(payload) {
       // remember AND to raise — primes the Familiar to feel them as
       // commitments {{user}} is counting on them to act on, not a
       // passive list to perceive.
-      schedLines.push("Open tasks I'm holding for {{user}} — mine to remember and to raise when a moment fits (no completion confirmed):");
+      schedLines.push("Open tasks I'm holding for {{user}} — mine to remember and to raise (no completion confirmed):");
       for (const item of openTasks) {
         schedLines.push(`  - ${item.label ?? item.id ?? ''}`);
       }

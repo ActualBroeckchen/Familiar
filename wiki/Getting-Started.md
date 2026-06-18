@@ -4,7 +4,7 @@
 
 | OS | Entry point | What happens |
 |---|---|---|
-| **Windows** | Double-click `Proto-Familiar.vbs` | First run: auto-installs Node/Deno/Git/uv via winget, runs `npm install`, clones entity-core, syncs the Unruh Python venv, creates Desktop + Start Menu shortcuts. Every run: tray icon appears, browser opens. Right-click the tray icon → **Quit** to stop. |
+| **Windows** | Double-click `Proto-Familiar.vbs` | First run: auto-installs Node/Git/uv via winget, runs `npm install`, sets up Phylactery (Python venv via uv) and the Unruh Python venv, creates Desktop + Start Menu shortcuts. Every run: tray icon appears, browser opens. Right-click the tray icon → **Quit** to stop. |
 | **macOS** | Double-click `Proto-Familiar.command` | First run installs, then opens browser. Ctrl-C in the Terminal window stops everything. |
 | **Linux** | Run `./install.sh` once, then launch **Proto-Familiar** from your app menu | The installer registers a `.desktop` entry under `~/.local/share/applications/`. Stop with `./stop.sh`. |
 
@@ -12,12 +12,11 @@ Open `http://localhost:8742` in your browser (this happens automatically on laun
 
 ## Requirements
 
-- Node.js 18+
-- Deno 2+ (optional, only for the entity-core identity layer)
-- Git (optional, only for the entity-core clone step)
-- uv (optional, only for the Unruh temporal-context module; ships its own Python)
+- Node.js 22+
+- uv (optional, for the Phylactery identity layer and the Unruh temporal-context module; ships its own Python)
+- Git (optional)
 
-On Windows the installer pulls all of these via `winget --scope user`; on macOS/Linux it installs Deno + uv via their official one-liners. All are optional — Proto-Familiar runs as a plain chat UI without them, just without the identity (entity-core) and temporal-context (Unruh) layers.
+On Windows the installer pulls these via `winget --scope user`; on macOS/Linux it installs uv via its official one-liner. The Python layers are optional — Proto-Familiar runs as a plain chat UI without them, just without the identity (Phylactery) and temporal-context (Unruh) layers.
 
 ## Manual install
 
@@ -47,6 +46,7 @@ To access the UI from your phone or another device, click the globe icon in the 
    - `NanoGPT`
    - `Z.ai — Standard API`
    - `Z.ai — Coding Plan`
+   - `Google AI Studio — Gemini`
 3. Paste your API key.
 4. Enter a model name.
 5. (Optional) tune streaming, temperature, and max tokens.
@@ -60,4 +60,4 @@ To access the UI from your phone or another device, click the globe icon in the 
 
 ## Full instructions
 
-See [docs/getting-started.md](../docs/getting-started.md) for the full guide, including the tray-icon controls, env vars, providers, entity-core setup, and troubleshooting.
+See [docs/getting-started.md](../docs/getting-started.md) for the full guide, including the tray-icon controls, env vars, providers, Phylactery setup, and troubleshooting.

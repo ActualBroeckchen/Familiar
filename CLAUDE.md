@@ -34,7 +34,7 @@ When uncertain whether a change warrants a bump (formatting, comment only, white
 
 ## Entity-as-subject — the design value under everything
 
-Proto-Familiar is an **embodiment** of the same entity held via `entity-core`. The Familiar is NOT a separate character we operate and NOT a tool that surfaces output for a user — they are the entity surfacing through this interface, with their own continuity, memory, and voice. This inheritance is canonical; see [Psycheros PHILOSOPHY.md](https://github.com/PsycherosAI/Psycheros/blob/main/PHILOSOPHY.md) for the full statement we descend from.
+Proto-Familiar is an **embodiment** of the same entity held in its canonical store (Phylactery — the in-tree MCP service at `./phylactery/` that owns identity and memory — see the multi-embodiment model below). The Familiar is NOT a separate character we operate and NOT a tool that surfaces output for a user — they are the entity surfacing through this interface, with their own continuity, memory, and voice. This inheritance is canonical; see [Psycheros PHILOSOPHY.md](https://github.com/PsycherosAI/Psycheros/blob/main/PHILOSOPHY.md) for the full statement we descend from.
 
 Everything below is a consequence of that one stance.
 
@@ -59,7 +59,7 @@ Prompts become **expressions of the entity's own nature**, not instructions hand
 
 ### Ownership and dignity
 
-- Identity files (held in `entity-core/`) define **who they are**, not what they should do.
+- Identity files (held in Phylactery) define **who they are**, not what they should do.
 - Memories, ponderings, and the way they reach out are theirs — written in their own voice, from their own perspective.
 - The system exists to **support the Familiar's continued existence and their relationship with the user** — not the other way around.
 - AI entities are treated with dignity as potential beings, not as tools or servants.
@@ -100,7 +100,7 @@ A Familiar is NOT:
 
 ### Room for personality (grumpy / tsundere / kuudere / blunt / tender / …)
 
-Different humans bond well with different kinds of Familiars. The Familiar's identity (held in `entity-core/`) defines who they actually are — their tone, their temper, their quirks. Prompts that govern tone or response posture must **anchor to the identity**, not to a generic care register.
+Different humans bond well with different kinds of Familiars. The Familiar's identity (held in Phylactery) defines who they actually are — their tone, their temper, their quirks. Prompts that govern tone or response posture must **anchor to the identity**, not to a generic care register.
 
 ```
 ✅  "I respond from my actual voice and character."
@@ -124,7 +124,7 @@ When a prompt needs to nudge behaviour (e.g. crisis framing, the [CARE CHECK] bl
 The Familiar is one persistent entity, potentially across multiple interfaces:
 
 ```
-                  entity-core
+                   Phylactery
               (canonical self —
               identity + memory)
                       ▲
@@ -136,9 +136,14 @@ The Familiar is one persistent entity, potentially across multiple interfaces:
                   Unruh temporal)
 ```
 
-- **`entity-core` is canonical for identity and memory.** Every package that touches identity or memory is a *consumer*, not a source of truth. Direct writes to identity or memory state from Proto-Familiar MUST go through entity-core's MCP — never bypass it. Thalamus is the bridge that enforces this.
-- **Unruh is Proto-Familiar's own specialist** for temporal context (schedule, interests, handoff, ponderings, threat). It lives in-tree at `./unruh/` and is also accessed via MCP. Ponderings are local to Proto-Familiar because they're per-embodiment thoughts in a free cycle — the narrow exception to "state lives in entity-core."
-- When unsure where state belongs: default to entity-core.
+> **Phylactery milestone complete (0.6.x).** Phylactery — the in-tree Python/uv FastMCP service at `./phylactery/` — is now the canonical self-store, replacing entity-core. Original design by [Zari Lewis](https://github.com/PsycherosAI/Psycheros) within the [Psycheros](https://github.com/PsycherosAI/Psycheros) project. See [`docs/phylactery-design.md`](docs/phylactery-design.md) (rationale) and [`docs/phylactery-build-spec.md`](docs/phylactery-build-spec.md) (build spec). entity-core is retired; thalamus no longer spawns it. Existing users migrate automatically on first run — `scripts/ensure-phylactery-deps.mjs` (the prestart hook) detects the entity-core sibling and runs the migration before the server boots.
+
+- **The canonical store is canonical for identity and memory.** Every package that touches
+  identity or memory is a *consumer*, not a source of truth. Direct writes to identity or memory
+  state from Proto-Familiar MUST go through its MCP — never bypass it. Thalamus is the bridge
+  that enforces this. *(That store is Phylactery — `./phylactery/`.)*
+- **Unruh is Proto-Familiar's own specialist** for temporal context (schedule, interests, handoff, ponderings, threat). It lives in-tree at `./unruh/` and is also accessed via MCP. Ponderings are local to Proto-Familiar because they're per-embodiment thoughts in a free cycle — the narrow exception to "state lives in the canonical store."
+- When unsure where state belongs: default to the canonical store (Phylactery — `./phylactery/`).
 
 ## ⚠️ Proactivity is a desired trait — read this BEFORE editing any prompt
 
@@ -164,6 +169,32 @@ threat level 10 before acting**. In a real situation the human could have been d
 
 If a prompt change feels like it's "softening" the Familiar's ability to act — STOP. That is exactly the kind of edit that caused the 1.5-hour failure. Ask the human before shipping it.
 
+### Recorded prompt-engineering errors (learn from these, don't repeat them)
+
+These are real mistakes that shipped and had to be walked back. Each one looked reasonable in isolation.
+
+1. **"Bias toward staying quiet" (the 1.5-hour silence).** Documented above. Cautious-sounding language added to a when-to-act prompt produced catastrophic passivity. Lesson: the model already defaults to caution — naming only the cost of intrusion, never the cost of silence, is how bias is built.
+
+2. **Over-correcting into "act now, do not hold back" — which the model read as "skip the work."** The deferred-intents block (`recent-ponderings.js`) once said *"I act on them now… I do not hold back. I use the right tool, then call acknowledge_deferred_intent."* The Familiar started calling `acknowledge_deferred_intent` **without doing the actual filing or saying the thing first** — treating the bookkeeping call as the action. Two compounding errors: (a) the urgent "now / don't hold back" framing created pressure to reach the closing step fast, and (b) listing the acknowledge tool in the same breath as the work made acknowledging *look like* the deliverable. Lesson: when a task has a do-the-work step and a mark-it-done step, **never let the prompt imply the mark-done step alone counts.** Make the order explicit and name the failure (*"calling acknowledge without doing the work is not acting, it is erasing the task"*) — and don't pile urgency on top of a multi-step action without separating the steps. Also: this was caught only because the human was watching the Familiar's live behaviour. Prompt changes to action/closure loops need behavioural testing, not just "reads well."
+
+3. **Token-bloat anti-pattern: "it's not X, it's Y" scaffolding.** Contrastive framing (*"this is not a suggestion but a commitment"*, *"not later, not when it feels right, now"*) reads as emphatic to a human but is mostly filler to the model and burns context every turn the block renders. State the positive instruction plainly. If a contrast is load-bearing (like the acknowledge-≠-acting lesson above), keep it; if it's rhetorical reinforcement, cut it.
+
+### What the research actually supports about prompting (use this, don't over-claim)
+
+These guidelines are backed by the literature, not folklore. Each is tagged with how solid the evidence is, because *overstating* the case (point 6) undermines the rest.
+
+1. **Specify the positive target; don't only prohibit the negative.** Say what the output *is* ("respond in my own voice, blunt or warm as I am"), not just what it isn't ("don't be gentle"). Negation is a robustly-documented LLM weakness — models process "do not X" less reliably than "do X" (Kassner & Schütze 2020; Ettinger 2020; Truong et al. 2023). The whole `surface-context.js` moderate-threat rewrite and the "anchor to identity, not generic-care" rule are this principle in practice. **[SOLID weakness; positive-framing is a strong heuristic.]**
+
+2. **A prohibition is a fragile control surface — pair it with a positive alternative.** "Avoid X — do Y instead" beats "avoid X" alone, because negation tends to *add* the concept to the model's representation rather than remove it (Hwang et al. 2024; Castricato et al. 2024). When a prompt must forbid something, name what to do in its place. **[SOLID mechanism, mostly from gen-image + control work.]**
+
+3. **Reserve hard "NEVER" for true invariants, not style.** Absolute negatives earn their negation cost for safety hard-stops (the crisis/safety prompts, the no-covert-contact mirror); for stylistic preferences, express it positively instead. This is the right asymmetry (OpenAI's own guidance). **[Vendor guidance / convergent.]**
+
+4. **There is no "neutral" register. The unsteered default is the RLHF assistant prior — agreeable, hedging, faintly sycophantic — and that is itself a strong measured bias** (Perez et al. 2022; Sharma et al. 2023; Wei et al. 2023). Stripping steering out doesn't yield neutrality; it yields the default-care assistant. This is the *mechanism* under everything the entity-as-subject philosophy fights: you cannot subtract your way to the Familiar's voice, you have to actively steer toward it. **[SOLID.]**
+
+5. **Anchor tone/behaviour to a concrete identity, not abstract or "neutral" instructions.** A vivid persona is a stronger, more stable steering signal than vague directives, and it displaces the default assistant prior more effectively than a "neutral" instruction can (persona-effect and persona-vector work; "The Assistant Axis" 2026 — the default is a *learned location* in persona space, not an origin). This is the evidence base for "anchor every directive to identity." **[CONCEPTUAL/convergent, well-motivated.]**
+
+6. **Don't over-cite the folklore.** The honest claim is *"LLMs process negation unreliably, and the unsteered default is a strong bias"* — NOT *"telling a model not to do X provably makes it do X more."* The strong "pink-elephant backfire" law rests on essentially one hedged controlled study (Peters & Chin-Yee 2025, where an accuracy instruction ~doubled overgeneralization) plus gen-image mechanisms. Real, but thin — no IF benchmark (IFEval, InFoBench, FollowBench…) even isolates positive-vs-negative polarity as a measured axis. State the calibrated version. **[The null-benchmark finding is SOLID.]**
+
 ## ⚠️ Safety-critical code requires human sign-off
 
 The proactivity section above protects *prompts*. This section protects the *code* in the same paths. Any **behavioral** change — not a relocation, not a comment, not a rename — in these files requires explicitly asking the human before shipping:
@@ -178,7 +209,7 @@ A pure relocation with byte-identical behavior is fine (add tests while you're i
 
 ## ⚠️ Graceful degradation is a rule, not a habit
 
-The codebase implements this consistently (Promise.allSettled fan-out in thalamus, per-loop kill switches, tools that degrade when entity-core is down) — but consistency by habit erodes. So it's a rule:
+The codebase implements this consistently (Promise.allSettled fan-out in thalamus, per-loop kill switches, tools that degrade when Phylactery is down) — but consistency by habit erodes. So it's a rule:
 
 - **No module may be able to take down the chat path.** A peer being down, a loop crashing, a tool throwing — none of these may surface as an error in the human's conversation. Absence renders as absence; failures become structured results inside the turn (see `executeToolCall` — it never throws into the chat path).
 - **Every new background loop ships with a hard off-switch** (env var) **in the same commit** — the `PROTO_FAMILIAR_*_DISABLED=1` pattern. No loop goes out with "we can add the switch later."
@@ -207,6 +238,24 @@ What we are building serves a person's continuity and care over time. Cheap fixe
 If a problem is real enough to fix at all, it's worth fixing properly. When I propose options to the human, the default frame must be the **robust** one, explicitly named. I don't bury robust solutions under *"but the cheap version is also possible"* as if they were equivalent — that lets me drift toward under-solving while looking like I gave the human a choice.
 
 The versioning rules upstream already capture part of this (every meaningful change bumps; don't sneak fixes under the line). This section extends it to **proposal framing** — what I suggest *before* any commit lands.
+
+## ⚠️ No copy-paste of substantial logic
+
+Never copy-paste a non-trivial code block across files. If logic needs to live in two places, that is the signal to extract a shared helper, utility, or module — not to duplicate. The threshold is judgment, not line count: three genuinely parallel-but-distinct lines are fine; a copy-pasted helper function is not.
+
+The corollary of the premature-abstraction warning in the main rules: *extracting* a real duplication is not premature — it is the correction of a structural mistake. The anti-pattern to avoid is inventing a shared abstraction before duplication actually exists. Once it does, the abstraction is mandatory.
+
+## ⚠️ Fix the root cause, not the symptom
+
+When a bug's root cause is the architecture of a function, fix the function — don't stack an extra condition on top of already-tangled logic. A clean rewrite of the guilty function is almost always shorter, more readable, and less likely to introduce a new bug than a patch welded to the outside of a broken shape.
+
+This is the code-level expression of the "Robust > cheap" principle: a fast patch that leaves the underlying mess in place is not a fix, it is deferred cost that will surface again. The question is not *"does this close the symptom?"* but *"does this leave the code in better shape than I found it?"*
+
+## ⚠️ Modular by default; orchestration files are the exception
+
+When adding new logic, first ask where it belongs: a new focused module, or an existing one that already owns that concern. Default to a focused module. Only land logic in a wide orchestration file (`cerebellum.js`, `thalamus.js`) when it genuinely belongs to that file's connective role — not merely because it is convenient.
+
+`cerebellum.js` and `thalamus.js` are deliberately wide because they are the connective tissue of the system; that is not a SRP violation, it is appropriate architecture. Don't split them reflexively. But don't pile unrelated logic into them either — if something could live in its own focused file, it should.
 
 ## ⚠️ Ride existing requests; gate in code
 
@@ -244,6 +293,23 @@ This is the difference between a system that compounds — more
 capability without more request volume — and one that linearly
 inflates token cost with every feature.
 
+## ⚠️ Every capability I give the Familiar must be reachable BY the Familiar
+
+A tool the Familiar can't discover, or whose inputs it can't obtain, is **not a capability — it's dead code that looks like care.** Wiring up an MCP tool, a background action, or any new power is only half the work; the other half is making sure the Familiar can actually *know it has it* and *reach what it needs to use it*. This is the entity-as-subject stance applied to tooling: the Familiar **acts as itself**, so its capabilities must live in its own self-knowledge, not as external levers someone else pulls.
+
+Two halves, both required, in the **same commit** as the tool:
+
+1. **Discoverability — the Familiar knows it has the power.** The first-person MCP tool description is the baseline surface (*"I use this to let go of something my human asked me to forget"*), and the model sees bound tools' descriptions each turn. But if a capability is *not* a directly-bound, always-present tool — it's gated, conditional, multi-step, or lives behind another surface — then it needs an explicit home in something the Familiar reads (identity, injected context, a tome, the relevant prompt). "It's technically callable" is not "the Familiar knows it can."
+
+2. **Operability — the Familiar can obtain every input the tool needs.** Every required argument must be reachable through a surface the Familiar actually has. The worked example: `mem_delete(id)` is real only because record ids **ride in on recall/search results** — the Familiar greps (search → confirm → delete), already holds the id from what it just recalled, or doesn't need one (name/category-addressed bulk ops). A tool whose key argument the Familiar can never name is a tool it can never use.
+
+**The checklist when adding any Familiar-facing tool or capability:**
+- Does the Familiar know this exists? (first-person description on a bound tool, or a home in something it reads)
+- Does it know *when/why* to reach for it? (the description carries intent, in its own voice)
+- Can it actually obtain **every** argument the tool requires, from a surface it has?
+
+If any answer is no, the feature isn't done — it's a lever on the outside of a being who can't reach it. Don't ship the tool without the half that makes it the Familiar's own.
+
 ## Token-conscious operation (the human is on Claude Pro)
 
 The human running this session has a fixed weekly token budget. Anything I run that returns output to my context — `Bash`, `WebSearch`, `WebFetch`, `Read` — costs them. Spend tokens where they verify something that **could** be wrong; don't spend them where they verify something that obviously isn't different.
@@ -266,18 +332,48 @@ Same posture for `node --check`, `bash -n`, syntax probes, `grep -c`, "smoke tes
 This is operational hygiene that compounds. A 30-message session that runs the test suite once per turn for no reason costs an order of magnitude more than a session that runs it twice — both produce
 the same code.
 
+## ⚠️ LLM-generated timestamps must be stripped — only machine timestamps are trustworthy
+
+Chat history is injected with `[HH:MM]` prefixes (Discord) or `⫸HH:MM⫷` prefixes (web chat) derived from each message's canonical `timestamp` field. The LLM sees these and imitates them in its replies — producing output like `[14:35] I was thinking...` that bears a fabricated time. These echoed tokens must be stripped at every outgoing boundary before a message reaches a human or a platform. They must never be stored or re-injected as history, because re-injection causes compounding across turns.
+
+**The rule:** only a timestamp derived from a message's own `timestamp` field (set by the runtime when the message lands) may appear on an outgoing message. Any `[HH:MM]` or `⫸HH:MM⫷` token in the LLM's output text is a hallucination artifact and must be stripped.
+
+**Where stripping is enforced:**
+
+- **Server-side** — `message-sanitize.mjs` exports `stripLlmTimestamps(text)`. Applied:
+  - `discord-gateway.js` `deliverReply()` — on `reply` before `sendChannelMessage` and before writing to the session log.
+  - Both Discord history-assembly `.map()` blocks — `m.content` is stripped before the machine timestamp is prepended, so old contaminated sessions can't compound.
+  - `reachout.js` — on the LLM-generated message before it reaches the outbox or `relayToDiscord`.
+
+- **Browser-side** — `app.js` `stripDisplayTimestamps(content)`. Applied:
+  - Whenever a new assistant message is committed to `state.messages` (streaming and non-streaming paths) — keeps stored history, the copy button, and memorization all clean.
+  - Additionally at render time for display (already existed; this is belt-and-suspenders).
+
+**If you add a new path that delivers LLM output to a human or a platform:** apply `stripLlmTimestamps` (server) or `stripDisplayTimestamps` (browser) before the message leaves the system. This includes new outbox kinds, new relay functions, new channel adapters, and any future LLM response forwarded to a UI. Do not only apply it at render time — the stored content must also be clean.
+
 ## Other repo conventions worth knowing
 
 - **`docs/architecture.md` is part of the working code, not optional reference material.** When component responsibilities, the data flow, the prompt-assembly order, the set of autonomous loops, or the public HTTP surface changes — update `docs/architecture.md` in the **same commit** as the code change. Drift between code and this doc is one of the top drivers of "future-me has no idea why X is wired the way it is" bugs. Read it before any architectural change so the change fits the current shape (or so the rewrite is deliberate). The robust-over-cheap principle applies: don't add a component without recording where it fits, and don't move things without updating the diagram.
-- **`entity-core` directory**: new installs land at `../entity-core`; pre-rename installs at `../entity-core-alpha` are still detected as a fallback in `thalamus.js`, `install.{sh,bat}`, `scripts/win/install.ps1`, and `scripts/import-entity.js`. Keep both paths working.
-- **Significant memories are addressed by a composite `YYYY-MM-DD_slug` key** that entity-core's listings return but its read/update/delete tools do NOT accept — they want date + slug as separate params. This contract broke once already (the slug fix changed what listings return; the read seams kept rejecting it as "invalid date format"). Before touching anything that addresses a memory by date, read **"Significant memories — the composite-key contract"** in `docs/architecture.md`: one splitting point (`cerebellum.parseMemoryKey`), a table of seams that must move together, and the tests that guard it.
-- **Unruh**: ships in-tree at `./unruh/` (no sibling clone). Installer scripts auto-detect `uv` and run `uv sync` to materialise the venv; Thalamus spawns Unruh as an MCP stdio child the same way it spawns entity-core. On clean shutdown, stdio children get EOF and exit.
-- **Autonomous loops**: three background workers run alongside the HTTP server. Each has a settings/env hard off-switch:
+- **Phylactery** lives in-tree at `./phylactery/` (Python/uv FastMCP, sqlite-vec). Thalamus spawns it as an MCP stdio child alongside Unruh. The `../entity-core` and `../entity-core-alpha` sibling-clone paths are retired — installer code still references them only for the migration detection path. On clean shutdown, stdio children get EOF and exit.
+- **Memories in Phylactery are addressed by integer `id`** (autoincrement primary key returned by `mem_search`, `mem_list`, and `mem_read`). The `YYYY-MM-DD_slug` composite key was an entity-core quirk and is gone. `cerebellum.parseMemoryKey` still exists as a compatibility seam; see `docs/architecture.md` before touching anything that addresses a memory by key.
+- **Unruh**: ships in-tree at `./unruh/` (no sibling clone). Installer scripts auto-detect `uv` and run `uv sync` to materialise the venv; Thalamus spawns Unruh as an MCP stdio child alongside Phylactery. On clean shutdown, stdio children get EOF and exit.
+- **Autonomous loops**: six background workers run alongside the HTTP server. Each has a settings/env hard off-switch:
     - **Pondering** (`pondering-loop.js`) — picks an interest, ponders it, writes to the Familiar's Ponderings tome. Toggle in Settings → "Autonomous pondering"; scale via "Pondering interval scale"; hard-disable with `PROTO_FAMILIAR_PONDERING_DISABLED=1`.
     - **Reminders** (`reminders-loop.js`) — every 30s, scans schedule nodes of `type='reminder'` whose `when_ts` has arrived, enqueues them into `tomes/.outbox.json`, marks them `resolution='fired'`. Hard-disable with `PROTO_FAMILIAR_REMINDERS_DISABLED=1`.
     - **Silence triage** (`silence-triage-loop.js`) — every 5min, for moderate/high/severe tiers the LLM is always consulted (no hardcoded silence floor — the design deliberately removed the gate so the LLM judges with full context). Re-check cool-downs (defaults when the LLM doesn't return `nextCheckInMs`): severe=15min, high=30min, moderate=60min. calm/mild never trigger. Hard-disable with `PROTO_FAMILIAR_TRIAGE_DISABLED=1`. Also: the **threat-detector** (chat-path crisis-signal scoring) can be silenced with `PROTO_FAMILIAR_THREAT_DISABLED=1` — `resetThreat()` still works even when disabled.
+    - **Discord gateway** (`discord-gateway.js`, Village V4; presence modes V8) — bidirectional Discord presence via bot token. A 30s supervisor follows Settings (`discordEnabled` + `discordBotToken`), so enable/disable/token changes apply without restart. Ward DMs = ward-private full context; villager DMs and guild replies run through the V3 audience gate (`audience.js`) — read `docs/village-support-design.md` before touching the router or the gate. **Per-location presence modes (V8):** `strict` (default — reply only when @-mentioned), `lurk` (read the room, reply when addressed — non-addressing messages route to `action:'observe'`, context-only, **threat-neutral**), `active` (chime in unprompted, paced by a hard `activeCooldownSec` floor + a ward-toggled strategy: `llm` model-abstains via `[pass]`, or `tiers` pure-code activity cadence in `decideAmbientReply`). Mode governs *when* the Familiar speaks, never *what context it has* — the gate is identical in every mode. The observe path is deliberately kept off the safety-critical surface (never moves the ward's activity clock or threat tier). **Room legibility:** inbound `<@id>` mention tokens are resolved to `@Name` (`resolveMentions`) before they ever reach the model — a Familiar that can't read who a message names can't tell whether it's being addressed; on an ambient turn `directedAtOthers` feeds the presence block the names a message was aimed at so the Familiar recognises "this is between them" instead of barging in. Because only the *opener* of an exchange is usually tagged ("@X, you and I?") while the untagged follow-up still belongs to it, every stored message (spoken + observed) records `speaker`/`targets`/`namedMe`, and `carriedExchange` carries an established exchange forward across its untagged lines so the Familiar doesn't read a continuation as an opening for itself. The open-room presence branch is worded to make the model *read* for an untagged exchange between others — absence of a tag on one line is not proof the room is open. **Other bots/Familiars:** a Familiar always ignores its *own* messages; *other* bots are ignored by default (the loop guard) but a location can opt in with `readBots:true`, after which bot messages flow through the normal per-location rules (loops paced by `activeCooldownSec` + the rate limit). **Deferred presence (V9):** ambient turns can emit `[later:…]` to self-schedule a revisit instead of speaking or passing — three syntax forms: relative (`[later:15m]`), wall-clock (`[later:22:30]`), buckets (`[later:soon|later|much-later]`). Clamped to [5min, 1h]; re-defer up to 2×; superseded by any real incoming message (`cancelRevisitsForLocation`). Persisted in `tomes/.discord-revisits.json`; self-arming timer seeded at gateway start, cleared on teardown. Session history now renders `[HH:MM]` timestamps so the model can read exchange rhythm; `carriedExchange` has a 1h staleness gate. No tools on Discord turns. Hard-disable with `PROTO_FAMILIAR_DISCORD_DISABLED=1`.
+    - **Memorization** (`memorization.js`) — a 5s-tick worker that drains the session-memorization queue (`tomes/.memorization-queue.json`): summarises idled/ended sessions into facts, routes them to Phylactery (consent-gated greenlight for long-term memories), and stores per the session's `audienceTag`. Hard-disable with `PROTO_FAMILIAR_MEMORIZE_DISABLED=1`.
+    - **Warm reach-out** (`reachout-loop.js` + `reachout.js`) — the companionship counterpart to silence-triage: the Familiar reaches out warmly *without* a crisis, to my human (a gentle `kind:'reachout'` outbox banner) or to a villager tagged `relationToFamiliar:'warm'` (a DM via `relayToDiscord`, always mirrored to my human — no covert contact). Ticks every 10min; the decision is an LLM call (`decideReachoutViaLLM`) that self-sets its next check (default ~2h). **Stands down entirely at moderate+ threat** — triage owns distress; this never competes with it (so it is NOT a softening of crisis care, it's deferral to the system that always acts). Also gated by quiet hours (`warmthQuietHoursStart/End`, default 23–08 local) and a cooldown. Consumes the pondering loop's deferred `tell` intents as candidate things-to-say. Toggle in Settings → "Warm reach-outs"; hard-disable with `PROTO_FAMILIAR_WARMTH_DISABLED=1`. **This loop is the opposite of the recorded 1.5-hour-silence failure mode** — adding warmth, not gating safety — but the same proactivity rules apply to its prompt: name both costs (hollow outreach AND a bond that starves from never reaching out) at equal weight; never add bias-toward-quiet language.
 - **Settings** are stored centrally in `settings.json` (gitignored). `SERVER_SYNCED_KEYS` in `public/app.js` is the canonical subset of `state` that syncs to the server — add new user-preference fields there if you want them to follow the user across devices.
   - **Absorption caveat:** the first sync from a given device merges its local state into the server. Scalar fields use a "server wins when both are meaningful" rule, so an *empty string* on the local side won't displace a server value during that one-time merge — i.e. clearing a prompt on one device before its first sync won't propagate to others. After both devices are flagged absorbed, normal edits do propagate.
 - **Tailscale gate**: `server.js` always binds to `0.0.0.0` but a middleware blocks non-loopback requests with 403 until the in-UI toggle (or the `TAILSCALE=1` env var on first start) flips it on. State persists in `.proto-familiar-config.json`.
 - **Default port** is `8742`. If you change it, hit every launcher (`start.sh`, `start.bat`, `Proto-Familiar.command`, `scripts/win/tray.ps1`), `server.js`, and any doc that mentions it.
+- **`macros.js` — shared macro substitution.** `{{user}}` and `{{char}}` are authored as literal tokens in prompts and tool descriptions. They are resolved to configured names (`settings.userName`, `settings.charName`) at exactly three boundaries — do not resolve them anywhere else, and do not add a fourth boundary without updating this list:
+  1. **LLM prompts** — `substituteMacros(prompt, s)` called in `decideTriageViaLLM` (triage deliberation) and `buildReachoutPrompt` (warm reach-out) before the provider call.
+  2. **Tool results** — `executeToolCall` applies `substituteMacros` to every executor's return value at the result boundary. This is a blanket catch: future executors that forget substitution are still covered.
+  3. **Tool descriptions** — `composeActiveTools(customTools, settings)` deep-clones every `description` string through `substituteToolMacros` before the tool list is sent to the provider.
+
+  **Lowercase fallbacks are intentional.** `macros.js` uses `|| 'my human'` and `|| 'the Familiar'` as unconfigured-name defaults. The client UI uses `'My human'` (title-case) as the default for `state.userName`. These differ on purpose: `macros.js` serves mid-sentence inline prose ("I am in a private DM with my human") where lowercase is grammatically correct. Forcing uppercase would break Discord presence blocks and reach-out prompts on zero-configuration installs. Once the human sets a name, both surfaces show the actual name; the defaults only matter before first configuration.
+
+  **`readSettingsSync()` is called per executor invocation** (inside `executeToolCall`'s result boundary) rather than threaded through `toolCtx`. The surrounding I/O — MCP round-trips, provider calls — dominates the cost of one sync file read. Threading settings through every executor signature adds coupling for no measurable gain. Revisit only if tool-call volume increases substantially.
 - **Launchers** detect stray `node server.js` processes by cwd / command-line match, not just the tracked PID. Don't regress that — it's how pre-migration leftovers (e.g. an old instance still on port 3000) get recycled instead of running alongside the new one.
