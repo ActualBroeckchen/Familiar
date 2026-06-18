@@ -245,9 +245,12 @@ re-accessible **without re-fetching**, and it sits as a stable prefix the provid
 prompt-cache. *Within-session recall is free; do not build anything for it.*
 
 The cost that buys: each read sits in history at up to `webSearchMaxChars` and is re-sent every
-turn for the remainder of the session. Caching softens the token bill but the context window is
-still consumed — which is exactly what the `webSearchMaxChars` cap bounds. No trimming logic in
-this milestone; the cap is the control.
+turn for the remainder of the session. In practice this is noise, not a problem to engineer
+against — the supported models carry 200k+ token windows, and the existing ~3h-idle session
+rotation (`SESSION_IDLE_MS`, `public/app.js` → `autoEndSession`/`startNewSession`) already
+bounds how much any one session can accumulate. So `webSearchMaxChars` is a sensible per-read
+bound, not a defence against runaway growth; **no trimming logic in this milestone.** General
+long-session context handling is a separate, future concern and explicitly out of scope here.
 
 **What Pillar E is actually for: crossing the session boundary.** Session history is
 per-session — the next conversation starts fresh, and only Phylactery/tomes carry over. The
