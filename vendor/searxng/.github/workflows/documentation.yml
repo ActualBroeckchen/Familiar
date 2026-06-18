@@ -1,0 +1,71 @@
+---
+name: Documentation
+
+# yamllint disable-line rule:truthy
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.14"
+
+jobs:
+  release:
+    if: github.repository_owner == 'searxng' || github.event_name == 'workflow_dispatch'
+    name: Release
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      # for JamesIves/github-pages-deploy-action to push
+      contents: write
+
+    steps:
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "${{ env.PYTHON_VERSION }}"
+
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          persist-credentials: "false"
+          fetch-depth: "0"
+
+      - name: Setup cache Python
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          key: "python-${{ env.PYTHON_VERSION }}-${{ runner.arch }}-${{ hashFiles('./requirements*.txt') }}"
+          restore-keys: |
+            python-${{ env.PYTHON_VERSION }}-${{ runner.arch }}-
+          path: "./local/"
+
+      - name: Setup dependencies
+        run: sudo ./utils/searxng.sh install buildhost
+
+      - name: Setup venv
+        run: make V=1 install
+
+      - name: Build documentation
+        run: make V=1 docs.html
+
+      - if: github.ref_name == 'master'
+        name: Release
+        uses: JamesIves/github-pages-deploy-action@d92aa235d04922e8f08b40ce78cc5442fcfbfa2f  # v4.8.0
+        with:
+          folder: "dist/docs"
+          branch: "gh-pages"
+          commit-message: "[doc] build from commit ${{ github.sha }}"
+          # Automatically remove deleted files from the deploy branch
+          clean: "true"
+          single-commit: "true"

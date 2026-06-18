@@ -194,10 +194,20 @@ export async function searchWeb(query, settings = {}, deps = {}) {
   const maxResults = clampInt(settings.webSearchMaxResults, DEFAULT_MAX_RESULTS, 1, 20);
 
   const base = String(settings.webSearchBaseUrl || '').trim();
-  const res  = base
-    ? await searchViaSearxng(q, base, deps)
-    : await searchViaDuckDuckGo(q, deps);
 
+  // When a SearXNG backend is configured (a custom URL, or the Familiar's own
+  // managed instance), try it first — but fall back to the always-available
+  // keyless backend if it errors, so a wrong/stale URL or a down instance
+  // never leaves my human without search.
+  if (base) {
+    const primary = await searchViaSearxng(q, base, deps);
+    if (!primary.error) return formatResults(q, primary.rows, maxResults);
+    const fallback = await searchViaDuckDuckGo(q, deps);
+    if (!fallback.error) return formatResults(q, fallback.rows, maxResults);
+    return primary.error; // both down — report the SearXNG error
+  }
+
+  const res = await searchViaDuckDuckGo(q, deps);
   if (res.error) return res.error;
   return formatResults(q, res.rows, maxResults);
 }

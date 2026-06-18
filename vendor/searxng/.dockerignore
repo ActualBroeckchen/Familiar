@@ -1,0 +1,6 @@
+*
+
+!container/*.template.*
+!container/entrypoint.sh
+!searx/**
+!requirements*.txt

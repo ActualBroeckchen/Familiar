@@ -128,8 +128,23 @@ test('searchWeb uses SearXNG JSON when a custom base URL is set', async () => {
   assert.doesNotMatch(out, /2\. B/);
 });
 
-test('searchWeb (SearXNG backend) degrades calmly on error', async () => {
-  const out = await searchWeb('x', { webSearchBaseUrl: 'http://localhost:8080' }, { fetchFn: async () => ({ ok: false, status: 403 }) });
+test('searchWeb falls back to keyless when the configured SearXNG backend is down', async () => {
+  const lookupFn = async () => [{ address: '93.184.216.34' }];
+  const fetchFn  = async (url) => {
+    if (url.includes('format=json')) throw new Error('ECONNREFUSED'); // SearXNG unreachable
+    return { ok: true, url, status: 200, headers: { get: () => null }, text: async () => DDG_HTML };
+  };
+  const out = await searchWeb('cats', { webSearchBaseUrl: 'http://localhost:8080' }, { fetchFn, lookupFn });
+  assert.match(out, /Result A/);   // keyless results returned despite the stale/down SearXNG URL
+});
+
+test('searchWeb reports the SearXNG error only when keyless ALSO fails', async () => {
+  const lookupFn = async () => [{ address: '93.184.216.34' }];
+  const fetchFn  = async (url) => {
+    if (url.includes('format=json')) return { ok: false, status: 403 }; // SearXNG errors
+    throw new Error('offline');                                          // keyless also down
+  };
+  const out = await searchWeb('x', { webSearchBaseUrl: 'http://localhost:8080' }, { fetchFn, lookupFn });
   assert.match(out, /HTTP 403/);
 });
 

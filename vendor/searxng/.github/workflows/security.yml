@@ -1,0 +1,46 @@
+---
+name: Security
+
+# yamllint disable-line rule:truthy
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "42 05 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  container:
+    if: github.repository_owner == 'searxng'
+    name: Container
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      security-events: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          persist-credentials: "false"
+
+      - name: Sync GHCS from Docker Scout
+        uses: docker/scout-action@cd72f264beff1cd72735de31148b9d3244a0234a  # v1.21.0
+        with:
+          organization: "searxng"
+          dockerhub-user: "${{ secrets.DOCKER_USER }}"
+          dockerhub-password: "${{ secrets.DOCKER_TOKEN }}"
+          image: "registry://ghcr.io/searxng/searxng:latest"
+          command: "cves"
+          sarif-file: "./scout.sarif"
+          exit-code: "false"
+          write-comment: "false"
+
+      - name: Upload SARIFs
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4.36.2
+        with:
+          sarif_file: "./scout.sarif"

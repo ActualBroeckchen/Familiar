@@ -163,14 +163,31 @@ export async function stopManagedSearxng() {
 }
 
 // ── Real side effects (the verify-on-real-install integration point) ──
-// These are the default implementations; tests inject fakes. The exact uv
-// invocation and module entrypoint must be confirmed against the vendored
-// SearXNG version when the source is dropped in.
+// These are the default implementations; tests inject fakes.
+//
+// SearXNG uses requirements.txt + setup.py (not pyproject.toml), so the
+// uv sync / uv run flow doesn't apply. Instead: uv venv .venv to create the
+// environment, uv pip install --python <venv-py> -r requirements.txt to
+// populate it, then invoke the venv Python directly to spawn the webapp.
+// Verified at SHA b5ef7ec: entrypoint `python -m searx.webapp`, bind/port
+// from settings.yml only, health endpoint GET /healthz → 200 "OK",
+// SEARXNG_SETTINGS_PATH read by settings_loader (settings_loader.py:93).
+
+function getVenvPython() {
+  const venvDir = path.join(VENDORED_DIR, '.venv');
+  return process.platform === 'win32'
+    ? path.join(venvDir, 'Scripts', 'python.exe')
+    : path.join(venvDir, 'bin', 'python');
+}
 
 async function ensureDeps() {
-  // Lazily materialise the SearXNG venv with uv — only the first time the
-  // human enables web search, never at every boot.
-  await runToCompletion('uv', ['sync'], { cwd: VENDORED_DIR });
+  // Fast path: venv already materialised from a previous boot.
+  if (existsSync(getVenvPython())) return;
+  await runToCompletion('uv', ['venv', '.venv'], { cwd: VENDORED_DIR });
+  await runToCompletion(
+    'uv', ['pip', 'install', '--python', getVenvPython(), '-r', 'requirements.txt'],
+    { cwd: VENDORED_DIR },
+  );
 }
 
 async function spawnSearxng() {
@@ -178,13 +195,11 @@ async function spawnSearxng() {
   const url  = `http://127.0.0.1:${port}`;
   writeManagedSettings(port);
 
-  const child = spawn('uv', ['run', '--no-sync', 'python', '-m', 'searx.webapp'], {
+  const child = spawn(getVenvPython(), ['-m', 'searx.webapp'], {
     cwd: VENDORED_DIR,
-    // SearXNG reads the bind address + port from settings.yml (server.bind_address
-    // / server.port), which writeManagedSettings sets — NOT from env (verified
-    // against the pinned SHA's searx/webapp.py). SEARXNG_SETTINGS_PATH is the
-    // documented way to point it at our generated file (read by settings_loader);
-    // confirm that path is honoured on the first real boot.
+    // SearXNG reads bind address + port from settings.yml (server.bind_address
+    // / server.port) — NOT from env. SEARXNG_SETTINGS_PATH is the documented
+    // env var for pointing it at our generated file (verified: settings_loader.py:93).
     env: {
       ...process.env,
       SEARXNG_SETTINGS_PATH: SETTINGS_YML,

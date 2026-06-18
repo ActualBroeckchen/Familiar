@@ -9,6 +9,8 @@ tomes/.memorization-queue.json.tmp
 # Threat-tracker state (step 4b) — local, decaying scalar; never committed.
 tomes/.threat-state.json
 tomes/.threat-state.json.tmp
+# Generated SearXNG config (random secret, per-boot port) — never committed.
+tomes/.searxng/
 # Outbox delivery queue (M11) — local pending notifications.
 tomes/.outbox.json
 tomes/.outbox.json.tmp
@@ -37,11 +39,22 @@ tomes/.village-location-knocks.json.tmp
 # use UUID filenames. Shipped tomes use human-readable "*-Tome.json".
 tomes/????????-????-????-????-????????????.json
 tomes/????????-????-????-????-????????????.json.tmp
+# Sample/test lorebook files dropped in tomes/ during development.
+tomes/Sample*.json
 .proto-familiar.pid
 .proto-familiar-config.json
+.proto-familiar.log.err
 .pf-install-complete
 settings.json
 settings.json.tmp
+packagebackup.json
+# Per-install runtime data directories (never committed).
+data/
+lorebook/
+memory/
+# Windows shell metadata.
+desktop.ini
+**/desktop.ini
 # Village registry local mirror (V1) — canonical copy lives in Phylactery.
 village.json
 village.json.tmp
