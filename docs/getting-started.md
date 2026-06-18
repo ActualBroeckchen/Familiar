@@ -17,7 +17,7 @@ Proto-Familiar ships with a one-click installer and launcher for each platform. 
    If you don't have `git` yet, download the ZIP from GitHub, extract it, and move the resulting `Proto-Familiar` folder to `%LOCALAPPDATA%`.
 
 2. Double-click **`Proto-Familiar.vbs`** inside that folder.
-3. On first run a console window opens and auto-installs Node 18+, Git, and uv via `winget install --scope user` (no admin prompt). If winget is unavailable or a specific install fails, each tool has a fallback path: uv via its official PowerShell one-liner, Node + Git via opening the download page and waiting for you to confirm. Once prereqs are in place, the installer runs `npm install`, sets up the in-tree Phylactery + Unruh Python venvs via `uv sync` (from each module's `uv.lock`), and creates Desktop + Start Menu shortcuts named **Proto-Familiar**.
+3. On first run a console window opens and auto-installs Node 22+, Git, and uv via `winget install --scope user` (no admin prompt). If winget is unavailable or a specific install fails, each tool has a fallback path: uv via its official PowerShell one-liner, Node + Git via opening the download page and waiting for you to confirm. Once prereqs are in place, the installer runs `npm install`, sets up the in-tree Phylactery + Unruh Python venvs via `uv sync` (from each module's `uv.lock`), and creates Desktop + Start Menu shortcuts named **Proto-Familiar**.
 4. After install, a tray icon appears (bottom-right, you may need to click the `^` to reveal hidden icons) and your browser opens at `http://localhost:8742`.
 
 If anything goes sideways, every install run appends to `.proto-familiar-install.log` in the project root — open that file first; the failing step is usually named explicitly. The installer also pops a Windows MessageBox at the end with the outcome and the log path, so a closed console doesn't mean lost diagnostics.
@@ -41,7 +41,7 @@ The tray app is single-instance — double-clicking the shortcut a second time j
 
 1. Clone or download the repo.
 2. Double-click **`Proto-Familiar.command`** in Finder.
-3. On first run it runs `./install.sh`, which checks Node 18+, auto-installs uv via its official one-liner installer if missing, runs `npm install`, and sets up the in-tree Phylactery + Unruh Python venvs via `uv sync`. On subsequent runs it skips straight to launching.
+3. On first run it runs `./install.sh`, which checks Node 22+ (upgrading automatically if a version manager like nvm or fnm is detected), auto-installs uv via its official one-liner installer if missing, runs `npm install`, and sets up the in-tree Phylactery + Unruh Python venvs via `uv sync`. On subsequent runs it skips straight to launching.
 4. A Terminal window opens showing server logs; your browser opens automatically at `http://localhost:8742`. The launcher auto-recycles any stale Proto-Familiar holding the port before binding.
 
 **To shut down**, press **Ctrl-C** in the Terminal window, then close it (Cmd-W). Because `node` runs in the foreground, Ctrl-C cleanly stops Proto-Familiar, Phylactery, and Unruh.
@@ -62,7 +62,7 @@ The installer handles these automatically on every platform. Install manually on
 
 | Requirement | Version | Notes |
 |---|---|---|
-| [Node.js](https://nodejs.org/) | 18 or newer | Built-in `fetch` API required |
+| [Node.js](https://nodejs.org/) | 22 or newer | Native WebSocket API required (Discord gateway) |
 | [uv](https://docs.astral.sh/uv/) | 0.4 or newer | For the in-tree Phylactery identity layer and the Unruh temporal-context module; ships its own Python ≥ 3.11, so no system Python install needed |
 | [Git](https://git-scm.com/) | any recent | For cloning and updating the repo |
 

@@ -12,7 +12,7 @@ Open `http://localhost:8742` in your browser (this happens automatically on laun
 
 ## Requirements
 
-- Node.js 18+
+- Node.js 22+
 - uv (optional, for the Phylactery identity layer and the Unruh temporal-context module; ships its own Python)
 - Git (optional)
 

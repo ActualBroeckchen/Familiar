@@ -309,25 +309,27 @@ async function callProvider({ provider, apiKey, model, prompt }) {
 }
 
 /**
- * Salvage complete topic objects from a truncated/malformed response.
- * Walks the "topics" array with a string-aware brace counter and
- * individually parses each complete object — a session that produced
- * four whole entries and one cut-off one keeps the four.
+ * Salvage complete objects from a truncated/malformed response. Walks the
+ * named array (`key`, e.g. "topics" or "facts") with a string-aware brace
+ * counter and individually parses each complete object — a response that
+ * produced four whole entries and one cut-off one keeps the four. Shared by
+ * both the topic and fact parsers so the counter lives in exactly one place.
  */
-export function salvageTopics(raw) {
-  const topicsKey = raw.indexOf('"topics"');
-  if (topicsKey < 0) return [];
-  const arrStart = raw.indexOf('[', topicsKey);
+export function salvageArrayField(raw, key) {
+  const text = String(raw);
+  const keyAt = text.indexOf(`"${key}"`);
+  if (keyAt < 0) return [];
+  const arrStart = text.indexOf('[', keyAt);
   if (arrStart < 0) return [];
-  const topics = [];
+  const items = [];
   let i = arrStart + 1;
-  while (i < raw.length) {
-    while (i < raw.length && raw[i] !== '{' && raw[i] !== ']') i++;
-    if (i >= raw.length || raw[i] === ']') break;
+  while (i < text.length) {
+    while (i < text.length && text[i] !== '{' && text[i] !== ']') i++;
+    if (i >= text.length || text[i] === ']') break;
     const start = i;
     let depth = 0, inStr = false, esc = false, complete = false;
-    for (; i < raw.length; i++) {
-      const ch = raw[i];
+    for (; i < text.length; i++) {
+      const ch = text[i];
       if (inStr) {
         if (esc) esc = false;
         else if (ch === '\\') esc = true;
@@ -341,11 +343,16 @@ export function salvageTopics(raw) {
     }
     if (!complete) break; // truncated mid-object — nothing further is whole
     try {
-      const obj = JSON.parse(raw.slice(start, i));
-      if (obj && typeof obj === 'object') topics.push(obj);
+      const obj = JSON.parse(text.slice(start, i));
+      if (obj && typeof obj === 'object') items.push(obj);
     } catch { /* malformed object — skip, keep scanning */ }
   }
-  return topics;
+  return items;
+}
+
+/** Salvage complete entries from a truncated "topics" array. */
+export function salvageTopics(raw) {
+  return salvageArrayField(raw, 'topics');
 }
 
 export function parseTopics(raw, finishReason = null) {
@@ -391,35 +398,10 @@ function parseFacts(raw, finishReason = null) {
       if (err.message === 'LLM returned no facts.') throw err;
     }
   }
-  // Salvage: reuse the salvageTopics brace-counter but look for the "facts" key.
-  const salvaged = (() => {
-    const factsKey = cleaned.indexOf('"facts"');
-    if (factsKey < 0) return [];
-    const arrStart = cleaned.indexOf('[', factsKey);
-    if (arrStart < 0) return [];
-    const items = [];
-    let i = arrStart + 1;
-    while (i < cleaned.length) {
-      while (i < cleaned.length && cleaned[i] !== '{' && cleaned[i] !== ']') i++;
-      if (i >= cleaned.length || cleaned[i] === ']') break;
-      const start = i;
-      let depth = 0, inStr = false, esc = false, complete = false;
-      for (; i < cleaned.length; i++) {
-        const ch = cleaned[i];
-        if (inStr) {
-          if (esc) esc = false;
-          else if (ch === '\\') esc = true;
-          else if (ch === '"') inStr = false;
-        } else if (ch === '"') inStr = true;
-        else if (ch === '{') depth++;
-        else if (ch === '}') { depth--; if (depth === 0) { i++; complete = true; break; } }
-      }
-      if (!complete) break;
-      try { const obj = JSON.parse(cleaned.slice(start, i)); if (obj && typeof obj === 'object') items.push(obj); }
-      catch { /* skip */ }
-    }
-    return items;
-  })().filter(f => (f?.content ?? '').toString().trim());
+  // Salvage truncated output the same way parseTopics does, via the shared
+  // brace-counter — just pointed at the "facts" array instead of "topics".
+  const salvaged = salvageArrayField(cleaned, 'facts')
+    .filter(f => (f?.content ?? '').toString().trim());
   if (salvaged.length) {
     if (finishReason === 'length') console.warn(`[memorization] LLM output truncated — salvaged ${salvaged.length} fact(s)`);
     return salvaged;

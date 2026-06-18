@@ -163,14 +163,34 @@ if errorlevel 1 (
     )
   ) else (
     echo [ERROR] Node.js is not installed and winget is unavailable.
-    echo         Install Node 18+ from https://nodejs.org/ and re-run install.bat.
+    echo         Install Node 22+ from https://nodejs.org/ and re-run install.bat.
     exit /b 1
   )
 )
 for /f "tokens=1 delims=." %%v in ('node -p "process.versions.node"') do set NODE_MAJOR=%%v
-if !NODE_MAJOR! LSS 18 (
-  echo [ERROR] Node.js !NODE_MAJOR! detected. Proto-Familiar needs Node 18 or newer.
-  exit /b 1
+if !NODE_MAJOR! LSS 22 (
+  echo Node.js !NODE_MAJOR! detected ^(need 22+ for Discord's native WebSocket^) - upgrading via winget...
+  if "!HAVE_WINGET!"=="1" (
+    winget upgrade --id OpenJS.NodeJS.LTS --scope user --silent --accept-source-agreements --accept-package-agreements
+    REM winget upgrade exits non-zero when "no applicable upgrade found" (already latest
+    REM per winget's view, e.g. installed from MSI outside winget). Fall back to install.
+    if errorlevel 1 (
+      winget install --id OpenJS.NodeJS.LTS --scope user --silent --accept-source-agreements --accept-package-agreements
+    )
+    REM Refresh PATH so the newly installed/upgraded node is visible in this session.
+    for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "[System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')" 2^>nul`) do set "PATH=%%P"
+    set "PATH=%LOCALAPPDATA%\Microsoft\WinGet\Links;%LOCALAPPDATA%\Programs\nodejs;%ProgramFiles%\nodejs;%PATH%"
+    for /f "tokens=1 delims=." %%v in ('node -p "process.versions.node" 2^>nul') do set NODE_MAJOR=%%v
+    if !NODE_MAJOR! LSS 22 (
+      echo [ERROR] Node.js upgrade did not reach v22+ ^(now: !NODE_MAJOR!^).
+      echo         Close this window, open a new terminal, and re-run install.bat.
+      exit /b 1
+    )
+  ) else (
+    echo [ERROR] Node.js !NODE_MAJOR! needs upgrading to 22+ but winget is unavailable.
+    echo         Install Node 22+ from https://nodejs.org/ and re-run install.bat.
+    exit /b 1
+  )
 )
 for /f %%v in ('node -v') do echo Node.js %%v found.
 

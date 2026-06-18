@@ -7,7 +7,7 @@
  * and mark the node 'fired'. The "enqueue first, mark fired second"
  * order is deliberate — if either step fails, the reminder is fired
  * AGAIN next tick rather than dropped silently. The outbox dedups
- * on originId so the user doesn't see double-banners.
+ * on originId so my human doesn't see double-banners.
  *
  * Why setInterval (not cron / apscheduler / OS timers): we already
  * have the pondering-loop pattern in this codebase, it has a

@@ -26,6 +26,7 @@ import { PROVIDER_URLS } from './providers.js';
 import { enrich } from './thalamus.js';
 import { readSettingsSync, primaryConnectionFrom, getRecentSessionMessages } from './cerebellum.js';
 import { buildTimeAnchorBlock, relativeTime } from './relative-time.js';
+import { substituteMacros } from './macros.js';
 
 // ── Warm-villager selection ──────────────────────────────────────
 //
@@ -175,14 +176,14 @@ export async function decideReachoutViaLLM({
       }).join('\n')}`
     : '';
 
-  const prompt = buildReachoutPrompt({
+  const prompt = substituteMacros(buildReachoutPrompt({
     nowBlock,
     identityContext,
     sessionBlock,
     pendingTells,
     warmVillagers,
     wardSilencePhrase,
-  });
+  }), s);
 
   let raw;
   try {

@@ -205,6 +205,18 @@ test('composeActiveTools appends custom tool objects after the built-ins', () =>
   assert.equal(composeActiveTools([null, 'junk']).length, BUILTIN_TOOLS.length);
 });
 
+test('composeActiveTools resolves {{user}}/{{char}} macros in descriptions', () => {
+  const custom = [{ type: 'function', function: { name: 'greet', description: 'I greet {{user}} as {{char}}.', parameters: {} } }];
+  const tools = composeActiveTools(custom, { userName: 'Zara', charName: 'Vex' });
+  const greet = tools.find(t => t.function.name === 'greet');
+  assert.equal(greet.function.description, 'I greet Zara as Vex.');
+  // No literal macro survives composition anywhere (built-in descriptions too).
+  const blob = JSON.stringify(tools);
+  assert.ok(!blob.includes('{{user}}') && !blob.includes('{{char}}'), 'no literal macros survive composition');
+  // The shared constant is cloned, never mutated — it keeps its authored macros.
+  assert.ok(JSON.stringify(BUILTIN_TOOLS).includes('{{user}}'), 'BUILTIN_TOOLS retains authored macros');
+});
+
 test('executeToolCall: unknown / custom tool returns advertise-only notice, not a throw', async () => {
   const out = await executeToolCall('my_custom_tool', '{}');
   assert.match(out, /advertised but has no implementation yet/);

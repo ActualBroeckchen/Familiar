@@ -510,7 +510,25 @@ if (-not (Have "node")) {
 if (-not (Have "node")) { Fail "Node.js still not on PATH. Close this window, open a new one, and re-run." }
 $nodeVersion = (& node -v).TrimStart("v")
 $nodeMajor = [int]($nodeVersion.Split('.')[0])
-if ($nodeMajor -lt 18) { Fail "Node.js $nodeVersion detected; Proto-Familiar needs 18+." }
+if ($nodeMajor -lt 22) {
+    Step "Node.js $nodeVersion detected (need 22+ for Discord's native WebSocket) — upgrading via winget..."
+    if ($haveWinget) {
+        # Try upgrade first; fall back to install if winget doesn't manage this copy.
+        winget upgrade --id OpenJS.NodeJS.LTS --scope user --silent `
+            --accept-source-agreements --accept-package-agreements
+        if ($LASTEXITCODE -ne 0) {
+            winget install --id OpenJS.NodeJS.LTS --scope user --silent `
+                --accept-source-agreements --accept-package-agreements
+        }
+        Update-EnvPath
+        $nodeVersion = ''
+        try { $nodeVersion = (& node -v 2>$null).TrimStart("v") } catch {}
+        $nodeMajor = if ($nodeVersion -match '^\d') { [int]($nodeVersion.Split('.')[0]) } else { 0 }
+    }
+    if ($nodeMajor -lt 22) {
+        Fail "Node.js $nodeVersion installed; Proto-Familiar needs 22+. Install Node 22+ from https://nodejs.org/ and re-run."
+    }
+}
 Ok "Node.js v$nodeVersion"
 
 # --- Git (install if missing, in both modes) ---

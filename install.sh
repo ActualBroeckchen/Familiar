@@ -110,15 +110,117 @@ if [ "$MODE" = "update" ]; then
   fi
 fi
 
-# --- Node.js check (install if missing, in both modes) ------------------
+# --- Node.js check (upgrade via version manager if below minimum) --------
+# Node 22+ is required for the Discord gateway's native WebSocket API.
+# All other features run on Node 18+, but upgrading everyone to 22 avoids
+# a silent half-broken Discord feature on older installs.
+NODE_MIN_MAJOR=22
+
+# Attempt to install/switch to Node $NODE_MIN_MAJOR via a user-scoped
+# version manager. Never touches Homebrew or system/apt Node — those are
+# shared tooling with blast radius beyond this project.
+# Returns 0 if an attempt ran (success or failure); 1 if no VM was found.
+_try_upgrade_node() {
+  # ── nvm (shell function; must source its init script) ──────────────
+  _NVM_SH=""
+  if [ -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh" ]; then
+    _NVM_SH="${NVM_DIR:-$HOME/.nvm}/nvm.sh"
+  fi
+  if [ -n "$_NVM_SH" ]; then
+    say "nvm detected — installing Node $NODE_MIN_MAJOR via nvm..."
+    # shellcheck disable=SC1090
+    . "$_NVM_SH"
+    if nvm install "$NODE_MIN_MAJOR" && nvm use "$NODE_MIN_MAJOR"; then
+      say "nvm: Node $(node -v 2>/dev/null || echo '?') active."
+    else
+      warn "nvm install $NODE_MIN_MAJOR failed — see output above."
+    fi
+    return 0
+  fi
+
+  # ── fnm (binary; writes env into current shell via eval) ───────────
+  if command -v fnm >/dev/null 2>&1; then
+    say "fnm detected — installing Node $NODE_MIN_MAJOR via fnm..."
+    if fnm install "$NODE_MIN_MAJOR" && fnm use "$NODE_MIN_MAJOR"; then
+      eval "$(fnm env --shell bash 2>/dev/null)" || true
+      say "fnm: Node $(node -v 2>/dev/null || echo '?') active."
+    else
+      warn "fnm install $NODE_MIN_MAJOR failed — see output above."
+    fi
+    return 0
+  fi
+
+  # ── asdf nodejs plugin ──────────────────────────────────────────────
+  if command -v asdf >/dev/null 2>&1; then
+    if asdf plugin list 2>/dev/null | grep -q '^nodejs$'; then
+      say "asdf detected — installing Node latest:$NODE_MIN_MAJOR via asdf..."
+      if asdf install nodejs "latest:$NODE_MIN_MAJOR" && \
+         asdf global nodejs "latest:$NODE_MIN_MAJOR"; then
+        say "asdf: Node $(node -v 2>/dev/null || echo '?') active."
+      else
+        warn "asdf install nodejs latest:$NODE_MIN_MAJOR failed — see output above."
+      fi
+      return 0
+    fi
+  fi
+
+  return 1  # no version manager found
+}
+
 if ! command -v node >/dev/null 2>&1; then
-  die "Node.js is not installed. Install Node 18+ from https://nodejs.org/ and re-run."
+  NODE_MAJOR=0
+else
+  NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo 0)"
 fi
-NODE_MAJOR=$(node -p "process.versions.node.split('.')[0]")
-if [ "$NODE_MAJOR" -lt 18 ]; then
-  die "Node.js $NODE_MAJOR detected. Proto-Familiar needs Node 18 or newer."
+
+if [ "$NODE_MAJOR" -lt "$NODE_MIN_MAJOR" ]; then
+  if [ "$NODE_MAJOR" -eq 0 ]; then
+    say "Node.js not found — looking for a version manager..."
+  else
+    say "Node.js $(node -v 2>/dev/null) found — need ${NODE_MIN_MAJOR}+ (Discord requires native WebSocket)."
+  fi
+
+  if ! _try_upgrade_node; then
+    # No version manager — hard-fail with clear upgrade instructions.
+    UNAME_S="$(uname -s 2>/dev/null || echo unknown)"
+    printf '\033[1;31mXX Node.js %d+ required (detected: %s).\033[0m\n' \
+      "$NODE_MIN_MAJOR" "${NODE_MAJOR:-not found}"
+    echo "   Install nvm (user-scoped, no sudo) then re-run:"
+    echo "     curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash"
+    echo "     source ~/.nvm/nvm.sh"
+    echo "     nvm install ${NODE_MIN_MAJOR}"
+    echo "   Then:  bash install.sh"
+    if [ "$UNAME_S" = "Darwin" ]; then
+      echo ""
+      echo "   Or via Homebrew (system-wide):"
+      echo "     brew install node@${NODE_MIN_MAJOR}"
+      echo "     brew link --overwrite --force node@${NODE_MIN_MAJOR}"
+    else
+      echo ""
+      echo "   Or via nodesource PPA (system-wide, needs sudo):"
+      echo "     curl -fsSL https://deb.nodesource.com/setup_${NODE_MIN_MAJOR}.x | sudo -E bash -"
+      echo "     sudo apt-get install -y nodejs"
+    fi
+    exit 1
+  fi
+
+  # Re-check after the version manager ran.
+  if ! command -v node >/dev/null 2>&1; then
+    NODE_MAJOR=0
+  else
+    NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo 0)"
+  fi
+
+  if [ "$NODE_MAJOR" -lt "$NODE_MIN_MAJOR" ]; then
+    printf '\033[1;31mXX Version manager ran but Node %d+ not active (now: %s).\033[0m\n' \
+      "$NODE_MIN_MAJOR" "${NODE_MAJOR:-not found}"
+    echo "   Complete the upgrade with:  nvm use ${NODE_MIN_MAJOR}  (or fnm use ${NODE_MIN_MAJOR})"
+    echo "   Then re-run:  bash install.sh"
+    exit 1
+  fi
 fi
-say "Node.js $(node -v) found."
+
+say "Node.js $(node -v) ready."
 
 # --- npm install (idempotent; fast when nothing changed) ----------------
 say "Running npm install..."

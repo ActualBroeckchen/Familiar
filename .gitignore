@@ -28,6 +28,11 @@ tomes/.rate-limits.json.tmp
 # Consent-pending tracking for the memorization greenlight flow.
 tomes/.consent-pending.json
 tomes/.consent-pending.json.tmp
+# Village knock tracking — contact attempts from unregistered users/locations.
+tomes/.village-knocks.json
+tomes/.village-knocks.json.tmp
+tomes/.village-location-knocks.json
+tomes/.village-location-knocks.json.tmp
 # User-generated tomes (Session Memories, Familiar's Ponderings, etc.)
 # use UUID filenames. Shipped tomes use human-readable "*-Tome.json".
 tomes/????????-????-????-????-????????????.json
@@ -37,7 +42,7 @@ tomes/????????-????-????-????-????????????.json.tmp
 .pf-install-complete
 settings.json
 settings.json.tmp
-# Village registry local mirror (V1) — canonical copy lives in entity-core.
+# Village registry local mirror (V1) — canonical copy lives in Phylactery.
 village.json
 village.json.tmp
 .pf-backups/

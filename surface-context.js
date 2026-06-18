@@ -121,6 +121,15 @@ function matchPriorsForTask(allPriors, label) {
 
 // ── Hard gates (cheap code, upstream of any judgement) ────────────
 
+// A surfacing-history entry is { at, raised }. Older persisted entries were
+// a bare timestamp number (no raised flag). Normalize both shapes here so the
+// dedup gate reads one consistent shape instead of branching inline.
+function normalizeOfferEntry(entry) {
+  if (typeof entry === 'number') return { at: entry, raised: false };
+  if (entry && typeof entry === 'object') return { at: entry.at, raised: entry.raised === true };
+  return { at: null, raised: false };
+}
+
 export function passesHardGates(task, ctx) {
   const { threat, routinePhaseLabel, surfacingHistory, now, stakesTier } = ctx;
 
@@ -160,12 +169,9 @@ export function passesHardGates(task, ctx) {
   // raised gets the long window. raised false/null (I stayed quiet,
   // or the tag hasn't landed) gets the short one.
   if (stakesTier !== 'external_obligation') {
-    const lastOffer = surfacingHistory?.[task.id];
-    const at = typeof lastOffer === 'number' ? lastOffer : lastOffer?.at;
+    const { at, raised } = normalizeOfferEntry(surfacingHistory?.[task.id]);
     if (typeof at === 'number') {
-      const windowMs = lastOffer?.raised === true
-        ? DEDUP_WINDOW_RAISED_MS
-        : DEDUP_WINDOW_UNRAISED_MS;
+      const windowMs = raised ? DEDUP_WINDOW_RAISED_MS : DEDUP_WINDOW_UNRAISED_MS;
       if (now - at < windowMs) return false;
     }
   }

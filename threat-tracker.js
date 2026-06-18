@@ -1,8 +1,8 @@
 /**
  * Threat-level tracker — persistent decaying scalar.
  *
- * Stores the Familiar's current "how concerned should I be about the
- * user right now" weight. Read paths compute the effective (decayed)
+ * Stores the Familiar's current "how concerned should I be about my
+ * human right now" weight. Read paths compute the effective (decayed)
  * value on the fly, so a paused or restarted system sees the right
  * level when it next reads — no background job needed.
  *

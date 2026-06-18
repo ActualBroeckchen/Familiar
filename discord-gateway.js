@@ -46,6 +46,7 @@ import { recordUserActivity } from './last-activity.js';
 import { recordKnock, recordLocationKnock } from './knocks.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { enqueueOutbox } from './outbox.js';
+import { substituteMacros } from './macros.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOGS_DIR  = path.join(__dirname, 'logs');
@@ -173,7 +174,15 @@ export function isDeferToken(text) {
 
 async function readRevisits() {
   try { return JSON.parse(await fsp.readFile(REVISIT_FILE, 'utf8')); }
-  catch { return []; }
+  catch (err) {
+    // ENOENT is the normal empty-queue case — silent. A parse error means a
+    // corrupt file (e.g. a crash mid-write): pending revisits would vanish
+    // silently, so log it loudly rather than swallow the diagnostic.
+    if (err?.code !== 'ENOENT') {
+      console.warn('[discord] revisits file unreadable — treating queue as empty:', err?.message ?? err);
+    }
+    return [];
+  }
 }
 
 async function writeRevisits(list) {
@@ -216,6 +225,11 @@ async function armRevisitTimer() {
 }
 
 async function fireRevisit(item) {
+  // The gateway may have been torn down between when this timer was set and
+  // when it fired — clearTimeout can't stop a callback already queued on the
+  // event loop. Speaking through a closed/stale gw would post with an invalid
+  // token (or throw). If we're no longer running, stand down silently.
+  if (!gw.running) return;
   // Claim the item. If it's no longer in the queue, a real incoming message
   // (or a re-arm) already superseded this revisit — honour the supersession
   // and stand down rather than speaking from a stale timer closure.
@@ -611,14 +625,6 @@ export function carriedExchange(messages, { currentSpeaker = null, lookback = 5,
     return party;
   }
   return [];
-}
-
-// ── Macro substitution ────────────────────────────────────────────
-
-function substituteMacros(text, settings) {
-  return String(text ?? '')
-    .replaceAll('{{user}}', settings?.userName || 'my human')
-    .replaceAll('{{char}}', settings?.charName || 'the Familiar');
 }
 
 // ── Presence preamble (my own orientation, first person) ─────────
