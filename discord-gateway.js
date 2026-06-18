@@ -47,6 +47,7 @@ import { recordKnock, recordLocationKnock } from './knocks.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { enqueueOutbox } from './outbox.js';
 import { substituteMacros } from './macros.js';
+import { stripLlmTimestamps } from './message-sanitize.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOGS_DIR  = path.join(__dirname, 'logs');
@@ -282,10 +283,13 @@ async function fireRevisit(item) {
   const history = (session.messages ?? [])
     .filter(m => m.role === 'user' || m.role === 'assistant')
     .slice(-HISTORY_LIMIT)
-    .map(m => ({
-      role: m.role,
-      content: m.timestamp ? `[${formatMsgTime(m.timestamp)}] ${m.content}` : m.content,
-    }));
+    .map(m => {
+      const clean = stripLlmTimestamps(m.content);
+      return {
+        role: m.role,
+        content: m.timestamp ? `[${formatMsgTime(m.timestamp)}] ${clean}` : clean,
+      };
+    });
 
   const apiMessages = [
     ...(systemContent ? [{ role: 'system', content: systemContent }] : []),
@@ -901,6 +905,7 @@ async function deliverReply(gw, { rawReply, audienceTag, apiMessages, conn, sett
     else if (reply !== rawReply) console.log(`[discord] outgoing filter rewrote reply (audience=${audienceTag})`);
   }
 
+  reply = stripLlmTimestamps(reply);
   await sendChannelMessage(gw.config.token, channelId, reply);
 
   // Persist the turn. Sessions land in logs/ exactly like web sessions
@@ -1193,10 +1198,13 @@ async function handleTurn(gw, msg, decision) {
   const history = (session.messages ?? [])
     .filter(m => m.role === 'user' || m.role === 'assistant')
     .slice(-HISTORY_LIMIT)
-    .map(m => ({
-      role: m.role,
-      content: m.timestamp ? `[${formatMsgTime(m.timestamp)}] ${m.content}` : m.content,
-    }));
+    .map(m => {
+      const clean = stripLlmTimestamps(m.content);
+      return {
+        role: m.role,
+        content: m.timestamp ? `[${formatMsgTime(m.timestamp)}] ${clean}` : clean,
+      };
+    });
 
   // Non-ward speakers are name-prefixed so multi-party rooms stay
   // legible to me across turns. The ward's own words stay raw, same

@@ -27,6 +27,7 @@ import { enrich } from './thalamus.js';
 import { readSettingsSync, primaryConnectionFrom, getRecentSessionMessages } from './cerebellum.js';
 import { buildTimeAnchorBlock, relativeTime } from './relative-time.js';
 import { substituteMacros } from './macros.js';
+import { stripLlmTimestamps } from './message-sanitize.mjs';
 
 // ── Warm-villager selection ──────────────────────────────────────
 //
@@ -109,7 +110,7 @@ export function parseReachoutDecision(raw) {
   const nextCheckInMs = Number.isFinite(parsed.nextCheckInMs) ? parsed.nextCheckInMs : null;
   if (parsed.action !== 'reach_out') return { action: 'wait', nextCheckInMs };
 
-  const message = typeof parsed.message === 'string' ? parsed.message.trim() : '';
+  const message = typeof parsed.message === 'string' ? stripLlmTimestamps(parsed.message.trim()) : '';
   if (!message) return { action: 'wait', nextCheckInMs };
 
   if (parsed.target === 'villager') {

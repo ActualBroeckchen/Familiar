@@ -1912,7 +1912,10 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
         throw err;
       }
 
-      const { content, pendingMsgs, finalShell } = result;
+      const { content: _rawContent, pendingMsgs, finalShell } = result;
+      // Strip any LLM-echoed timestamps at the commit boundary — once here
+      // keeps state.messages, the copy button, and memorization all clean.
+      const content = stripDisplayTimestamps(_rawContent);
       const trimmed = (content ?? '').trim();
       const usedTools = pendingMsgs.length > 0;
 
@@ -2058,7 +2061,8 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
         throw err;
       }
 
-      const { content, pendingMsgs, timestamp } = result;
+      const { content: _rawContent, pendingMsgs, timestamp } = result;
+      const content = stripDisplayTimestamps(_rawContent);
       const trimmed   = (content ?? '').trim();
       const usedTools = pendingMsgs.length > 0;
 

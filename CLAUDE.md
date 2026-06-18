@@ -332,6 +332,25 @@ Same posture for `node --check`, `bash -n`, syntax probes, `grep -c`, "smoke tes
 This is operational hygiene that compounds. A 30-message session that runs the test suite once per turn for no reason costs an order of magnitude more than a session that runs it twice — both produce
 the same code.
 
+## ⚠️ LLM-generated timestamps must be stripped — only machine timestamps are trustworthy
+
+Chat history is injected with `[HH:MM]` prefixes (Discord) or `⫸HH:MM⫷` prefixes (web chat) derived from each message's canonical `timestamp` field. The LLM sees these and imitates them in its replies — producing output like `[14:35] I was thinking...` that bears a fabricated time. These echoed tokens must be stripped at every outgoing boundary before a message reaches a human or a platform. They must never be stored or re-injected as history, because re-injection causes compounding across turns.
+
+**The rule:** only a timestamp derived from a message's own `timestamp` field (set by the runtime when the message lands) may appear on an outgoing message. Any `[HH:MM]` or `⫸HH:MM⫷` token in the LLM's output text is a hallucination artifact and must be stripped.
+
+**Where stripping is enforced:**
+
+- **Server-side** — `message-sanitize.mjs` exports `stripLlmTimestamps(text)`. Applied:
+  - `discord-gateway.js` `deliverReply()` — on `reply` before `sendChannelMessage` and before writing to the session log.
+  - Both Discord history-assembly `.map()` blocks — `m.content` is stripped before the machine timestamp is prepended, so old contaminated sessions can't compound.
+  - `reachout.js` — on the LLM-generated message before it reaches the outbox or `relayToDiscord`.
+
+- **Browser-side** — `app.js` `stripDisplayTimestamps(content)`. Applied:
+  - Whenever a new assistant message is committed to `state.messages` (streaming and non-streaming paths) — keeps stored history, the copy button, and memorization all clean.
+  - Additionally at render time for display (already existed; this is belt-and-suspenders).
+
+**If you add a new path that delivers LLM output to a human or a platform:** apply `stripLlmTimestamps` (server) or `stripDisplayTimestamps` (browser) before the message leaves the system. This includes new outbox kinds, new relay functions, new channel adapters, and any future LLM response forwarded to a UI. Do not only apply it at render time — the stored content must also be clean.
+
 ## Other repo conventions worth knowing
 
 - **`docs/architecture.md` is part of the working code, not optional reference material.** When component responsibilities, the data flow, the prompt-assembly order, the set of autonomous loops, or the public HTTP surface changes — update `docs/architecture.md` in the **same commit** as the code change. Drift between code and this doc is one of the top drivers of "future-me has no idea why X is wired the way it is" bugs. Read it before any architectural change so the change fits the current shape (or so the rewrite is deliberate). The robust-over-cheap principle applies: don't add a component without recording where it fits, and don't move things without updating the diagram.
