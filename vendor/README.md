@@ -20,10 +20,18 @@ it**, so it MUST be re-applied whenever the pin moves (and re-smoke-tested):
 - **`searx/valkeydb.py` — guard the Unix-only `import pwd`.** `import pwd` is
   Unix-only and crashes module load on Windows (it's in a Valkey connection-error
   path we never hit). Wrap the import in `try/except ImportError` (and guard its
-  single use). Without this, the managed backend cannot boot on Windows.
+  single use). Without this, the managed backend cannot boot on Windows. **Keep the
+  dated `# Modified by Proto-Familiar … (AGPL/GPL §5(a))` notice** at the patch site
+  when re-applying — it satisfies the copyleft change-marking requirement (see
+  [`docs/searxng-license-notes.md`](../docs/searxng-license-notes.md)).
 
 If this list grows, consider converting these into committed `.patch` files
 applied programmatically during vendoring rather than hand-editing.
+
+> **License:** SearXNG is **AGPL-3.0-or-later** (`vendor/searxng/LICENSE`). Proto-Familiar
+> is GPL-3.0 and runs SearXNG at arm's length (separate process, loopback HTTP), so this is a
+> compatible aggregation, not a combined work. Full analysis + obligations:
+> [`docs/searxng-license-notes.md`](../docs/searxng-license-notes.md).
 
 ### Re-vendoring procedure (when bumping the pin)
 

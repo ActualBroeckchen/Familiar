@@ -19,10 +19,17 @@ A valkey DB connect can be tested by::
 """
 
 import os
+# --- Modified by Proto-Familiar, 2026-06-18 (AGPL/GPL §5(a) change notice) ----
+# Guarded the Unix-only `import pwd` so SearXNG's webapp loads on Windows.
+# Upstream imported `pwd` unconditionally, which crashes module import on
+# Windows; the single use (below) is a Valkey connection-error path we never
+# hit. See vendor/README.md and docs/searxng-license-notes.md. Re-apply this
+# patch (with its notice) whenever the SearXNG pin is bumped.
 try:
     import pwd  # Unix-only; not available on Windows
 except ImportError:
-    pwd = None  # proto-familiar: Windows compat patch
+    pwd = None
+# --- end Proto-Familiar modification ------------------------------------------
 import logging
 import warnings
 

@@ -1,7 +1,8 @@
 {
   "name": "proto-familiar",
-  "version": "0.7.8-alpha",
+  "version": "0.7.9-alpha",
   "description": "Lightweight LLM frontend for z.ai, NanoGPT, and Google AI Studio",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "main": "server.js",
   "scripts": {
