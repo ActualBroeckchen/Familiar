@@ -56,6 +56,7 @@ import {
 } from './thalamus.js';
 import { audienceTagFor } from './audience.js';
 import { searchWeb, readWebpage } from './websearch.js';
+import { managedSearxngUrl } from './searxng-service.js';
 import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
 import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta } from './outbox.js';
@@ -2169,11 +2170,19 @@ export const TOOL_EXECUTORS = {
 
   // ── Web access ────────────────────────────────────────────────────
   // Thin delegation to websearch.js, which owns the SSRF guard, the
-  // timeout, and the extraction. Settings (base URL, caps) ride in via
-  // readSettingsSync. These never appear in the tool list unless the
-  // human has opted in (webSearchEnabled) — see composeActiveTools.
-  web_search:   async ({ query } = {}) => searchWeb(query, readSettingsSync()),
-  read_webpage: async ({ url }   = {}) => readWebpage(url, readSettingsSync()),
+  // timeout, and the extraction. These never appear in the tool list
+  // unless the human has opted in (webSearchEnabled) — see composeActiveTools.
+  //
+  // Effective search backend, resolved here at the boundary:
+  //   custom webSearchBaseUrl  ?? managedSearxngUrl()  ?? '' (keyless)
+  // A custom URL means "use my own SearXNG"; otherwise, if the Familiar's
+  // managed SearXNG is up, use it; otherwise the built-in keyless backend.
+  web_search: async ({ query } = {}) => {
+    const s    = readSettingsSync();
+    const base = (s.webSearchBaseUrl && String(s.webSearchBaseUrl).trim()) || managedSearxngUrl() || '';
+    return searchWeb(query, { ...s, webSearchBaseUrl: base });
+  },
+  read_webpage: async ({ url } = {}) => readWebpage(url, readSettingsSync()),
 };
 
 /**

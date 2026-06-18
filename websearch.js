@@ -28,7 +28,6 @@ import { parseHTML } from 'linkedom';
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 
-const DEFAULT_BASE_URL    = 'http://localhost:8080';
 const DEFAULT_MAX_RESULTS = 5;
 const DEFAULT_MAX_CHARS   = 15000;
 const DEFAULT_TIMEOUT_MS  = 9000;
@@ -179,41 +178,109 @@ export async function guardedFetch(rawUrl, {
 }
 
 // ── Search ────────────────────────────────────────────────────────
+// The default backend is in-box and keyless: I scrape DuckDuckGo's HTML
+// results in-process with the same linkedom parser the reader uses. There
+// is nothing for my human to install, start, or configure — they just turn
+// the feature on. A power user who wants a heavier-duty backend can point
+// webSearchBaseUrl at their own SearXNG instance; when it's set I use that
+// instead. Both backends produce the same {title,url,content} rows, which
+// formatResults renders once.
 
-export async function searchWeb(query, settings = {}, { fetchFn = fetch } = {}) {
+const DDG_HTML_ENDPOINT = 'https://html.duckduckgo.com/html/';
+
+export async function searchWeb(query, settings = {}, deps = {}) {
   const q = String(query ?? '').trim();
   if (!q) return 'I need something to search for.';
-
-  const base       = String(settings.webSearchBaseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
   const maxResults = clampInt(settings.webSearchMaxResults, DEFAULT_MAX_RESULTS, 1, 20);
-  const url        = `${base}/search?q=${encodeURIComponent(q)}&format=json`;
 
-  const ctrl  = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
-  let data;
-  try {
-    const res = await fetchFn(url, { signal: ctrl.signal, headers: { 'Accept': 'application/json' } });
-    if (!res.ok) {
-      return `My search came back with an error (HTTP ${res.status}). My SearXNG instance needs JSON output enabled to answer me.`;
-    }
-    data = await res.json();
-  } catch (err) {
-    if (err?.name === 'AbortError') return 'My search timed out before it answered.';
-    return `I couldn't reach my search right now (${err.message}). It runs as a local SearXNG service — it may be down.`;
-  } finally {
-    clearTimeout(timer);
-  }
+  const base = String(settings.webSearchBaseUrl || '').trim();
+  const res  = base
+    ? await searchViaSearxng(q, base, deps)
+    : await searchViaDuckDuckGo(q, deps);
 
-  const rows = Array.isArray(data?.results) ? data.results : [];
-  if (rows.length === 0) return `I searched for "${q}" but nothing came back.`;
+  if (res.error) return res.error;
+  return formatResults(q, res.rows, maxResults);
+}
 
-  const lines = rows.slice(0, maxResults).map((r, i) => {
+function formatResults(q, rows, maxResults) {
+  const picked = (Array.isArray(rows) ? rows : []).slice(0, maxResults);
+  if (picked.length === 0) return `I searched for "${q}" but nothing came back.`;
+  const lines = picked.map((r, i) => {
     const title   = (r?.title || '(untitled)').trim();
     const link    = (r?.url || '(no link)').trim();
     const snippet = (r?.content || '').trim();
     return `${i + 1}. ${title}\n   ${link}${snippet ? `\n   ${snippet}` : ''}`;
   });
   return `Results for "${q}":\n${lines.join('\n')}\n\n(I can open any of these with read_webpage by passing its link.)`;
+}
+
+// In-box default: keyless DuckDuckGo HTML scrape. Goes through the public
+// SSRF guard like any other arbitrary fetch.
+async function searchViaDuckDuckGo(q, { fetchFn = fetch, lookupFn } = {}) {
+  const url = `${DDG_HTML_ENDPOINT}?q=${encodeURIComponent(q)}`;
+  let res;
+  try {
+    res = await guardedFetch(url, { fetchFn, lookupFn });
+  } catch (err) {
+    if (err instanceof WebAccessError) return { error: err.message };
+    if (err?.name === 'AbortError')    return { error: 'My search timed out before it answered.' };
+    return { error: `I couldn't reach the web to search just now (${err.message}).` };
+  }
+  if (!res.ok) return { error: `My search came back with an error (HTTP ${res.status}).` };
+
+  let html;
+  try { html = await res.text(); }
+  catch { return { error: 'My search answered but I couldn\'t read it.' }; }
+
+  try {
+    const { document } = parseHTML(html);
+    const rows = [];
+    for (const block of document.querySelectorAll('.result')) {
+      if (block.classList?.contains('result--ad')) continue;
+      const a = block.querySelector('.result__a');
+      if (!a) continue;
+      const title = (a.textContent || '').trim();
+      const link  = ddgRealUrl(a.getAttribute('href') || '');
+      if (!title || !link) continue;
+      const snip  = block.querySelector('.result__snippet');
+      rows.push({ title, url: link, content: snip ? (snip.textContent || '').trim() : '' });
+    }
+    return { rows };
+  } catch (err) {
+    return { error: `I searched but couldn't make sense of the results (${err.message}).` };
+  }
+}
+
+// Power-user opt-in: a self-hosted SearXNG JSON API. Loopback is allowed
+// here (it's the human's own service), so this does NOT route through the
+// public-only guard.
+async function searchViaSearxng(q, base, { fetchFn = fetch } = {}) {
+  const url   = `${base.replace(/\/+$/, '')}/search?q=${encodeURIComponent(q)}&format=json`;
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+  try {
+    const res = await fetchFn(url, { signal: ctrl.signal, headers: { 'Accept': 'application/json' } });
+    if (!res.ok) return { error: `My search came back with an error (HTTP ${res.status}). My SearXNG instance needs JSON output enabled.` };
+    const data = await res.json();
+    return { rows: Array.isArray(data?.results) ? data.results : [] };
+  } catch (err) {
+    if (err?.name === 'AbortError') return { error: 'My search timed out before it answered.' };
+    return { error: `I couldn't reach my SearXNG instance (${err.message}). It may be down.` };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// DuckDuckGo result links are redirect URLs (//duckduckgo.com/l/?uddg=…).
+// Pull the real target back out.
+function ddgRealUrl(href) {
+  try {
+    const u    = new URL(href, 'https://duckduckgo.com');
+    const uddg = u.searchParams.get('uddg');
+    return uddg || u.href;
+  } catch {
+    return href;
+  }
 }
 
 // ── Read ──────────────────────────────────────────────────────────

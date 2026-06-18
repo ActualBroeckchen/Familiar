@@ -283,10 +283,10 @@
               <label for="web-search-enabled">Web search &amp; read</label>
               <input type="checkbox" id="web-search-enabled">
             </div>
-            <p class="field-hint">Adds <code>web_search</code> + <code>read_webpage</code>. Needs a local <a href="https://docs.searxng.org/" target="_blank" rel="noopener">SearXNG</a> instance with JSON output enabled — see <code>docs/websearch-setup.md</code>.</p>
+            <p class="field-hint">Adds <code>web_search</code> + <code>read_webpage</code>. Works out of the box — nothing to install. Just turn it on.</p>
             <div class="field">
-              <label for="web-search-base-url">SearXNG base URL</label>
-              <input type="text" id="web-search-base-url" placeholder="http://localhost:8080" spellcheck="false">
+              <label for="web-search-base-url">Custom search backend <span class="label-hint">(optional, advanced)</span></label>
+              <input type="text" id="web-search-base-url" placeholder="(blank = built-in search) e.g. http://localhost:8080 for your own SearXNG" spellcheck="false">
             </div>
             <div class="field-row">
               <label for="web-search-max-results">Search results to keep</label>

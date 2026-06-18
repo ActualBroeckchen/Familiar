@@ -171,9 +171,9 @@ const state = {
   // ── Tool calling ──────────────────────────────────────────
   toolsEnabled:      true,   // whether to send tools array with each request
   customTools:       '',     // JSON array string of user-defined tool definitions
-  // ── Web search (opt-in; needs a local SearXNG instance) ──────
+  // ── Web search (opt-in; works in-box, no setup) ─────────────
   webSearchEnabled:    false,
-  webSearchBaseUrl:    'http://localhost:8080',
+  webSearchBaseUrl:    '',     // blank = built-in keyless search; set to use your own SearXNG
   webSearchMaxResults: 5,
   webSearchMaxChars:   15000,
   // ── Topics & tomes (lorebook) ───────────────────────────
@@ -2241,7 +2241,7 @@ function readSettingsFromUI() {
   const wsEnabledEl = $('web-search-enabled');
   if (wsEnabledEl) state.webSearchEnabled = wsEnabledEl.checked;
   const wsBaseEl = $('web-search-base-url');
-  if (wsBaseEl) state.webSearchBaseUrl = wsBaseEl.value.trim() || 'http://localhost:8080';
+  if (wsBaseEl) state.webSearchBaseUrl = wsBaseEl.value.trim(); // blank = built-in search
   const wsResEl = $('web-search-max-results');
   if (wsResEl) state.webSearchMaxResults = Math.min(20, Math.max(1, parseInt(wsResEl.value, 10) || 5));
   const wsCharsEl = $('web-search-max-chars');
@@ -2307,7 +2307,7 @@ function writeSettingsToUI() {
   setIfNotFocused($('tools-enabled'),      'checked', state.toolsEnabled ?? true);
   setIfNotFocused($('custom-tools'),       'value',   state.customTools ?? '');
   setIfNotFocused($('web-search-enabled'),     'checked', state.webSearchEnabled === true);
-  setIfNotFocused($('web-search-base-url'),    'value',   state.webSearchBaseUrl ?? 'http://localhost:8080');
+  setIfNotFocused($('web-search-base-url'),    'value',   state.webSearchBaseUrl ?? '');
   setIfNotFocused($('web-search-max-results'), 'value',   state.webSearchMaxResults ?? 5);
   setIfNotFocused($('web-search-max-chars'),   'value',   state.webSearchMaxChars ?? 15000);
   setIfNotFocused($('user-discord-webhook'), 'value', state.userDiscordWebhook ?? '');

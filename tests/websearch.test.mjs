@@ -76,29 +76,61 @@ test('guardedFetch returns the final response after a permitted redirect', async
   assert.equal(res.url, 'http://example.com/final');
 });
 
-// ── searchWeb: shape + graceful failure ──────────────────────────
-test('searchWeb formats top results and caps to webSearchMaxResults', async () => {
-  const fetchFn = async () => ({
+// ── searchWeb: built-in DuckDuckGo default ───────────────────────
+const DDG_HTML = `
+  <div class="result results_links_deep">
+    <div class="links_main">
+      <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fa&rut=z">Result A</a>
+      <a class="result__snippet" href="#">snippet a</a>
+    </div>
+  </div>
+  <div class="result results_links_deep">
+    <div class="links_main">
+      <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fb">Result B</a>
+      <a class="result__snippet">snippet b</a>
+    </div>
+  </div>
+  <div class="result result--ad">
+    <div class="links_main"><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fad.test">An ad</a></div>
+  </div>`;
+
+test('searchWeb (default backend) scrapes DuckDuckGo, decodes uddg links, skips ads, caps results', async () => {
+  const lookupFn = async () => [{ address: '93.184.216.34' }];
+  const fetchFn  = async (href) => ({ ok: true, url: href, status: 200, headers: { get: () => null }, text: async () => DDG_HTML });
+  const out = await searchWeb('cats', { webSearchMaxResults: 1 }, { fetchFn, lookupFn });
+  assert.match(out, /Results for "cats"/);
+  assert.match(out, /1\. Result A/);
+  assert.match(out, /https:\/\/example\.com\/a/);   // uddg redirect decoded
+  assert.doesNotMatch(out, /2\. Result B/);          // capped at 1
+  assert.doesNotMatch(out, /An ad/);                 // result--ad skipped
+  assert.match(out, /read_webpage/);
+});
+
+test('searchWeb (default backend) degrades calmly when the web is unreachable', async () => {
+  const lookupFn = async () => [{ address: '93.184.216.34' }];
+  const out = await searchWeb('x', {}, { lookupFn, fetchFn: async () => { throw new Error('ENOTFOUND'); } });
+  assert.match(out, /couldn't reach the web/);
+});
+
+// ── searchWeb: opt-in SearXNG backend ────────────────────────────
+test('searchWeb uses SearXNG JSON when a custom base URL is set', async () => {
+  let hit = '';
+  const fetchFn = async (url) => { hit = url; return {
     ok: true,
     json: async () => ({ results: [
       { title: 'A', url: 'http://a.test', content: 'snippet a' },
       { title: 'B', url: 'http://b.test', content: 'snippet b' },
-      { title: 'C', url: 'http://c.test', content: 'snippet c' },
     ] }),
-  });
-  const out = await searchWeb('cats', { webSearchMaxResults: 2 }, { fetchFn });
-  assert.match(out, /Results for "cats"/);
+  }; };
+  const out = await searchWeb('cats', { webSearchBaseUrl: 'http://localhost:8080', webSearchMaxResults: 1 }, { fetchFn });
+  assert.match(hit, /^http:\/\/localhost:8080\/search\?q=cats&format=json$/);
   assert.match(out, /1\. A/);
-  assert.match(out, /2\. B/);
-  assert.doesNotMatch(out, /3\. C/);
-  assert.match(out, /read_webpage/);
+  assert.doesNotMatch(out, /2\. B/);
 });
 
-test('searchWeb degrades calmly when the instance errors or is unreachable', async () => {
-  const errOut = await searchWeb('x', {}, { fetchFn: async () => ({ ok: false, status: 403 }) });
-  assert.match(errOut, /HTTP 403/);
-  const downOut = await searchWeb('x', {}, { fetchFn: async () => { throw new Error('ECONNREFUSED'); } });
-  assert.match(downOut, /couldn't reach my search/);
+test('searchWeb (SearXNG backend) degrades calmly on error', async () => {
+  const out = await searchWeb('x', { webSearchBaseUrl: 'http://localhost:8080' }, { fetchFn: async () => ({ ok: false, status: 403 }) });
+  assert.match(out, /HTTP 403/);
 });
 
 test('searchWeb needs a query', async () => {

@@ -1,62 +1,24 @@
-# Web search & read — setup
+# Web search & read
 
 Since **0.7.0-alpha** the Familiar can search the web and read pages, via two tools —
-`web_search` and `read_webpage`. Both are **opt-in** and need a local, self-hosted
-[SearXNG](https://docs.searxng.org/) instance you run yourself. Nothing is enabled, and no
-egress happens, until you turn it on in Settings.
+`web_search` and `read_webpage`.
 
-## 1. Run SearXNG
+## It works out of the box
 
-SearXNG is lightweight and runs well in Docker. A minimal start:
+There is **nothing to install, start, or configure.** In the sidebar **Tools** section, turn on
+**Web search & read** — that's the whole setup. The Familiar searches using a built-in, keyless
+backend (it reads DuckDuckGo results directly), so the moment the box is checked, it can search.
 
-```bash
-docker run --rm -d \
-  --name searxng \
-  -p 8080:8080 \
-  -v "$PWD/searxng:/etc/searxng" \
-  searxng/searxng
-```
+Optional knobs in the same section:
 
-That writes a default config into `./searxng/` on first boot. Edit `./searxng/settings.yml` so
-the **JSON API** is on (it is off by default) and a `secret_key` is set (SearXNG refuses to
-serve the API without one):
-
-```yaml
-search:
-  formats:
-    - html
-    - json          # mandatory — the Familiar reads results as JSON
-
-server:
-  secret_key: "change-me-to-a-long-random-string"
-```
-
-Restart the container after editing (`docker restart searxng`). Confirm the API answers:
-
-```bash
-curl "http://localhost:8080/search?q=test&format=json"
-```
-
-You should get JSON with a `results` array. If you get HTML or a 403, the `json` format or the
-`secret_key` is missing.
-
-> SearXNG's port (8080) is unrelated to Proto-Familiar's own port (8742) — they don't clash.
-
-## 2. Enable it in Proto-Familiar
-
-In the sidebar **Tools** section:
-
-- **Web search & read** — turn on. Until this is checked, `web_search` / `read_webpage` are not
-  even advertised to the Familiar.
-- **SearXNG base URL** — defaults to `http://localhost:8080`; change if you run it elsewhere.
 - **Search results to keep** — how many rows `web_search` returns (default 5).
 - **Max page chars read** — caps the markdown `read_webpage` returns (default 15000).
 
-These settings sync across your devices like the rest of your preferences.
+These sync across your devices like the rest of your preferences.
 
-## 3. What the Familiar can do with it
+## What the Familiar can do with it
 
-- **`web_search`** — runs a query through SearXNG and gets back titles, snippets, and links.
+- **`web_search`** — runs a query and gets back titles, snippets, and links.
 - **`read_webpage`** — opens one of those links, strips it down to clean markdown
   (`linkedom` + `@mozilla/readability` + `turndown`), and reads it. The content is stamped with
   its source URL and the date read, and framed as untrusted external data.
@@ -66,9 +28,9 @@ These settings sync across your devices like the rest of your preferences.
 
 ## Safety
 
-`read_webpage` will only open **public** http/https addresses. It refuses loopback, private-LAN,
-link-local, and cloud-metadata targets (and validates the resolved IP, not just the hostname, so
-a name pointing at a private address is caught too), follows redirects manually re-checking every
+`read_webpage` only opens **public** http/https addresses. It refuses loopback, private-LAN,
+link-local, and cloud-metadata targets (validating the resolved IP, not just the hostname, so a
+name pointing at a private address is caught too), follows redirects manually re-checking every
 hop, and times out on slow hosts. This keeps a poisoned search result from steering the Familiar
 at something internal.
 
@@ -77,3 +39,34 @@ at something internal.
 - Uncheck **Web search & read** in Settings, or
 - Set the hard env kill-switch before launch: `PROTO_FAMILIAR_WEBSEARCH_DISABLED=1` — forces both
   tools off regardless of the toggle.
+
+---
+
+## Advanced: use your own SearXNG (optional)
+
+The built-in search is keyless and convenient, but a shared keyless backend can rate-limit under
+heavy use. If you want a heavier-duty, fully-controlled backend, you can run your own
+[SearXNG](https://docs.searxng.org/) and point Proto-Familiar at it — **this is entirely
+optional and most people never need it.**
+
+1. Run SearXNG (Docker is easiest):
+   ```bash
+   docker run --rm -d --name searxng -p 8080:8080 \
+     -v "$PWD/searxng:/etc/searxng" searxng/searxng
+   ```
+2. Enable the JSON API in `./searxng/settings.yml` (off by default) and set a `secret_key`
+   (SearXNG won't serve the API without one):
+   ```yaml
+   search:
+     formats:
+       - html
+       - json          # mandatory — the Familiar reads results as JSON
+   server:
+     secret_key: "change-me-to-a-long-random-string"
+   ```
+   Restart (`docker restart searxng`) and confirm:
+   ```bash
+   curl "http://localhost:8080/search?q=test&format=json"
+   ```
+3. In Settings → Tools, put the URL in **Custom search backend** (e.g. `http://localhost:8080`).
+   Leave it blank to use the built-in search.
