@@ -86,10 +86,11 @@ Read these first. They are constraints you build *inside of*, not background rea
     base URL in settings)          external content, stamped with source URL)
                                           │
                                           ▼
-                                 the Familiar may keep the gist
-                                 via the EXISTING save_to_tome —
-                                 provenance rides along, so a later
-                                 recall answers without re-fetching
+                                 in-session: stays in history, re-accessible
+                                 + prompt-cacheable, no re-fetch needed.
+                                 across sessions: the Familiar may keep the
+                                 gist via the EXISTING save_to_tome —
+                                 provenance rides along so it survives.
 ```
 
 - **No Discord exposure.** Discord turns run no tools; only `/api/chat` composes the tool
@@ -220,9 +221,9 @@ Thin. The definitions and delegating executors only.
    - `web_search` — *"I reach for this when my human needs something current that my own memory
      doesn't hold — it gives me back a handful of titles, snippets, and links I can then read."*
    - `read_webpage` — *"I read a page I found while searching, pulled down to clean markdown so
-     I can actually take it in. I pass the exact URL a search handed me. When something on the
-     page is worth keeping, I save the gist to a tome so I can recall it later instead of
-     fetching it again."*
+     I can actually take it in. I pass the exact URL a search handed me. What I read stays with
+     me for the rest of this conversation anyway — but when something is worth keeping past it, I
+     save the gist to a tome so it's still mine in the next session."*
    - Keep parameter schemas as in the proposal (`query` / `url`, both required).
 2. **`TOOL_EXECUTORS`** — two `(args, ctx)` entries that `await` into `websearch.js` and return
    a string. They `try/catch` and return a calm first-person failure (the no-throw contract).
@@ -236,9 +237,23 @@ Thin. The definitions and delegating executors only.
 
 ## 6. Pillar E — keeping what's worth keeping (gist persistence)
 
-The Familiar shouldn't have to re-fetch a page it already understood. After a `read_webpage`,
-it can persist the gist so a later question is answered from memory, and only re-read when it
-needs freshness. This is a planned part of the feature, not a someday-maybe.
+**First, what does NOT need solving.** A `read_webpage` result already persists in the live
+session: the tool round is pushed into `state.messages` (`public/app.js` — both the streaming
+and non-streaming paths), saved to `localStorage`, and re-sent on every subsequent turn
+(`state.messages.map(toApiMessage)`). So for the rest of the session the page content is fully
+re-accessible **without re-fetching**, and it sits as a stable prefix the provider can
+prompt-cache. *Within-session recall is free; do not build anything for it.*
+
+The cost that buys: each read sits in history at up to `webSearchMaxChars` and is re-sent every
+turn for the remainder of the session. Caching softens the token bill but the context window is
+still consumed — which is exactly what the `webSearchMaxChars` cap bounds. No trimming logic in
+this milestone; the cap is the control.
+
+**What Pillar E is actually for: crossing the session boundary.** Session history is
+per-session — the next conversation starts fresh, and only Phylactery/tomes carry over. The
+memorization loop already auto-summarizes ended sessions, but lossily. Pillar E is the Familiar
+*deliberately* keeping a provenance-stamped gist so a specific thing it read survives into
+future sessions intact — distinct from, and better than, the automatic summary.
 
 The robust shape here is **reuse, not a new mechanism**:
 
@@ -248,15 +263,16 @@ The robust shape here is **reuse, not a new mechanism**:
    has. *(This is the no-copy-paste / one-home-for-state rule.)*
 
 2. **No new LLM call.** By the time the Familiar decides to keep something, the page content is
-   already in its context from `read_webpage`, in the same tool round. Deciding to save and
-   calling `save_to_tome` rides that existing turn — Pillar E adds **zero** request volume.
+   already in its context — from `read_webpage` this turn, or from session history on a later
+   turn. Deciding to save and calling `save_to_tome` rides a turn that's already happening —
+   Pillar E adds **zero** request volume.
 
-3. **Provenance makes recall trustworthy and re-fetch avoidable.** Because `readWebpage` stamps
+3. **Provenance makes a cross-session recall trustworthy.** Because `readWebpage` stamps
    `Source: <url> · retrieved <date>` onto its return (Pillar C, 4c), whatever the Familiar
-   saves carries the URL and the date it was read. A future tome scan surfaces the saved gist
-   with its source, so the Familiar can answer directly — or, seeing the retrieval date is old,
-   choose to re-read for freshness. The provenance is what turns a saved blob into something it
-   can reason about later.
+   saves carries the URL and the date it was read. A future-session tome scan surfaces the saved
+   gist with its source, so the Familiar can answer directly — or, seeing the retrieval date is
+   old, choose to re-read for freshness. The provenance is what turns a saved blob into
+   something it can reason about in a session that no longer holds the original page.
 
 4. **Saving is the Familiar's judgement, not automatic.** Auto-saving every page read would
    bloat memory with things that didn't matter, and *what's worth keeping* is interpretation,
@@ -304,8 +320,11 @@ URL rides in on the stamped return. Nothing new is required to make this usable.
       a usable URL, as a compact string.
 - [ ] `read_webpage` on a real article returns clean truncated markdown, framed as untrusted,
       with a `Source: <url> · retrieved <date>` provenance line.
+- [ ] A `read_webpage` result persists in session history and is re-accessible on later turns
+      without re-fetching (no special work — verify the tool round lands in `state.messages`).
 - [ ] After a `read_webpage`, the Familiar can keep the gist via `save_to_tome` (no new tool,
-      no extra LLM call) and the saved entry carries the source URL; a later recall surfaces it.
+      no extra LLM call) and the saved entry carries the source URL; a *next-session* recall
+      surfaces it.
 - [ ] `read_webpage` on `http://127.0.0.1:8742/…`, `http://169.254.169.254/…`, `file:///…`,
       and a public URL that **redirects** to a private one are all refused by the guard, and the
       refusal renders as a calm first-person string — never a thrown 500.
