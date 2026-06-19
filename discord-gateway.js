@@ -842,7 +842,11 @@ async function discordRest(token, route, { method = 'GET', body } = {}) {
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const text = await resp.text();
-  if (!resp.ok) throw new Error(`discord ${method} ${route} → ${resp.status}: ${text.slice(0, 200)}`);
+  if (!resp.ok) {
+    const err = new Error(`discord ${method} ${route} → ${resp.status}: ${text.slice(0, 200)}`);
+    err.status = resp.status;   // let callers distinguish fatal auth (401/403) from transient
+    throw err;
+  }
   return text ? JSON.parse(text) : null;
 }
 
@@ -1471,7 +1475,27 @@ async function connect() {
   let url = gw.sessionId && gw.resumeUrl ? gw.resumeUrl : null;
   const resuming = !!url;
   if (!url) {
-    const info = await discordRest(gw.config.token, '/gateway/bot');
+    let info;
+    try {
+      info = await discordRest(gw.config.token, '/gateway/bot');
+    } catch (err) {
+      // A 401/403 on the REST handshake means Discord refused the bot token
+      // outright — that's FATAL, not a transient blip, so stop the silent
+      // retry loop and surface a clear, actionable reason. (WS-level auth
+      // failures are handled in onclose via FATAL_CLOSE_CODES; this is the
+      // same class of failure one step earlier, at the REST stage.) The
+      // supervisor clears `fatal` when the token changes, so a fresh token —
+      // or the Apply button — resumes automatically.
+      if (err?.status === 401 || err?.status === 403) {
+        gw.fatal = true;
+        gw.connected = false;
+        gw.status.connected = false;
+        gw.status.lastError = `Discord rejected the bot token (HTTP ${err.status}) — it's invalid or was reset. Paste a fresh token and click Apply.`;
+        console.error(`[discord] FATAL: bot token rejected (HTTP ${err.status}). Reset it in the Discord Developer Portal, update Settings, and Apply. Gateway stays down until the token changes.`);
+        return;
+      }
+      throw err; // transient (429 / 5xx / network) — let the normal reconnect handle it
+    }
     url = info?.url;
     if (!url) throw new Error('gateway URL missing from /gateway/bot');
   }
@@ -1568,6 +1592,18 @@ function teardown() {
   gw.reconnectAttempts = 0;
 }
 
+// Kick off a fresh connection attempt. Shared by the supervisor tick and the
+// Apply button so the connect-and-handle-failure shape lives in one place.
+function beginConnect() {
+  gw.running = true;
+  gw.status.running = true;
+  connect().catch(err => {
+    console.error('[discord] connect failed:', err?.message ?? err);
+    gw.status.lastError = err?.message ?? String(err);
+    scheduleReconnect();
+  });
+}
+
 function superviseTick() {
   try {
     const want = desiredConfig();
@@ -1585,18 +1621,38 @@ function superviseTick() {
       teardown();
     }
     if (tokenChanged) gw.fatal = false; // new credentials → try again
-    if (!gw.running) {
-      gw.running = true;
-      gw.status.running = true;
-      connect().catch(err => {
-        console.error('[discord] connect failed:', err?.message ?? err);
-        gw.status.lastError = err?.message ?? String(err);
-        scheduleReconnect();
-      });
-    }
+    if (!gw.running && !gw.fatal) beginConnect();
   } catch (err) {
     console.error('[discord] supervisor tick failed:', err?.message ?? err);
   }
+}
+
+/**
+ * Apply the current Discord settings and (re)connect immediately — the
+ * backend for the UI's "Apply" button. Clears any fatal state (e.g. after
+ * pasting a fresh token) and does a clean restart, so the ward never has to
+ * wait up to 30s for the next supervisor tick or reload the page. Returns the
+ * resulting status. Never throws.
+ */
+export function applyDiscordSettings() {
+  try {
+    if (process.env.PROTO_FAMILIAR_DISCORD_DISABLED === '1') return getDiscordStatus();
+    gw.fatal = false;
+    gw.reconnectAttempts = 0;
+    if (gw.reconnectTimer) { clearTimeout(gw.reconnectTimer); gw.reconnectTimer = null; }
+    const want = desiredConfig();
+    if (!want) {
+      if (gw.running) { console.log('[discord] apply: disabled in settings — gateway down'); teardown(); }
+      return getDiscordStatus();
+    }
+    if (gw.running) teardown();  // clean restart so a fresh token always reconnects
+    gw.config = want;
+    console.log('[discord] apply: (re)connecting now with the latest settings');
+    beginConnect();
+  } catch (err) {
+    console.error('[discord] apply failed:', err?.message ?? err);
+  }
+  return getDiscordStatus();
 }
 
 /**
@@ -1629,6 +1685,7 @@ export function getDiscordStatus() {
   // to connect. nodeVersion makes that warning concrete and actionable.
   return {
     ...gw.status,
+    fatal: gw.fatal,   // true → don't show "starting/reconnecting"; the token/intents need fixing
     webSocketSupported: webSocketCtor() !== null,
     nodeVersion: process.version,
   };

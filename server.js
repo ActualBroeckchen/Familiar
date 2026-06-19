@@ -91,7 +91,7 @@ import {
 } from './village.js';
 import { resolveAudience, audienceTagFor, WARD_PRIVATE } from './audience.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
-import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord } from './discord-gateway.js';
+import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings } from './discord-gateway.js';
 import { startSearxngSupervisor, stopManagedSearxng } from './searxng-service.js';
 import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock } from './knocks.js';
 
@@ -2244,6 +2244,13 @@ const villageError = (res, err) => {
 // error, and turn/failure counters without reading server logs.
 app.get('/api/discord/status', (_req, res) => {
   res.json(getDiscordStatus());
+});
+
+// POST /api/discord/apply — apply the saved Discord settings and (re)connect
+// immediately (the UI's "Apply" button), so the ward doesn't wait for the 30s
+// supervisor tick or reload the page. Returns the resulting gateway status.
+app.post('/api/discord/apply', (_req, res) => {
+  res.json(applyDiscordSettings());
 });
 
 // Knock list (V4.x) — contact attempts from unregistered people,

@@ -231,7 +231,8 @@ ack/cancel — see `memorization.js`.
 - `POST /api/village/villagers` + `PATCH /api/village/villagers/:id` + `DELETE /api/village/villagers/:id` — saving a villager auto-dismisses knocks matching their aliases
 - `POST|PATCH|DELETE /api/village/locations` — keyed by body `key` (location keys contain `:`)
 - `GET /api/village/knocks` + `DELETE /api/village/knocks/:platform/:id` — pending contact attempts from unregistered people (captured by the Discord gateway; identity metadata only, never message content)
-- `GET /api/discord/status` — gateway connection state, bot identity, turn/failure counters, plus `webSocketSupported`/`nodeVersion` so the Settings UI can warn proactively when the runtime is too old (Node < 22) to open the gateway
+- `GET /api/discord/status` — gateway connection state, bot identity, turn/failure counters, a `fatal` flag (token/intents rejected — the UI shows red instead of a perpetual "reconnecting"), plus `webSocketSupported`/`nodeVersion` so the Settings UI can warn proactively when the runtime is too old (Node < 22) to open the gateway
+- `POST /api/discord/apply` — apply the saved Discord settings and (re)connect immediately (the Settings "Apply & connect" button), clearing any fatal state; returns the resulting status. Saves the ward waiting for the 30s supervisor tick or reloading the page
 
 **Threat surface:**
 - `GET /api/threat` — current tier + weight + last_touched + disabled
@@ -503,8 +504,12 @@ supervisor tick (30s) compares Settings (`discordEnabled`,
 `discordBotToken`) against the live connection and starts / stops /
 restarts to match — no server restart needed. The gateway itself is a
 native-WebSocket client (Node ≥ 22) implementing identify / heartbeat /
-resume / backoff; fatal close codes (bad token, missing privileged
-intents) park it until Settings change. Inbound `MESSAGE_CREATE` flows
+resume / backoff. Fatal states park it until Settings change (cleared on
+token change or via `applyDiscordSettings()`): WS-level fatal close codes
+(missing privileged intents) **and** a `401`/`403` on the REST `/gateway/bot`
+handshake (rejected/reset token) — the latter sets `fatal` instead of
+looping silently, so the UI surfaces "token rejected" rather than a green
+light over an endless retry. Inbound `MESSAGE_CREATE` flows
 through `classifyMessage()` (pure, tested): ward DM → ward-private
 turn; registered-villager DM → gated turn; guild → governed by the
 location's **presence mode** (Village V8): `strict` (default — reply

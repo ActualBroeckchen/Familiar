@@ -421,6 +421,10 @@
             <p class="field-hint">Your Familiar joins Discord as this bot: it answers your DMs with full context, answers DMs from registered Villagers with only what their category grants, and replies in server channels <em>only when @-mentioned</em> — with the room's assigned trust ceiling applied (unassigned rooms are treated as Strangers). Unregistered users' DMs are ignored.</p>
             <p class="field-hint"><strong>Setup:</strong> Developer Portal → your application → Bot → enable the <em>Message Content</em> privileged intent, copy the token, invite the bot to your server. Your user ID: Discord Settings → Advanced → Developer Mode, then right-click yourself → Copy User ID.</p>
             <p class="field-hint">All Discord conversations land in Session logs, same as web chats — nothing is hidden from you. Hard off-switch: <code>PROTO_FAMILIAR_DISCORD_DISABLED=1</code>.</p>
+            <div class="field-actions" style="margin-top: 6px">
+              <button id="discord-apply" class="btn-secondary">⟳ Apply &amp; connect</button>
+            </div>
+            <p class="field-hint">After entering your token and ticking the box, press <strong>Apply &amp; connect</strong> — no page reload needed.</p>
             <div id="discord-status" class="field-hint" style="margin-top: 6px"></div>
           </div>
         </div>
