@@ -94,8 +94,9 @@ canonical self. Phase 3 stops *new* mis-filing; Phase 4 drains the *backlog*.
   long-term memories go through the **existing** greenlight; the Familiar's own `self` facts are
   its own call (no human consent needed for its own identity).
 
-- **D — tome tidy.** After a successful route, mark the entry graduated. Decide hard-delete vs
-  keep-as-pointer (Open knob 2). A failed/partial route leaves the entry untouched for retry.
+- **D — tome tidy.** After a *confirmed* route, tidy per `tomeGraduationTidy` — `delete` removes
+  the entry; `pointer` leaves a breadcrumb. Never tidy on an unconfirmed write; a failed/partial
+  route leaves the entry untouched for retry.
 
 - **E — controls.** Settings toggle + `PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1`; decisions
   logged; ward-facing note (like Pillar H) so the human can see what was filed where.
@@ -109,17 +110,21 @@ canonical self. Phase 3 stops *new* mis-filing; Phase 4 drains the *backlog*.
   mis-files into the canonical self).
 - Never delete the only copy of a fact on a write that hasn't confirmed success.
 
-## 4. Open knobs (decide before build)
+## 4. Decisions (settled)
 
-1. **Where it rides.** (a) Its own slow Proto-Familiar-side loop with a self-cool-down
-   *(recommended — tomes are PF-local; cleanest separation; mirrors the loop pattern)*; (b) folded
-   into the memorization worker; (c) triggered from the Phylactery consolidation pass. *(a) keeps
-   it independent and off the chat path.*
-2. **Tome-tidy semantics.** (a) Mark graduated + keep a slim pointer entry so the keyword trigger
-   still resolves to "this now lives in <home>" *(recommended — nothing lost, recall still works)*;
-   (b) hard-delete the graduated entry. 
-3. **Scope aggressiveness.** Only graduate when the LLM is confident it's a durable fact, or also
-   sweep borderline lore? *(Recommended: confident-only; let the rest stay.)*
+1. **Where it rides — its own slow Proto-Familiar-side loop** with a self-set cool-down (mirrors
+   the reminders / silence-triage loop pattern). Independent, off the chat path; tomes are
+   PF-local so it stays PF-side.
+2. **Tome tidy — configurable via `tomeGraduationTidy`:**
+   - `delete` — remove the graduated entry outright. The fact now lives in Phylactery, so nothing
+     is lost; this is the **declutter mode** for installs whose tomes have piled up.
+   - `pointer` *(default)* — replace the entry with a slim "this now lives in &lt;home&gt;"
+     breadcrumb, so a keyword trigger still resolves.
+   Either way, the tome entry is touched **only after** the route to Phylactery is confirmed — a
+   failed/partial route leaves it intact to retry.
+3. **Scope — confident durable facts only.** When the LLM isn't sure a tome entry is a durable
+   fact with a clear home, it **stays a tome**. Borderline lore is left alone (false-negative is
+   cheap; mis-filing into the canonical self is not).
 
 ## 5. Acceptance criteria
 
@@ -127,6 +132,8 @@ canonical self. Phase 3 stops *new* mis-filing; Phase 4 drains the *backlog*.
       routed to its right home (identity + graph) and the tome entry is tidied — no human action.
 - [ ] A fact already held in Phylactery is **not** duplicated — the entry is tidied, nothing
       re-written.
+- [ ] `tomeGraduationTidy='delete'` removes the graduated entry; `='pointer'` leaves a breadcrumb;
+      both happen only after a confirmed route, never before.
 - [ ] Ponderings / Session Memories / runtime tomes are never touched.
 - [ ] A fact the LLM can't confidently place **stays a tome**.
 - [ ] Ward long-term memory routes through the existing greenlight; the Familiar's own `self`
@@ -143,6 +150,6 @@ canonical self. Phase 3 stops *new* mis-filing; Phase 4 drains the *backlog*.
 | `tomes` entry shape | Add `graduationReviewedAt` / a graduated-pointer marker (via the existing `modifyTomeFile`). |
 | `cerebellum.js` / `thalamus.js` | Reuse existing wrappers; possibly a small helper for the batched judgment prompt (reusing the Phase 3 rubric text). |
 | `server.js` | Boot the loop after the others; tear down in the shutdown handler. |
-| `public/app.js` + `index.html` | Settings toggle (+ `SERVER_SYNCED_KEYS`). |
+| `public/app.js` + `index.html` | Settings: enable toggle + `tomeGraduationTidy` (`delete` / `pointer`), both added to `SERVER_SYNCED_KEYS`. |
 | `docs/architecture.md` | Record the new loop (the autonomous-loops set). |
 | `tests/` | Candidate gate (eligible/excluded tomes, reviewed-marker), dedup-skips-duplicate, stays-tome-on-low-confidence, failed-route-leaves-entry. |
