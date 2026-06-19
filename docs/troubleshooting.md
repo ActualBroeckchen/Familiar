@@ -390,6 +390,43 @@ the reconnect loop repeatedly:
 
 ---
 
+## Discord presence
+
+### The bot is offline in Discord (won't reply, doesn't see my DMs)
+
+**First stop: the Discord presence panel in Settings tells you why.** Open
+Settings → **Discord presence** and read the status line:
+
+- **🔴 "Discord rejected the bot token …"** — the token is invalid or was
+  reset on Discord's side. This is the most common cause. A token that
+  *used* to work and suddenly fails was almost certainly reset (manually, or
+  by Discord after a leak). **Fix:** Discord Developer Portal → your app →
+  **Bot** → **Reset Token** → copy the new token (make sure it's the *Bot
+  Token*, not the Client Secret, Public Key, or Application ID — pasting one
+  of those is the #1 cause of a `401`). Paste it into the **Bot token** field,
+  make sure **Enable Discord presence** is ticked, and press **⟳ Apply &
+  connect**. It should flip to **🟢 Connected as …** within a few seconds.
+- **🟡 "Starting / reconnecting…"** — a transient network/Discord hiccup; it
+  retries with backoff. If it never settles, check your internet and that
+  the bot's **Message Content** privileged intent is enabled in the portal.
+- **⚪ "Not running"** — Discord presence is off, or no token is set, or the
+  env off-switch `PROTO_FAMILIAR_DISCORD_DISABLED=1` is set.
+
+> **Updating does not invalidate Discord tokens.** Pulling new Proto-Familiar
+> code can't reach across and reset a token on Discord's servers — if the bot
+> goes offline around an update, it's a coincidence of timing, not the update.
+> Don't blanket-refresh tokens "just in case"; read the panel, and only reset
+> when it shows 🔴.
+
+### I changed the token / toggle but nothing happened
+
+Press **⟳ Apply & connect** in the Discord presence panel. It applies the
+saved settings and reconnects immediately — no page reload, and no waiting for
+the 30-second supervisor tick. (The supervisor *will* pick the change up on its
+own within 30s, but the button is instant.)
+
+---
+
 ## Updating & versions
 
 ### The installer says "already up to date" but I'm not getting the new version

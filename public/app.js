@@ -3069,24 +3069,59 @@ function init() {
     renderTrustedContacts();
   }
 
-  // Discord presence (Village V4) — show live gateway status when the
-  // section is opened. Cheap GET; failures render as a quiet dash.
+  // Discord presence (Village V4) — show live gateway status. Cheap GET;
+  // failures render as a quiet dash. A fatal state (bad token / intents)
+  // shows red rather than a perpetual "reconnecting", so the ward sees the
+  // real problem instead of a green light over a silent retry loop.
+  async function refreshDiscordStatus() {
+    const el = $('discord-status');
+    if (!el) return;
+    try {
+      const s = await (await fetch('/api/discord/status')).json();
+      renderDiscordNodeWarning(s);
+      const bits = [];
+      if (s.fatal) {
+        bits.push(`🔴 ${s.lastError || 'Discord refused the connection — check the bot token and privileged intents.'}`);
+      } else {
+        bits.push(s.connected ? `🟢 Connected as ${s.botUser ?? 'bot'}` : (s.running ? '🟡 Starting / reconnecting…' : '⚪ Not running'));
+        if (s.lastError) bits.push(`Last error: ${s.lastError}`);
+      }
+      if (s.turns) bits.push(`${s.turns} replies this boot`);
+      el.textContent = bits.join(' · ');
+    } catch {
+      el.textContent = '—';
+    }
+  }
+
   const discordSection = document.querySelector('#section-discord .collapse-toggle');
   if (discordSection) {
-    discordSection.addEventListener('click', async () => {
+    discordSection.addEventListener('click', () => { refreshDiscordStatus(); });
+  }
+
+  // Apply & connect — flush the current settings to the server immediately
+  // (bypassing the debounce) and kick the gateway to (re)connect now, so the
+  // ward doesn't have to wait for the 30s supervisor tick or reload the page.
+  const discordApplyBtn = $('discord-apply');
+  if (discordApplyBtn) {
+    discordApplyBtn.addEventListener('click', async () => {
       const el = $('discord-status');
-      if (!el) return;
+      discordApplyBtn.disabled = true;
+      if (el) el.textContent = 'Applying…';
       try {
-        const s = await (await fetch('/api/discord/status')).json();
-        renderDiscordNodeWarning(s);
-        const bits = [];
-        bits.push(s.connected ? `🟢 Connected as ${s.botUser ?? 'bot'}` : (s.running ? '🟡 Starting / reconnecting…' : '⚪ Not running'));
-        if (s.turns) bits.push(`${s.turns} replies this boot`);
-        if (s.lastError) bits.push(`Last error: ${s.lastError}`);
-        el.textContent = bits.join(' · ');
-      } catch {
-        el.textContent = '—';
-      }
+        readSettingsFromUI(); // pull the latest field values into state
+        await fetch('/api/settings', {
+          method:  'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ settings: extractServerSettings(state) }),
+        });
+        await fetch('/api/discord/apply', { method: 'POST' });
+      } catch { /* fall through to the status refresh either way */ }
+      // The gateway connects asynchronously — poll the status a few times so
+      // the indicator lands on the real outcome (connected / fatal).
+      await refreshDiscordStatus();
+      setTimeout(refreshDiscordStatus, 1500);
+      setTimeout(refreshDiscordStatus, 4000);
+      discordApplyBtn.disabled = false;
     });
   }
 

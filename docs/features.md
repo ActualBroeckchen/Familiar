@@ -111,7 +111,11 @@ When enabled (Settings → Tools → **Web search & read**), the Familiar gains 
 
 ---
 
-## Topics
+## Discord presence
+
+The Familiar can join Discord as a bot — answering your DMs with full context, registered Villagers' DMs with only what their category grants, and server channels when @-mentioned. Configure it in Settings → **Discord presence**: paste the **Bot token** (Developer Portal → your app → Bot, with the *Message Content* intent enabled), tick **Enable Discord presence**, and press **⟳ Apply & connect** — it connects immediately, no page reload.
+
+The panel's status line is your single source of truth: **🟢 Connected as …**, **🟡 Starting / reconnecting…**, **⚪ Not running**, or **🔴** with a plain reason when Discord rejects the token (invalid or reset — fix it and press Apply again). A rejected token parks the gateway and says so, rather than retrying silently behind a green light. All Discord conversations land in Session logs, same as web chats. Hard-disable with `PROTO_FAMILIAR_DISCORD_DISABLED=1`. (See [Troubleshooting → Discord presence](troubleshooting.md#discord-presence) if the bot won't come online.)
 
 See [Topics](topics.md) for the full reference.
 
