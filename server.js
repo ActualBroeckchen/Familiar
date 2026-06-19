@@ -51,6 +51,7 @@ import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
 import { listOutbox, acknowledgeOutbox, clearAcknowledged, enqueueOutbox } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
 import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';
+import { startTomeGraduationLoop, stopTomeGraduationLoop } from './tome-graduation-loop.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './reachout.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
 import { buildTimeAnchorBlock } from './relative-time.js';
@@ -2761,6 +2762,12 @@ function startReachout() {
     onError: (err) => console.error('[reachout]', err?.message ?? err),
   });
   console.log('[reachout] Warm reach-out ENABLED (default-ON). Stands down at moderate+ threat; quiet hours respected. Hard-disable with PROTO_FAMILIAR_WARMTH_DISABLED=1.');
+
+  // Tome → Phylactery graduation (phase 4). OPT-IN: stays dormant until the
+  // ward enables "Graduate tome knowledge" in Settings. Slow 30-min pass that
+  // drains durable facts stranded in tomes into identity/memory. Hard
+  // off-switch: PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1.
+  startTomeGraduationLoop();
 }
 
 // Graceful shutdown — fires on SIGTERM (stop.sh / stop.bat / docker
@@ -2791,6 +2798,7 @@ async function handleSignal(signal) {
   try { await stopRemindersLoop(); } catch { /* already stopped */ }
   try { await stopSilenceTriageLoop(); } catch { /* already stopped */ }
   try { await stopReachoutLoop(); } catch { /* already stopped */ }
+  try { await stopTomeGraduationLoop(); } catch { /* already stopped */ }
   try { stopDiscordGateway(); } catch { /* already stopped */ }
   try { await stopManagedSearxng(); } catch { /* already stopped */ }
   try { shutdownPhylactery(); } catch { /* already disconnected */ }
