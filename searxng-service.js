@@ -32,11 +32,21 @@ import net from 'net';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, rmSync, readdirSync } from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const VENDORED_DIR = path.join(__dirname, 'vendor', 'searxng');
+const PATCHES_DIR  = path.join(__dirname, 'vendor', 'searxng-patches');
+
+// SearXNG is NOT vendored into the repo (its ~970-file source bloated it).
+// The managed backend FETCHES it on first enable, pinned to this exact commit,
+// then re-applies the tracked patches under vendor/searxng-patches/. Moving the
+// pin = bump SEARXNG_PIN + re-run the spawn smoke-test (CLAUDE.md cadence).
+const SEARXNG_REPO = 'https://github.com/searxng/searxng';
+const SEARXNG_PIN  = 'b5ef7ec8f32b7020cc0f887e26f0d01b85949d17';
+const SOURCE_RETRY_COOLDOWN_MS = 60 * 60_000;   // back off 1h after a failed fetch
+let _nextSourceAttemptTs = 0;
 const RUNTIME_DIR  = path.join(__dirname, 'tomes', '.searxng');   // generated settings.yml (gitignored area)
 const SETTINGS_YML = path.join(RUNTIME_DIR, 'settings.yml');
 
@@ -75,14 +85,12 @@ export function searxngSourcePresent() {
  * injected for tests.
  */
 export function desiredManaged(settings, {
-  present  = searxngSourcePresent,
   disabled = searxngHardDisabled,
 } = {}) {
   if (disabled()) return false;
   if (settings?.webSearchEnabled !== true) return false;
   if (String(settings?.webSearchBaseUrl || '').trim()) return false; // custom URL → not ours
-  if (!present()) return false;
-  return true;
+  return true;   // source absence is handled by fetch-on-enable, not gated here
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────
@@ -147,7 +155,7 @@ export function startSearxngSupervisor({ readSettings = () => ({}), intervalMs =
     return;
   }
   if (!searxngSourcePresent()) {
-    console.log('[searxng] no vendored SearXNG source — web search uses the built-in keyless backend (this is fine; the managed backend is optional)');
+    console.log('[searxng] managed SearXNG source not present yet — it will be fetched (pinned) the first time web search is enabled; keyless search works meanwhile');
     // Still arm the supervisor: if the source is dropped in later, the next
     // tick picks it up without a restart.
   }
@@ -180,7 +188,44 @@ function getVenvPython() {
     : path.join(venvDir, 'bin', 'python');
 }
 
+// Fetch the pinned SearXNG source on first enable (it's not in the repo), then
+// re-apply the tracked patches. Idempotent: returns immediately once present.
+// On failure it backs off 1h and cleans up a half-clone, so a missing git /
+// no network degrades to keyless without re-cloning every tick.
+async function ensureSource() {
+  if (searxngSourcePresent()) return;
+  if (Date.now() < _nextSourceAttemptTs) throw new Error('source fetch backing off after a recent failure');
+  try {
+    console.log(`[searxng] fetching SearXNG source (pinned ${SEARXNG_PIN.slice(0, 7)}) — one-time, on first enable…`);
+    mkdirSync(VENDORED_DIR, { recursive: true });
+    await runToCompletion('git', ['init', '-q'], { cwd: VENDORED_DIR });
+    await runToCompletion('git', ['remote', 'add', 'origin', SEARXNG_REPO], { cwd: VENDORED_DIR }).catch(() => {});
+    await runToCompletion('git', ['fetch', '-q', '--depth', '1', 'origin', SEARXNG_PIN], { cwd: VENDORED_DIR });
+    await runToCompletion('git', ['checkout', '-q', 'FETCH_HEAD'], { cwd: VENDORED_DIR });
+    rmSync(path.join(VENDORED_DIR, '.git'), { recursive: true, force: true }); // vendored files, not an embedded repo
+    await applyPatches();
+    if (!searxngSourcePresent()) throw new Error('fetched but searx/webapp.py is missing (unexpected layout)');
+    console.log('[searxng] SearXNG source fetched + patched.');
+  } catch (err) {
+    _nextSourceAttemptTs = Date.now() + SOURCE_RETRY_COOLDOWN_MS;
+    try { rmSync(VENDORED_DIR, { recursive: true, force: true }); } catch { /* best-effort */ }
+    throw new Error(`could not fetch SearXNG source (${err.message}); web search stays on the keyless backend`);
+  }
+}
+
+// Apply every tracked vendor/searxng-patches/*.patch (e.g. the Windows pwd
+// guard) in order. `git apply` patches files in a plain dir — no repo needed.
+async function applyPatches() {
+  let patches;
+  try { patches = readdirSync(PATCHES_DIR).filter(f => f.endsWith('.patch')).sort(); }
+  catch { return; }
+  for (const p of patches) {
+    await runToCompletion('git', ['apply', path.join(PATCHES_DIR, p)], { cwd: VENDORED_DIR });
+  }
+}
+
 async function ensureDeps() {
+  await ensureSource();   // fetch the pinned source if it isn't here yet
   // Fast path: venv already materialised from a previous boot.
   if (existsSync(getVenvPython())) return;
   await runToCompletion('uv', ['venv', '.venv'], { cwd: VENDORED_DIR });

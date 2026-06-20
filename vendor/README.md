@@ -1,61 +1,32 @@
 # vendor/
 
-Third-party apps the Familiar runs, vendored into the tree so they ship "in the
-box" (the same posture as `phylactery/` and `unruh/`, except these are *not* our
-code). Their build artifacts and virtualenvs are gitignored; their source is
-committed.
+Third-party apps the Familiar runs. We **don't commit their source** — it bloats
+the repo (SearXNG alone was ~970 files / 419k lines). Instead the managed backend
+**fetches the source on first enable**, pinned to an exact commit, and re-applies
+the tracked patches under `vendor/searxng-patches/`.
 
-## searxng/ — vendored at `b5ef7ec` (2026-06-18)
+## searxng/ (fetched, not committed)
 
-The optional Familiar-managed web-search backend. SearXNG is a **rolling
-release** — no version tags — so we pin to a specific commit SHA (recorded in
-`vendor/searxng/VERSION`). Smoke-tested on Windows: `[searxng] managed instance
-ready`, real search returned results, `/healthz → OK`.
+The optional Familiar-managed web-search backend. SearXNG is a **rolling release**
+(no version tags), so we pin to a commit SHA — recorded as `SEARXNG_PIN` in
+`searxng-service.js`. When the ward enables "Web search & read" with no custom
+backend URL, `searxng-service.js` clones that commit into `vendor/searxng/`
+(shallow, by SHA), strips `.git`, and applies every `vendor/searxng-patches/*.patch`.
+A missing `git` / no network degrades cleanly to the keyless backend (and backs off
+an hour before retrying).
 
-### ⚠️ Local patches to re-apply after every re-clone
+### Local patches (`vendor/searxng-patches/`)
 
-We carry a small local modification to SearXNG's source. **A fresh re-clone wipes
-it**, so it MUST be re-applied whenever the pin moves (and re-smoke-tested):
+These ARE committed and re-applied on every fetch:
 
-- **`searx/valkeydb.py` — guard the Unix-only `import pwd`.** `import pwd` is
-  Unix-only and crashes module load on Windows (it's in a Valkey connection-error
-  path we never hit). Wrap the import in `try/except ImportError` (and guard its
-  single use). Without this, the managed backend cannot boot on Windows. **Keep the
-  dated `# Modified by Proto-Familiar … (AGPL/GPL §5(a))` notice** at the patch site
-  when re-applying — it satisfies the copyleft change-marking requirement (see
-  [`docs/searxng-license-notes.md`](../docs/searxng-license-notes.md)).
+- **`0001-valkeydb-windows-pwd.patch`** — guards SearXNG's Unix-only `import pwd`
+  (and its one use site) so the webapp loads on Windows. Carries an AGPL/GPL §5(a)
+  change notice; see [`docs/searxng-license-notes.md`](../docs/searxng-license-notes.md).
 
-If this list grows, consider converting these into committed `.patch` files
-applied programmatically during vendoring rather than hand-editing.
+### Bumping the pin (on every MINOR / MAJOR Proto-Familiar bump — see CLAUDE.md)
 
-> **License:** SearXNG is **AGPL-3.0-or-later** (`vendor/searxng/LICENSE`). Proto-Familiar
-> is GPL-3.0 and runs SearXNG at arm's length (separate process, loopback HTTP), so this is a
-> compatible aggregation, not a combined work. Full analysis + obligations:
-> [`docs/searxng-license-notes.md`](../docs/searxng-license-notes.md).
-
-### Re-vendoring procedure (when bumping the pin)
-
-```bash
-# from the repo root (any OS)
-git rm -r --cached vendor/searxng            # drop the old vendored tree from the index
-rm -rf vendor/searxng                        # (Windows: Remove-Item -Recurse -Force vendor\searxng)
-git clone --depth 1 https://github.com/searxng/searxng vendor/searxng
-git -C vendor/searxng rev-parse HEAD > vendor/searxng/VERSION   # the new pin
-```
-
-Then strip the nested `.git` so it's vendored files, not an embedded gitlink:
-
-```bash
-rm -rf vendor/searxng/.git                       # macOS / Linux
-```
-```powershell
-Remove-Item -Recurse -Force vendor\searxng\.git  # Windows PowerShell
-```
-```cmd
-rmdir /s /q vendor\searxng\.git                  :: Windows cmd
-```
-
-**Then re-apply the local patches above and re-run the boot smoke-test** (flip the
-"Web search & read" toggle, watch for `[searxng] managed instance ready`). Until
-`vendor/searxng/searx/webapp.py` exists, the managed backend stays dormant and
-search runs on the in-box keyless backend.
+1. Pick the new SearXNG commit; set `SEARXNG_PIN` in `searxng-service.js`.
+2. Delete any local `vendor/searxng/`, let it re-fetch, and confirm the patches still
+   apply (regenerate them against the new commit if upstream drifted —
+   `git diff --relative=vendor/searxng <old> <new> -- vendor/searxng/searx/<file>`).
+3. **Re-run the spawn smoke-test** (entrypoint / bind-port / `/healthz`).

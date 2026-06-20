@@ -29,9 +29,13 @@ test('desiredManaged declines when the human set their own SearXNG URL', () => {
   assert.equal(desiredManaged(s, { present, disabled: off }), false);
 });
 
-test('desiredManaged declines when the source is absent or env-disabled', () => {
-  assert.equal(desiredManaged({ webSearchEnabled: true }, { present: absent, disabled: off }), false);
-  assert.equal(desiredManaged({ webSearchEnabled: true }, { present,         disabled: on  }), false);
+test('desiredManaged still wants a managed instance when the source is absent (fetch-on-enable)', () => {
+  // Source absence no longer gates desire — startManaged fetches it on first enable.
+  assert.equal(desiredManaged({ webSearchEnabled: true }, { disabled: off }), true);
+});
+
+test('desiredManaged declines when env-disabled', () => {
+  assert.equal(desiredManaged({ webSearchEnabled: true }, { disabled: on }), false);
 });
 
 // ── reconcile — lifecycle with injected side effects ─────────────

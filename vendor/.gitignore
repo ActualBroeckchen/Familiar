@@ -1,11 +1,12 @@
-# Vendored third-party apps. We DO commit their source (so it ships "in the
-# box"), but never their build artifacts or virtualenvs.
+# vendor/ — third-party apps the Familiar runs.
 #
-# SearXNG (see docs/searxng-managed-build-spec.md): clone into searxng/, record
-# the pinned commit SHA in searxng/VERSION, then `rm -rf searxng/.git` so it's
-# vendored files rather than an embedded gitlink.
-searxng/.venv/
-searxng/.git/
+# SearXNG is NOT committed (its ~970-file source bloated the repo). Instead the
+# managed backend FETCHES it on first enable, pinned to a commit SHA, and
+# re-applies the patches under vendor/searxng-patches/ (which ARE tracked). So
+# we ignore the whole fetched source tree but keep the patches + this file.
+searxng/
+# Never commit build artifacts / venvs even if the dir is force-added.
+**/.venv/
 **/__pycache__/
 **/*.pyc
 **/*.pyo

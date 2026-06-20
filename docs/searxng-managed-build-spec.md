@@ -7,8 +7,14 @@
 > Kept as the build record. Two things differed from the original guesses: SearXNG packages with
 > `requirements.txt`+`setup.py` (not `pyproject.toml`), so deps go through `uv venv` + `uv pip
 > install` and the spawn invokes the venv Python directly; and `searx/valkeydb.py`'s Unix-only
-> `import pwd` needed guarding for Windows (a local patch — see `vendor/README.md`, re-apply on
-> every re-vendor).
+> `import pwd` needed guarding for Windows (a local patch).
+>
+> **Update (de-vendored):** SearXNG's ~970-file source was too big to commit, so it is **no longer
+> vendored into the repo**. It is **fetched on first enable** — `searxng-service.js` shallow-clones
+> the pinned `SEARXNG_PIN` commit into `vendor/searxng/` (gitignored), strips `.git`, and re-applies
+> the tracked patches under `vendor/searxng-patches/`. A missing `git`/network backs off and stays
+> keyless. Everything below describing "vendor SearXNG into the tree" is the prior model; the spawn,
+> patch, and smoke-test details still hold.
 
 ## Why this exists
 

@@ -86,6 +86,13 @@ grounds.** The AGPL does not meaningfully push us one way or the other here. (If
 or permissively licensed, the calculus would differ — vendoring AGPL source into a proprietary product
 is where teams get burned. That is not our situation.)
 
+**Decision (taken on engineering grounds): fetch-at-install.** SearXNG's ~970-file source was too big
+to commit, so we **fetch it on first enable** instead (pinned SHA, `searxng-service.js`). We no longer
+*distribute* SearXNG's source ourselves — the user obtains it from upstream — which if anything
+*reduces* our distribution footprint. We do still ship + apply our `vendor/searxng-patches/` (the
+Windows `pwd` guard), so we remain a *modifier*: that patch carries its §5(a) change notice, and it
+applies on the user's machine to the upstream copy they fetched. Obligations otherwise unchanged.
+
 ## Concrete to-dos (small, mostly done in this change)
 
 - ✅ Strengthen the `valkeydb.py` modification notice to a dated §5(a) statement; mirror it on the

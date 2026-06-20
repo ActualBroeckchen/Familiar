@@ -1,0 +1,35 @@
+diff --git a/searx/valkeydb.py b/searx/valkeydb.py
+index 1cdc8d2..e98705c 100644
+--- a/searx/valkeydb.py
++++ b/searx/valkeydb.py
+@@ -19,7 +19,17 @@ A valkey DB connect can be tested by::
+ """
+ 
+ import os
+-import pwd
++# --- Modified by Proto-Familiar, 2026-06-18 (AGPL/GPL §5(a) change notice) ----
++# Guarded the Unix-only `import pwd` so SearXNG's webapp loads on Windows.
++# Upstream imported `pwd` unconditionally, which crashes module import on
++# Windows; the single use (below) is a Valkey connection-error path we never
++# hit. See vendor/README.md and docs/searxng-license-notes.md. Re-apply this
++# patch (with its notice) whenever the SearXNG pin is bumped.
++try:
++    import pwd  # Unix-only; not available on Windows
++except ImportError:
++    pwd = None
++# --- end Proto-Familiar modification ------------------------------------------
+ import logging
+ import warnings
+ 
+@@ -60,6 +70,9 @@ def initialize():
+         return True
+     except valkey.exceptions.ValkeyError:
+         _CLIENT = None
+-        _pw = pwd.getpwuid(os.getuid())
+-        logger.exception("[%s (%s)] can't connect valkey DB ...", _pw.pw_name, _pw.pw_uid)
++        if pwd and hasattr(os, 'getuid'):
++            _pw = pwd.getpwuid(os.getuid())
++            logger.exception("[%s (%s)] can't connect valkey DB ...", _pw.pw_name, _pw.pw_uid)
++        else:
++            logger.exception("can't connect valkey DB ...")
+     return False
