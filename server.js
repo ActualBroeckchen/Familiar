@@ -94,6 +94,9 @@ import { resolveAudience, audienceTagFor, WARD_PRIVATE } from './audience.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings } from './discord-gateway.js';
 import { startLocalEngineSupervisor, stopLocalEngines, localEngineStatus, startInstall, uninstallEngine, applyLocalEngine } from './local-engine-service.js';
+import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
+import { substituteMacros } from './macros.js';
+import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock } from './knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -2290,6 +2293,57 @@ app.post('/api/websearch/engine/uninstall', async (req, res) => {
 // effect without waiting for the 30s tick. Returns immediate status.
 app.post('/api/websearch/apply', (_req, res) => {
   res.json(applyLocalEngine());
+});
+
+// POST /api/guide-chat — the in-modal Familiar explainer (Part 4). Same entity,
+// STRIPPED context (identity + the four prompt fields + the tools-info /
+// no-jargon blocks; no memory/graph/temporal/tools/care-check). Non-streaming,
+// no tools, not persisted, not memorised. Degrades calmly so the modal still
+// works as a picker if this fails.
+app.post('/api/guide-chat', async (req, res) => {
+  if (guideChatDisabled()) return res.status(403).json({ error: 'The in-modal guide is turned off.' });
+  const { provider, apiKey, model, messages } = req.body || {};
+  const url = PROVIDER_URLS[provider];
+  if (!url) return res.status(400).json({ error: `Unknown provider: "${provider}".` });
+  if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) return res.status(400).json({ error: 'API key is required.' });
+  if (!model || typeof model !== 'string' || !model.trim()) return res.status(400).json({ error: 'Model name is required.' });
+  if (!Array.isArray(messages) || messages.length === 0) return res.status(400).json({ error: 'Messages array is required.' });
+
+  const settings = readSettingsSync();
+  // Identity layer only (no memory/graph/temporal). Degrades to no identity.
+  let identityStatic = '';
+  try {
+    const enriched = await enrich('', { staticOnly: true });
+    identityStatic = enriched?.static || '';
+  } catch (err) {
+    console.warn('[guide-chat] identity enrich failed (continuing without it):', err?.message ?? err);
+  }
+
+  const systemContent = buildGuideSystem(identityStatic, settings);
+  const convo = messages
+    .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+    .map(m => ({ role: m.role, content: m.content }));
+  const finalMessages = [{ role: 'system', content: systemContent }, ...convo];
+  if (settings.postHistoryPrompt && settings.postHistoryPrompt.trim()) {
+    finalMessages.push({ role: 'system', content: substituteMacros(settings.postHistoryPrompt.trim(), settings) });
+  }
+
+  try {
+    const r = await fetch(url, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey.trim()}` },
+      body:    JSON.stringify({ model: model.trim(), messages: finalMessages, stream: false }),
+    });
+    if (!r.ok) {
+      const t = await r.text();
+      return res.status(502).json({ error: `The model service answered with an error (${r.status}).`, detail: t.slice(0, 200) });
+    }
+    const data = await r.json();
+    const content = stripLlmTimestamps(data?.choices?.[0]?.message?.content ?? '');
+    res.json({ content });
+  } catch (err) {
+    res.status(502).json({ error: `I couldn't reach the model service (${err.message}).` });
+  }
 });
 
 // Knock list (V4.x) — contact attempts from unregistered people,

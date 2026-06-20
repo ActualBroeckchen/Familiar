@@ -1,7 +1,8 @@
 # Modular web search — build spec
 
-> **Status: IN PROGRESS — Parts 1, 2 (a/b/c) and 3 shipped; Part 4 (the in-modal Familiar
-> explainer) planned.** Part 3 (`0.7.24`–`0.7.26`): the managedSearch seam (3a), `php-runtime.js`
+> **Status: COMPLETE — Parts 1–4 shipped.** Part 4 (the in-modal Familiar explainer) landed at
+> `0.7.29` (`guide-chat.js` + `POST /api/guide-chat` + the modal mini-chat). The whole arc — two-tool
+> split, modular Basic/API/Local backend, static-PHP local engines, and the explainer — is done. Part 3 (`0.7.24`–`0.7.26`): the managedSearch seam (3a), `php-runtime.js`
 > static-PHP fetcher (3b, + Windows official-PHP support `0.7.27`), and the 4get + LibreY engines
 > (3c). The PHP runtime fetches a static binary on Linux/macOS and the official windows.php.net NTS
 > zip (+ generated php.ini) on Windows x64, so the engines work on all three. **Smoke-test caveat:**
