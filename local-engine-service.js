@@ -31,9 +31,10 @@ import net from 'net';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
-import { existsSync, mkdirSync, writeFileSync, rmSync, readdirSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, copyFileSync, rmSync, readdirSync } from 'fs';
 
-import { searxngSearch } from './local-engine-adapters.js';
+import { searxngSearch, libreySearch, fourgetSearch } from './local-engine-adapters.js';
+import { ensurePhp, phpSupported } from './php-runtime.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -311,12 +312,7 @@ async function ensureSearxngSource() {
   if (Date.now() < _searxngSourceRetryTs) throw new Error('source fetch backing off after a recent failure');
   try {
     console.log(`[local-engine] fetching SearXNG source (pinned ${SEARXNG_PIN.slice(0, 7)}) — one-time, on first install…`);
-    mkdirSync(SEARXNG_DIR, { recursive: true });
-    await runToCompletion('git', ['init', '-q'], { cwd: SEARXNG_DIR });
-    await runToCompletion('git', ['remote', 'add', 'origin', SEARXNG_REPO], { cwd: SEARXNG_DIR }).catch(() => {});
-    await runToCompletion('git', ['fetch', '-q', '--depth', '1', 'origin', SEARXNG_PIN], { cwd: SEARXNG_DIR });
-    await runToCompletion('git', ['checkout', '-q', 'FETCH_HEAD'], { cwd: SEARXNG_DIR });
-    rmSync(path.join(SEARXNG_DIR, '.git'), { recursive: true, force: true }); // vendored files, not a repo
+    await gitFetchPinned(SEARXNG_DIR, SEARXNG_REPO, SEARXNG_PIN);
     await applySearxngPatches();
     if (!searxngInstalled()) throw new Error('fetched but searx/webapp.py is missing (unexpected layout)');
     console.log('[local-engine] SearXNG source fetched + patched.');
@@ -357,7 +353,7 @@ async function spawnSearxng() {
     env: { ...process.env, SEARXNG_SETTINGS_PATH: SEARXNG_YML },
     stdio: 'ignore',
   });
-  await waitHealthy(url);
+  await waitHealthy(`${url}/healthz`, { label: 'SearXNG' });
   return { child, url };
 }
 
@@ -379,19 +375,32 @@ function writeSearxngSettings(port) {
   writeFileSync(SEARXNG_YML, yml, 'utf8');
 }
 
-async function waitHealthy(url, { timeoutMs = HEALTH_TIMEOUT_MS, pollMs = HEALTH_POLL_MS, fetchFn = fetch } = {}) {
-  // webapp.py exposes GET /healthz → 200 "OK" (verified against the pinned SHA).
+// Poll a health URL until it answers 2xx. Generic across engines — the caller
+// passes the full URL (SearXNG: …/healthz; php engines: the app root).
+async function waitHealthy(healthUrl, { timeoutMs = HEALTH_TIMEOUT_MS, pollMs = HEALTH_POLL_MS, fetchFn = fetch, label = 'engine' } = {}) {
   const deadline = Date.now() + timeoutMs;
   let lastErr = 'no response';
   while (Date.now() < deadline) {
     try {
-      const res = await fetchFn(`${url}/healthz`);
+      const res = await fetchFn(healthUrl);
       if (res.ok) return true;
       lastErr = `HTTP ${res.status}`;
     } catch (err) { lastErr = err.message; }
     await sleep(pollMs);
   }
-  throw new Error(`SearXNG did not become healthy within ${Math.round(timeoutMs / 1000)}s (${lastErr})`);
+  throw new Error(`${label} did not become healthy within ${Math.round(timeoutMs / 1000)}s (${lastErr})`);
+}
+
+// Shallow-clone a repo at a pinned ref into `dir`, then strip .git so the
+// files are vendored (not an embedded repo). Shared by SearXNG and the PHP
+// engines so the fetch dance lives in one place.
+async function gitFetchPinned(dir, repo, pin) {
+  mkdirSync(dir, { recursive: true });
+  await runToCompletion('git', ['init', '-q'], { cwd: dir });
+  await runToCompletion('git', ['remote', 'add', 'origin', repo], { cwd: dir }).catch(() => {});
+  await runToCompletion('git', ['fetch', '-q', '--depth', '1', 'origin', pin], { cwd: dir });
+  await runToCompletion('git', ['checkout', '-q', 'FETCH_HEAD'], { cwd: dir });
+  rmSync(path.join(dir, '.git'), { recursive: true, force: true });
 }
 
 const searxngEngine = {
@@ -409,27 +418,86 @@ const searxngEngine = {
   },
 };
 
-// 4get / LibreY are PHP engines that need a fetched static PHP runtime — that
-// arrives in Part 3. Until then they're listed (so the modal shows the whole
-// map and greys their controls) but marked available:false, which keeps them
-// out of desiredEngine and refuses install. Part 3 fills in their real
-// installed/ensureInstalled/spawn/uninstall and flips available to true.
-function pendingPhpEngine(id, label, strain) {
-  const soon = async () => { throw new Error(`${label} isn't available yet (a future update adds it)`); };
+// ── PHP engines (4get / LibreY) ───────────────────────────────────
+// Built from a descriptor template: each fetches its own source (pinned) and
+// runs under the static PHP binary php-runtime.js fetches, via `php -S` bound
+// to loopback. `available` is false where there's no static PHP build
+// (Windows), so the modal greys them and they're never desired/installed
+// there — SearXNG (uv) still covers Windows. The real spawn is the
+// on-real-machine integration point (Linux/macOS); confirm each engine's API
+// route/config against its fetched source on first install (build-spec §4b).
+//
+// `router` (optional): a front-controller script passed to `php -S` for apps
+// that rely on URL rewriting (4get). Flat-file apps (LibreY: api.php is a real
+// file) need none.
+function makePhpEngine({ id, label, strain, repo, pin, entry, configExample, router, search }) {
+  const dir = path.join(__dirname, 'vendor', id);
+  let retryTs = 0;
+  const installed = () => existsSync(path.join(dir, entry));
   return {
-    id, label, strain, runtime: 'php', available: false,
-    installed: () => false,
-    ensureInstalled: soon,
-    spawn: soon,
-    search: async () => ({ error: `${label} isn't available yet` }),
-    uninstall: async () => {},
+    id, label, strain, runtime: 'php',
+    get available() { return phpSupported(); },
+    installed,
+    ensureInstalled: async () => {
+      await ensurePhp();                 // fetch the static PHP runtime (throws where unsupported)
+      if (installed()) return;
+      if (Date.now() < retryTs) throw new Error('source fetch backing off after a recent failure');
+      try {
+        console.log(`[local-engine] fetching ${label} source (pinned ${String(pin).slice(0, 12)})…`);
+        await gitFetchPinned(dir, repo, pin);
+        if (configExample) {
+          const src = path.join(dir, configExample[0]);
+          const dst = path.join(dir, configExample[1]);
+          if (existsSync(src) && !existsSync(dst)) copyFileSync(src, dst);
+        }
+        if (!installed()) throw new Error(`fetched but ${entry} is missing (unexpected layout)`);
+        console.log(`[local-engine] ${label} source fetched.`);
+      } catch (err) {
+        retryTs = Date.now() + SOURCE_RETRY_COOLDOWN_MS;
+        try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
+        throw new Error(`could not fetch ${label} source (${err.message})`);
+      }
+    },
+    spawn: async () => {
+      const php  = await ensurePhp();
+      const port = await getFreePort();
+      const url  = `http://127.0.0.1:${port}`;
+      const args = ['-S', `127.0.0.1:${port}`, '-t', dir, ...(router ? [router] : [])];
+      const child = spawn(php, args, { cwd: dir, stdio: 'ignore' });
+      try {
+        await waitHealthy(`${url}/`, { label });
+      } catch (err) {
+        try { child.kill('SIGTERM'); } catch { /* already gone */ }
+        throw err;
+      }
+      return { child, url };
+    },
+    search,
+    uninstall: async () => { rmSync(dir, { recursive: true, force: true }); retryTs = 0; },
   };
 }
 
+const libreyEngine = makePhpEngine({
+  id: 'librey', label: 'LibreY', strain: 'low',
+  repo: 'https://github.com/Ahwxorg/LibreY', pin: 'main',
+  entry: 'index.php',
+  configExample: ['config.php.example', 'config.php'],   // API on by default (disable_api:false)
+  search: libreySearch,
+});
+
+const fourgetEngine = makePhpEngine({
+  id: '4get', label: '4get', strain: 'med',
+  repo: 'https://git.lolcat.ca/lolcat/4get', pin: 'master',
+  entry: 'index.php',
+  configExample: ['data/config.php.example', 'data/config.php'],
+  router: 'index.php',   // front-controller routing (no apache rewrites under php -S)
+  search: fourgetSearch,
+});
+
 const ENGINES = {
   searxng: searxngEngine,
-  '4get':  pendingPhpEngine('4get',  '4get',   'med'),
-  librey:  pendingPhpEngine('librey', 'LibreY', 'low'),
+  librey:  libreyEngine,
+  '4get':  fourgetEngine,
 };
 
 // ── Shared spawn helpers ──────────────────────────────────────────

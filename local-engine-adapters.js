@@ -38,3 +38,50 @@ export async function searxngSearch(base, q, { fetchFn = fetch } = {}) {
     return abortOr(err, 'SearXNG');
   }
 }
+
+// Map an arbitrary engine result object to our {title,url,content} row,
+// tolerating the small field-name differences between engines.
+function toRow(r) {
+  return {
+    title:   r?.title || r?.name || '',
+    url:     r?.url || r?.link || r?.href || '',
+    content: r?.description || r?.desc || r?.content || r?.snippet || '',
+  };
+}
+const keepRows = (arr) => (Array.isArray(arr) ? arr : [])
+  .map(toRow)
+  .filter(row => row.url && row.title);
+
+// LibreY: GET /api.php?q=…&type=text → a JSON ARRAY of {title,url,description}
+// (a leading infobox/special element may appear; keepRows drops anything
+// without a url+title). API is on by default (config disable_api:false).
+export async function libreySearch(base, q, { fetchFn = fetch } = {}) {
+  const url = `${trimBase(base)}/api.php?q=${encodeURIComponent(q)}&type=text`;
+  try {
+    const res = await timedFetch(url, { fetchFn });
+    if (!res.ok) return { error: `My LibreY search came back with an error (HTTP ${res.status}).` };
+    const data = await res.json();
+    const arr = Array.isArray(data) ? data : (data?.results || data?.items);
+    return { rows: keepRows(arr) };
+  } catch (err) {
+    return abortOr(err, 'LibreY');
+  }
+}
+
+// 4get: GET /api/v1/web?s=… → JSON grouped by type, web results under `web`.
+// Defensive across shapes (web / results / bare array). The API must be
+// enabled in 4get's data/config.php (copied from the shipped example on
+// install). Exact route/shape confirmed from the fetched source on first
+// real install — see docs/websearch-modular-build-spec.md §4b.
+export async function fourgetSearch(base, q, { fetchFn = fetch } = {}) {
+  const url = `${trimBase(base)}/api/v1/web?s=${encodeURIComponent(q)}`;
+  try {
+    const res = await timedFetch(url, { fetchFn });
+    if (!res.ok) return { error: `My 4get search came back with an error (HTTP ${res.status}).` };
+    const data = await res.json();
+    const arr = data?.web || data?.results || (Array.isArray(data) ? data : []);
+    return { rows: keepRows(arr) };
+  } catch (err) {
+    return abortOr(err, '4get');
+  }
+}
