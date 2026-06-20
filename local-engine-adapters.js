@@ -18,6 +18,12 @@
 
 import { timedFetch } from './web-fetch-util.js';
 
+// Local engines aggregate several upstream search engines server-side, so they
+// are legitimately slower than a single fast API — the default 9s fetch timeout
+// is too tight (LibreY routinely needs ~10s). Give them room before we give up
+// and fall back to the keyless floor.
+const LOCAL_TIMEOUT_MS = 20000;
+
 const trimBase = (base) => String(base || '').replace(/\/+$/, '');
 
 function abortOr(err, name) {
@@ -39,7 +45,7 @@ async function httpErr(res, name) {
 export async function searxngSearch(base, q, { fetchFn = fetch } = {}) {
   const url = `${trimBase(base)}/search?q=${encodeURIComponent(q)}&format=json`;
   try {
-    const res = await timedFetch(url, { fetchFn });
+    const res = await timedFetch(url, { fetchFn, timeoutMs: LOCAL_TIMEOUT_MS });
     if (!res.ok) return httpErr(res, 'SearXNG');
     const data = await res.json();
     return { rows: Array.isArray(data?.results) ? data.results : [] };
@@ -69,7 +75,7 @@ const keepRows = (arr) => (Array.isArray(arr) ? arr : [])
 export async function libreySearch(base, q, { fetchFn = fetch } = {}) {
   const url = `${trimBase(base)}/api.php?q=${encodeURIComponent(q)}&t=0&p=0`;
   try {
-    const res = await timedFetch(url, { fetchFn });
+    const res = await timedFetch(url, { fetchFn, timeoutMs: LOCAL_TIMEOUT_MS });
     if (!res.ok) return httpErr(res, 'LibreY');
     const data = await res.json();
     const arr = Array.isArray(data) ? data : (data?.results || data?.items);
@@ -87,7 +93,7 @@ export async function libreySearch(base, q, { fetchFn = fetch } = {}) {
 export async function fourgetSearch(base, q, { fetchFn = fetch } = {}) {
   const url = `${trimBase(base)}/api/v1/web?s=${encodeURIComponent(q)}`;
   try {
-    const res = await timedFetch(url, { fetchFn });
+    const res = await timedFetch(url, { fetchFn, timeoutMs: LOCAL_TIMEOUT_MS });
     if (!res.ok) return httpErr(res, '4get');
     const data = await res.json();
     const arr = data?.web || data?.results || (Array.isArray(data) ? data : []);
