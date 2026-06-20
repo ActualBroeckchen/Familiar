@@ -1,26 +1,26 @@
 /**
- * php-runtime.js — fetch a self-contained static PHP CLI binary on demand.
+ * php-runtime.js — fetch a PHP CLI runtime on demand for the PHP-based
+ * local search engines (4get, LibreY).
  *
- * The PHP-based local search engines (4get, LibreY) need a PHP runtime we
- * don't otherwise ship. Rather than ask my human to install PHP (exactly the
- * friction the whole design forbids), the Familiar fetches a single
- * self-contained static PHP binary on first install — the same fetch-on-enable
- * pattern SearXNG's source uses — caches it under vendor/php-runtime/, and runs
- * the engines with it.
+ * Rather than ask my human to install PHP (the friction the whole design
+ * forbids), the Familiar fetches a PHP runtime on first install — the same
+ * fetch-on-enable pattern SearXNG's source uses — caches it under
+ * vendor/php-runtime/, and runs the engines with it via `php -S`.
  *
- * Source: static-php-cli's prebuilt "common" CLI builds (≈30 extensions incl.
- * curl / openssl / mbstring / dom / simplexml / gd — the set 4get/LibreY need),
- * at https://dl.static-php.dev/static-php-cli/common/php-<ver>-cli-<platform>.tar.gz
- * Builds exist for Linux + macOS (x86_64 / aarch64) only — there is no Windows
- * build, so phpSupported() is false on win32 and the PHP engines degrade to
- * "unavailable" there (SearXNG, which runs via uv, still works on Windows).
+ * Two sources, by host:
+ *   • Linux / macOS (x86_64 / aarch64) — a self-contained static binary from
+ *     static-php-cli's prebuilt "common" build (extensions compiled in).
+ *   • Windows (x64) — the official windows.php.net Non-Thread-Safe zip, plus a
+ *     generated php.ini that enables the DLL extensions 4get/LibreY need
+ *     (curl/openssl/mbstring/gd/…). NTS is correct for the single-process
+ *     `php -S` server. (Needs the VS 2015-2022 x64 runtime, which is present on
+ *     virtually all Windows; if php.exe won't start, that's the thing to add.)
  *
- * Integrity: static-php.dev publishes no per-file checksums, so the floor is
- * HTTPS + a pinned version URL + a functional `php --version` check (a
- * corrupt/truncated/wrong binary won't run and report the pinned version). A
- * security-conscious operator can pin a hard SHA-256 in PHP_SHA256 to enforce
- * a cryptographic match. A failed fetch/verify throws → the engine degrades to
- * keyless; it never breaks search.
+ * Integrity: the static source publishes no checksums and the Windows page
+ * publishes per-file SHA-256, so the floor is HTTPS + a pinned-version URL + a
+ * functional `php --version` check (a corrupt/wrong binary won't run and report
+ * the pinned version). PHP_SHA256 can hold a hard pin per artifact. A failed
+ * fetch/verify throws → the engine degrades to keyless; it never breaks search.
  */
 
 import path from 'path';
@@ -33,45 +33,67 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RUNTIME_ROOT = path.join(__dirname, 'vendor', 'php-runtime');
 
 // Pinned PHP version. Bump deliberately (re-run the engine spawn smoke-test).
-// 8.3 over 8.4 for the broadest app compatibility. See CLAUDE.md cadence.
-const PHP_VERSION  = '8.3.31';
-const PHP_BASE_URL = 'https://dl.static-php.dev/static-php-cli/common';
+// 8.3 over 8.4/8.5 for the broadest app compatibility. See CLAUDE.md cadence.
+const PHP_VERSION   = '8.3.31';
+const STATIC_BASE   = 'https://dl.static-php.dev/static-php-cli/common';
+const WIN_BASE      = 'https://downloads.php.net/~windows/releases';
 
-// node `${platform}-${arch}` → static-php-cli artifact platform string.
-// win32 is absent on purpose (no static build) → unsupported.
-const PLATFORM_MAP = {
+// node `${platform}-${arch}` → static-php-cli artifact (Linux/macOS only).
+const STATIC_MAP = {
   'linux-x64':   'linux-x86_64',
   'linux-arm64': 'linux-aarch64',
   'darwin-x64':  'macos-x86_64',
   'darwin-arm64':'macos-aarch64',
 };
 
-// Optional HARD checksum pins (static-php.dev publishes none, so empty by
-// default → integrity rests on HTTPS + the functional version check below).
-// Fill in `<artifact>: '<sha256 hex>'` to enforce a cryptographic match.
+// Optional HARD checksum pins, keyed by spec.dir (none published for the
+// static builds; the Windows page lists SHA-256 if you want to pin one).
 const PHP_SHA256 = {};
 
-// ── Pure helpers (unit-tested) ────────────────────────────────────
+// ── Host PHP spec (the single source of platform truth) ───────────
 
-/** static-php-cli artifact string for a node platform/arch, or null if
- *  there's no prebuilt static PHP for it (e.g. Windows). */
+/**
+ * The PHP source descriptor for a host, or null if none exists. Pure;
+ * platform/arch are injectable for tests.
+ */
+export function phpSpec(platform = process.platform, arch = process.arch) {
+  const staticArtifact = STATIC_MAP[`${platform}-${arch}`];
+  if (staticArtifact) {
+    return {
+      kind:    'static',
+      dir:     staticArtifact,
+      binary:  'php',
+      archive: 'tar.gz',
+      urls:    [`${STATIC_BASE}/php-${PHP_VERSION}-cli-${staticArtifact}.tar.gz`],
+    };
+  }
+  if (platform === 'win32' && arch === 'x64') {
+    const name = `php-${PHP_VERSION}-nts-Win32-vs16-x64.zip`;  // vs16 = PHP 8.3
+    return {
+      kind:    'windows',
+      dir:     'win-x64',
+      binary:  'php.exe',
+      archive: 'zip',
+      // Current patch lives under releases/; a superseded one moves to archives/.
+      urls:    [`${WIN_BASE}/${name}`, `${WIN_BASE}/archives/${name}`],
+    };
+  }
+  return null;
+}
+
+// Back-compat / focused helper: the static-build artifact (null on Windows).
 export function staticPhpArtifact(platform = process.platform, arch = process.arch) {
-  return PLATFORM_MAP[`${platform}-${arch}`] || null;
+  return STATIC_MAP[`${platform}-${arch}`] || null;
 }
 
-/** The download URL for a given artifact platform string. */
-export function phpDownloadUrl(artifact, version = PHP_VERSION) {
-  return `${PHP_BASE_URL}/php-${version}-cli-${artifact}.tar.gz`;
-}
-
-/** Does this host have a static PHP build available at all? */
+/** Does this host have any fetchable PHP build? */
 export function phpSupported() {
-  return !!staticPhpArtifact();
+  return !!phpSpec();
 }
 
 function phpBinaryPath() {
-  const artifact = staticPhpArtifact() || 'unsupported';
-  return path.join(RUNTIME_ROOT, artifact, 'php');
+  const spec = phpSpec();
+  return path.join(RUNTIME_ROOT, spec ? spec.dir : 'unsupported', spec ? spec.binary : 'php');
 }
 
 /** Is the PHP runtime already fetched + cached for this host? */
@@ -82,44 +104,43 @@ export function phpInstalled() {
 // ── Install ───────────────────────────────────────────────────────
 
 /**
- * Ensure a usable static PHP binary exists for this host, fetching it once if
- * needed. Returns the binary path. Throws (caller degrades to keyless) on an
+ * Ensure a usable PHP binary exists for this host, fetching it once if needed.
+ * Returns the binary path. Throws (caller degrades to keyless) on an
  * unsupported platform, a failed download/extract, a checksum mismatch, or a
- * binary that won't run. Side effects (download/extract/verify) are injectable
- * for tests.
+ * binary that won't run. Side effects are injectable for tests.
  */
 export async function ensurePhp(deps = {}) {
-  const artifact = staticPhpArtifact();
-  if (!artifact) {
-    throw new Error(`no static PHP build for this platform (${process.platform}-${process.arch}); the PHP-based engines need Linux or macOS`);
+  const spec = phpSpec();
+  if (!spec) {
+    throw new Error(`no PHP build for this platform (${process.platform}-${process.arch}); the PHP-based engines need Linux, macOS, or 64-bit Windows`);
   }
-  const bin = phpBinaryPath();
+  const dir = path.join(RUNTIME_ROOT, spec.dir);
+  const bin = path.join(dir, spec.binary);
   if (existsSync(bin)) return bin;
 
-  const dir = path.dirname(bin);
   mkdirSync(dir, { recursive: true });
-  const url = phpDownloadUrl(artifact);
-  const tar = path.join(dir, 'php.tar.gz');
+  const archivePath = path.join(dir, spec.archive === 'zip' ? 'php.zip' : 'php.tar.gz');
 
   try {
-    await (deps.download || downloadFile)(url, tar);
+    await (deps.download || downloadFile)(spec.urls, archivePath);
 
-    const want = PHP_SHA256[artifact];
+    const want = PHP_SHA256[spec.dir];
     if (want) {
-      const got = sha256File(tar);
-      if (got !== want) throw new Error(`PHP download checksum mismatch for ${artifact}`);
+      const got = sha256File(archivePath);
+      if (got !== want) throw new Error(`PHP download checksum mismatch for ${spec.dir}`);
     }
 
-    await (deps.extract || extractTarGz)(tar, dir);
-    rmSync(tar, { force: true });
+    await (deps.extract || extractArchive)(archivePath, dir);
+    rmSync(archivePath, { force: true });
     if (!existsSync(bin)) throw new Error('PHP archive extracted but the php binary is missing');
-    if (process.platform !== 'win32') chmodSync(bin, 0o755);
+
+    if (spec.kind === 'windows') writeWindowsIni(dir);
+    else chmodSync(bin, 0o755);
 
     const ok = await (deps.verify || verifyPhp)(bin);
     if (!ok) throw new Error('the fetched PHP binary did not run as expected');
     return bin;
   } catch (err) {
-    // Leave no half-installed runtime behind.
     try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
     throw new Error(`could not set up the PHP runtime (${err.message})`);
   }
@@ -132,16 +153,42 @@ export async function uninstallPhp() {
 
 // ── Real side effects (the verify-on-real-install integration point) ──
 
-async function downloadFile(url, dest) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`download failed (HTTP ${res.status})`);
-  writeFileSync(dest, Buffer.from(await res.arrayBuffer()));
+// Try each candidate URL in order (Windows: releases/ then archives/).
+async function downloadFile(urls, dest) {
+  const list = Array.isArray(urls) ? urls : [urls];
+  let lastErr = 'no url';
+  for (const url of list) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) { lastErr = `HTTP ${res.status}`; continue; }
+      writeFileSync(dest, Buffer.from(await res.arrayBuffer()));
+      return;
+    } catch (err) { lastErr = err.message; }
+  }
+  throw new Error(`download failed (${lastErr})`);
 }
 
-async function extractTarGz(tar, dir) {
-  // The tarball holds a single `php` binary. System tar is present on the
-  // Linux/macOS hosts these builds target.
-  await runToCompletion('tar', ['-xzf', tar, '-C', dir]);
+// `tar -xf` auto-detects compression and, via libarchive/bsdtar (present on
+// Windows 10+ and macOS), also extracts .zip — so one call covers both kinds.
+async function extractArchive(archive, dir) {
+  await runToCompletion('tar', ['-xf', archive, '-C', dir]);
+}
+
+// Windows DLL extensions are off until enabled. php.exe auto-loads a php.ini
+// sitting beside it, so drop one in that turns on what 4get/LibreY need.
+function writeWindowsIni(dir) {
+  const extDir = path.join(dir, 'ext').replace(/\\/g, '/');
+  const ini = [
+    `extension_dir = "${extDir}"`,
+    'extension=curl',
+    'extension=openssl',
+    'extension=mbstring',
+    'extension=gd',
+    'extension=fileinfo',
+    'extension=intl',
+    '',
+  ].join('\r\n');
+  writeFileSync(path.join(dir, 'php.ini'), ini, 'utf8');
 }
 
 // Functional integrity: the binary runs and reports the pinned major.minor.

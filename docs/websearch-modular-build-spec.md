@@ -2,9 +2,11 @@
 
 > **Status: IN PROGRESS — Parts 1, 2 (a/b/c) and 3 shipped; Part 4 (the in-modal Familiar
 > explainer) planned.** Part 3 (`0.7.24`–`0.7.26`): the managedSearch seam (3a), `php-runtime.js`
-> static-PHP fetcher (3b), and the 4get + LibreY engines (3c). **Smoke-test caveat:** the PHP
-> install + spawn could not be exercised in CI (no PHP in the sandbox), so it's the on-real-machine
-> integration point — Linux/macOS only. **LibreY** is higher-confidence (flat PHP, `api.php` served
+> static-PHP fetcher (3b, + Windows official-PHP support `0.7.27`), and the 4get + LibreY engines
+> (3c). The PHP runtime fetches a static binary on Linux/macOS and the official windows.php.net NTS
+> zip (+ generated php.ini) on Windows x64, so the engines work on all three. **Smoke-test caveat:**
+> the PHP install + spawn could not be exercised in CI (no PHP in the sandbox), so it's the
+> on-real-machine integration point. **LibreY** is higher-confidence (flat PHP, `api.php` served
 > directly under `php -S`); **4get** is more experimental (front-controller routing under `php -S`;
 > its exact API route/config should be confirmed against the fetched source on first install).
 > Engines are **branch-pinned** (`main`/`master`) pending verified commit SHAs (a follow-up — read
