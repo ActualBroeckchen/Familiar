@@ -18,6 +18,7 @@ import { promises as fsp } from 'fs';
 
 import {
   modifyTomeFile, appendIdentity, createMemoryFull, searchMemory, enrich,
+  searchGraphNodes, createGraphNode, createGraphEdge, getGraphSubgraph,
 } from './thalamus.js';
 import { readSettingsSync, primaryConnectionFrom } from './cerebellum.js';
 import { PROVIDER_URLS } from './providers.js';
@@ -64,9 +65,10 @@ export function buildGraduationPrompt({ identityContext, items }) {
 `I'm tidying knowledge that's been sitting in my tomes, moving anything durable into its right home in my canonical self. For each entry I decide where it truly belongs:
 - A standing fact about who I am, as I grow and change → my self identity (home "self").
 - A standing fact about who {{user}} is → their identity (home "ward"). About our bond → our relationship (home "relationship").
+- A person, place, or thing and HOW IT CONNECTS to others — a relationship between entities → my knowledge graph (home "graph"). I give the relationship(s) as subject → edge → object, using the entities' canonical labels as I already know them.
 - A moment, event, or pattern with a 'when' → my memory (home "memory").
-- Keyword-triggered context or lore that fits none of those → it stays a tome (home "tome").
-If I'm not sure an entry is a durable fact with a clear home, it STAYS a tome — I don't crowd my canonical self with maybes. I'm also given what I already hold close to each entry: if I already have this fact, I set already_held true and don't write a duplicate. When I do graduate a fact, I rewrite it cleanly in my own first-person voice as the content to file.`;
+- Keyword-triggered context or lore — something that should resurface on a topic but isn't a fact about who someone is, how things connect, or a moment in time → it stays a tome (home "tome").
+When something might durably matter, I bring it into my canonical self rather than leave it stranded. My consolidation passes prune duplicates, merge, and let unused detail decay over time — the way sleep sorts a day's memories — so I lean toward graduating: over-gathering is cheap to correct, and missing something that turns out to matter is not. (A tome is still the right home for genuine keyword-lore — I'm not hoarding facts there out of caution, but I'm not emptying tomes for its own sake either.) I'm also given what I already hold close to each entry: if I already have this fact, I set already_held true and don't write a duplicate. When I graduate a fact, I rewrite it cleanly in my own first-person voice as the content to file.`;
 
   const list = items.map((it, i) =>
 `Entry ${i + 1} — uid ${it.uid} — from tome "${it.tomeName}"${it.comment ? `, titled "${it.comment}"` : ''}:
@@ -83,7 +85,7 @@ The entries to review:
 ${list}
 
 I reply with ONLY a JSON array — one object per uid, no prose:
-[{ "uid": "…", "home": "self|ward|relationship|memory|tome", "already_held": false, "content": "the fact rewritten in my own voice (omit when home is tome or already_held)", "filename": "for an identity home: my_identity.md | ward_notes.md | relationship_notes.md", "granularity": "for memory: daily|significant" }]`;
+[{ "uid": "…", "home": "self|ward|relationship|graph|memory|tome", "already_held": false, "content": "for an identity or memory home: the fact rewritten in my own voice (omit for graph/tome/already_held)", "filename": "for an identity home: my_identity.md | ward_notes.md | relationship_notes.md", "granularity": "for memory: daily|significant", "relations": "for a graph home: [{ \\"subject\\": {\\"label\\":\\"Chen\\",\\"type\\":\\"person\\"}, \\"edge\\": \\"lives_in\\", \\"object\\": {\\"label\\":\\"Berlin\\",\\"type\\":\\"place\\"} }]" }]`;
 }
 
 // Provider call — mirrors the reachout/triage loops' shape. (If a fourth
@@ -140,7 +142,7 @@ async function runTick() {
   const summary = await runOneGraduationTick({
     loadTomes,
     decide:     decideGraduation,
-    deps:       { appendIdentity, createMemoryFull },
+    deps:       { appendIdentity, createMemoryFull, searchGraphNodes, createGraphNode, createGraphEdge, getGraphSubgraph },
     modifyTome: modifyTomeFile,
     tidyMode,
     excludeNames: EXCLUDED_TOME_NAMES,

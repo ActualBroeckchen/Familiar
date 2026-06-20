@@ -73,6 +73,50 @@ test('routeDecision does not write for tome / already-held', async () => {
   assert.equal(wrote, false);
 });
 
+// ── routeDecision: graph (resolve-or-create + edge dedup) ────────
+test('routeDecision (graph) reuses an existing node, creates a missing one, wires the edge', async () => {
+  const created = [];
+  const edges = [];
+  const deps = {
+    searchGraphNodes: async ({ query }) =>
+      query.toLowerCase() === 'chen'
+        ? { results: [{ node: { id: 'chen-id', label: 'Chen' }, score: 0.9 }] }
+        : { results: [] },
+    createGraphNode: async ({ label }) => { created.push(label); return { ok: true, id: `${label}-id` }; },
+    getGraphSubgraph: async () => ({ nodes: [], edges: [] }),
+    createGraphEdge: async (e) => { edges.push(e); return { ok: true, id: 'e1' }; },
+  };
+  const r = await routeDecision({ home: 'graph', relations: [
+    { subject: { label: 'Chen', type: 'person' }, edge: 'lives_in', object: { label: 'Berlin', type: 'place' } },
+  ] }, {}, deps);
+  assert.equal(r.ok, true);
+  assert.deepEqual(created, ['Berlin']);            // Chen reused, Berlin created
+  assert.deepEqual(edges[0], { fromId: 'chen-id', toId: 'Berlin-id', type: 'lives_in' });
+});
+
+test('routeDecision (graph) skips an edge that already connects them', async () => {
+  const edges = [];
+  const deps = {
+    searchGraphNodes: async ({ query }) => ({ results: [{ node: { id: `${query.toLowerCase()}-id`, label: query }, score: 1 }] }),
+    createGraphNode: async ({ label }) => ({ ok: true, id: `${label}-id` }),
+    getGraphSubgraph: async () => ({ nodes: [], edges: [{ id: 'x', toId: 'berlin-id', type: 'lives_in' }] }),
+    createGraphEdge: async (e) => { edges.push(e); return { ok: true }; },
+  };
+  const r = await routeDecision({ home: 'graph', relations: [
+    { subject: { label: 'Chen' }, edge: 'lives_in', object: { label: 'Berlin' } },
+  ] }, {}, deps);
+  assert.equal(r.ok, true);
+  assert.equal(edges.length, 0);                    // already connected → no duplicate edge
+});
+
+test('routeDecision (graph) fails cleanly on an incomplete relation (entry left to retry)', async () => {
+  const r = await routeDecision({ home: 'graph', relations: [{ subject: { label: 'Chen' }, edge: '' }] }, {}, {
+    searchGraphNodes: async () => ({ results: [] }), createGraphNode: async () => ({ id: 'x' }),
+    getGraphSubgraph: async () => ({ edges: [] }), createGraphEdge: async () => ({ ok: true }),
+  });
+  assert.equal(r.ok, false);
+});
+
 // ── tidyEntry ────────────────────────────────────────────────────
 function fakeTome(entries) {
   const store = { 'f.json': { name: 'K', entries } };

@@ -80,7 +80,7 @@ export function parseGraduationDecision(raw) {
     arr = m ? JSON.parse(m[0]) : JSON.parse(String(raw));
   } catch { return map; }
   if (!Array.isArray(arr)) return map;
-  const HOMES = new Set(['self', 'ward', 'relationship', 'memory', 'tome']);
+  const HOMES = new Set(['self', 'ward', 'relationship', 'graph', 'memory', 'tome']);
   for (const d of arr) {
     if (!d || typeof d.uid !== 'string') continue;
     const home = HOMES.has(d.home) ? d.home : 'tome';
@@ -91,12 +91,59 @@ export function parseGraduationDecision(raw) {
       content:     typeof d.content === 'string' ? d.content.trim() : '',
       filename:    typeof d.filename === 'string' ? d.filename.trim() : '',
       granularity: typeof d.granularity === 'string' ? d.granularity.trim() : 'significant',
+      relations:   Array.isArray(d.relations) ? d.relations : [],
     });
   }
   return map;
 }
 
 const GRAD_GRANULARITIES = new Set(['daily', 'weekly', 'monthly', 'yearly', 'significant']);
+
+/**
+ * Resolve a graph node by exact (case-insensitive) label, or create it.
+ * Exact-label reuse is deliberately conservative — it reuses an existing
+ * "Chen" but won't wrongly merge two distinct entities whose labels differ.
+ * The LLM is told to use the canonical labels it sees in the graph block.
+ */
+async function resolveOrCreateNode(node, deps) {
+  const label = String(node?.label ?? '').trim();
+  if (!label) return null;
+  try {
+    const res = await deps.searchGraphNodes({ query: label, limit: 5 });
+    const items = (res?.results ?? res?.nodes ?? []).map(x => (x && x.node) ? x.node : x);
+    const match = items.find(n => n?.id && typeof n.label === 'string' && n.label.toLowerCase() === label.toLowerCase());
+    if (match?.id) return match.id;
+  } catch { /* fall through to create */ }
+  const created = await deps.createGraphNode({ label, type: node?.type || undefined, description: node?.description || undefined });
+  return created?.id ?? null;
+}
+
+/**
+ * Route a relational fact into the knowledge graph — the same discipline the
+ * Familiar uses in chat: resolve-or-create each endpoint, then wire the edge,
+ * skipping any edge of that type that already connects them. Idempotent: a
+ * re-run after a partial failure dedups what already landed. `relations` is
+ * an array so one tome entry can yield several edges.
+ */
+async function routeGraph(decision, deps) {
+  const relations = Array.isArray(decision.relations) ? decision.relations : [];
+  if (relations.length === 0) return { ok: false, error: 'no relations given' };
+  let wrote = false;
+  for (const rel of relations) {
+    const edgeType = String(rel?.edge ?? '').trim();
+    if (!edgeType || !rel?.subject?.label || !rel?.object?.label) return { ok: false, error: 'incomplete relation' };
+    const fromId = await resolveOrCreateNode(rel.subject, deps);
+    const toId   = await resolveOrCreateNode(rel.object, deps);
+    if (!fromId || !toId) return { ok: false, error: 'could not resolve endpoints' };
+    let exists = false;
+    try {
+      const sub = await deps.getGraphSubgraph({ nodeId: fromId, depth: 1 });
+      exists = (sub?.edges ?? []).some(e => e.toId === toId && (e.type === edgeType || e.customType === edgeType));
+    } catch { /* best-effort edge dedup */ }
+    if (!exists) { await deps.createGraphEdge({ fromId, toId, type: edgeType }); wrote = true; }
+  }
+  return { ok: true, wrote };
+}
 
 /**
  * Route ONE confirmed decision into Phylactery, then return whether the
@@ -114,6 +161,13 @@ export async function routeDecision(decision, candidate, deps = {}) {
   // Nothing to write: it stays a tome, or it's already held (we'll still
   // tidy a duplicate, but there's no new write).
   if (home === 'tome' || decision.alreadyHeld) return { ok: true, wrote: false };
+
+  // Graph is relational, not prose — it routes via relations[], not content.
+  if (home === 'graph') {
+    try { return await routeGraph(decision, deps); }
+    catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+  }
+
   if (!content) return { ok: false, error: 'empty content' };
 
   try {
@@ -166,7 +220,9 @@ export async function tidyEntry({ file, uid, decision, mode = 'pointer', now = D
     }
     // pointer: replace content with a breadcrumb, keep keys so the trigger
     // still resolves to "this now lives in my <home>".
-    const where = decision.home === 'memory' ? 'memory' : `${decision.home} identity`;
+    const where = decision.home === 'memory' ? 'memory'
+      : decision.home === 'graph' ? 'knowledge graph'
+      : `${decision.home} identity`;
     entry.content = `(Graduated to my ${where} on ${ts.slice(0, 10)} — I keep it there now.)`;
     entry.graduationReviewedAt = ts;
     entry.graduatedTo = decision.home;

@@ -3,8 +3,10 @@
 > **Status: SHIPPED — v1, opt-in (default OFF).** `tome-graduation.js` (pure logic) +
 > `tome-graduation-loop.js` (driver) are built and unit-tested (11 tests); wired into server
 > boot/shutdown and Settings ("Graduate tome knowledge" + `tomeGraduationTidy`). **v1 routes to
-> identity + memory only — autonomous graph construction is deferred to v2** (the one risky
-> route: building nodes/edges from free text unattended). It stays dormant until the ward enables
+> identity, memory, AND the knowledge graph** — relational facts resolve-or-create their
+> endpoints (exact-label reuse, conservative) and dedup the edge, the same discipline the chat
+> tools use; node/edge creation goes through the snapshot-protected wrappers. It stays dormant
+> until the ward enables
 > it, and the **LLM judgment prompt needs the ward's live behavioural test** when they do (it
 > can't be verified in CI). Inherits the Phase 3 routing rubric verbatim.
 
@@ -106,10 +108,11 @@ canonical self. Phase 3 stops *new* mis-filing; Phase 4 drains the *backlog*.
 ## 3. Safety & consent
 
 - Not on the crisis/threat/triage surface — no human sign-off gate. But it **writes to the
-  canonical store**, so: snapshot before tome edits (mirror Pillar H), consent-gate ward
-  long-term memory via the existing flow, and stay conservative — when the LLM is unsure where a
-  fact goes, it **stays a tome** (false-negative is cheap: the fact waits; false-positive
-  mis-files into the canonical self).
+  canonical store**, so the safety is in *reversibility and accuracy*, not in a stingy gate:
+  snapshot before tome edits (mirror Pillar H), consent-gate ward long-term memory via the
+  existing flow, dedup so a save corrects/supersedes rather than duplicates. The *quantity* posture
+  leans toward capture (§4.3) — the consolidation back-end is the safety net for over-gathering,
+  not a cautious LLM gate.
 - Never delete the only copy of a fact on a write that hasn't confirmed success.
 
 ## 4. Decisions (settled)
@@ -124,9 +127,13 @@ canonical self. Phase 3 stops *new* mis-filing; Phase 4 drains the *backlog*.
      breadcrumb, so a keyword trigger still resolves.
    Either way, the tome entry is touched **only after** the route to Phylactery is confirmed — a
    failed/partial route leaves it intact to retry.
-3. **Scope — confident durable facts only.** When the LLM isn't sure a tome entry is a durable
-   fact with a clear home, it **stays a tome**. Borderline lore is left alone (false-negative is
-   cheap; mis-filing into the canonical self is not).
+3. **Scope — lean toward graduating; trust consolidation to prune.** The asymmetry favours
+   capture: over-gathering is cheap to correct (the consolidation passes merge duplicate nodes,
+   decay unused detail, and graduate identity detail to RAG — the back-end "sleep-sort"), while a
+   fact left stranded in a tome can be missed when it matters. So when something plausibly belongs
+   in the canonical self, the pass brings it in rather than hedging it back to a tome. Genuine
+   keyword-lore still stays a tome — the bias is toward capture, not toward emptying tomes. *(This
+   relies on the consolidation machinery actually pruning sensibly; if that weakens, revisit.)*
 
 ## 5. Acceptance criteria
 
@@ -137,7 +144,8 @@ canonical self. Phase 3 stops *new* mis-filing; Phase 4 drains the *backlog*.
 - [ ] `tomeGraduationTidy='delete'` removes the graduated entry; `='pointer'` leaves a breadcrumb;
       both happen only after a confirmed route, never before.
 - [ ] Ponderings / Session Memories / runtime tomes are never touched.
-- [ ] A fact the LLM can't confidently place **stays a tome**.
+- [ ] Genuine keyword-lore **stays a tome**; a plausibly-durable fact is **graduated** (the bias
+      is capture, not hedging it back to a tome).
 - [ ] Ward long-term memory routes through the existing greenlight; the Familiar's own `self`
       facts do not require consent.
 - [ ] Phylactery down / LLM error → the tome entry is left intact for retry; chat path untouched.
