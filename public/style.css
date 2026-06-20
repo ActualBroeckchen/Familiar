@@ -3128,3 +3128,13 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
   line-height: 1.35;
 }
 .ws-opt input { margin-top: 3px; flex: none; }
+
+/* Web search modal — resizable */
+#websearch-modal .modal {
+  resize: both;
+  overflow: auto;
+  min-width: 340px;
+  min-height: 300px;
+  max-width: 95vw;
+  max-height: 92vh;
+}

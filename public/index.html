@@ -596,6 +596,16 @@
       <div class="modal-body">
         <p class="field-hint"><strong>Definitions &amp; facts</strong> (<code>look_up</code>) are always on and need no setup. The choice below is only how I <strong>find web pages</strong> (<code>web_search</code>).</p>
 
+        <details class="field" id="websearch-guide" open>
+          <summary style="cursor:pointer"><strong>💬 Not sure? Ask me about these options</strong></summary>
+          <div id="guide-chat-messages" style="max-height:240px;overflow-y:auto;margin:8px 0;display:flex;flex-direction:column;gap:8px"></div>
+          <p class="field-hint hidden" id="guide-chat-unavailable">I can't chat here just now — there's no model connection set up yet. The buttons below still work.</p>
+          <div class="field-row" style="gap:6px;align-items:stretch">
+            <input type="text" id="guide-chat-input" placeholder="e.g. which is best if I don't want to sign up for anything?" style="flex:1" autocomplete="off">
+            <button class="btn-send" id="guide-chat-send" type="button">Ask</button>
+          </div>
+        </details>
+
         <div class="field">
           <label class="ws-opt"><input type="radio" name="web-search-backend" value="basic"><span><strong>Basic</strong> — built-in, no setup. Works for everyone.</span></label>
           <label class="ws-opt"><input type="radio" name="web-search-backend" value="api"><span><strong>API</strong> — proper search, paste one key.</span></label>
@@ -640,16 +650,6 @@
           <label for="web-search-max-chars">Max page chars read</label>
           <input type="number" id="web-search-max-chars" min="500" max="100000" step="500" style="width:7em">
         </div>
-
-        <details class="field" id="websearch-guide" style="margin-top:12px">
-          <summary style="cursor:pointer"><strong>💬 Not sure? Ask me about these options</strong></summary>
-          <div id="guide-chat-messages" style="max-height:240px;overflow-y:auto;margin:8px 0;display:flex;flex-direction:column;gap:8px"></div>
-          <p class="field-hint hidden" id="guide-chat-unavailable">I can't chat here just now — there's no model connection set up yet. The buttons above still work.</p>
-          <div class="field-row" style="gap:6px;align-items:stretch">
-            <input type="text" id="guide-chat-input" placeholder="e.g. which is best if I don't want to sign up for anything?" style="flex:1" autocomplete="off">
-            <button class="btn-send" id="guide-chat-send" type="button">Ask</button>
-          </div>
-        </details>
       </div>
       <div class="modal-footer">
         <span class="field-hint" id="websearch-apply-status" style="margin-right:auto"></span>
