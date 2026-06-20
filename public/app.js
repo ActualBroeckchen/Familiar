@@ -345,6 +345,7 @@ function openWebSearchModal() {
   writeSettingsToUI();      // reflect current state into the modal fields
   syncWebSearchPanels();
   startEnginePolling();     // live install/active status while open
+  resetGuideChat();         // fresh, ephemeral explainer conversation
   $('websearch-modal')?.classList.remove('hidden');
 }
 
@@ -493,6 +494,89 @@ async function applyWebSearchBackend() {
   _lastEngineJson = ''; refreshEngineList();
   if (btn) btn.disabled = false;
   setTimeout(() => { if (status) status.textContent = ''; }, 4000);
+}
+
+// ── In-modal Familiar explainer (the guide chat) ────────────────
+// The same Familiar, scoped to explaining the search options. Ephemeral to the
+// modal (history resets each open); never persisted.
+let _guideHistory = [];
+let _guidePending = false;
+
+// The connection creds the guide chat sends (same as the main chat path).
+function guideConn() {
+  const c = (typeof getPrimaryConnection === 'function' && getPrimaryConnection()) || null;
+  const provider = c?.provider || state.provider;
+  const apiKey   = c?.apiKey   || state.apiKey;
+  const model    = c?.model    || state.model;
+  if (!provider || !apiKey || !model) return null;
+  return { provider, apiKey, model };
+}
+
+function resetGuideChat() {
+  _guideHistory = [];
+  _guidePending = false;
+  const ok = !!guideConn();
+  $('guide-chat-unavailable')?.classList.toggle('hidden', ok);
+  const input = $('guide-chat-input');
+  const send  = $('guide-chat-send');
+  if (input) input.disabled = !ok;
+  if (send)  send.disabled  = !ok;
+  renderGuideChat();
+}
+
+function renderGuideChat() {
+  const host = $('guide-chat-messages');
+  if (!host) return;
+  host.innerHTML = '';
+  for (const m of _guideHistory) {
+    const b = document.createElement('div');
+    const mine = m.role === 'user';
+    b.style.cssText = `align-self:${mine ? 'flex-end' : 'flex-start'};max-width:85%;padding:6px 10px;` +
+      `border-radius:10px;white-space:pre-wrap;word-break:break-word;` +
+      (mine ? 'background:var(--accent,#3a6c5a);color:#fff'
+            : `background:var(--surface-2,#2a2a2a);${m.error ? 'opacity:.8;font-style:italic' : ''}`);
+    b.textContent = m.content;
+    host.appendChild(b);
+  }
+  if (_guidePending) {
+    const t = document.createElement('div');
+    t.className = 'field-hint'; t.textContent = '…'; t.style.alignSelf = 'flex-start';
+    host.appendChild(t);
+  }
+  host.scrollTop = host.scrollHeight;
+}
+
+async function sendGuideChat() {
+  const input = $('guide-chat-input');
+  const text  = input ? input.value.trim() : '';
+  if (!text || _guidePending) return;
+  const conn = guideConn();
+  if (!conn) { resetGuideChat(); return; }
+
+  _guideHistory.push({ role: 'user', content: text });
+  if (input) input.value = '';
+  _guidePending = true;
+  renderGuideChat();
+
+  try {
+    const r = await fetch('/api/guide-chat', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ ...conn, messages: _guideHistory }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `request failed (${r.status})`);
+    const content = (typeof stripDisplayTimestamps === 'function')
+      ? stripDisplayTimestamps(data.content || '')
+      : (data.content || '');
+    _guideHistory.push({ role: 'assistant', content: content || '(no reply)' });
+  } catch (err) {
+    _guideHistory.push({ role: 'assistant', content: `I couldn't answer just now (${err.message}).`, error: true });
+  } finally {
+    _guidePending = false;
+    renderGuideChat();
+    input?.focus();
+  }
 }
 
 function saveHistory() {
@@ -3331,6 +3415,10 @@ function init() {
     el.addEventListener('change', () => { readSettingsFromUI(); syncWebSearchPanels(); });
   });
   $('websearch-apply-btn')?.addEventListener('click', applyWebSearchBackend);
+  $('guide-chat-send')?.addEventListener('click', sendGuideChat);
+  $('guide-chat-input')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendGuideChat(); }
+  });
 
   // ── Settings field listeners ─────────────────────────────────
   const settingsIds = [
