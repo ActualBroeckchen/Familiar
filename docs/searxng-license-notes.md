@@ -26,7 +26,19 @@ What we owe is ordinary copyleft hygiene for the SearXNG component, listed below
 | Component | License | Where |
 |---|---|---|
 | Proto-Familiar (our code) | **GPL-3.0** | top-level `LICENSE` |
-| SearXNG (vendored) | **AGPL-3.0-or-later** | `vendor/searxng/LICENSE` + per-file `SPDX-License-Identifier: AGPL-3.0-or-later` |
+| SearXNG (fetched) | **AGPL-3.0-or-later** | `vendor/searxng/LICENSE` + per-file `SPDX-License-Identifier: AGPL-3.0-or-later` |
+| LibreY (fetched, 0.7.26) | **AGPL-3.0** | `vendor/librey/` (github.com/Ahwxorg/LibreY) — fetched on enable, not committed |
+| 4get (fetched, 0.7.26) | **AGPL-3.0** | `vendor/4get/` (git.lolcat.ca/lolcat/4get) — fetched on enable, not committed |
+| static PHP (fetched, 0.7.26) | **PHP License + bundled deps** | `vendor/php-runtime/` (static-php-cli "common" build) — fetched on enable, not committed |
+
+The same analysis as SearXNG applies to 4get and LibreY: both are AGPL-3.0, both run at
+**arm's length** (a separate `php -S` process on loopback, spoken to over HTTP/JSON — never linked
+into our address space → *mere aggregation*, not a combined work), and both are **fetched on
+enable, not committed**, so the user obtains their source from upstream. We currently apply **no
+patches** to either (so no §5(a) change-notice obligation yet — if we add one, it carries a dated
+notice like the SearXNG `pwd` patch). Keep their instances loopback-bound, as we do. The static PHP
+binary is a prebuilt redistributable under the PHP License (plus its bundled extensions' licenses);
+we fetch it unmodified.
 
 AGPL-3.0 = GPL-3.0 **plus §13**, the "network use" clause: if you *modify* the program and let
 users interact with the modified version *remotely over a network*, you must offer those users the

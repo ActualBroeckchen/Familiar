@@ -25,8 +25,8 @@
 import dns from 'node:dns/promises';
 import net from 'node:net';
 
-import { timedFetch } from './web-fetch-util.js';
 import { API_PROVIDERS } from './websearch-providers.js';
+import { searxngSearch } from './local-engine-adapters.js';
 
 // The HTML-extraction stack (linkedom + @mozilla/readability + turndown) is
 // loaded LAZILY, not as static top-level imports. These are optional-feature
@@ -245,7 +245,7 @@ export async function searchWeb(query, settings = {}, deps = {}) {
 // knows whether a fallback is still worth trying).
 async function runChosenBackend(q, settings, deps) {
   const custom = String(settings.webSearchBaseUrl || '').trim();
-  if (custom) return { primary: await searchViaSearxng(q, custom, deps), isBasic: false };
+  if (custom) return { primary: await searxngSearch(custom, q, deps), isBasic: false };
 
   const backend = String(settings.webSearchBackend || 'basic');
 
@@ -258,9 +258,10 @@ async function runChosenBackend(q, settings, deps) {
   }
 
   if (backend === 'local') {
-    const managed = String(deps.managedUrl || '').trim();
-    if (managed) return { primary: await searchViaSearxng(q, managed, deps), isBasic: false };
-    // Local chosen but no managed engine is ready → straight to the floor.
+    // The managed engine knows its own JSON dialect; local-engine-service
+    // injects managedSearch bound to whichever engine is active. It returns
+    // { error } when nothing is ready, which falls through to the floor below.
+    if (deps.managedSearch) return { primary: await deps.managedSearch(q, deps), isBasic: false };
     return { primary: await searchViaDuckDuckGo(q, deps), isBasic: true };
   }
 
@@ -316,23 +317,6 @@ async function searchViaDuckDuckGo(q, { fetchFn = fetch, lookupFn } = {}) {
     return { rows };
   } catch (err) {
     return { error: `I searched but couldn't make sense of the results (${err.message}).` };
-  }
-}
-
-// A SearXNG JSON API — either the human's own (custom webSearchBaseUrl) or
-// the Familiar's managed loopback instance. Both are sanctioned endpoints,
-// so this does NOT route through the public-only SSRF guard; it uses the
-// shared timedFetch for its timeout.
-async function searchViaSearxng(q, base, { fetchFn = fetch } = {}) {
-  const url = `${base.replace(/\/+$/, '')}/search?q=${encodeURIComponent(q)}&format=json`;
-  try {
-    const res = await timedFetch(url, { fetchFn });
-    if (!res.ok) return { error: `My search came back with an error (HTTP ${res.status}). My SearXNG instance needs JSON output enabled.` };
-    const data = await res.json();
-    return { rows: Array.isArray(data?.results) ? data.results : [] };
-  } catch (err) {
-    if (err?.name === 'AbortError') return { error: 'My search timed out before it answered.' };
-    return { error: `I couldn't reach my SearXNG instance (${err.message}). It may be down.` };
   }
 }
 

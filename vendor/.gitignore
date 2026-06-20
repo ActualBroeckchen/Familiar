@@ -5,8 +5,14 @@
 # re-applies the patches under vendor/searxng-patches/ (which ARE tracked). So
 # we ignore the whole fetched source tree but keep the patches + this file.
 searxng/
+# 4get + LibreY (PHP engines, 0.7.26) — likewise fetched on enable, not committed.
+4get/
+librey/
 # Never commit build artifacts / venvs even if the dir is force-added.
 **/.venv/
 **/__pycache__/
 **/*.pyc
 **/*.pyo
+
+# Fetched static PHP runtime for the PHP-based local engines (4get/LibreY)
+php-runtime/

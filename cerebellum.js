@@ -56,7 +56,7 @@ import {
 } from './thalamus.js';
 import { audienceTagFor } from './audience.js';
 import { searchWeb, readWebpage, lookUp } from './websearch.js';
-import { managedEngineUrl } from './local-engine-service.js';
+import { managedEngineSearch } from './local-engine-service.js';
 import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
 import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta } from './outbox.js';
@@ -2226,7 +2226,7 @@ export const TOOL_EXECUTORS = {
   // engine URL (runtime state the supervisor publishes); searchWeb resolves
   // the rest and always degrades to the keyless floor.
   web_search: async ({ query } = {}) =>
-    searchWeb(query, readSettingsSync(), { managedUrl: managedEngineUrl() }),
+    searchWeb(query, readSettingsSync(), { managedSearch: managedEngineSearch }),
   // look_up needs no backend resolution: it's always the keyless official
   // reference APIs (Wikipedia + DDG Instant Answer), so it ignores the
   // search-backend settings entirely.

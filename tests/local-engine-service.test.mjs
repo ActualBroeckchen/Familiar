@@ -5,6 +5,7 @@ import {
   desiredEngine,
   reconcile,
   managedEngineUrl,
+  managedEngineSearch,
   stopLocalEngines,
 } from '../local-engine-service.js';
 
@@ -28,6 +29,7 @@ function fakeEngine(id) {
     installed: () => true,
     ensureInstalled: async () => {},
     spawn: async () => { eng._spawns += 1; return { child, url: `http://127.0.0.1/${id}` }; },
+    search: async (base, q) => ({ rows: [{ title: id, url: base, content: q }] }),
     uninstall: async () => {},
     _child: child,
     _spawns: 0,
@@ -109,6 +111,17 @@ test('reconcile degrades to keyless (null URL) when the spawn fails', async () =
   const engines = { searxng: { ...fakeEngine('searxng'), spawn: async () => { throw new Error('uv not found'); } } };
   await reconcile({ engines, disabled: off, readSettings: () => localOn('searxng') });
   assert.equal(managedEngineUrl(), null); // must not throw
+});
+
+test('managedEngineSearch delegates to the active engine, and errors when none runs', async () => {
+  await stopLocalEngines();
+  assert.match((await managedEngineSearch('x')).error, /no managed search engine/);
+  const eng = fakeEngine('searxng');
+  await reconcile({ engines: { searxng: eng }, disabled: off, readSettings: () => localOn('searxng') });
+  const r = await managedEngineSearch('hi');
+  assert.deepEqual(r.rows[0], { title: 'searxng', url: 'http://127.0.0.1/searxng', content: 'hi' });
+  await stopLocalEngines();
+  assert.match((await managedEngineSearch('x')).error, /no managed search engine/);
 });
 
 test('a child that exits on its own drops the managed URL back to null', async () => {

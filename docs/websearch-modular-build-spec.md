@@ -1,9 +1,14 @@
 # Modular web search — build spec
 
-> **Status: IN PROGRESS — Part 1 (`0.7.19`), Part 2a (backend engine, `0.7.20`), Part 2b
-> (engine-agnostic supervisor, `0.7.21`), and Part 2c (the modal + endpoints, `0.7.22`) all
-> shipped — Part 2 is complete. Parts 3 (4get/LibreY via static PHP) and 4 (the in-modal Familiar
-> explainer) planned.** This is the build
+> **Status: IN PROGRESS — Parts 1, 2 (a/b/c) and 3 shipped; Part 4 (the in-modal Familiar
+> explainer) planned.** Part 3 (`0.7.24`–`0.7.26`): the managedSearch seam (3a), `php-runtime.js`
+> static-PHP fetcher (3b), and the 4get + LibreY engines (3c). **Smoke-test caveat:** the PHP
+> install + spawn could not be exercised in CI (no PHP in the sandbox), so it's the on-real-machine
+> integration point — Linux/macOS only. **LibreY** is higher-confidence (flat PHP, `api.php` served
+> directly under `php -S`); **4get** is more experimental (front-controller routing under `php -S`;
+> its exact API route/config should be confirmed against the fetched source on first install).
+> Engines are **branch-pinned** (`main`/`master`) pending verified commit SHAs (a follow-up — read
+> the resolved SHA after a successful fetch and pin it, per the SearXNG precedent). This is the build
 > instruction for reworking web search from a single backend into **two distinct tools** (info
 > lookup vs. website search) and a **modular, human-pickable backend** (Basic / API / Local engine)
 > presented in a popout modal — with an in-modal **Familiar explainer** so the human can be guided

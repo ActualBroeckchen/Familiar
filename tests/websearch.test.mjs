@@ -184,18 +184,25 @@ test('searchWeb (api backend, no key set) still answers via the floor', async ()
   assert.match(out, /Result A/);
 });
 
-test('searchWeb (local backend) uses the managed engine URL when one is ready', async () => {
-  let hit = '';
-  const fetchFn = async (url) => { hit = url; return { ok: true, json: async () => ({ results: [{ title: 'M', url: 'http://m.test', content: 'cm' }] }) }; };
-  const out = await searchWeb('cats', { webSearchBackend: 'local' }, { fetchFn, managedUrl: 'http://127.0.0.1:9' });
-  assert.match(hit, /^http:\/\/127\.0\.0\.1:9\/search\?q=cats&format=json$/);
+test('searchWeb (local backend) uses the injected managed search when present', async () => {
+  const managedSearch = async () => ({ rows: [{ title: 'M', url: 'http://m.test', content: 'cm' }] });
+  const out = await searchWeb('cats', { webSearchBackend: 'local' }, { managedSearch });
   assert.match(out, /1\. M/);
+  assert.match(out, /http:\/\/m\.test/);
 });
 
-test('searchWeb (local backend) falls to the floor when no managed engine is ready', async () => {
+test('searchWeb (local backend) falls to the floor when the managed engine returns an error', async () => {
   const lookupFn = async () => [{ address: '93.184.216.34' }];
   const fetchFn  = async (url) => ({ ok: true, url, status: 200, headers: { get: () => null }, text: async () => DDG_HTML });
-  const out = await searchWeb('cats', { webSearchBackend: 'local' }, { fetchFn, lookupFn }); // no managedUrl
+  const managedSearch = async () => ({ error: 'no managed search engine is running right now.' });
+  const out = await searchWeb('cats', { webSearchBackend: 'local' }, { fetchFn, lookupFn, managedSearch });
+  assert.match(out, /Result A/); // floor answered
+});
+
+test('searchWeb (local backend) falls to the floor when no managed search is injected', async () => {
+  const lookupFn = async () => [{ address: '93.184.216.34' }];
+  const fetchFn  = async (url) => ({ ok: true, url, status: 200, headers: { get: () => null }, text: async () => DDG_HTML });
+  const out = await searchWeb('cats', { webSearchBackend: 'local' }, { fetchFn, lookupFn });
   assert.match(out, /Result A/);
 });
 
