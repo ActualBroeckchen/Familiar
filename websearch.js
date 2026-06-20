@@ -227,45 +227,58 @@ export async function searchWeb(query, settings = {}, deps = {}) {
   if (!q) return 'I need something to search for.';
   const maxResults = clampInt(settings.webSearchMaxResults, DEFAULT_MAX_RESULTS, 1, 20);
 
-  const { primary, isBasic } = await runChosenBackend(q, settings, deps);
-  if (!primary.error) return formatResults(q, primary.rows, maxResults);
+  const { primary, isBasic, label } = await runChosenBackend(q, settings, deps);
+  if (!primary.error) {
+    // Observability: which backend actually answered (so a silent fallback
+    // doesn't look identical to the chosen backend working).
+    console.log(`[websearch] "${q}" — served via ${label}`);
+    return formatResults(q, primary.rows, maxResults);
+  }
 
   // The chosen backend errored. If it wasn't already the keyless floor, try
   // the floor before giving up — a wrong key / stale URL / down instance
   // never leaves my human without search.
   if (!isBasic) {
     const fallback = await searchViaDuckDuckGo(q, deps);
-    if (!fallback.error) return formatResults(q, fallback.rows, maxResults);
+    if (!fallback.error) {
+      console.log(`[websearch] "${q}" — ${label} unavailable; fell back to built-in keyless search`);
+      return formatResults(q, fallback.rows, maxResults);
+    }
   }
+  console.log(`[websearch] "${q}" — search failed (${label})`);
   return primary.error; // the floor itself failed, or both down → report it
 }
 
-// Run ONLY the backend the human selected; return its {rows}|{error} plus a
-// flag for whether that backend was already the keyless floor (so searchWeb
-// knows whether a fallback is still worth trying).
+// Run ONLY the backend the human selected; return its {rows}|{error}, whether
+// that backend was already the keyless floor (so searchWeb knows whether a
+// fallback is worth trying), and a human-readable label of what served.
 async function runChosenBackend(q, settings, deps) {
   const custom = String(settings.webSearchBaseUrl || '').trim();
-  if (custom) return { primary: await searxngSearch(custom, q, deps), isBasic: false };
+  if (custom) return { primary: await searxngSearch(custom, q, deps), isBasic: false, label: 'your own SearXNG' };
 
   const backend = String(settings.webSearchBackend || 'basic');
 
   if (backend === 'api') {
     const provider = String(settings.webSearchApiProvider || 'tavily');
     const fn = API_PROVIDERS[provider];
-    if (!fn) return { primary: { error: `I don't recognise the search provider "${provider}".` }, isBasic: false };
+    if (!fn) return { primary: { error: `I don't recognise the search provider "${provider}".` }, isBasic: false, label: `the ${provider} API` };
     const cfg = { apiKey: settings.webSearchApiKey, cseId: settings.webSearchGoogleCseId };
-    return { primary: await fn(q, cfg, deps), isBasic: false };
+    return { primary: await fn(q, cfg, deps), isBasic: false, label: `the ${provider} API` };
   }
 
   if (backend === 'local') {
     // The managed engine knows its own JSON dialect; local-engine-service
-    // injects managedSearch bound to whichever engine is active. It returns
-    // { error } when nothing is ready, which falls through to the floor below.
-    if (deps.managedSearch) return { primary: await deps.managedSearch(q, deps), isBasic: false };
-    return { primary: await searchViaDuckDuckGo(q, deps), isBasic: true };
+    // injects managedSearch bound to whichever engine is active, and tags the
+    // result with `via` (the engine name). It returns { error } when nothing
+    // is ready, which falls through to the floor below.
+    if (deps.managedSearch) {
+      const primary = await deps.managedSearch(q, deps);
+      return { primary, isBasic: false, label: primary.via || 'a local engine' };
+    }
+    return { primary: await searchViaDuckDuckGo(q, deps), isBasic: true, label: 'built-in keyless search' };
   }
 
-  return { primary: await searchViaDuckDuckGo(q, deps), isBasic: true };
+  return { primary: await searchViaDuckDuckGo(q, deps), isBasic: true, label: 'built-in keyless search' };
 }
 
 function formatResults(q, rows, maxResults) {

@@ -266,10 +266,12 @@ export async function managedEngineSearch(q, deps = {}) {
     return { error: 'no managed search engine is running right now.' };
   }
   if (!_activeEngine.search) return { error: 'the running engine has no search adapter.' };
+  const via = `${_activeEngine.label} (local)`;
   try {
-    return await _activeEngine.search(_url, q, deps);
+    const r = await _activeEngine.search(_url, q, deps);
+    return { ...r, via };
   } catch (err) {
-    return { error: `my ${_activeEngine.label} search failed (${err.message}).` };
+    return { error: `my ${_activeEngine.label} search failed (${err.message}).`, via };
   }
 }
 
