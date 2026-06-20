@@ -16,7 +16,9 @@ const on  = () => true;  // hard-disabled
 function fakeChild() {
   const handlers = {};
   return {
-    kill() { this._killed = true; },
+    // kill() emits 'exit' so killAndWait resolves promptly (mirrors a real
+    // child process exiting on SIGTERM).
+    kill() { this._killed = true; handlers.exit?.(); },
     on(ev, fn) { handlers[ev] = fn; },
     emit(ev)   { handlers[ev]?.(); },
     _killed: false,

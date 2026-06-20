@@ -139,14 +139,43 @@ async function startEngine(id, engines) {
 
 async function stopEngine() {
   _state = 'stopping';
-  if (_child) {
-    try { _child.kill('SIGTERM'); } catch { /* already gone */ }
-    _child = null;
-  }
+  const child = _child;
+  _child        = null;
   _url          = null;
   _activeId     = null;
   _activeEngine = null;
-  _state        = 'down';
+  // WAIT for the child to actually exit before returning — on Windows the
+  // child's cwd (the engine dir) is locked while it lives, so an uninstall
+  // that deletes that dir must not race the process's death.
+  if (child) await killAndWait(child);
+  _state = 'down';
+}
+
+// Kill a child and resolve once it has exited (or we force-killed it). Capped
+// so teardown never hangs.
+function killAndWait(child, timeoutMs = 5000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let t1, t2;
+    const finish = () => { if (settled) return; settled = true; clearTimeout(t1); clearTimeout(t2); resolve(); };
+    try { child.on?.('exit', finish); } catch { /* */ }
+    t1 = setTimeout(() => { if (!settled) { try { child.kill('SIGKILL'); } catch { /* */ } } }, timeoutMs);
+    t2 = setTimeout(finish, timeoutMs + 1000);
+    t1.unref?.(); t2.unref?.();
+    try { child.kill('SIGTERM'); } catch { finish(); }
+  });
+}
+
+// rmSync, but retry past transient Windows file locks (a just-killed php.exe
+// can hold the dir for a moment after exit).
+async function rmDirWithRetry(dir, attempts = 6) {
+  for (let i = 0; i < attempts; i++) {
+    try { rmSync(dir, { recursive: true, force: true }); return; }
+    catch (err) {
+      if (i === attempts - 1) throw err;
+      await sleep(300);
+    }
+  }
 }
 
 /**
@@ -415,7 +444,7 @@ const searxngEngine = {
   spawn:           spawnSearxng,
   search:          searxngSearch,   // (base, q, deps) → {rows}|{error}
   uninstall: async () => {
-    rmSync(SEARXNG_DIR, { recursive: true, force: true });
+    await rmDirWithRetry(SEARXNG_DIR);
     _searxngSourceRetryTs = 0;
   },
 };
@@ -478,7 +507,7 @@ function makePhpEngine({ id, label, strain, repo, pin, entry, configExample, rou
       return { child, url };
     },
     search,
-    uninstall: async () => { rmSync(dir, { recursive: true, force: true }); retryTs = 0; },
+    uninstall: async () => { await rmDirWithRetry(dir); retryTs = 0; },
   };
 }
 

@@ -366,6 +366,7 @@ function syncWebSearchPanels() {
 
 let _engineListTimer = null;
 let _lastEngineJson  = '';
+let _uninstallingId  = null;
 function startEnginePolling() {
   stopEnginePolling();
   refreshEngineList();
@@ -420,7 +421,10 @@ function renderEngineList(host, data) {
 
     const actions = document.createElement('span');
     actions.style.cssText = 'display:flex;gap:6px;align-items:center';
-    if (unavailable) {
+    if (id === _uninstallingId) {
+      const s = document.createElement('span'); s.className = 'field-hint'; s.textContent = 'Uninstalling…';
+      actions.appendChild(s);
+    } else if (unavailable) {
       // greyed: nothing actionable yet (Part 3 wires 4get/LibreY)
     } else if (e.phase === 'installing') {
       const s = document.createElement('span'); s.className = 'field-hint'; s.textContent = 'Installing…';
@@ -461,11 +465,14 @@ async function installLocalEngineUI(id) {
 }
 
 async function uninstallLocalEngineUI(id) {
+  _uninstallingId = id;
+  _lastEngineJson = ''; refreshEngineList();   // show "Uninstalling…" right away
   try {
     await fetch('/api/websearch/engine/uninstall', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }),
     });
-  } catch { /* same */ }
+  } catch { /* the refresh below shows the real outcome */ }
+  _uninstallingId = null;
   _lastEngineJson = ''; refreshEngineList();
 }
 
