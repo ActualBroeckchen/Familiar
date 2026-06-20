@@ -342,7 +342,7 @@ function setRadio(name, value) {
 }
 
 function openWebSearchModal() {
-  applySettingsToUI();      // reflect current state into the modal fields
+  writeSettingsToUI();      // reflect current state into the modal fields
   syncWebSearchPanels();
   startEnginePolling();     // live install/active status while open
   $('websearch-modal')?.classList.remove('hidden');
