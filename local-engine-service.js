@@ -31,7 +31,7 @@ import net from 'net';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
-import { existsSync, mkdirSync, writeFileSync, copyFileSync, rmSync, readdirSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync } from 'fs';
 
 import { searxngSearch, libreySearch, fourgetSearch } from './local-engine-adapters.js';
 import { ensurePhp, phpSupported } from './php-runtime.js';
@@ -461,7 +461,7 @@ const searxngEngine = {
 // `router` (optional): a front-controller script passed to `php -S` for apps
 // that rely on URL rewriting (4get). Flat-file apps (LibreY: api.php is a real
 // file) need none.
-function makePhpEngine({ id, label, strain, repo, pin, entry, configExample, router, search, enabled = true }) {
+function makePhpEngine({ id, label, strain, repo, pin, entry, configure, router, search, enabled = true }) {
   const dir = path.join(__dirname, 'vendor', id);
   let retryTs = 0;
   const installed = () => existsSync(path.join(dir, entry));
@@ -474,23 +474,22 @@ function makePhpEngine({ id, label, strain, repo, pin, entry, configExample, rou
     installed,
     ensureInstalled: async () => {
       await ensurePhp();                 // fetch the static PHP runtime (throws where unsupported)
-      if (installed()) return;
-      if (Date.now() < retryTs) throw new Error('source fetch backing off after a recent failure');
-      try {
-        console.log(`[local-engine] fetching ${label} source (pinned ${String(pin).slice(0, 12)})…`);
-        await gitFetchPinned(dir, repo, pin);
-        if (configExample) {
-          const src = path.join(dir, configExample[0]);
-          const dst = path.join(dir, configExample[1]);
-          if (existsSync(src) && !existsSync(dst)) copyFileSync(src, dst);
+      if (!installed()) {
+        if (Date.now() < retryTs) throw new Error('source fetch backing off after a recent failure');
+        try {
+          console.log(`[local-engine] fetching ${label} source (pinned ${String(pin).slice(0, 12)})…`);
+          await gitFetchPinned(dir, repo, pin);
+          if (!installed()) throw new Error(`fetched but ${entry} is missing (unexpected layout)`);
+          console.log(`[local-engine] ${label} source fetched.`);
+        } catch (err) {
+          retryTs = Date.now() + SOURCE_RETRY_COOLDOWN_MS;
+          try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
+          throw new Error(`could not fetch ${label} source (${err.message})`);
         }
-        if (!installed()) throw new Error(`fetched but ${entry} is missing (unexpected layout)`);
-        console.log(`[local-engine] ${label} source fetched.`);
-      } catch (err) {
-        retryTs = Date.now() + SOURCE_RETRY_COOLDOWN_MS;
-        try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
-        throw new Error(`could not fetch ${label} source (${err.message})`);
       }
+      // Always (re)write the engine's config — idempotent, so it also repairs
+      // an existing install on the next activate without an uninstall.
+      if (configure) { try { configure(dir); } catch (err) { console.warn(`[local-engine] ${label} configure failed: ${err.message}`); } }
     },
     spawn: async () => {
       const php  = await ensurePhp();
@@ -511,11 +510,30 @@ function makePhpEngine({ id, label, strain, repo, pin, entry, configExample, rou
   };
 }
 
+// Materialise an engine's config from its shipped example (if config is
+// missing), then apply an optional idempotent transform to the live config.
+function writeEngineConfig(dir, fromRel, toRel, transform) {
+  const from = path.join(dir, fromRel);
+  const to   = path.join(dir, toRel);
+  let content = existsSync(to) ? readFileSync(to, 'utf8')
+              : existsSync(from) ? readFileSync(from, 'utf8')
+              : null;
+  if (content == null) return;
+  if (transform) content = transform(content);
+  writeFileSync(to, content, 'utf8');
+}
+
 const libreyEngine = makePhpEngine({
   id: 'librey', label: 'LibreY', strain: 'low',
   repo: 'https://github.com/Ahwxorg/LibreY', pin: 'main',
   entry: 'index.php',
-  configExample: ['config.php.example', 'config.php'],   // API on by default (disable_api:false)
+  // Pin text search to DuckDuckGo. LibreY's default "auto" balances Google +
+  // DDG, but Google captcha-walls the scraper → "No results found" 500s; DDG
+  // scrapes reliably (it's what our keyless floor uses). API is on by default.
+  configure: (dir) => writeEngineConfig(
+    dir, 'config.php.example', 'config.php',
+    (c) => c.replace(/(["']text["']\s*=>\s*)["'](?:auto|google)["']/, '$1"duckduckgo"'),
+  ),
   search: libreySearch,
 });
 
@@ -523,7 +541,7 @@ const fourgetEngine = makePhpEngine({
   id: '4get', label: '4get', strain: 'med',
   repo: 'https://git.lolcat.ca/lolcat/4get', pin: 'master',
   entry: 'index.php',
-  configExample: ['data/config.php.example', 'data/config.php'],
+  configure: (dir) => writeEngineConfig(dir, 'data/config.php.example', 'data/config.php'),
   router: 'index.php',   // front-controller routing (no apache rewrites under php -S)
   search: fourgetSearch,
   // Held back: 4get's JSON API (/api/v1/web) is API-key-gated (401 even on the
