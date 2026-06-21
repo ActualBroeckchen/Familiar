@@ -81,13 +81,33 @@ def _year_str(d: date) -> str:
 
 
 def _get_entries_for_period(
-    conn: sqlite3.Connection, granularity: str, period_prefix: str
+    conn: sqlite3.Connection, granularity: str, period_prefix: str,
+    exclude_pending: bool = False,
 ) -> list[dict]:
+    # exclude_pending keeps consent-pending facts OUT of a rollup: summarising an
+    # unreviewed fact into a permanent weekly note would slip it past the ward's
+    # consent, so daily→weekly passes exclude_pending=True.
+    pending_clause = " AND consent_pending=0" if exclude_pending else ""
     rows = conn.execute(
-        "SELECT id, date_key, content FROM memories WHERE granularity=? AND date_key LIKE ? AND kind='narrative'",
+        f"SELECT id, date_key, content FROM memories WHERE granularity=? AND date_key LIKE ? AND kind='narrative'{pending_clause}",
         (granularity, f"{period_prefix}%"),
     ).fetchall()
     return [{"id": r["id"], "date_key": r["date_key"], "content": r["content"] or ""} for r in rows]
+
+
+def _prune_consolidated(conn: sqlite3.Connection, ids: list[str]) -> int:
+    """Delete the source rows now captured in a higher-tier rollup, so a tier
+    doesn't accumulate forever after it's been summarised upward. Snapshots first
+    (recoverable from the Knowledge editor); embeddings go with the rows."""
+    if not ids:
+        return 0
+    from phylactery.snapshot import auto_snapshot
+    auto_snapshot(conn)
+    ph = ",".join("?" * len(ids))
+    with conn:
+        conn.execute(f"DELETE FROM memories WHERE id IN ({ph})", ids)
+        conn.execute(f"DELETE FROM memory_vecs WHERE memory_id IN ({ph})", ids)
+    return len(ids)
 
 
 def consolidate_to_weekly(
@@ -100,14 +120,19 @@ def consolidate_to_weekly(
     week_key = f"{week_start.isoformat()}_to_{(week_start + timedelta(days=6)).isoformat()}"
     period_prefix = week_start.isoformat()[:7]  # YYYY-MM to catch the week's days
 
-    entries = _get_entries_for_period(conn, "daily", period_prefix)
+    entries = _get_entries_for_period(conn, "daily", period_prefix, exclude_pending=True)
     entries = [e for e in entries if week_start.isoformat() <= e["date_key"] <= (week_start + timedelta(days=6)).isoformat()]
     if len(entries) < 2:
         return {"ok": True, "skipped": True, "reason": "too few daily entries"}
 
     summary = _call_llm(cfg, _consolidation_prompt("daily", "weekly", [e["content"] for e in entries]))
     result = memory_create(summary, "weekly", date_key=week_start.isoformat(), conn=conn)
-    return {"ok": True, "dateKey": result.get("dateKey"), "sourceDays": len(entries)}
+    # Prune the daily sources now captured in this weekly rollup, so daily rows
+    # don't pile up forever after they've been summarised. Only the rows we
+    # actually consolidated (consent-pending dailies were excluded above and are
+    # left untouched for review).
+    pruned = _prune_consolidated(conn, [e["id"] for e in entries]) if result.get("ok") else 0
+    return {"ok": True, "dateKey": result.get("dateKey"), "sourceDays": len(entries), "pruned": pruned}
 
 
 def consolidate_to_monthly(
