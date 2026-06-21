@@ -1445,6 +1445,7 @@ export const BUILTIN_TOOLS = [
           notes:          { type: 'string', description: 'Ordinary notes — shareable context that can surface even when others are present.' },
           privateNotes:   { type: 'string', description: 'Sensitive notes for {{user}} and me only (orientation, health, legal name, etc.). Held back automatically whenever anyone else is present. I reserve this for things that could genuinely harm or expose them — not trivia.' },
           graphNodeId:    { type: 'string', description: 'Optional. The knowledge-graph node id to link this person to (from find_graph_node). Keeps the Village and the relational graph as one picture.' },
+          mutualConsentToRemember: { type: 'boolean', description: 'Standing memory consent. I set this true ONLY when both {{user}} AND this person have agreed I may keep memories about them — then I stop asking for per-fact consent on them (an explicit "never store" category still holds). I set it false to withdraw that standing agreement. I only touch this when {{user}} and I are alone, since it changes their record.' },
         },
         required: [],
       },
@@ -2097,7 +2098,7 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `I couldn't read the Village: ${err.message}`; }
   },
 
-  village_upsert: async ({ id, name, category, relationToWard, pronouns, commStyleNotes, notes, privateNotes, graphNodeId } = {}, ctx = {}) => {
+  village_upsert: async ({ id, name, category, relationToWard, pronouns, commStyleNotes, notes, privateNotes, graphNodeId, mutualConsentToRemember } = {}, ctx = {}) => {
     if (!_toolDeps.upsertVillager || !_toolDeps.getVillageRegistry) return 'I can\'t reach the Village right now.';
     const wardPrivate = ctx.wardPrivate !== false;
 
@@ -2130,6 +2131,11 @@ export const TOOL_EXECUTORS = {
       if (notes !== undefined) args.notes = notes;
       if (privateNotes !== undefined) args.privateNotes = privateNotes;
       if (graphNodeId !== undefined) args.graphNodeId = graphNodeId;
+      // Standing mutual consent: true sets both sides agreed, false clears it.
+      // Only reachable here when ward-private (id-edits are gated above), so a
+      // record change to memory permissions always happens with my human present.
+      if (mutualConsentToRemember === true) args.standingConsent = { wardAgreed: true, villagerAgreed: true };
+      else if (mutualConsentToRemember === false) args.standingConsent = {};
 
       // Resolve category name → id (the Familiar knows names, not ids).
       if (typeof category === 'string' && category.trim()) {

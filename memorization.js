@@ -56,7 +56,9 @@ export function resolveRememberGate(category, subjectVillagers, wardRemember) {
   for (const v of subjectVillagers) {
     const vGate = gateForCategory(category, v.remember);
     if (vGate === 'false') return 'false';
-    if (vGate === 'ask') gate = 'ask';
+    // Standing mutual consent (my human AND this person both agreed) clears the
+    // per-fact `ask` for them — but never overrides an explicit `false` above.
+    if (vGate === 'ask' && !standingConsentActive(v)) gate = 'ask';
   }
   return gate;
 }
@@ -122,7 +124,7 @@ async function persistQueue() {
 // per-path key, which they couldn't before.
 
 import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap, graphRelate } from './thalamus.js';
-import { getRegistry } from './village.js';
+import { getRegistry, standingConsentActive } from './village.js';
 import { readSettingsSync } from './cerebellum.js';
 
 export function findOrCreateSessionMemoriesTome() {

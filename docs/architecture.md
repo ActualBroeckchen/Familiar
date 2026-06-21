@@ -675,6 +675,14 @@ When multiple villagers are subjects of a fact, the most restrictive
 gate wins (`false > ask > true`). Default when no villager map exists:
 `basics=true`, all others=`ask`.
 
+**Standing mutual consent (0.8.3):** a villager record can carry
+`standingConsent: { wardAgreed, villagerAgreed }`. When **both** are true
+(`village.standingConsentActive`), `resolveRememberGate` clears that villager's
+`ask` to `true` — no more per-fact consent prompts about them — but an explicit
+`false` category still hard-blocks (a convenience toggle never overrides the
+ward's veto). Set two ways: the Village-UI consent checkboxes, or the Familiar's
+`village_upsert` tool (`mutualConsentToRemember`, ward-private only).
+
 **Consent flow:** `thalamus.enrich()` reads `.consent-pending.json` cheaply
 (no MCP round-trip) and injects a `[PENDING MEMORY CONSENT]` block when
 non-empty. The Familiar calls `memory_confirm_consent(ids)` or

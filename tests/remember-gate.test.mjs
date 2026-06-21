@@ -63,3 +63,28 @@ test('resolveRememberGate: villager with no remember map uses category defaults'
   assert.equal(resolveRememberGate('basics', [v], null), 'true');
   assert.equal(resolveRememberGate('health_info', [v], null), 'ask');
 });
+
+// ── Standing mutual consent: clears `ask`, never overrides `false` ───────────
+
+test('resolveRememberGate: standing consent (both agreed) clears the ask gate', () => {
+  const agreed = { remember: { health_info: 'ask' }, standingConsent: { wardAgreed: true, villagerAgreed: true } };
+  assert.equal(resolveRememberGate('health_info', [agreed], null), 'true');
+});
+
+test('resolveRememberGate: standing consent requires BOTH sides', () => {
+  const wardOnly     = { remember: { health_info: 'ask' }, standingConsent: { wardAgreed: true } };
+  const villagerOnly = { remember: { health_info: 'ask' }, standingConsent: { villagerAgreed: true } };
+  assert.equal(resolveRememberGate('health_info', [wardOnly], null), 'ask');
+  assert.equal(resolveRememberGate('health_info', [villagerOnly], null), 'ask');
+});
+
+test('resolveRememberGate: standing consent never overrides an explicit false', () => {
+  const blocked = { remember: { health_info: false }, standingConsent: { wardAgreed: true, villagerAgreed: true } };
+  assert.equal(resolveRememberGate('health_info', [blocked], null), 'false');
+});
+
+test('resolveRememberGate: one un-agreed ask villager still forces ask', () => {
+  const agreed   = { remember: { health_info: 'ask' }, standingConsent: { wardAgreed: true, villagerAgreed: true } };
+  const unagreed = { remember: { health_info: 'ask' } };
+  assert.equal(resolveRememberGate('health_info', [agreed, unagreed], null), 'ask');
+});

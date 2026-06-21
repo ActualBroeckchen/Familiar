@@ -210,6 +210,21 @@ test('update villager: move categories, clear triage', async () => {
   assert.equal(updated.triage, undefined);
 });
 
+test('standingConsent: only true flags persist; both-true round-trips', async () => {
+  const v = await upsertVillager(
+    { name: 'Melian', standingConsent: { wardAgreed: true, villagerAgreed: true, junk: 'x' } },
+    { filePath },
+  );
+  assert.deepEqual(v.standingConsent, { wardAgreed: true, villagerAgreed: true });
+});
+
+test('standingConsent: a partial (one side) is kept; an empty object clears it', async () => {
+  const v = await upsertVillager({ name: 'Melian', standingConsent: { wardAgreed: true, villagerAgreed: false } }, { filePath });
+  assert.deepEqual(v.standingConsent, { wardAgreed: true });
+  const cleared = await upsertVillager({ id: v.id, standingConsent: { wardAgreed: false, villagerAgreed: false } }, { filePath });
+  assert.equal(cleared.standingConsent, undefined);
+});
+
 test('delete villager', async () => {
   const v = await upsertVillager({ name: 'Temp' }, { filePath });
   await deleteVillager({ id: v.id }, { filePath });
