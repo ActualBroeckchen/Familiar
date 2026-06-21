@@ -830,13 +830,14 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'save_memory',
-      description: 'I write a memory entry to my long-term store — a moment, event, emotional pattern, or anything with a \'when\' worth keeping. (Standing facts about who {{user}} is go to update_identity; entities and relationships go to my graph.) I prefer "daily" for routine session events and "significant" for major milestones. Daily memories accumulate — each save appends today\'s bullets, nothing is overwritten, and multiple saves a day are normal. A significant memory is a named, standalone milestone (e.g. "the night they told me about their sister") in its own file, so I always pass a short `title` for it. Before saving I recall to check I\'m not repeating myself: if I already recorded this and it was simply wrong, I update_memory to correct it; if it was true and has since changed, I save a fresh dated entry that supersedes the old without erasing the history.',
+      description: 'I write a memory entry to my long-term store — a moment, event, emotional pattern, or anything with a \'when\' worth keeping. I prefer "daily" for routine session events and "significant" for major milestones. Daily memories accumulate — each save appends today\'s bullets, nothing is overwritten, and multiple saves a day are normal. A significant memory is a named, standalone milestone (e.g. "the night they told me about their sister") in its own file, so I always pass a short `title` for it. Most of what I save is a lived *moment* (the default — register "episodic"). But a memory also has a register, a separate axis: when what I\'m keeping is a STANDING TRUTH rather than a moment — about myself (register "me") or about {{user}} (register "ward") — I set it, and it becomes an identity-grade fact recalled when relevant. That\'s the lighter sibling of update_identity: update_identity keeps a truth in front of me every single turn; a "me"/"ward" memory holds it in recalled-when-relevant store instead, so my always-on surface stays lean. Entities and relationships still go to my graph. Before saving I recall to check I\'m not repeating myself: if I already recorded this and it was simply wrong, I update_memory to correct it; if it was true and has since changed, I save a fresh dated entry that supersedes the old without erasing the history.',
       parameters: {
         type: 'object',
         properties: {
           content:     { type: 'string', description: 'Memory content I write in first-person, as bullet points starting with "- " — one bullet per fact, insight, or moment. I do NOT include a [chat:id] tag on each bullet — that tag is for external import dedup; live saves from this conversation just want plain bullets so they all accrue. Brief, specific, in my voice.' },
-          granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier.' },
-          title:       { type: 'string', description: 'Short human-readable label for this memory — required for "significant" granularity, ignored for the others. A few words that name the milestone (e.g. "first meeting", "{{user}}\'s grandmother", "the night of the crisis call"). Used to generate the file slug so each significant memory lives in its own file.' },
+          granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier (the rollup axis). For a "me"/"ward" standing truth this is ignored — those are filed as standalone significant facts.' },
+          title:       { type: 'string', description: 'Short human-readable label for this memory — required for "significant" granularity and for any "me"/"ward" standing truth, ignored for plain daily/weekly/etc. A few words that name it (e.g. "first meeting", "{{user}}\'s grandmother", "what calms {{user}} down"). Used to generate the file slug so each lives in its own file.' },
+          register:    { type: 'string', enum: ['episodic', 'me', 'ward'], description: 'The register axis (separate from granularity). "episodic" (default) is a lived moment. "me" is a standing truth about myself; "ward" is a standing truth about {{user}}. I reach for me/ward only when it\'s genuinely a lasting fact worth recalling — not a passing moment, and not so load-bearing it must stay in my always-injected identity files (that\'s update_identity).' },
         },
         required: ['content', 'granularity'],
       },
@@ -1584,21 +1585,30 @@ export const TOOL_EXECUTORS = {
     return "Done — I've set this conversation to be drawn into my long-term memory now, so it carries across to wherever we talk next. I'll still check with you before keeping anything sensitive.";
   },
 
-  save_memory: async ({ content, granularity, title }) => {
+  save_memory: async ({ content, granularity, title, register }) => {
     if (!content || typeof content !== 'string' || !content.trim()) return 'Failed to save memory: content is required.';
     if (content.length > 8192) return 'Failed to save memory: content exceeds 8 KB limit.';
-    if (!VALID_MEMORY_GRANULARITIES.has(granularity)) {
+    // A me/ward standing truth is identity-grade: filed as a standalone
+    // significant fact on that register, regardless of the granularity passed.
+    const reg = (register === 'me' || register === 'ward') ? register : 'episodic';
+    const effGranularity = reg === 'episodic' ? granularity : 'significant';
+    if (!VALID_MEMORY_GRANULARITIES.has(effGranularity)) {
       return `Failed to save memory: granularity must be one of: ${[...VALID_MEMORY_GRANULARITIES].join(', ')}.`;
     }
     // Significant memories MUST be uniquely slugged or they collide on the
     // date-only filename and Phylactery's merge step destroys them.
     let slug;
-    if (granularity === 'significant') {
+    if (effGranularity === 'significant') {
       slug = deriveMemorySlug(title) ?? deriveMemorySlug(content) ?? `memory-${Date.now()}`;
     }
     try {
-      const result = await createMemory({ content: content.trim(), granularity, slug });
+      const result = await createMemory({ content: content.trim(), granularity: effGranularity, slug, register: reg });
       if (!result.ok) return `Memory save failed: ${result.error ?? 'unknown error'}`;
+      // me/ward standing truths read back in their own voice so I know where it landed.
+      if (reg !== 'episodic') {
+        const whose = reg === 'me' ? 'about myself' : "about my human";
+        return `Saved as a standing truth ${whose} (recalled when relevant, not on my always-injected surface).`;
+      }
       // For significant memories, hand back the composite key — it's how
       // the entry is addressed later (update_memory / delete_memory take
       // YYYY-MM-DD_slug for significant).

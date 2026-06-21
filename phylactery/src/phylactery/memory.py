@@ -22,6 +22,14 @@ from phylactery.audience import audience_filter_sql, WARD_PRIVATE
 
 VALID_GRANULARITIES = {"daily", "weekly", "monthly", "yearly", "significant"}
 
+# The `register` axis is SEPARATE from granularity (phylactery-design.md §9):
+#   episodic — lived moments extracted from conversation (the default)
+#   me       — a standing truth about the Familiar itself
+#   ward     — a standing truth about the human
+# me/ward are the graduation destination (Pillar H) AND can now be written
+# deliberately by the Familiar via save_memory's register choice.
+VALID_REGISTERS = {"episodic", "me", "ward"}
+
 _INSTANCE_ID = "proto-familiar"
 
 # Retrieval-decay constants (signed off: 180d half-life, careWeight:high floor=0.5).
@@ -116,7 +124,7 @@ def search(
             q_vec = embed_text(query)
             # KNN via sqlite-vec.
             rows = conn.execute(f"""
-                SELECT m.id, m.granularity, m.date_key, m.content, m.audience,
+                SELECT m.id, m.granularity, m.register, m.date_key, m.content, m.audience,
                        m.care_weight, m.last_recalled_at,
                        v.distance
                 FROM memory_vecs v
@@ -133,19 +141,19 @@ def search(
                 similarity = max(0.0, 1.0 - dist / 2.0)
                 dw = _decay_weight(r["last_recalled_at"], r["care_weight"])
                 score = similarity * dw
-                scored.append({"id": r["id"], "granularity": r["granularity"], "date": r["date_key"],
-                               "excerpt": (r["content"] or "")[:300], "score": round(score, 4)})
+                scored.append({"id": r["id"], "granularity": r["granularity"], "register": r["register"],
+                               "date": r["date_key"], "excerpt": (r["content"] or "")[:300], "score": round(score, 4)})
             scored.sort(key=lambda x: x["score"], reverse=True)
             results = scored[:max_results]
         except Exception:
             # Vector search unavailable (fastembed/sqlite-vec not ready) — degrade to recency.
             rows = conn.execute(f"""
-                SELECT id, granularity, date_key, content FROM memories
+                SELECT id, granularity, register, date_key, content FROM memories
                 WHERE kind='narrative' AND {aud_clause}
                 ORDER BY updated_at DESC LIMIT ?
             """, aud_params + [max_results]).fetchall()
-            results = [{"id": r["id"], "granularity": r["granularity"], "date": r["date_key"],
-                        "excerpt": (r["content"] or "")[:300], "score": 0.5} for r in rows]
+            results = [{"id": r["id"], "granularity": r["granularity"], "register": r["register"],
+                        "date": r["date_key"], "excerpt": (r["content"] or "")[:300], "score": 0.5} for r in rows]
 
         # Pillar H: recall tracking. Pure observability — bumps recall_count
         # and last_recalled_at for everything actually surfaced, so the
@@ -275,10 +283,13 @@ def create(
     consent_pending: bool = False,
     confidence: float = 1.0,
     standalone: bool = False,
+    register: str = "episodic",
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     if granularity not in VALID_GRANULARITIES:
         return {"ok": False, "error": f"invalid granularity: {granularity!r}"}
+    if register not in VALID_REGISTERS:
+        return {"ok": False, "error": f"invalid register: {register!r}"}
     own_conn = conn is None
     if own_conn:
         conn = get_conn()
@@ -348,7 +359,7 @@ def create(
                     audience,subjects_json,care_weight,category,consent_pending,
                     confidence,source_json,created_at,updated_at)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (rec_id, "narrative", "episodic", granularity, dk, slug,
+            """, (rec_id, "narrative", register, granularity, dk, slug,
                   content, audience, subj_json, care_weight, category,
                   1 if consent_pending else 0, max(0.0, min(1.0, confidence)),
                   source, now, now))

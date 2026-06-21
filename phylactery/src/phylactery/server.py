@@ -179,6 +179,7 @@ def memory_create(
     consent_pending: Optional[bool] = None,
     confidence: Optional[float] = None,
     standalone: Optional[bool] = None,
+    register: Optional[str] = None,
     instanceId: Optional[str] = None,
 ) -> str:
     """I use this to store a new memory about my human or our world. I reach for it
@@ -190,6 +191,9 @@ def memory_create(
     awaiting ward approval (the ask path). standalone gives a non-significant
     fact its own row (carrying its category/consent) instead of appending into
     the date bucket — how the memorization pipeline lands discrete daily facts.
+    register is the axis separate from granularity: episodic (default, a lived
+    moment), me (a standing truth about myself), or ward (a standing truth about
+    my human) — the recalled-when-relevant home for identity-grade facts.
     """
     result = mem.create(
         content, granularity, date_key=date, slug=slug,
@@ -200,6 +204,7 @@ def memory_create(
         consent_pending=bool(consent_pending),
         confidence=float(confidence) if confidence is not None else 1.0,
         standalone=bool(standalone),
+        register=register or "episodic",
         conn=_c(),
     )
     if not result.get("ok"):

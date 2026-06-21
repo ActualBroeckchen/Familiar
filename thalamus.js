@@ -1302,7 +1302,12 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
           const source = [r.granularity, r.date].filter(Boolean).join('/');
           const rel    = r.date ? relativeDay(r.date, memNow) : '';
           const when   = rel ? `${source}, ${rel}` : source;
-          return `[${i + 1}] (from ${when}, ${score}% relevant)\n${(r.excerpt ?? '').trim()}`;
+          // A me/ward register record is a standing truth I hold, not a passing
+          // moment — tag it so I weight it accordingly when I read it back.
+          const standing = r.register === 'ward' ? 'a standing fact about my human · '
+                         : r.register === 'me'   ? 'a standing fact about myself · '
+                         : '';
+          return `[${i + 1}] (${standing}from ${when}, ${score}% relevant)\n${(r.excerpt ?? '').trim()}`;
         })
         .filter(s => s.length > 5)
         .join('\n\n');
@@ -1858,15 +1863,16 @@ export async function reportSurfacingOutcomes({ responseText, bookmarks }) {
  * @param {{ content: string, granularity: string, date?: string, slug?: string, instanceId?: string }} opts
  * @returns {Promise<{ ok: boolean, error?: string }>}
  */
-export async function createMemory({ content, granularity = 'daily', date, slug, instanceId = 'proto-familiar' }) {
+export async function createMemory({ content, granularity = 'daily', date, slug, register = 'episodic', instanceId = 'proto-familiar' }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
     const today = new Date().toISOString().slice(0, 10);
     const args = { content, granularity, date: date ?? today, instanceId };
     if (slug) args.slug = slug;
+    if (register && register !== 'episodic') args.register = register;
     await mcpClient.callTool({ name: 'memory_create', arguments: args });
-    console.log(`[thalamus] createMemory() saved ${granularity} memory${slug ? ` (slug=${slug})` : ''}`);
+    console.log(`[thalamus] createMemory() saved ${granularity}${register !== 'episodic' ? `/${register}` : ''} memory${slug ? ` (slug=${slug})` : ''}`);
     return { ok: true };
   } catch (err) {
     console.error('[thalamus] createMemory failed:', err.message);
