@@ -1888,12 +1888,15 @@ export async function createMemoryFull({ content, granularity = 'significant', d
     if (slug) args.slug = slug;
     if (category) args.category = category;
     const raw = await mcpClient.callTool({ name: 'memory_create', arguments: args });
-    // Parse the returned string to extract the id (format: "Memory saved id=<id>.")
+    // Parse the returned string for the id and whether it merged into an
+    // existing memory ("Memory saved id=<id>." vs "Memory merged into existing
+    // id=<id>."). `merged` lets the memorization loop skip re-queuing dupes.
     const text = raw?.content?.find(c => c.type === 'text')?.text ?? '';
     const idMatch = text.match(/id=([a-f0-9]+)/);
     const id = idMatch?.[1] ?? null;
-    console.log(`[thalamus] createMemoryFull() ${granularity}${slug ? ` (${slug})` : ''}${consent_pending ? ' [consent_pending]' : ''}`);
-    return { ok: true, id };
+    const merged = /merged/i.test(text);
+    console.log(`[thalamus] createMemoryFull() ${granularity}${slug ? ` (${slug})` : ''}${consent_pending ? ' [consent_pending]' : ''}${merged ? ' [merged-dedup]' : ''}`);
+    return { ok: true, id, merged };
   } catch (err) {
     console.error('[thalamus] createMemoryFull failed:', err.message);
     return { ok: false, error: err.message };

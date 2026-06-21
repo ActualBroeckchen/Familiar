@@ -200,6 +200,11 @@ def memory_create(
     )
     if not result.get("ok"):
         return f"Memory save failed: {result.get('error', 'unknown')}"
+    if result.get("merged"):
+        # A near-duplicate was folded into an existing memory instead of
+        # creating a new row (the dedup path). The marker lets callers skip
+        # re-queuing it for consent.
+        return f"Memory merged into existing id={result.get('id', '')}."
     dk = result.get("dateKey", "")
     if granularity == "significant":
         return f"Memory saved (significant/{dk}) id={result.get('id', '')}."

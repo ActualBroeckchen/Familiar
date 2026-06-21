@@ -514,7 +514,13 @@ async function processJob(job) {
     });
     if (!result?.ok) throw new Error(`Phylactery memory_create failed: ${result?.error ?? 'unknown'}`);
 
-    if (gate === 'ask') {
+    // Only queue for consent when this actually created a NEW pending memory.
+    // result.merged means the fact folded into an existing entry (a near-dup):
+    // if that entry was already pending it's already in the queue; if it was
+    // already confirmed, re-queuing it would ask consent for something the
+    // human already greenlit. Either way, skip — this is what stops the
+    // consent queue filling with duplicates.
+    if (gate === 'ask' && !result.merged) {
       pendingConsent.push({
         id: result.id,
         brief: content.slice(0, 120),
