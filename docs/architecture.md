@@ -643,6 +643,16 @@ exact-dup hygiene (which groups by `granularity,date_key,content` — significan
 unique `date_slug` had escaped it). *(Consolidation creates roll-up summaries but
 does not yet prune the daily source rows — a known follow-up.)*
 
+> **Tiering is one of two axes; don't conflate them.** `granularity`
+> (`daily…significant`) is the rollup tier this section touches. A memory record
+> *also* has a **`register`** field — `episodic | me | ward` — which is a
+> **separate axis** (`phylactery-design.md:272`). The memorization pipeline only
+> produces **`episodic`** facts; the `me`/`ward` registers are the *graduation*
+> destination, where standing identity-file detail about the Familiar (`me`) or
+> the human (`ward`) lands when Pillar H moves it off the always-injected surface
+> (created at `significant`, see Pillar H below). `me`/`ward` are **not**
+> `granularity` values.
+
 **Semantic dedup-merge (0.8.0):** `memory.create` (Phylactery) runs a KNN
 similarity check before inserting a significant / standalone / consent-pending
 memory. A near-identical paraphrase (sim ≥ 0.85) folds into the existing entry
