@@ -310,6 +310,72 @@ def create_edge(
             conn.close()
 
 
+# ── Resolve-or-create (the dedup discipline) ──────────────────────────────────
+
+def _resolve_node(conn: sqlite3.Connection, label: str, node_type: str | None) -> str | None:
+    """Exact, case-insensitive label match (optionally constrained by type) —
+    the fast path before any embedding. Returns a node id or None."""
+    label = (label or "").strip()
+    if not label:
+        return None
+    if node_type:
+        row = conn.execute(
+            "SELECT id FROM graph_nodes WHERE lower(label)=lower(?) AND (type=? OR type='') ORDER BY (type=?) DESC LIMIT 1",
+            (label, node_type, node_type),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT id FROM graph_nodes WHERE lower(label)=lower(?) LIMIT 1", (label,),
+        ).fetchone()
+    return row["id"] if row else None
+
+
+def resolve_or_create_node(conn, label, node_type=None, description=None, audience="ward-private"):
+    """Reuse an existing node with the same label, else create one. On reuse the
+    node's updated_at is bumped (a lightweight 'confirmed again' signal).
+    Returns (node_id, created: bool)."""
+    nid = _resolve_node(conn, label, node_type)
+    if nid:
+        with conn:
+            conn.execute("UPDATE graph_nodes SET updated_at=? WHERE id=?", (now_iso(), nid))
+        return nid, False
+    res = create_node(label, node_type=node_type, description=description, audience=audience, conn=conn)
+    return res["id"], True
+
+
+def relate(from_label, from_type, to_label, to_type, edge_type,
+           weight: float = 1.0, audience: str = "ward-private",
+           conn: sqlite3.Connection | None = None) -> dict[str, Any]:
+    """Resolve-or-create both endpoints by label, then create the edge UNLESS an
+    identical (from→to, same type) edge already exists. This is the single
+    discipline that keeps the graph from filling with duplicate nodes + edges —
+    the memorization loop calls it for every relation it extracts."""
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        flabel, tlabel, etype = (from_label or "").strip(), (to_label or "").strip(), (edge_type or "").strip()
+        if not flabel or not tlabel or not etype:
+            return {"ok": False, "error": "from_label, to_label, and edge_type are all required"}
+        from_id, from_new = resolve_or_create_node(conn, flabel, from_type, audience=audience)
+        to_id, to_new = resolve_or_create_node(conn, tlabel, to_type, audience=audience)
+        existing = conn.execute(
+            "SELECT id FROM graph_edges WHERE from_id=? AND to_id=? AND lower(type)=lower(?) LIMIT 1",
+            (from_id, to_id, etype),
+        ).fetchone()
+        if existing:
+            with conn:
+                conn.execute("UPDATE graph_edges SET updated_at=? WHERE id=?", (now_iso(), existing["id"]))
+            return {"ok": True, "edgeId": existing["id"], "fromId": from_id, "toId": to_id,
+                    "type": etype, "edgeCreated": False, "nodesCreated": int(from_new) + int(to_new)}
+        edge = create_edge(from_id, to_id, etype, weight=weight, audience=audience, conn=conn)
+        return {"ok": True, "edgeId": edge["id"], "fromId": from_id, "toId": to_id,
+                "type": etype, "edgeCreated": True, "nodesCreated": int(from_new) + int(to_new)}
+    finally:
+        if own_conn:
+            conn.close()
+
+
 def update_edge(
     edge_id: str,
     edge_type: str | None = None,

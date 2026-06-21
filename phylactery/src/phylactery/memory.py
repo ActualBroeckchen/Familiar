@@ -28,6 +28,16 @@ _INSTANCE_ID = "proto-familiar"
 _DECAY_HALF_LIFE_DAYS = 180.0
 _DECAY_FLOOR_HIGH_CARE = 0.5
 
+# Semantic dedup at write time (the "82 queued, only 5 new" fix). Similarity is
+# the same `1 - distance/2` scale memory.search() ranks with. Conservative on
+# purpose — only fold in clear paraphrase duplicates, so two genuinely different
+# facts are never conflated. Tunable; merges/confirms are logged so they can be
+# audited and the thresholds adjusted against real behaviour.
+#   sim >= _DEDUP_IDENTICAL_MIN  → near-identical restatement: confirm, no append
+#   _DEDUP_MERGE_MIN <= sim < …  → additive near-dup: fold the new detail in
+_DEDUP_MERGE_MIN = 0.78       # ≈ cosine 0.90
+_DEDUP_IDENTICAL_MIN = 0.85   # ≈ cosine 0.95
+
 
 def _derive_slug(title: str | None, content: str) -> str:
     source = (title or content[:80]).strip()
@@ -170,6 +180,81 @@ def _touch_recall(conn: sqlite3.Connection, ids: list[str]) -> None:
 
 # ── Create ────────────────────────────────────────────────────────────────────
 
+def _norm_text(s: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9 ]+", " ", (s or "").lower()).split())
+
+
+def _lexically_contained(new: str, existing: str) -> bool:
+    """Cheap check: is the new content's text already present in the existing
+    entry? Avoids appending a paraphrase whose words are already there."""
+    n = _norm_text(new)
+    return bool(n) and n in _norm_text(existing)
+
+
+def _find_near_duplicate(conn: sqlite3.Connection, content: str, audience: str):
+    """Nearest existing narrative memory to `content`, if it's similar enough to
+    be a duplicate. Returns (id, content, consent_pending, similarity) or None.
+    Degrades to None (→ normal insert) if embeddings are unavailable."""
+    try:
+        from phylactery.embed import embed_text
+        q_vec = embed_text(content)
+        aud_clause, aud_params = audience_filter_sql(audience)
+        row = conn.execute(f"""
+            SELECT m.id, m.content, m.consent_pending, v.distance
+            FROM memory_vecs v
+            JOIN memories m ON m.id = v.memory_id
+            WHERE v.embedding MATCH ? AND k = ?
+              AND m.kind='narrative' AND {aud_clause}
+            ORDER BY v.distance
+            LIMIT 1
+        """, [q_vec, 10] + aud_params).fetchone()
+        if not row:
+            return None
+        sim = max(0.0, 1.0 - row["distance"] / 2.0)
+        if sim < _DEDUP_MERGE_MIN:
+            return None
+        return (row["id"], row["content"], row["consent_pending"], sim)
+    except Exception:
+        return None
+
+
+def _dedup_merge(conn, content, audience, consent_pending, now, source):
+    """If `content` duplicates an existing memory, fold it in and return a
+    create-style result; otherwise return None (caller inserts normally)."""
+    dup = _find_near_duplicate(conn, content, audience)
+    if dup is None:
+        return None
+    dup_id, dup_content, dup_pending, sim = dup
+
+    # Near-identical restatement → confirm the existing entry, add nothing.
+    # (Appending identical text is pure bloat; the knowledge is already held.)
+    if sim >= _DEDUP_IDENTICAL_MIN:
+        with conn:
+            conn.execute("UPDATE memories SET updated_at=? WHERE id=?", (now, dup_id))
+        import sys
+        print(f"[phylactery] dedup: confirmed existing memory {dup_id} (sim {sim:.2f}); skipped near-identical duplicate", file=sys.stderr)
+        return {"ok": True, "id": dup_id, "merged": True, "identical": True}
+
+    # Additive near-dup. Only fold in when the existing entry and the new one
+    # share consent status — folding unconsented new detail into an already
+    # CONSENTED memory would slip it past consent, so in that case fall through
+    # to a normal insert (the new detail gets its own consent pass).
+    if bool(dup_pending) != bool(consent_pending):
+        return None
+
+    if not _lexically_contained(content, dup_content):
+        new_content = (dup_content or "") + "\n" + content
+        with conn:
+            conn.execute("UPDATE memories SET content=?, updated_at=? WHERE id=?", (new_content, now, dup_id))
+        _upsert_embedding(conn, dup_id, new_content)
+        import sys
+        print(f"[phylactery] dedup: merged into memory {dup_id} (sim {sim:.2f})", file=sys.stderr)
+    else:
+        with conn:
+            conn.execute("UPDATE memories SET updated_at=? WHERE id=?", (now, dup_id))
+    return {"ok": True, "id": dup_id, "merged": True}
+
+
 def create(
     content: str,
     granularity: str,
@@ -203,6 +288,15 @@ def create(
             slug = None
 
         source = json.dumps({"author": source_author, "via": "memorization", "at": now})
+
+        # Semantic dedup/merge — fold a near-identical fact into an existing
+        # memory instead of piling up paraphrase duplicates (the consent-queue
+        # bloat). Scoped to the memorization path (significant / consent-pending);
+        # plain daily logs keep their date-bucketed append below.
+        if content and content.strip() and (granularity == "significant" or consent_pending):
+            merged = _dedup_merge(conn, content, audience, consent_pending, now, source)
+            if merged is not None:
+                return merged
 
         with conn:
             # For non-significant tiers: APPEND to existing date entry if one exists.

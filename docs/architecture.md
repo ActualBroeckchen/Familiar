@@ -624,9 +624,30 @@ exponential backoff, idempotent enqueue on
 `sessionId+scope+topicId+messageRange`.
 
 **Extraction** uses a per-fact format: LLM returns
-`{facts: [{content, category, subjects, confidence}]}` where `category`
-∈ `basics | emotional_content | health_info | relationships | whereabouts`.
+`{facts: [{content, category, subjects, confidence}], relations: [{from, fromType, type, to, toType}]}`
+where `category` ∈ `basics | emotional_content | health_info | relationships | whereabouts`.
 Facts with `confidence < 0.4` are silently skipped.
+
+**Semantic dedup-merge (0.8.0):** `memory.create` (Phylactery) runs a KNN
+similarity check before inserting a significant/consent-pending memory. A
+near-identical paraphrase (sim ≥ 0.85) folds into the existing entry (bumps
+`updated_at`, no new row); an additive near-dup (sim ≥ 0.78) appends the new
+detail to the existing content. Consent-safe: an unconsented detail is never
+folded into an already-confirmed memory (it gets its own row). The merge marker
+rides back through `memory_create` → `thalamus.createMemoryFull` →
+`memorization.js`, which skips re-queuing a merged dup for consent. This is what
+stopped the "82 queued, only 5 new" duplicate pile-up.
+
+**Auto-graph (0.8.1):** the same extraction call also returns `relations` —
+concrete edges between named entities (person/place/organisation/pet/condition/
+thing; never abstractions). `parseRelations` normalises and within-job-dedups
+them (never throws — enrichment, not load-bearing), then `processJob` routes each
+via `thalamus.graphRelate` → Phylactery `graph_relate` (`graph.relate`), which
+resolve-or-creates both endpoints by case-insensitive label and dedups the edge
+by `from/to/lower(type)`. Fire-and-forget per edge (Promise.allSettled), gated on
+`created > 0` so a fully gate-dropped session doesn't quietly rebuild the graph.
+This rides the existing memorization LLM call (no new request) and fixes the
+"Familiar almost never saves to the graph unless prompted" gap.
 
 **`remember` gate** (per villager, per category):
 - `true` → store freely in Phylactery

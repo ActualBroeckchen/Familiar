@@ -4,7 +4,7 @@
 // discarding every entry even when most of them were complete.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseTopics, salvageTopics } from '../memorization.js';
+import { parseTopics, salvageTopics, parseRelations } from '../memorization.js';
 
 const topic = (n) => ({
   title:    `Topic ${n}`,
@@ -63,4 +63,68 @@ test('salvageTopics handles braces and escaped quotes inside strings', () => {
   const out = salvageTopics(tricky);
   assert.equal(out.length, 1);
   assert.equal(out[0].content, 'has } and { and " inside');
+});
+
+// ── parseRelations (auto-graph extraction) ───────────────────────────
+
+const factsAnd = (relations) => JSON.stringify({
+  facts: [{ content: 'Alice is stressed.', category: 'emotional_content', subjects: ['Alice'], confidence: 0.9 }],
+  relations,
+});
+
+test('parses well-formed relations and normalises the type to snake_case', () => {
+  const raw = factsAnd([
+    { from: 'Alice', fromType: 'person', type: 'Works At', to: 'Acme', toType: 'organisation' },
+  ]);
+  const rels = parseRelations(raw);
+  assert.equal(rels.length, 1);
+  assert.deepEqual(rels[0], { from: 'Alice', to: 'Acme', type: 'works_at', fromType: 'person', toType: 'organisation' });
+});
+
+test('a response with no relations array degrades to an empty list (never throws)', () => {
+  const onlyFacts = JSON.stringify({ facts: [{ content: 'x', category: 'basics', subjects: [], confidence: 1 }] });
+  assert.deepEqual(parseRelations(onlyFacts), []);
+  assert.deepEqual(parseRelations('total garbage, no json at all'), []);
+});
+
+test('drops edges missing an endpoint or a type, and self-loops', () => {
+  const raw = factsAnd([
+    { from: 'Alice', type: 'works_at', to: '' },          // no to
+    { from: '', type: 'works_at', to: 'Acme' },           // no from
+    { from: 'Alice', to: 'Bob' },                         // no type
+    { from: 'Alice', type: 'same_as', to: 'alice' },      // self-loop (case-insensitive)
+    { from: 'Alice', fromType: 'person', type: 'friend_of', to: 'Bob', toType: 'person' }, // keeper
+  ]);
+  const rels = parseRelations(raw);
+  assert.equal(rels.length, 1);
+  assert.equal(rels[0].to, 'Bob');
+});
+
+test('drops unknown node types but keeps the edge', () => {
+  const raw = factsAnd([
+    { from: 'Alice', fromType: 'wizard', type: 'lives_in', to: 'Portland', toType: 'place' },
+  ]);
+  const rels = parseRelations(raw);
+  assert.equal(rels.length, 1);
+  assert.equal(rels[0].fromType, undefined); // invalid type stripped
+  assert.equal(rels[0].toType, 'place');
+});
+
+test('dedups identical edges within one response', () => {
+  const raw = factsAnd([
+    { from: 'Alice', type: 'works_at', to: 'Acme' },
+    { from: 'alice', type: 'Works_At', to: 'ACME' }, // same edge, different casing
+  ]);
+  assert.equal(parseRelations(raw).length, 1);
+});
+
+test('salvages relations from output truncated mid-object', () => {
+  const full = factsAnd([
+    { from: 'Alice', fromType: 'person', type: 'works_at', to: 'Acme', toType: 'organisation' },
+    { from: 'Bob', fromType: 'person', type: 'lives_in', to: 'Portland', toType: 'place' },
+  ]);
+  const cut = full.slice(0, full.lastIndexOf('"toType":"place"'));
+  const rels = parseRelations(cut, 'length');
+  assert.equal(rels.length, 1);
+  assert.equal(rels[0].from, 'Alice');
 });

@@ -1888,12 +1888,15 @@ export async function createMemoryFull({ content, granularity = 'significant', d
     if (slug) args.slug = slug;
     if (category) args.category = category;
     const raw = await mcpClient.callTool({ name: 'memory_create', arguments: args });
-    // Parse the returned string to extract the id (format: "Memory saved id=<id>.")
+    // Parse the returned string for the id and whether it merged into an
+    // existing memory ("Memory saved id=<id>." vs "Memory merged into existing
+    // id=<id>."). `merged` lets the memorization loop skip re-queuing dupes.
     const text = raw?.content?.find(c => c.type === 'text')?.text ?? '';
     const idMatch = text.match(/id=([a-f0-9]+)/);
     const id = idMatch?.[1] ?? null;
-    console.log(`[thalamus] createMemoryFull() ${granularity}${slug ? ` (${slug})` : ''}${consent_pending ? ' [consent_pending]' : ''}`);
-    return { ok: true, id };
+    const merged = /merged/i.test(text);
+    console.log(`[thalamus] createMemoryFull() ${granularity}${slug ? ` (${slug})` : ''}${consent_pending ? ' [consent_pending]' : ''}${merged ? ' [merged-dedup]' : ''}`);
+    return { ok: true, id, merged };
   } catch (err) {
     console.error('[thalamus] createMemoryFull failed:', err.message);
     return { ok: false, error: err.message };
@@ -2263,6 +2266,29 @@ export async function createGraphEdge({ fromId, toId, type, weight, instanceId =
     return { ok: true, result };
   } catch (err) {
     console.error('[thalamus] createGraphEdge failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Record a relationship by entity NAMES with resolve-or-create + edge dedup
+ * (the graph_relate tool does it all in one round-trip in Phylactery). This is
+ * what the memorization loop calls for each extracted relation, so the graph
+ * populates itself without piling up duplicate nodes/edges. Degrades to a
+ * no-op when Phylactery is down.
+ */
+export async function graphRelate({ fromLabel, fromType, toLabel, toType, type, weight, instanceId = PROTO_INSTANCE_ID }) {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
+  try {
+    const args = { fromLabel, toLabel, type, instanceId };
+    if (fromType !== undefined) args.fromType = fromType;
+    if (toType   !== undefined) args.toType   = toType;
+    if (weight   !== undefined) args.weight   = weight;
+    const result = await callTool('graph_relate', args);
+    return { ok: true, result };
+  } catch (err) {
+    console.error('[thalamus] graphRelate failed:', err.message);
     return { ok: false, error: err.message };
   }
 }

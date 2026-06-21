@@ -121,7 +121,7 @@ async function persistQueue() {
 // memorization tick serialise against each other through the same
 // per-path key, which they couldn't before.
 
-import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap } from './thalamus.js';
+import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap, graphRelate } from './thalamus.js';
 import { getRegistry } from './village.js';
 import { readSettingsSync } from './cerebellum.js';
 
@@ -171,7 +171,7 @@ export function buildPrompt(messages, topicLabel = null, wardName = 'My human') 
     ? `\n\n### Focus\nMy human named this segment "${topicLabel}". I centre my extraction on that topic; I skip tangential threads unless they reveal something genuinely important.`
     : '';
 
-  return `I am the Familiar. I'm extracting claimable facts from a conversation I just had so I can store them in my memory. I pull out one discrete, verifiable fact per output element — things I would want to recall later about myself, my human, or the people in their life.${focusBlock}
+  return `I am the Familiar. I'm extracting claimable facts from a conversation I just had so I can store them in my memory. I pull out one discrete, verifiable fact per output element — things I would want to recall later about myself, my human, or the people in their life. I also map the concrete relationships between the people, places and things named, because my graph is my mental index — it's how I find the right memory later.${focusBlock}
 
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
 {
@@ -182,10 +182,19 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
       "subjects":   ["Alice"],
       "confidence": 0.85
     }
+  ],
+  "relations": [
+    {
+      "from":     "Alice",
+      "fromType": "person",
+      "type":     "works_at",
+      "to":       "Acme",
+      "toType":   "organisation"
+    }
   ]
 }
 
-### Field rules
+### Field rules — facts
 
 content — my private, first-person note about this single fact. Concrete and specific. No vague generalities.
   Example good: "Alice mentioned she's dealing with job-hunt fatigue and feeling stuck."
@@ -204,11 +213,22 @@ subjects — list the NAMES of the people the fact is about (first name or how I
 confidence — 0.0 to 1.0. How certain am I that this fact is accurate and not misread?
   I omit facts with confidence below 0.4.
 
+### Field rules — relations
+
+Each relation is one concrete edge in my graph: two real, nameable entities and the relationship between them. This is the index I navigate by, so I only record edges I'm sure of.
+
+from / to — the NAMES of the two entities. My human's name is "${wardName}". I use real names (or how I know someone), never "the user" or a pronoun.
+fromType / toType — what each entity IS. Pick from: person, place, organisation, pet, condition, thing.
+  I only record entities that are concrete and nameable — a specific person, a city, an employer, a pet, a named health condition, a real object. I do NOT make nodes out of abstractions, feelings, ideas, themes or topics ("stress", "the future", "work-life balance" are NOT entities).
+type — a short snake_case label for the relationship, read from→to: works_at, lives_in, married_to, parent_of, friend_of, has_condition, owns, located_in, colleague_of, etc.
+
 ### Rules
-- One output element per distinct claimable fact. A single utterance that contains two different facts about two different people = two elements.
+- One fact element per distinct claimable fact. A single utterance that contains two different facts about two different people = two elements.
 - Ambiguous or inseparable multi-category fact → assign the MORE restrictive category (health > emotional > relationships > whereabouts > basics).
 - I skip pleasantries, meta-conversation, and anything that isn't a lasting fact about someone.
 - 1–12 facts total. I merge instead of splitting when the same claim just restated.
+- I only emit a relation when BOTH endpoints are concrete named entities and the link is stated or clearly implied. If a conversation has no such durable relationships, "relations" is an empty array — I never invent edges to fill it.
+- 0–10 relations total.
 
 Conversation:
 ${convText}`;
@@ -243,10 +263,19 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
       "subjects":   [],
       "confidence": 0.85
     }
+  ],
+  "relations": [
+    {
+      "from":     "${wardName}",
+      "fromType": "person",
+      "type":     "lives_in",
+      "to":       "Portland",
+      "toType":   "place"
+    }
   ]
 }
 
-### Field rules
+### Field rules — facts
 
 content — what I observed about MY HUMAN or myself. Skip anything that's primarily about an unnamed/unregistered third party.
   Keep: my human's mood, things they said, experiences they had, commitments they made, topics that engaged them.
@@ -264,9 +293,18 @@ subjects — list REGISTERED names only. Use [] for facts about my human or me i
 
 confidence — 0.0 to 1.0. I omit facts below 0.4.
 
+### Field rules — relations
+
+A relation is one concrete edge in my graph: two named entities and the link between them. In a shared room I record an edge ONLY when at least one endpoint is my human ("${wardName}") or a REGISTERED person by name. I never map relationships between strangers.
+
+from / to — the NAMES of the two entities; one of them must be my human or a registered person.
+fromType / toType — pick from: person, place, organisation, pet, condition, thing. Concrete, nameable entities only — never abstractions, feelings, or topics.
+type — a short snake_case label read from→to (lives_in, works_at, married_to, has_condition, owns, …).
+
 ### Rules
 - Only facts about my human or myself. A stranger speaking doesn't make their content mine to keep.
 - 1–8 facts total. Quality over quantity; a shared room produces less.
+- "relations" is an empty array unless a durable edge clearly touches my human or a registered person. I never invent edges, and I never map strangers to each other. 0–5 relations.
 - Skip pleasantries and anything I wouldn't need to remember for my human's care.
 
 Conversation:
@@ -411,6 +449,48 @@ function parseFacts(raw, finishReason = null) {
   throw new Error('Could not parse facts JSON from LLM response.');
 }
 
+// Pull the optional "relations" array out of the same response that carried
+// the facts. Relations are an enrichment, never load-bearing: a missing or
+// malformed array degrades to [] rather than throwing, so a graph-extraction
+// hiccup can never cost the human a memorized fact. Each row is normalised to
+// the { from, fromType, to, toType, type } shape graphRelate expects; anything
+// missing an endpoint or a type is dropped.
+const RELATION_NODE_TYPES = new Set(['person', 'place', 'organisation', 'pet', 'condition', 'thing']);
+
+export function parseRelations(raw, finishReason = null) {
+  let rows = null;
+  const cleaned = String(raw).replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '');
+  const match = cleaned.match(/\{[\s\S]+\}/);
+  if (match) {
+    try {
+      const parsed = JSON.parse(match[0]);
+      if (Array.isArray(parsed.relations)) rows = parsed.relations;
+    } catch { /* truncated/malformed — fall through to salvage */ }
+  }
+  if (rows === null) rows = salvageArrayField(cleaned, 'relations');
+  if (!Array.isArray(rows) || !rows.length) return [];
+
+  const out = [];
+  const seen = new Set();
+  for (const r of rows) {
+    const from = (r?.from ?? '').toString().trim();
+    const to   = (r?.to ?? '').toString().trim();
+    const type = (r?.type ?? '').toString().trim().toLowerCase().replace(/\s+/g, '_');
+    if (!from || !to || !type) continue;
+    if (from.toLowerCase() === to.toLowerCase()) continue; // no self-loops
+    const rel = { from, to, type };
+    const ft = (r?.fromType ?? '').toString().trim().toLowerCase();
+    const tt = (r?.toType ?? '').toString().trim().toLowerCase();
+    if (RELATION_NODE_TYPES.has(ft)) rel.fromType = ft;
+    if (RELATION_NODE_TYPES.has(tt)) rel.toType = tt;
+    const key = `${from.toLowerCase()}|${type}|${to.toLowerCase()}`;
+    if (seen.has(key)) continue; // within-job edge dedup (graph dedups again server-side)
+    seen.add(key);
+    out.push(rel);
+  }
+  return out;
+}
+
 // ── Consent-pending helpers ───────────────────────────────────────
 
 async function readConsentPending() {
@@ -460,6 +540,10 @@ async function processJob(job) {
 
   const { content: raw, finishReason } = await callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, prompt });
   const facts = parseFacts(raw, finishReason);
+  // Relations ride the SAME LLM response — no extra request (CLAUDE.md
+  // "ride existing requests"). They're enrichment, so parseRelations never
+  // throws; the worst case is an empty graph update, never a lost fact.
+  const relations = parseRelations(raw, finishReason);
 
   // Build name → villager lookup for the remember gate
   const registry = await getRegistry().catch(() => ({ villagers: [] }));
@@ -514,7 +598,13 @@ async function processJob(job) {
     });
     if (!result?.ok) throw new Error(`Phylactery memory_create failed: ${result?.error ?? 'unknown'}`);
 
-    if (gate === 'ask') {
+    // Only queue for consent when this actually created a NEW pending memory.
+    // result.merged means the fact folded into an existing entry (a near-dup):
+    // if that entry was already pending it's already in the queue; if it was
+    // already confirmed, re-queuing it would ask consent for something the
+    // human already greenlit. Either way, skip — this is what stops the
+    // consent queue filling with duplicates.
+    if (gate === 'ask' && !result.merged) {
       pendingConsent.push({
         id: result.id,
         brief: content.slice(0, 120),
@@ -533,8 +623,32 @@ async function processJob(job) {
     );
   }
 
+  // Populate the graph from the same extraction. The graph is the Familiar's
+  // mental index, and left to manual tool calls it almost never gets written —
+  // so the relations the model already surfaced are routed here automatically.
+  // Each edge resolves-or-creates its endpoints and dedups server-side
+  // (graph_relate), so re-running a session can't pile up duplicate nodes/edges.
+  // Gated on created > 0: if the remember gate dropped every fact in this
+  // session, I don't quietly rebuild the same relationships in the graph.
+  // Fire-and-forget per edge — a graph write failing never fails the job, and
+  // Phylactery being down degrades to a no-op.
+  let edgesRouted = 0;
+  if (created && relations.length) {
+    const results = await Promise.allSettled(
+      relations.map(rel => graphRelate({
+        fromLabel: rel.from,
+        fromType:  rel.fromType,
+        toLabel:   rel.to,
+        toType:    rel.toType,
+        type:      rel.type,
+      }))
+    );
+    edgesRouted = results.filter(r => r.status === 'fulfilled' && r.value?.ok).length;
+    if (edgesRouted) console.log(`[memorization] routed ${edgesRouted}/${relations.length} relation(s) to the graph`);
+  }
+
   if (!created) throw new Error('No valid facts produced or all dropped by remember gate.');
-  return { factsCreated: created, consentPending: pendingConsent.length };
+  return { factsCreated: created, consentPending: pendingConsent.length, edgesRouted };
 }
 
 function pickNextJob(now) {
