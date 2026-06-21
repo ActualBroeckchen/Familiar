@@ -103,7 +103,7 @@ See [Tool Calling](tool-calling.md) for the full reference.
 | Custom tools | Paste a JSON array of OpenAI function-calling definitions |
 | Web search & read | Opt-in web access (`look_up` + `web_search` + `read_webpage`). `look_up` answers definitions/facts from keyless reference APIs (no scraping); `web_search` finds pages. Works out of the box (built-in keyless DuckDuckGo) — off by default, just turn it on. Optionally upgrade to a search API (Marginalia needs no signup; Tavily; Brave; Google). See [Web search setup](websearch-setup.md) |
 
-Built-in tools: `get_datetime`, `get_session_info`, `save_to_tome`, `save_memory`, `update_identity`. The two Phylactery tools (`save_memory`, `update_identity`) degrade gracefully when Phylactery is unreachable. See [Tool Calling](tool-calling.md) for parameter details.
+Built-in tools: `get_datetime`, `get_session_info`, `save_to_tome`, `save_memory`, `memorize_now`, `update_identity`. `save_memory` takes a `register` choice (`episodic` by default, or `me`/`ward` to file a *standing truth* about the Familiar or the human, recalled when relevant); `memorize_now` commits the whole current conversation to memory on demand — the Familiar's counterpart to the **Memorize now** button, for when a session rollover won't cleanly happen. The Phylactery tools degrade gracefully when Phylactery is unreachable. See [Tool Calling](tool-calling.md) for parameter details.
 
 ### Web search & read (opt-in)
 
