@@ -2468,7 +2468,19 @@ app.delete('/api/village/locations', async (req, res) => {
 // the boot reconciliation + trusted-contacts migration. Degrades
 // gracefully: Phylactery down → mirror stays authoritative for
 // gating, writes accumulate as syncPending and replay on next boot.
+// Short timeout on the boot canonical pull so it fails fast instead of hanging
+// on the MCP SDK's 60s default while Phylactery is still warming up. If the pull
+// loses that race, the mirror stays authoritative and these backoffs retry the
+// reconciliation in the background until Phylactery answers.
+const VILLAGE_PULL_TIMEOUT_MS = 8_000;
+const VILLAGE_RESYNC_BACKOFF_MS = [5_000, 15_000, 30_000, 60_000];
+
 async function startVillageSync() {
+  // Tracks whether the most recent canonical pull actually REACHED Phylactery
+  // (vs. timing out). A reached pull that simply found no village data yet is
+  // still a success — only a transport/timeout failure trips the retry.
+  let pullReached = false;
+
   initVillageSync({
     push: async (json) => {
       const content = '```json\n' + json + '\n```';
@@ -2484,11 +2496,13 @@ async function startVillageSync() {
     },
     pull: async () => {
       try {
-        const id = await getIdentityAll();
+        const id = await getIdentityAll({ timeout: VILLAGE_PULL_TIMEOUT_MS });
+        pullReached = true;
         const file = (id?.custom ?? []).find(f => f.filename === 'village-registry.md');
         const m = file?.content?.match(/```json\s*\n([\s\S]*?)\n```/);
         return m ? JSON.parse(m[1]) : null;
       } catch (err) {
+        pullReached = false;
         console.warn('[village] canonical pull failed:', err?.message ?? err);
         return null;
       }
@@ -2508,6 +2522,24 @@ async function startVillageSync() {
     }
   } catch (err) {
     console.error('[village] boot sync failed (mirror stays authoritative):', err?.message ?? err);
+  }
+
+  // Boot-race recovery: if the canonical pull never reached Phylactery (it was
+  // still loading the embedding model / migrating / consolidating), a newer
+  // canonical wouldn't reconcile until the next restart. Retry the
+  // reconciliation in the background with backoff — non-blocking, bounded, and
+  // the mirror stays authoritative throughout.
+  if (!pullReached) {
+    for (const delay of VILLAGE_RESYNC_BACKOFF_MS) {
+      await new Promise(r => setTimeout(r, delay));
+      try { await villageBootSync(); }
+      catch (err) { console.warn('[village] deferred re-sync attempt failed:', err?.message ?? err); }
+      if (pullReached) {
+        console.log('[village] deferred re-sync reached Phylactery — canonical reconciled');
+        return;
+      }
+    }
+    console.warn('[village] deferred re-sync gave up; mirror remains authoritative until next restart');
   }
 }
 

@@ -2108,12 +2108,16 @@ export async function updateIdentitySection({ category, filename, heading, conte
 
 const PROTO_INSTANCE_ID = 'proto-familiar';
 
-async function callTool(name, args = {}) {
+async function callTool(name, args = {}, opts = {}) {
   await startThalamus();
   if (!mcpClient) throw new Error('phylactery not connected');
   const t0 = Date.now();
   console.log(`[thalamus] → phylactery: ${name}`);
-  const result = await mcpClient.callTool({ name, arguments: args });
+  // opts.timeout overrides the SDK's 60s default — used by callers that
+  // must fail fast rather than hang (e.g. the village boot pull racing
+  // Phylactery's warm-up).
+  const reqOpts = opts.timeout ? { timeout: opts.timeout } : undefined;
+  const result = await mcpClient.callTool({ name, arguments: args }, undefined, reqOpts);
   console.log(`[thalamus] ← phylactery: ${name} (${Date.now() - t0}ms)`);
   return parseToolText(result, {});
 }
@@ -2141,8 +2145,8 @@ export async function readMemory({ granularity, date, slug }) {
   return callTool('memory_read', { granularity, date, ...(slug ? { slug } : {}) });
 }
 
-export async function getIdentityAll() {
-  return callTool('identity_get_all', {});
+export async function getIdentityAll({ timeout } = {}) {
+  return callTool('identity_get_all', {}, timeout ? { timeout } : {});
 }
 
 export async function listGraphNodes({ type, limit = 200, offset = 0 } = {}) {
