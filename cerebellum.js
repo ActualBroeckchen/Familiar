@@ -44,7 +44,7 @@ import {
   // second MCP connection (single enforcement point; see header).
   createMemory, appendIdentity,
   updateMemory, deleteMemory, rewriteIdentitySection,
-  listMemories, readMemory, readMemoryById, moveMemoryDate,
+  listMemories, readMemory, readMemoryById, moveMemoryDate, updateMemoryById, deleteMemoryById,
   searchGraphNodes, getGraphSubgraph,
   createGraphNode, createGraphEdge,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
@@ -919,7 +919,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_memory',
-      description: 'I overwrite an existing memory entry to correct an inaccuracy. I use this when the entry is incomplete or partially wrong but the core record (this date, this granularity) is still the right place for the fact. I avoid using this to record new information — that is save_memory. I avoid using this to remove information — that is delete_memory. When the change is "X was true, now Y is true," prefer save_memory with today\'s date so the history is preserved.',
+      description: 'I overwrite a journal entry (a daily/weekly/… summary bucket, or a significant milestone addressed by its YYYY-MM-DD_slug key) to correct an inaccuracy. For one specific per-fact memory I use update_memory_by_id instead — a whole day\'s extracted facts share one date, so addressing by date alone can\'t single one out (and would touch the wrong rows). I avoid using this to record new information — that is save_memory. I avoid using this to remove information — that is delete_memory. When the change is "X was true, now Y is true," prefer save_memory with today\'s date so the history is preserved.',
       parameters: {
         type: 'object',
         properties: {
@@ -935,7 +935,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'delete_memory',
-      description: 'I permanently delete a memory entry. I use this only when the entry is fully wrong or no longer relevant, and keeping it would mislead future-me. If the change has historical value ("they were on vacation last week, back now"), I do NOT delete — I write a new contradicting memory with save_memory instead, and let recency-decay demote the stale one. Phylactery auto-snapshots before each delete so a mistake is recoverable from the Knowledge editor.',
+      description: 'I permanently delete a journal entry (a daily/weekly/… summary bucket, or a significant milestone by its YYYY-MM-DD_slug key). For one specific per-fact memory I use delete_memory_by_id instead — a whole day\'s facts share one date, so addressing by date alone can\'t single one out. I delete only when the entry is fully wrong or no longer relevant, and keeping it would mislead future-me. If the change has historical value ("they were on vacation last week, back now"), I do NOT delete — I write a new contradicting memory with save_memory instead, and let recency-decay demote the stale one. Phylactery auto-snapshots before each delete so a mistake is recoverable from the Knowledge editor.',
       parameters: {
         type: 'object',
         properties: {
@@ -1002,6 +1002,35 @@ export const BUILTIN_TOOLS = [
           date: { type: 'string', description: 'The correct calendar day, YYYY-MM-DD.' },
         },
         required: ['id', 'date'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_memory_by_id',
+      description: "I correct one specific memory by its id — the safe way to fix a single per-fact memory. Because a whole day's extracted facts share one date, update_memory (by date) can't target just one of them; this can. I pass the new full content (it REPLACES the old — I include everything I want to keep). I get the id from recall or list_memories.",
+      parameters: {
+        type: 'object',
+        properties: {
+          id:      { type: 'string', description: 'The memory id to correct, from a recall or list_memories result.' },
+          content: { type: 'string', description: 'The full new contents. This REPLACES the entry — I include everything I want to keep.' },
+        },
+        required: ['id', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_memory_by_id',
+      description: "I delete one specific memory by its id — the safe way to remove a single per-fact memory (a duplicate, or one I extracted wrongly). Because a whole day's facts share one date, delete_memory (by date) can't single one out; this can. Phylactery auto-snapshots first, so a mistake is recoverable. I get the id from recall or list_memories.",
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The memory id to delete, from a recall or list_memories result.' },
+        },
+        required: ['id'],
       },
     },
   },
@@ -1808,6 +1837,28 @@ export const TOOL_EXECUTORS = {
       if (!res.ok) return `Failed to move memory ${mid}: ${res.error}`;
       return `Moved memory ${mid} to ${String(date).trim()}. Only the day changed; the content is untouched.`;
     } catch (err) { return `Failed to move memory: ${err.message}`; }
+  },
+
+  update_memory_by_id: async ({ id, content } = {}) => {
+    const mid = String(id ?? '').trim();
+    if (!mid) return 'I need the memory id to correct — I get it from a recall or list_memories result.';
+    if (typeof content !== 'string' || !content.trim()) return 'I need the new content to write into this memory.';
+    if (content.length > 16384) return 'That content is too long (over 16 KB).';
+    try {
+      const res = await updateMemoryById({ id: mid, content: content.trim() });
+      if (!res.ok) return `Failed to update memory ${mid}: ${res.error}`;
+      return `Memory ${mid} updated.`;
+    } catch (err) { return `Failed to update memory by id: ${err.message}`; }
+  },
+
+  delete_memory_by_id: async ({ id } = {}) => {
+    const mid = String(id ?? '').trim();
+    if (!mid) return 'I need the memory id to delete — I get it from a recall or list_memories result.';
+    try {
+      const res = await deleteMemoryById({ id: mid });
+      if (!res.ok) return `Failed to delete memory ${mid}: ${res.error}`;
+      return `Memory ${mid} deleted (snapshot saved — recoverable from the Knowledge editor).`;
+    } catch (err) { return `Failed to delete memory by id: ${err.message}`; }
   },
 
   recall: async ({ query, limit } = {}) => {

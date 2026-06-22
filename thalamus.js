@@ -1042,7 +1042,7 @@ import {
   getUnactedIntents,
   formatDeferredIntentsBlock,
 } from './recent-ponderings.js';
-import { getThreat, tierForThreat } from './threat-tracker.js';
+import { getThreat } from './threat-tracker.js';
 import {
   selectSurfaceCandidates,
   formatSurfaceCandidatesBlock,

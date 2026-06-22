@@ -463,12 +463,19 @@ def update_memory(
             sets.append("care_weight=?")
             params.append(care_weight if care_weight != "" else None)
         params += [granularity, dk]
+        # granularity+date_key is unique ONLY for the journal bucket (slug NULL) and
+        # for significant rows (slug is baked into the composite date_key). It is
+        # NOT unique for standalone per-fact rows — a whole day's facts share one
+        # plain date_key. So a no-slug update must scope to slug IS NULL, or it would
+        # overwrite EVERY standalone fact on that date with the same content. Those
+        # are addressed by id instead (update_memory_by_id).
+        scope = "" if slug else " AND slug IS NULL"
         result = conn.execute(
-            f"UPDATE memories SET {', '.join(sets)} WHERE granularity=? AND date_key=? AND kind='narrative'",
+            f"UPDATE memories SET {', '.join(sets)} WHERE granularity=? AND date_key=? AND kind='narrative'{scope}",
             params,
         )
         if result.rowcount == 0:
-            return {"ok": False, "error": f"no {granularity} memory at {dk!r}"}
+            return {"ok": False, "error": f"no {granularity} journal memory at {dk!r} (per-fact rows are addressed by id)"}
         conn.commit()
         # Re-embed updated content.
         row = conn.execute("SELECT id FROM memories WHERE granularity=? AND date_key=?", (granularity, dk)).fetchone()
@@ -492,12 +499,17 @@ def delete_memory(
     try:
         auto_snapshot(conn)
         dk = f"{date_key}_{slug}" if slug else date_key
+        # Same uniqueness caveat as update_memory: a no-slug delete must scope to the
+        # journal bucket (slug IS NULL), or it would delete an arbitrary one of the
+        # many standalone facts that share a plain date_key. Per-fact rows are
+        # deleted by id instead (delete_memory_by_id).
+        scope = "" if slug else " AND slug IS NULL"
         row = conn.execute(
-            "SELECT id FROM memories WHERE granularity=? AND date_key=? AND kind='narrative'",
+            f"SELECT id FROM memories WHERE granularity=? AND date_key=? AND kind='narrative'{scope}",
             (granularity, dk),
         ).fetchone()
         if not row:
-            return {"ok": False, "error": f"no {granularity} memory at {dk!r}"}
+            return {"ok": False, "error": f"no {granularity} journal memory at {dk!r} (per-fact rows are addressed by id)"}
         rec_id = row["id"]
         with conn:
             conn.execute("DELETE FROM memories WHERE id=?", (rec_id,))

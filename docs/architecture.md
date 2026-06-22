@@ -677,10 +677,20 @@ facts share one plain `date_key`, that key **cannot** address a single fact —
   mis-dated fact — only the day moves; significant rows rebuild their `date_slug`).
   Exposed as MCP tools (`memory_read_by_id`, `memory_move_date`,
   `memory_update_by_id`, `memory_delete_by_id`), thalamus wrappers, the Familiar's
-  `read_memory_by_id` / `move_memory_date` tools (ids ride in on `recall` /
-  `list_memories`), and the HTTP `/api/entity/memories/by-id/:id` surface
-  (GET/PUT/DELETE + `…/move`). The Knowledge-editor memory panel now opens, edits,
-  moves, and deletes by id — fixing the bug where every row opened the same entry.
+  `read_memory_by_id` / `move_memory_date` / `update_memory_by_id` /
+  `delete_memory_by_id` tools (ids ride in on `recall` / `list_memories`), and the
+  HTTP `/api/entity/memories/by-id/:id` surface (GET/PUT/DELETE + `…/move`). The
+  Knowledge-editor memory panel now opens, edits, moves, and deletes by id — fixing
+  the bug where every row opened the same entry.
+- **The mass-overwrite guard (0.7.64, audit finding).** `granularity+date_key` is
+  unique ONLY for the journal bucket (`slug NULL`) and significant rows (slug baked
+  into the composite key) — **not** for standalone per-fact rows that share a plain
+  date. So the by-date `update_memory` / `delete_memory` now scope to `slug IS NULL`
+  when no slug is given: a no-slug update was previously an **un-scoped** `UPDATE …
+  WHERE granularity=? AND date_key=?` that would rewrite **every** standalone fact
+  on that date with the same content. By-date now only ever touches the journal
+  bucket; per-fact rows are by-id only, and the Familiar's `update_memory` /
+  `delete_memory` descriptions steer it to the `_by_id` variants for a single fact.
 
 > **Tiering is one of two axes; don't conflate them.** `granularity`
 > (`daily…significant`) is the rollup tier this section touches. A memory record
@@ -1447,7 +1457,7 @@ re-implement this split anywhere else.
 | `thalamus.readMemory` / `updateMemory` / `deleteMemory` | Pass `slug` through to entity-core's tools. `updateMemory` without the slug is the shadow-file hazard. |
 | `thalamus.readMemoryById` / `updateMemoryById` / `deleteMemoryById` / `moveMemoryDate` | By-id wrappers over the `memory_*_by_id` / `memory_move_date` MCP tools. |
 | `update_memory` / `delete_memory` executors (cerebellum.js) | Split the model-supplied key; their tool descriptions teach the `YYYY-MM-DD_slug` addressing. |
-| `read_memory_by_id` / `move_memory_date` executors (cerebellum.js) | The Familiar's by-id surface; ids ride in on `recall` / `list_memories`. `move_memory_date` is how it cleans up facts filed under the wrong day. |
+| `read_memory_by_id` / `move_memory_date` / `update_memory_by_id` / `delete_memory_by_id` executors (cerebellum.js) | The Familiar's by-id surface; ids ride in on `recall` / `list_memories`. `move_memory_date` cleans up facts filed under the wrong day; `update_/delete_by_id` safely correct or remove ONE per-fact row. The by-date `update_memory`/`delete_memory` are journal-bucket/significant only (scoped `slug IS NULL`). |
 | `save_memory` executor | Auto-derives the slug (`deriveMemorySlug`) and returns the composite key in its confirmation so the Familiar knows the address of what it just wrote. |
 | Knowledge editor — memory panel (app.js) | Addresses every read/edit/move/delete by the row's `id` (0.7.61). It used to send the `granularity/date` key, which collided for standalone facts sharing a date — clicking any row opened the top one. By-id is the fix; don't regress it back to key-addressing. |
 

@@ -10,7 +10,6 @@ preserved here so the prompt assembly in thalamus.js stays unchanged.
 
 from __future__ import annotations
 
-import json
 import re
 import sqlite3
 from typing import Any

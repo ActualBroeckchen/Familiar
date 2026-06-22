@@ -21,7 +21,7 @@ from typing import Any
 
 import httpx
 
-from phylactery.db import get_conn, new_id, now_iso
+from phylactery.db import get_conn
 from phylactery.memory import create as memory_create
 
 
@@ -117,7 +117,6 @@ def consolidate_to_weekly(
 ) -> dict[str, Any]:
     ref = reference_date or date.today() - timedelta(days=7)
     week_start = _week_start(ref)
-    week_key = f"{week_start.isoformat()}_to_{(week_start + timedelta(days=6)).isoformat()}"
     period_prefix = week_start.isoformat()[:7]  # YYYY-MM to catch the week's days
 
     entries = _get_entries_for_period(conn, "daily", period_prefix, exclude_pending=True)

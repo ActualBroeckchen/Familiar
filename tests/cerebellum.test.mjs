@@ -249,6 +249,12 @@ test('move_memory_date: a missing id and a bad date are each caught before any s
   assert.match(await executeToolCall('move_memory_date', JSON.stringify({ id: 'abc', date: 'june 22' })), /YYYY-MM-DD/);
 });
 
+test('update_memory_by_id / delete_memory_by_id: missing args are caught before any store call', async () => {
+  assert.match(await executeToolCall('update_memory_by_id', JSON.stringify({ content: 'x' })), /need the memory id/i);
+  assert.match(await executeToolCall('update_memory_by_id', JSON.stringify({ id: 'abc' })), /need the new content/i);
+  assert.match(await executeToolCall('delete_memory_by_id', '{}'), /need the memory id/i);
+});
+
 test('executeToolCall: a throwing executor produces a structured failure, not an exception', async () => {
   TOOL_EXECUTORS.__test_throw = () => { throw new Error('peer is down'); };
   try {

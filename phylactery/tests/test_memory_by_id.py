@@ -131,3 +131,49 @@ def test_delete_by_id_removes_only_the_targeted_row():
     assert res["ok"] and res["deleted"] == a_id
     assert c.execute("SELECT COUNT(*) FROM memories WHERE id=?", (a_id,)).fetchone()[0] == 0
     assert c.execute("SELECT COUNT(*) FROM memories WHERE id=?", (b_id,)).fetchone()[0] == 1
+
+
+# ── The mass-overwrite guard (audit finding) ───────────────────────────────────
+# update_memory / delete_memory address by granularity+date, which is unique ONLY
+# for the journal bucket (slug NULL). They must NEVER touch the standalone per-fact
+# rows that share that plain date — those are by-id only.
+
+def _journal_plus_two_facts(c):
+    with patch("phylactery.embed.embed_text", _fake_embed):
+        memory.create("the day's running summary", "daily", date_key="2026-06-22", conn=c)  # journal bucket, slug NULL
+    a_id, b_id = _two_facts_same_day(c)  # two standalone facts on the same date
+    return a_id, b_id
+
+
+def test_update_by_date_touches_only_the_journal_bucket_not_the_facts():
+    c = _conn()
+    a_id, b_id = _journal_plus_two_facts(c)
+    with patch("phylactery.embed.embed_text", _fake_embed):
+        res = memory.update_memory("daily", "2026-06-22", "rewritten summary", conn=c)
+    assert res["ok"]
+    # the journal bucket changed…
+    bucket = c.execute("SELECT content FROM memories WHERE granularity='daily' AND date_key='2026-06-22' AND slug IS NULL").fetchone()
+    assert "rewritten summary" in bucket["content"]
+    # …and the two standalone facts are UNTOUCHED (the mass-overwrite bug)
+    assert "Alice" in c.execute("SELECT content FROM memories WHERE id=?", (a_id,)).fetchone()["content"]
+    assert "Bob"   in c.execute("SELECT content FROM memories WHERE id=?", (b_id,)).fetchone()["content"]
+
+
+def test_delete_by_date_removes_only_the_journal_bucket_not_the_facts():
+    c = _conn()
+    a_id, b_id = _journal_plus_two_facts(c)
+    res = memory.delete_memory("daily", "2026-06-22", conn=c)
+    assert res["ok"]
+    assert c.execute("SELECT COUNT(*) FROM memories WHERE granularity='daily' AND date_key='2026-06-22' AND slug IS NULL").fetchone()[0] == 0
+    # both per-fact rows survive
+    assert c.execute("SELECT COUNT(*) FROM memories WHERE id IN (?,?)", (a_id, b_id)).fetchone()[0] == 2
+
+
+def test_update_by_date_with_no_journal_bucket_is_a_clean_miss_not_a_mass_write():
+    c = _conn()
+    a_id, b_id = _two_facts_same_day(c)  # ONLY standalone facts, no journal bucket
+    with patch("phylactery.embed.embed_text", _fake_embed):
+        res = memory.update_memory("daily", "2026-06-22", "should hit nothing", conn=c)
+    assert res["ok"] is False  # nothing to update → clean miss, not a silent mass-overwrite
+    assert "Alice" in c.execute("SELECT content FROM memories WHERE id=?", (a_id,)).fetchone()["content"]
+    assert "Bob"   in c.execute("SELECT content FROM memories WHERE id=?", (b_id,)).fetchone()["content"]
