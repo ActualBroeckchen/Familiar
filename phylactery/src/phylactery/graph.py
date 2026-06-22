@@ -9,13 +9,12 @@ graph_full: full node+edge dump for the Knowledge editor Map view.
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from typing import Any
 
 from phylactery.db import get_conn, new_id, now_iso
 from phylactery.snapshot import auto_snapshot
-from phylactery.audience import audience_filter_sql, audience_in_sql
+from phylactery.audience import audience_in_sql
 
 
 def _node_row_to_dict(row: sqlite3.Row) -> dict:

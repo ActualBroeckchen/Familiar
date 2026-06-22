@@ -19,7 +19,7 @@ The audience **foundation already exists** — the review/docs were behind the c
 
 **The actual hole:** when a room IS trusted enough to run `memory_search`/`graph_subgraph` (it has the `memories:'shared'` / `graph` grant), those calls run **unfiltered** — `thalamus` never passes the room's `audienceTag`, so memory recall defaults to `ward-private` → `audience_filter_sql` → `"1=1"` → **everything, ward-private included**, and `graph.get_subgraph` ignores `audience` entirely. So ward-private memories/graph **enter the Familiar's context in trusted shared rooms.** The send-side outgoing filter is a partial backstop; the context itself is ungated.
 
-**Plus a latent bug:** `audience_filter_sql` returns `audience IN (room_tag, 'ward-private')` for a non-ward room — including `ward-private`, which contradicts the module's own `is_allowed` and would keep leaking even once wired.
+**Plus a latent bug:** `audience_filter_sql` returns `audience IN (room_tag, 'ward-private')` for a non-ward room — including `ward-private`, which contradicts the gate's own intended semantics and would keep leaking even once wired. (Fixed by routing recall through `audience_in_sql` instead, which does not re-add ward-private.)
 
 ## 2. Design principle
 

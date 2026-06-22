@@ -48,7 +48,7 @@ import {
 } from './surface-events.js';
 import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedIntents } from './recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
-import { listOutbox, acknowledgeOutbox, clearAcknowledged, enqueueOutbox } from './outbox.js';
+import { listOutbox, acknowledgeOutbox, clearAcknowledged } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
 import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';
 import { startMemorySweepLoop } from './memory-sweep-loop.js';
