@@ -35,27 +35,30 @@ audienceTag (category id)  ──audience.js: visibleAudiences()──▶  ["cat
 
 ## 3. Phases (leak closes first)
 
-### Phase 1 — close the recall leak, with the category ladder
+### Phase 1 — close the recall leak, with the category ladder ✅ done
 - **`audience.js` `visibleAudiences(roomTag, registry)`** → the set of audience tags a room may see: every category whose `permissionScore` ≤ the room category's score, **excluding `ward-private`**. Ward-private room → a sentinel meaning "all" (`null`). Strangers room → `[]` (sees nothing — though `fetchEligibility` already blocks the fetch there). This IS the category ladder.
 - **`memory.py` `audience_filter_sql` + `search`** accept an **allowed-set** (list) instead of a single tag. `None`/ward sentinel → `1=1`; `[]` → `0=1` (nothing); else `audience IN (?,…)`. **Fixes the ward-private-in-the-IN-list bug.**
 - **`graph.py` `get_subgraph`** gains the same audience filter (today it has none).
 - **`thalamus`** computes `visibleAudiences` from the session's `audienceTag` (+ registry) and passes the set to both `memory_search` and `graph_subgraph`. The MCP tools (`server.py`) thread it through.
 - Result: a shared room sees only memories/graph it's cleared for; ward-private never surfaces outside a ward-private session. Closes the leak.
 
-### Phase 2 — write-time audience derivation (widen + tighten — ward decision)
+### Phase 2 — write-time audience derivation (widen + tighten — ward decision) ✅ done
 Today a memory's `audience` = the session's `audienceTag`. **Decision (ward): both widen and tighten** — a subject villager's disclosure preference may raise *or* lower a memory's audience.
 
-**Rule (the subject's stated disclosure is the source of truth for memories about them; most-restrictive across multiple subjects):**
+**Rule as built (`audience.deriveMemoryAudience`) — session-bounded by default, explicit disclosure widens/tightens; most-restrictive across multiple subjects:**
 ```
-memory about villager(s) V:  audience = mostRestrictive( disclosure(V_i, fact.category) for each subject )
-memory about the ward only:  audience = mostRestrictive( sessionTag, categoryFloor(fact.category) )
+sessionDefault            = mostRestrictive( sessionTag, categoryFloor(fact.category) )
+memory about the ward only = sessionDefault                          (never auto-widened)
+memory about villager(s) V = mostRestrictive(
+                               disclosure(V_i, fact.category) if set, else sessionDefault
+                               for each subject )
 ```
-- **`disclosure(V, C)`** — how widely V is OK being discussed re: category C. Source: a **new per-villager `disclosure` map** (sibling of `remember`/`standingConsent`), per remember-category, holding an audience level (a Village category id, or `ward-private`). This is what lets Melian's *"my health is fine with close friends"* widen a health memory to `cat-friends` instead of `ward-private`.
-  - **Default when unset (fail-private):** V's representative Village category for non-sensitive categories (`basics`/`relationships`/`whereabouts`); **`ward-private`** for sensitive ones (`health_info`, `emotional_content`) until V explicitly widens them.
-- **Widen IS allowed** (per decision): a memory about a `cat-friends` villager can become friends-visible even though it was made in a ward-private session — that's the *subject's* expressed disclosure, not the ward's. The ward's **own** facts (no villager subject) never widen past the session tag.
+- **`disclosure(V, C)`** — how widely V is OK being discussed re: category C. Source: a **per-villager `disclosure` map** (sibling of `remember`/`standingConsent`), per remember-category, holding an audience level (a Village category id, or `ward-private`). This is what lets Melian's *"my health is fine with close friends"* widen a health memory to `cat-friends` instead of `ward-private`.
+  - **Default when unset = session-bounded (the safer choice we shipped).** With no explicit preference, a fact is capped at the room it was made in — it is **never auto-widened** from the villager's own category. (The earlier draft auto-widened to V's representative category; we tightened that to session-bounded so silence never widens.) Sensitive categories (`health_info`, `emotional_content`) floor the default to `ward-private`.
+- **Explicit disclosure overrides in either direction**, including past the sensitivity floor — that entry *is* the data subject's stated consent. A memory about a `cat-friends` villager can become friends-visible even though it was made in a ward-private session.
 - **Multi-subject** → most restrictive wins (every named person must be OK with the room).
 
-> **New field `villager.disclosure`** needs: schema/sanitize in `village.js` (mirrors `remember`), a Village-UI editor (per-category → audience level), and the Familiar's `village_upsert` tool gaining a way to record *"they're fine sharing X with my circle"* in first person (it learns this in conversation). Audience is still **derived in code** from this field + the fact's category + subjects — the extraction LLM is never asked for an audience (§6).
+> **Field `villager.disclosure`** (delivered): schema/sanitize in `village.js` (mirrors `remember`), server endpoints (POST/PATCH), a Village-UI editor (per-category → audience dropdown), and the Familiar's `village_upsert` tool gaining a `disclosure` argument (circle names resolved to ids) so it can record *"they're fine sharing X with my circle"* in first person. Audience is still **derived in code** from this field + the fact's category + subjects — the extraction LLM is never asked for an audience (§6).
 
 > **Phase 1 is independent of all this** — it gates recall by whatever `audience` a record already carries, so it closes the leak regardless of how audience is written. Phase 2 only changes what audience gets *written* going forward.
 

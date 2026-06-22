@@ -713,6 +713,26 @@ gate wins (`false > ask > true`). Default when no villager map exists:
 ward's veto). Set two ways: the Village-UI consent checkboxes, or the Familiar's
 `village_upsert` tool (`mutualConsentToRemember`, ward-private only).
 
+**Write-time audience derivation (Pillar C → Pillar E, 0.7.x).** Each per-fact row
+is now stamped with the audience tag that gates its later recall — derived **in
+code** by `audience.deriveMemoryAudience({ category, subjects, sessionTag,
+registry })`, never asked of the extractor (a tag the LLM could forget is a tag
+that could leak). The rule is **session-bounded by default, widen/tighten by
+explicit consent**: with no per-subject preference a fact is capped at the room it
+was made in (`audienceTag`), and a sensitive category (`health_info`,
+`emotional_content`) is floored to `ward-private`. A subject villager may carry a
+`disclosure` map (per remember-category → a Village category id, or
+`ward-private`); an explicit entry **overrides** the default in either direction —
+widening a ward-private fact out to a named circle, or tightening past the session
+ceiling — and even overrides the sensitivity floor, because that is the data
+subject's own stated consent. With multiple subjects the **narrowest** circle wins
+(everyone named must be comfortable with the room). The ward sets `disclosure` in
+the Village UI (a per-category dropdown beside the consent toggles); the Familiar
+sets it in first person via `village_upsert`'s `disclosure` argument (circle names
+resolved to ids, ward-private only for edits). The derived tag rides into
+`createMemoryFull({ audience })`, where it becomes the `audience` column the Pillar
+E recall gate filters on.
+
 **Consent flow:** `thalamus.enrich()` reads `.consent-pending.json` cheaply
 (no MCP round-trip) and injects a `[PENDING MEMORY CONSENT]` block when
 non-empty. The Familiar calls `memory_confirm_consent(ids)` or

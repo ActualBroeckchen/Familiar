@@ -288,6 +288,62 @@ export function visibleAudiences(roomTag, registry) {
     .map(c => c.id);
 }
 
+// ── Write-time audience derivation (Phase 2) ──────────────────────
+//
+// A memory's audience is DERIVED IN CODE from what the extractor already
+// produces (category + subjects) and the session tag — the LLM is never asked
+// for it (a tag it could forget is a tag that could leak). Widen + tighten (ward
+// decision): a subject villager's EXPLICIT `disclosure[category]` may raise OR
+// lower the audience; without an explicit preference the default is
+// session-bounded (never auto-widened from the villager's category).
+
+const SENSITIVE_CATEGORIES = new Set(['health_info', 'emotional_content']);
+
+// Restrictiveness score of an audience tag: higher = narrower circle. ward-private
+// and unknown/deleted categories score Infinity (fail-private).
+function audienceScore(tag, categoryMap) {
+  if (!tag || tag === AUDIENCE_TAG_WARD_PRIVATE) return Infinity;
+  const cat = categoryMap.get(tag);
+  return cat ? permissionScore(cat.grants) : Infinity;
+}
+
+// The most restrictive (narrowest) of a set of audience tags.
+function mostRestrictive(tags, categoryMap) {
+  let best = AUDIENCE_TAG_WARD_PRIVATE, bestScore = -Infinity;
+  for (const t of tags) {
+    const s = audienceScore(t, categoryMap);
+    if (s > bestScore) { bestScore = s; best = t; }
+  }
+  return best;
+}
+
+/**
+ * Derive the audience tag a memory should be stored with.
+ * @param {string} category      remember-category (health_info, basics, …)
+ * @param {Array}  subjects       subject villager objects (may carry `.disclosure`)
+ * @param {string} sessionTag     the room the memory was made in (the ward's ceiling)
+ * @param {object} registry       village registry (for category scores)
+ * @returns {string} an audience tag (a category id, or 'ward-private')
+ */
+export function deriveMemoryAudience({ category, subjects = [], sessionTag = AUDIENCE_TAG_WARD_PRIVATE, registry } = {}) {
+  const categoryMap = new Map((registry?.categories ?? []).map(c => [c.id, c]));
+  // Session-bounded default, tightened by the fact's sensitivity floor.
+  const floor = SENSITIVE_CATEGORIES.has(category) ? AUDIENCE_TAG_WARD_PRIVATE : null;
+  const sessionDefault = floor ? mostRestrictive([sessionTag, floor], categoryMap) : (sessionTag || AUDIENCE_TAG_WARD_PRIVATE);
+
+  if (!subjects.length) return sessionDefault; // a fact about the ward themselves — never auto-widened
+
+  // Per subject: an explicit disclosure preference widens or tightens; otherwise
+  // the session-bounded default (no auto-widen from their category). The narrowest
+  // across all named subjects wins — everyone must be OK with the room.
+  const levels = subjects.map(v => {
+    const explicit = v?.disclosure?.[category];
+    if (explicit && (explicit === AUDIENCE_TAG_WARD_PRIVATE || categoryMap.has(explicit))) return explicit;
+    return sessionDefault;
+  });
+  return mostRestrictive(levels, categoryMap);
+}
+
 // ── Grant check ───────────────────────────────────────────────────
 
 /**

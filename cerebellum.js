@@ -1458,6 +1458,7 @@ export const BUILTIN_TOOLS = [
           privateNotes:   { type: 'string', description: 'Sensitive notes for {{user}} and me only (orientation, health, legal name, etc.). Held back automatically whenever anyone else is present. I reserve this for things that could genuinely harm or expose them — not trivia.' },
           graphNodeId:    { type: 'string', description: 'Optional. The knowledge-graph node id to link this person to (from find_graph_node). Keeps the Village and the relational graph as one picture.' },
           mutualConsentToRemember: { type: 'boolean', description: 'Standing memory consent. I set this true ONLY when both {{user}} AND this person have agreed I may keep memories about them — then I stop asking for per-fact consent on them (an explicit "never store" category still holds). I set it false to withdraw that standing agreement. I only touch this when {{user}} and I are alone, since it changes their record.' },
+          disclosure: { type: 'object', description: 'Where facts about this person may surface, per kind of fact. A map from fact-kind (one of: basics, emotional_content, health_info, relationships, whereabouts) to a circle — a category name (e.g. "Family", "Close friends") meaning "memories of this kind about them may surface in that circle\'s rooms", or "ward-private" meaning "only ever when {{user}} and I are alone". I set this when someone tells me how widely they\'re comfortable being discussed (e.g. "you can mention my health to my family but no one else"). A kind I leave out keeps its default: bounded to the room a memory was made in. I only change this when {{user}} and I are alone, since it edits their record.' },
         },
         required: [],
       },
@@ -2138,7 +2139,7 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `I couldn't read the Village: ${err.message}`; }
   },
 
-  village_upsert: async ({ id, name, category, relationToWard, pronouns, commStyleNotes, notes, privateNotes, graphNodeId, mutualConsentToRemember } = {}, ctx = {}) => {
+  village_upsert: async ({ id, name, category, relationToWard, pronouns, commStyleNotes, notes, privateNotes, graphNodeId, mutualConsentToRemember, disclosure } = {}, ctx = {}) => {
     if (!_toolDeps.upsertVillager || !_toolDeps.getVillageRegistry) return 'I can\'t reach the Village right now.';
     const wardPrivate = ctx.wardPrivate !== false;
 
@@ -2177,14 +2178,38 @@ export const TOOL_EXECUTORS = {
       if (mutualConsentToRemember === true) args.standingConsent = { wardAgreed: true, villagerAgreed: true };
       else if (mutualConsentToRemember === false) args.standingConsent = {};
 
-      // Resolve category name → id (the Familiar knows names, not ids).
-      if (typeof category === 'string' && category.trim()) {
+      // Resolve circle names → ids (the Familiar knows names, not ids). The
+      // registry is read once and shared by both the category and disclosure
+      // resolution below.
+      const needsRegistry = (typeof category === 'string' && category.trim()) ||
+        (disclosure && typeof disclosure === 'object' && !Array.isArray(disclosure));
+      let cats = [];
+      if (needsRegistry) {
         const reg = await _toolDeps.getVillageRegistry();
-        const cats = reg?.categories ?? [];
-        const q = category.trim().toLowerCase();
-        const hit = cats.find(c => c.id.toLowerCase() === q || c.name.toLowerCase() === q);
+        cats = reg?.categories ?? [];
+      }
+      const resolveCircle = (q) => cats.find(c =>
+        c.id.toLowerCase() === q.trim().toLowerCase() || c.name.toLowerCase() === q.trim().toLowerCase());
+
+      if (typeof category === 'string' && category.trim()) {
+        const hit = resolveCircle(category);
         if (!hit) return `I don't have a category called "${category}". Categories: ${cats.map(c => c.name).join(', ') || '(none)'}.`;
         args.categoryIds = [hit.id];
+      }
+
+      // Disclosure: per fact-kind, the circle a person is OK being discussed in.
+      // Resolve each value (a circle name, or 'ward-private') to the id the
+      // store keeps; an unknown circle is a hard stop so nothing lands wrong.
+      if (disclosure && typeof disclosure === 'object' && !Array.isArray(disclosure)) {
+        const resolved = {};
+        for (const [kind, circle] of Object.entries(disclosure)) {
+          if (typeof circle !== 'string' || !circle.trim()) continue;
+          if (circle.trim().toLowerCase() === 'ward-private') { resolved[kind] = 'ward-private'; continue; }
+          const hit = resolveCircle(circle);
+          if (!hit) return `For disclosure I don't have a circle called "${circle}". Circles: ${cats.map(c => c.name).join(', ') || '(none)'}, or "ward-private".`;
+          resolved[kind] = hit.id;
+        }
+        if (Object.keys(resolved).length) args.disclosure = resolved;
       }
 
       const v = await _toolDeps.upsertVillager(args);

@@ -125,6 +125,7 @@ async function persistQueue() {
 
 import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap, graphRelate } from './thalamus.js';
 import { getRegistry, standingConsentActive } from './village.js';
+import { deriveMemoryAudience } from './audience.js';
 import { segmentByDay } from './day-segments.js';
 import { recordSegmentRun, isSegmentMemorized } from './memory-coverage.js';
 import { readSettingsSync } from './cerebellum.js';
@@ -589,6 +590,13 @@ async function processJob(job) {
     const gate = resolveRememberGate(category, subjectVillagers, wardRemember);
     if (gate === 'false') continue; // drop silently
 
+    // Derive WHERE this fact may surface (audience), in code — the extractor is
+    // never asked for it. Widen+tighten: a subject's explicit disclosure pref can
+    // raise/lower it; otherwise it's bounded by the session tag + sensitivity.
+    const factAudience = deriveMemoryAudience({
+      category, subjects: subjectVillagers, sessionTag: audience, registry,
+    });
+
     // Discrete session facts land at the `daily` tier — the doc's baseline for
     // conversation-derived memory — but as STANDALONE rows so each keeps its own
     // category / subjects / consent. They then consolidate (daily→weekly→…) and
@@ -601,7 +609,7 @@ async function processJob(job) {
       content,
       granularity: 'daily',
       standalone: true,
-      audience,
+      audience: factAudience,
       subjects: subjectIds,
       category,
       consent_pending: gate === 'ask',

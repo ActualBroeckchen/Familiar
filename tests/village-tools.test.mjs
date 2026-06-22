@@ -187,3 +187,24 @@ test('village_upsert: unknown category name is reported, no mutation', async () 
     assert.equal(calls.length, 0);
   });
 });
+
+test('village_upsert: disclosure resolves circle names → ids and keeps ward-private', async () => {
+  await withFakeVillage(async (calls) => {
+    const out = await executeToolCall('village_upsert',
+      JSON.stringify({ name: 'Mum', disclosure: { health_info: 'Family', basics: 'ward-private' } }),
+      { wardPrivate: true });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].disclosure, { health_info: 'family', basics: 'ward-private' },
+      'circle name resolved to id; ward-private kept as the sentinel');
+    assert.match(out, /added in the Village/i);
+  });
+});
+
+test('village_upsert: an unknown disclosure circle is a hard stop, no mutation', async () => {
+  await withFakeVillage(async (calls) => {
+    const out = await executeToolCall('village_upsert',
+      JSON.stringify({ name: 'Mum', disclosure: { health_info: 'Nonexistent' } }), { wardPrivate: true });
+    assert.match(out, /don't have a circle called/i);
+    assert.equal(calls.length, 0);
+  });
+});
