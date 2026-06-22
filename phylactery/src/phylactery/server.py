@@ -253,6 +253,73 @@ def memory_read(
 
 
 @mcp.tool()
+def memory_read_by_id(
+    id: str,
+    instanceId: Optional[str] = None,
+) -> dict[str, Any]:
+    """I use this to read one specific memory by its id — the reliable handle when a
+    date alone is ambiguous. Many of my per-fact memories share a single day (a whole
+    conversation's facts land on the same date), so addressing by day can't tell them
+    apart; the id always can. I get ids from memory_search and memory_list. Returns the
+    full record — content, granularity, date, register, audience, care weight.
+    """
+    return mem.read_memory_by_id(id, conn=_c())
+
+
+@mcp.tool()
+def memory_move_date(
+    id: str,
+    date: str,
+    instanceId: Optional[str] = None,
+) -> str:
+    """I use this to move a memory (by its id) to the day it actually belongs to —
+    when something was filed under the wrong date. The classic case: a batch of facts
+    imported from older conversations all landed in today's bucket because no date rode
+    along at the time; I read each one, work out the day it really happened, and move it
+    there. Only the day changes — content and everything else stay put. date is the
+    correct calendar day, YYYY-MM-DD. Auto-snapshots first.
+    """
+    result = mem.move_memory_date(id, date, conn=_c())
+    if not result.get("ok"):
+        return f"Move failed: {result.get('error', 'unknown')}"
+    return f"Memory {id} moved to {result.get('date')}. (Snapshot created before change.)"
+
+
+@mcp.tool()
+def memory_update_by_id(
+    id: str,
+    content: Optional[str] = None,
+    audience: Optional[str] = None,
+    careWeight: Optional[str] = None,
+    instanceId: Optional[str] = None,
+) -> str:
+    """I use this to correct or re-tag one specific memory by its id — the reliable
+    handle when many facts share a day. content rewrites the text; audience sets who
+    may see it; careWeight is 'high'/'low' or '' to clear. Auto-snapshots first.
+    """
+    result = mem.update_memory_by_id(
+        id, new_content=content, audience=audience, care_weight=careWeight, conn=_c()
+    )
+    if not result.get("ok"):
+        return f"Update failed: {result.get('error', 'unknown')}"
+    return "Memory updated. (Snapshot created before change.)"
+
+
+@mcp.tool()
+def memory_delete_by_id(
+    id: str,
+    instanceId: Optional[str] = None,
+) -> str:
+    """I use this to delete one specific memory by its id — the reliable handle when
+    many facts share a day and a date can't single one out. Auto-snapshots first.
+    """
+    result = mem.delete_memory_by_id(id, conn=_c())
+    if not result.get("ok"):
+        return f"Delete failed: {result.get('error', 'unknown')}"
+    return f"Memory deleted: {result.get('deleted')}. (Snapshot created before deletion.)"
+
+
+@mcp.tool()
 def memory_search(
     query: str,
     maxResults: Optional[int] = None,

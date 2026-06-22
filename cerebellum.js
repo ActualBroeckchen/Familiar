@@ -44,7 +44,7 @@ import {
   // second MCP connection (single enforcement point; see header).
   createMemory, appendIdentity,
   updateMemory, deleteMemory, rewriteIdentitySection,
-  listMemories, readMemory,
+  listMemories, readMemory, readMemoryById, moveMemoryDate,
   searchGraphNodes, getGraphSubgraph,
   createGraphNode, createGraphEdge,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
@@ -978,8 +978,37 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'read_memory_by_id',
+      description: "I read one specific memory by its id — the reliable handle when a date alone can't tell two entries apart. Many of my per-fact memories share a single day (a whole conversation's facts land on the same date), so addressing by day returns whichever comes first; the id always lands on the exact one. Ids ride in on recall and list_memories results. I reach for this when I need the full, exact entry before I edit or move it.",
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The memory id, from a recall or list_memories result.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'move_memory_date',
+      description: "I move a memory (by its id) to the day it actually belongs to, when it was filed under the wrong date. The case this is for: a batch of facts brought in from older conversations all landed in today's bucket because no date rode along when they were saved — I read each one, work out the day it really happened from its content, and move it there. Only the day changes; the content stays exactly as it is. I get the id from recall or list_memories.",
+      parameters: {
+        type: 'object',
+        properties: {
+          id:   { type: 'string', description: 'The memory id to move, from a recall or list_memories result.' },
+          date: { type: 'string', description: 'The correct calendar day, YYYY-MM-DD.' },
+        },
+        required: ['id', 'date'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'recall',
-      description: "I search my own long-term memory for what I already hold about something — by meaning, not exact words. I reach for this before I save a new memory (to check whether I already recorded a fact, so I update or supersede it instead of saving a duplicate), when {{user}} references something from before, or whenever I want to confirm what I know. It returns the closest matches with their relevance, their address (tier/date), and id, so I can then read_memory, update_memory, or delete_memory the right entry. Recall is how I check; the save or update I then make is the actual filing — recalling alone doesn't record anything.",
+      description: "I search my own long-term memory for what I already hold about something — by meaning, not exact words. I reach for this before I save a new memory (to check whether I already recorded a fact, so I update or supersede it instead of saving a duplicate), when {{user}} references something from before, or whenever I want to confirm what I know. It returns the closest matches with their relevance, their address (tier/date), and id, so I can then read_memory_by_id (the exact entry), move_memory_date (re-file a mis-dated one), update_memory, or delete_memory. Recall is how I check; the save or update I then make is the actual filing — recalling alone doesn't record anything.",
       parameters: {
         type: 'object',
         properties: {
@@ -1754,6 +1783,30 @@ export const TOOL_EXECUTORS = {
       if (!content || !String(content).trim()) return `No ${granularity} memory found at ${date}.`;
       return String(content);
     } catch (err) { return `Failed to read memory: ${err.message}`; }
+  },
+
+  read_memory_by_id: async ({ id } = {}) => {
+    const mid = String(id ?? '').trim();
+    if (!mid) return 'I need the memory id to read — I get it from a recall or list_memories result.';
+    try {
+      const data = await readMemoryById({ id: mid });
+      if (!data || data.ok === false) return `No memory with id ${mid} — ${data?.error ?? 'not found'}.`;
+      const addr = [data.granularity, data.date].filter(Boolean).join('/');
+      const content = String(data.content ?? '').trim();
+      if (!content) return `Memory ${mid} (${addr}) is empty.`;
+      return `Memory ${mid} (${addr}):\n${content}`;
+    } catch (err) { return `Failed to read memory by id: ${err.message}`; }
+  },
+
+  move_memory_date: async ({ id, date } = {}) => {
+    const mid = String(id ?? '').trim();
+    if (!mid) return 'I need the memory id to move — I get it from a recall or list_memories result.';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date ?? '').trim())) return 'I need the correct day as YYYY-MM-DD to move this memory to.';
+    try {
+      const res = await moveMemoryDate({ id: mid, date: String(date).trim() });
+      if (!res.ok) return `Failed to move memory ${mid}: ${res.error}`;
+      return `Moved memory ${mid} to ${String(date).trim()}. Only the day changed; the content is untouched.`;
+    } catch (err) { return `Failed to move memory: ${err.message}`; }
   },
 
   recall: async ({ query, limit } = {}) => {

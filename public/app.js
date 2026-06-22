@@ -5538,24 +5538,58 @@ async function keLoadMemories() {
       row.innerHTML = `
         <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date ?? m.key)}${registerBadge}${audienceBadge}${cwBadge}</div>
         <div class="ke-row-sub">${esc((m.preview ?? m.title ?? '').slice(0, 140))}</div>`;
-      row.addEventListener('click', () => keOpenMemory(m.granularity, m.date ?? m.key));
+      row.addEventListener('click', () => keOpenMemory(m));
       list.appendChild(row);
     }
   } catch (err) { list.innerHTML = keError(err, 'Failed to load memories.'); }
 }
 
-async function keOpenMemory(granularity, date) {
+// Audience <option> list shared by the memory + graph-node editors: "just us"
+// (ward-private) plus every Village circle, with `current` preselected. An
+// unknown current value (a legacy tag like the old 'all', or a since-deleted
+// circle) is shown as its own option so opening a record never silently re-tags
+// it on save.
+function keAudienceOptionsHTML(current, categories) {
+  const cur  = current ?? 'ward-private';
+  const cats = categories ?? [];
+  const opts = [`<option value="ward-private"${cur === 'ward-private' ? ' selected' : ''}>ward-private (just us)</option>`];
+  for (const c of cats) {
+    opts.push(`<option value="${esc(c.id)}"${cur === c.id ? ' selected' : ''}>${esc(c.name)}</option>`);
+  }
+  if (cur !== 'ward-private' && !cats.some(c => c.id === cur)) {
+    opts.push(`<option value="${esc(cur)}" selected>${esc(cur)} (unknown circle)</option>`);
+  }
+  return opts.join('');
+}
+
+// A memory is addressed by its unique id — granularity+date can't single out a
+// standalone per-fact row, because a whole day's extracted facts share one date.
+// `m` is the list row (carries id, granularity, key=date).
+async function keOpenMemory(m) {
+  const id = m?.id;
   keSetDetail('ke-mem-detail', '<p class="logs-loading">Loading…</p>');
   try {
-    const res = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`);
+    if (!id) throw new Error('this memory has no id to open');
+    const res = await fetch(`/api/entity/memories/by-id/${encodeURIComponent(id)}`);
     if (!res.ok) throw new Error(await keReadServerError(res));
     const data = await res.json();
-    const content   = data.memory?.content    ?? data.content    ?? '';
-    const audience  = data.memory?.audience   ?? data.audience   ?? 'ward-private';
-    const careWeight = data.memory?.care_weight ?? data.care_weight ?? '';
-    const register  = data.memory?.register   ?? data.register   ?? 'episodic';
+    if (data.ok === false) throw new Error(data.error ?? 'memory not found');
+    const content    = data.content     ?? '';
+    const granularity = data.granularity ?? m.granularity ?? '';
+    const date       = data.date        ?? m.key ?? '';
+    const audience   = data.audience    ?? 'ward-private';
+    const careWeight = data.care_weight ?? '';
+    const register   = data.register    ?? 'episodic';
     const registerNote = (register === 'me' || register === 'ward')
       ? `<span class="ke-badge ke-badge-register">standing truth · ${register === 'me' ? 'about the Familiar' : 'about the ward'}</span>` : '';
+    // The day this memory is filed under, as a value an <input type="date"> accepts
+    // (the leading YYYY-MM-DD; significant keys carry a _slug suffix we drop here).
+    const dayValue = (String(date).match(/^\d{4}-\d{2}-\d{2}/) || [''])[0];
+    // Audience is a Village circle id (or ward-private), same model the recall gate
+    // filters on. Pull the circles so the dropdown offers real options, not a stale
+    // ward-private/all pair. Village unreachable → ward-private only; harmless.
+    let audCats = [];
+    try { audCats = (await vlFetch())?.categories ?? []; } catch { /* keep ward-private only */ }
     const det = $('ke-mem-detail');
     det.innerHTML = `
       <div class="ke-detail-header">
@@ -5565,10 +5599,7 @@ async function keOpenMemory(granularity, date) {
       <textarea id="ke-mem-content" rows="12" class="ke-textarea">${esc(content)}</textarea>
       <div class="ke-meta-row">
         <label class="ke-meta-label" for="ke-mem-audience">Audience</label>
-        <select id="ke-mem-audience" class="ke-select">
-          <option value="ward-private" ${audience === 'ward-private' ? 'selected' : ''}>ward-private (most restrictive)</option>
-          <option value="all" ${audience === 'all' ? 'selected' : ''}>all (any room)</option>
-        </select>
+        <select id="ke-mem-audience" class="ke-select">${keAudienceOptionsHTML(audience, audCats)}</select>
         <label class="ke-meta-label" for="ke-mem-care-weight">Care weight</label>
         <select id="ke-mem-care-weight" class="ke-select">
           <option value=""     ${!careWeight             ? 'selected' : ''}>— unset</option>
@@ -5576,23 +5607,39 @@ async function keOpenMemory(granularity, date) {
           <option value="low"  ${careWeight === 'low'    ? 'selected' : ''}>low</option>
         </select>
       </div>
+      <div class="ke-meta-row">
+        <label class="ke-meta-label" for="ke-mem-movedate">Filed under</label>
+        <input type="date" id="ke-mem-movedate" class="ke-select" value="${esc(dayValue)}">
+        <button id="ke-mem-move" class="btn-secondary">Move to this day</button>
+      </div>
       <div class="ke-actions">
         <button id="ke-mem-save"    class="btn-send">Save (overwrite)</button>
         <button id="ke-mem-super"   class="btn-secondary">Supersede with today's date</button>
         <button id="ke-mem-delete"  class="btn-ghost ke-danger">Delete</button>
       </div>
-      <p class="field-hint">Editing rewrites the entry in place; an auto-snapshot is taken first. "Supersede" writes a NEW dated entry that contradicts this one — recency-decay then demotes the stale entry while preserving history.</p>`;
+      <p class="field-hint">Editing rewrites the entry in place; an auto-snapshot is taken first. "Move to this day" re-files the memory under a different date (the fix for facts imported into the wrong day). "Supersede" writes a NEW dated entry that contradicts this one — recency-decay then demotes the stale entry while preserving history.</p>`;
     $('ke-mem-save').addEventListener('click', async () => {
       const body = $('ke-mem-content').value;
       const aud = $('ke-mem-audience').value;
       const cw  = $('ke-mem-care-weight').value;
-      const r = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`, {
+      const r = await fetch(`/api/entity/memories/by-id/${encodeURIComponent(id)}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: body, editedBy: 'user-edit', audience: aud, careWeight: cw || null }),
+        body: JSON.stringify({ content: body, audience: aud, careWeight: cw || '' }),
       });
       if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
       keLoadMemories();
-      keOpenMemory(granularity, date);
+      keOpenMemory({ ...m, id });
+    });
+    $('ke-mem-move').addEventListener('click', async () => {
+      const nd = $('ke-mem-movedate').value;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(nd)) { alert('Pick a valid date first.'); return; }
+      const r = await fetch(`/api/entity/memories/by-id/${encodeURIComponent(id)}/move`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: nd }),
+      });
+      if (!r.ok) { alert(`Move failed: ${(await r.json()).error ?? r.status}`); return; }
+      keLoadMemories();
+      keOpenMemory({ ...m, id });
     });
     $('ke-mem-super').addEventListener('click', async () => {
       const body = $('ke-mem-content').value;
@@ -5607,8 +5654,8 @@ async function keOpenMemory(granularity, date) {
       keLoadMemories();
     });
     $('ke-mem-delete').addEventListener('click', async () => {
-      if (!confirm(`Delete memory ${granularity}/${date}? An auto-snapshot is taken first; you can restore via the Snapshots tab.`)) return;
-      const r = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`, { method: 'DELETE' });
+      if (!confirm(`Delete this ${granularity} memory (${date})? An auto-snapshot is taken first; you can restore via the Snapshots tab.`)) return;
+      const r = await fetch(`/api/entity/memories/by-id/${encodeURIComponent(id)}`, { method: 'DELETE' });
       if (!r.ok) { alert(`Delete failed: ${(await r.json()).error ?? r.status}`); return; }
       keSetDetail('ke-mem-detail', '<p class="logs-empty">Deleted.</p>');
       keLoadMemories();
@@ -6720,17 +6767,13 @@ async function keGraphOpenPopover(node, clientX, clientY) {
     const sg   = await res.json();
     const self = (sg.nodes ?? []).find(n => n.id === node.id) ?? node;
     const edgesHtml = (sg.edges ?? []).map(e => keGraphEdgeRowHTML(node.id, e, sg)).join('');
-    // Audience dropdown options — "just us" plus every Village circle. A node is
-    // private by default; this is the deliberate widen/tighten surface for the
-    // human (the Familiar has the same control via update_graph_node).
-    let audOptions = `<option value="ward-private">Just us (ward-private)</option>`;
-    try {
-      const reg = await vlFetch();
-      const cur = self.audience ?? 'ward-private';
-      audOptions = `<option value="ward-private"${cur === 'ward-private' ? ' selected' : ''}>Just us (ward-private)</option>` +
-        (reg?.categories ?? []).map(c =>
-          `<option value="${esc(c.id)}"${cur === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
-    } catch { /* Village unreachable → ward-private only; harmless */ }
+    // Audience dropdown — "just us" plus every Village circle (shared with the
+    // memory editor). A node is private by default; this is the deliberate
+    // widen/tighten surface for the human (the Familiar has the same control via
+    // update_graph_node). Village unreachable → ward-private only; harmless.
+    let audCats = [];
+    try { audCats = (await vlFetch())?.categories ?? []; } catch { /* keep ward-private only */ }
+    const audOptions = keAudienceOptionsHTML(self.audience, audCats);
     pop.innerHTML = `
       <div class="ke-graph-popover-head">
         <h3>${esc(self.label ?? node.id)}</h3>

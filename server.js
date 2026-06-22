@@ -17,10 +17,10 @@ import {
   startThalamus,
   enrich, createMemory, appendIdentity, updateIdentitySection,
   // Reads for the Knowledge editor UI
-  listMemories, readMemory, getIdentityAll, listGraphNodes, searchGraphNodes, getGraphSubgraph, getFullGraph,
+  listMemories, readMemory, readMemoryById, getIdentityAll, listGraphNodes, searchGraphNodes, getGraphSubgraph, getFullGraph,
   listSnapshots,
   // Writes (each auto-snapshots before the destructive op)
-  updateMemory, deleteMemory, rewriteIdentitySection,
+  updateMemory, deleteMemory, updateMemoryById, deleteMemoryById, moveMemoryDate, rewriteIdentitySection,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   createGraphNode, createGraphEdge,
   createSnapshot, restoreSnapshot,
@@ -1685,6 +1685,56 @@ app.get('/api/entity/memories', async (req, res) => {
   const n = limit !== undefined ? Math.max(1, Math.min(100, parseInt(limit, 10) || 50)) : 50;
   try { res.json(await listMemories({ granularity, limit: n })); }
   catch (err) { gatewayDown(res, err.message); }
+});
+
+// By-id addressing — the unique handle. Registered BEFORE the /:granularity/:date
+// routes so "by-id" is never swallowed as a granularity. granularity+date can't
+// single out a standalone per-fact row (many share one day); the id always can.
+const VALID_MEMORY_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+app.get('/api/entity/memories/by-id/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!VALID_MEMORY_ID_RE.test(id)) return badRequest(res, 'invalid id');
+  try {
+    const result = await readMemoryById({ id });
+    if (result && result.ok === false) return res.status(404).json(result);
+    res.json(result);
+  } catch (err) { gatewayDown(res, err.message); }
+});
+
+app.put('/api/entity/memories/by-id/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!VALID_MEMORY_ID_RE.test(id)) return badRequest(res, 'invalid id');
+  const { content, audience, careWeight } = req.body;
+  if (content !== undefined && (typeof content !== 'string' || !content.trim())) return badRequest(res, 'content must be a non-empty string');
+  if (content !== undefined && content.length > 16384)                          return badRequest(res, 'content exceeds 16 KB limit');
+  if (audience !== undefined && typeof audience !== 'string')                    return badRequest(res, 'audience must be string');
+  const result = await updateMemoryById({
+    id,
+    ...(content   !== undefined ? { content: content.trim() } : {}),
+    ...(audience  !== undefined ? { audience }                : {}),
+    ...(careWeight !== undefined ? { careWeight }             : {}),
+  });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result ?? { ok: true });
+});
+
+app.delete('/api/entity/memories/by-id/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!VALID_MEMORY_ID_RE.test(id)) return badRequest(res, 'invalid id');
+  const result = await deleteMemoryById({ id });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result ?? { ok: true });
+});
+
+app.post('/api/entity/memories/by-id/:id/move', async (req, res) => {
+  const { id } = req.params;
+  if (!VALID_MEMORY_ID_RE.test(id)) return badRequest(res, 'invalid id');
+  const { date } = req.body;
+  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return badRequest(res, 'date must be YYYY-MM-DD');
+  const result = await moveMemoryDate({ id, date });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result ?? { ok: true });
 });
 
 app.get('/api/entity/memories/:granularity/:date', async (req, res) => {

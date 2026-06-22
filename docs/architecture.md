@@ -653,6 +653,23 @@ sources are **pruned** (snapshot first, recoverable) so the tier doesn't pile up
 unreviewed fact is never baked into a permanent weekly note before the ward
 approves it.
 
+**Day-anchored fact dates + by-id addressing (0.7.61).** Because many standalone
+facts share one plain `date_key`, that key **cannot** address a single fact —
+`read_memory(granularity, date)` returns whichever row comes first. Two fixes:
+- **The date now rides through.** `processJob` passes the day-scoped job's
+  `topicId` (the segment's calendar date) as `createMemoryFull({ date })`, so a
+  slice from an older conversation files under **its** day, not today. Without this
+  every imported fact landed in today's bucket (the "159-into-today" bug).
+- **By-id is the unique handle.** `memory.py` gained `read_memory_by_id`,
+  `update_memory_by_id`, `delete_memory_by_id`, and `move_memory_date` (re-files a
+  mis-dated fact — only the day moves; significant rows rebuild their `date_slug`).
+  Exposed as MCP tools (`memory_read_by_id`, `memory_move_date`,
+  `memory_update_by_id`, `memory_delete_by_id`), thalamus wrappers, the Familiar's
+  `read_memory_by_id` / `move_memory_date` tools (ids ride in on `recall` /
+  `list_memories`), and the HTTP `/api/entity/memories/by-id/:id` surface
+  (GET/PUT/DELETE + `…/move`). The Knowledge-editor memory panel now opens, edits,
+  moves, and deletes by id — fixing the bug where every row opened the same entry.
+
 > **Tiering is one of two axes; don't conflate them.** `granularity`
 > (`daily…significant`) is the rollup tier this section touches. A memory record
 > *also* has a **`register`** field — `episodic | me | ward` — which is a
@@ -1023,8 +1040,11 @@ All `/api/entity/*` HTTP routes now delegate entirely to Phylactery via thalamus
 (entity-core is retired). New fields surfaced in the KE:
 
 - **`audience` + `careWeight` on memory records** — shown in the detail view with editable
-  dropdowns; `PUT /api/entity/memories/:granularity/:date` now accepts `audience` and `careWeight`
-  and forwards them to `memory_update` → `memory.py` `update_memory()`.
+  dropdowns; `PUT /api/entity/memories/by-id/:id` accepts `audience` and `careWeight`
+  and forwards them to `memory_update_by_id` → `memory.py` `update_memory_by_id()`. The
+  audience dropdown lists the real Village circles (ward-private + each category, via the
+  shared `keAudienceOptionsHTML` helper used by the graph-node editor too) — the same model
+  the recall gate filters on, not the old stale `ward-private`/`all` pair.
 - **Audience badges** in the memory list rows for non-ward-private records; careWeight badges
   for `high`/`low` entries.
 - **Ward · Remember settings** — persistent consent-policy map
@@ -1411,10 +1431,13 @@ re-implement this split anywhere else.
 | Seam | What it does |
 |---|---|
 | `GET/PUT/DELETE /api/entity/memories/:granularity/:date` (server.js) | Accepts the composite `:date`, splits via `parseMemoryKey`, passes `date` + `slug` separately to thalamus. **Never reintroduce a plain-date regex here.** |
+| `GET/PUT/DELETE /api/entity/memories/by-id/:id` + `POST …/move` (server.js) | The unique-handle surface (registered BEFORE `:granularity/:date` so `by-id` isn't swallowed as a granularity). The only way to address one of many standalone facts that share a date; `…/move` re-files a mis-dated fact. |
 | `thalamus.readMemory` / `updateMemory` / `deleteMemory` | Pass `slug` through to entity-core's tools. `updateMemory` without the slug is the shadow-file hazard. |
+| `thalamus.readMemoryById` / `updateMemoryById` / `deleteMemoryById` / `moveMemoryDate` | By-id wrappers over the `memory_*_by_id` / `memory_move_date` MCP tools. |
 | `update_memory` / `delete_memory` executors (cerebellum.js) | Split the model-supplied key; their tool descriptions teach the `YYYY-MM-DD_slug` addressing. |
+| `read_memory_by_id` / `move_memory_date` executors (cerebellum.js) | The Familiar's by-id surface; ids ride in on `recall` / `list_memories`. `move_memory_date` is how it cleans up facts filed under the wrong day. |
 | `save_memory` executor | Auto-derives the slug (`deriveMemorySlug`) and returns the composite key in its confirmation so the Familiar knows the address of what it just wrote. |
-| Knowledge editor (app.js) | Deliberately dumb: sends back whatever key the list returned. Keep it that way. |
+| Knowledge editor — memory panel (app.js) | Addresses every read/edit/move/delete by the row's `id` (0.7.61). It used to send the `granularity/date` key, which collided for standalone facts sharing a date — clicking any row opened the top one. By-id is the fix; don't regress it back to key-addressing. |
 
 **How it broke the first time** (so it isn't repeated): originally,
 significant saves had no slugs — listings returned plain dates and the

@@ -508,6 +508,144 @@ def delete_memory(
             conn.close()
 
 
+# ── By-id addressing (the unique handle) ───────────────────────────────────────
+# granularity+date_key is NOT unique for standalone per-fact rows — many share one
+# plain date (e.g. a whole day's extracted facts) — so the only reliable address
+# for those is the row id. These power the by-id read/edit/move/delete surface the
+# Knowledge editor and the Familiar's management tools use.
+
+def read_memory_by_id(
+    mem_id: str,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, granularity, register, date_key, slug, content, audience, care_weight "
+            "FROM memories WHERE id=? AND kind='narrative'",
+            (mem_id,),
+        ).fetchone()
+        if not row:
+            return {"ok": False, "error": f"no memory with id {mem_id!r}"}
+        return {
+            "ok": True,
+            "id": row["id"],
+            "granularity": row["granularity"],
+            "register": row["register"],
+            "date": row["date_key"],
+            "slug": row["slug"],
+            "content": row["content"] or "",
+            "audience": row["audience"] or "ward-private",
+            "care_weight": row["care_weight"],
+        }
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def update_memory_by_id(
+    mem_id: str,
+    new_content: str | None = None,
+    audience: str | None = None,
+    care_weight: str | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        auto_snapshot(conn)
+        row = conn.execute(
+            "SELECT id FROM memories WHERE id=? AND kind='narrative'", (mem_id,)
+        ).fetchone()
+        if not row:
+            return {"ok": False, "error": f"no memory with id {mem_id!r}"}
+        sets, params = ["updated_at=?"], [now_iso()]
+        if new_content is not None:
+            sets.append("content=?")
+            params.append(new_content)
+        if audience is not None:
+            sets.append("audience=?")
+            params.append(audience)
+        if care_weight is not None:
+            sets.append("care_weight=?")
+            params.append(care_weight if care_weight != "" else None)
+        params.append(mem_id)
+        with conn:
+            conn.execute(f"UPDATE memories SET {', '.join(sets)} WHERE id=?", params)
+        if new_content is not None:
+            _upsert_embedding(conn, mem_id, new_content)
+        return {"ok": True, "id": mem_id}
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def delete_memory_by_id(
+    mem_id: str,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        auto_snapshot(conn)
+        row = conn.execute(
+            "SELECT id FROM memories WHERE id=? AND kind='narrative'", (mem_id,)
+        ).fetchone()
+        if not row:
+            return {"ok": False, "error": f"no memory with id {mem_id!r}"}
+        with conn:
+            conn.execute("DELETE FROM memories WHERE id=?", (mem_id,))
+            _delete_embedding(conn, mem_id)
+        return {"ok": True, "deleted": mem_id}
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def move_memory_date(
+    mem_id: str,
+    new_date: str,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    """Re-date a memory addressed by its id — the fix for facts mis-filed under the
+    wrong day (e.g. a whole import landing in today's bucket because no date was
+    passed at create time). Content and slug are untouched; only the day moves."""
+    if not new_date or not re.match(r"^\d{4}-\d{2}-\d{2}$", new_date.strip()):
+        return {"ok": False, "error": "new_date must be a calendar date, YYYY-MM-DD"}
+    new_date = new_date.strip()
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        auto_snapshot(conn)
+        row = conn.execute(
+            "SELECT id, granularity, slug FROM memories WHERE id=? AND kind='narrative'",
+            (mem_id,),
+        ).fetchone()
+        if not row:
+            return {"ok": False, "error": f"no memory with id {mem_id!r}"}
+        # significant rows carry the slug INSIDE date_key (YYYY-MM-DD_slug); standalone
+        # rows keep the plain date in date_key with the slug in its own column; journal
+        # buckets have no slug. Rebuild date_key to match the row's shape.
+        if row["granularity"] == "significant" and row["slug"]:
+            new_dk = f"{new_date}_{row['slug']}"
+        else:
+            new_dk = new_date
+        with conn:
+            conn.execute(
+                "UPDATE memories SET date_key=?, updated_at=? WHERE id=?",
+                (new_dk, now_iso(), mem_id),
+            )
+        return {"ok": True, "id": mem_id, "date": new_dk}
+    finally:
+        if own_conn:
+            conn.close()
+
+
 # ── Embedding helpers ─────────────────────────────────────────────────────────
 
 def _upsert_embedding(conn: sqlite3.Connection, record_id: str, content: str) -> None:

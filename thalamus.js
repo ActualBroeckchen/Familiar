@@ -2147,6 +2147,57 @@ export async function readMemory({ granularity, date, slug }) {
   return callTool('memory_read', { granularity, date, ...(slug ? { slug } : {}) });
 }
 
+// By-id addressing — the unique handle. granularity+date can't single out a
+// standalone per-fact row (many share one day), so read/edit/move/delete of a
+// specific fact must go by id.
+export async function readMemoryById({ id }) {
+  return callTool('memory_read_by_id', { id });
+}
+
+export async function moveMemoryDate({ id, date }) {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
+  try {
+    const result = await callTool('memory_move_date', { id, date });
+    console.log(`[thalamus] moveMemoryDate ${id} → ${date}`);
+    return { ok: true, result };
+  } catch (err) {
+    console.error('[thalamus] moveMemoryDate failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function updateMemoryById({ id, content, audience, careWeight }) {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
+  try {
+    const args = { id,
+      ...(content   !== undefined ? { content }   : {}),
+      ...(audience  !== undefined ? { audience }  : {}),
+      ...(careWeight !== undefined ? { careWeight } : {}),
+    };
+    const result = await callTool('memory_update_by_id', args);
+    console.log(`[thalamus] updateMemoryById ${id}`);
+    return { ok: true, result };
+  } catch (err) {
+    console.error('[thalamus] updateMemoryById failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function deleteMemoryById({ id }) {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
+  try {
+    const result = await callTool('memory_delete_by_id', { id });
+    console.log(`[thalamus] deleteMemoryById ${id}`);
+    return { ok: true, result };
+  } catch (err) {
+    console.error('[thalamus] deleteMemoryById failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
 export async function getIdentityAll({ timeout } = {}) {
   return callTool('identity_get_all', {}, timeout ? { timeout } : {});
 }

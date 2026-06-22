@@ -568,6 +568,13 @@ async function processJob(job) {
   const wardRemember = await getRememberMap().catch(() => null);
 
   const audience = job.audienceTag ?? 'ward-private';
+  // The day this slice actually belongs to. Day-scoped jobs (segmentByDay) carry
+  // the calendar date as topicId — pass it as the memory's date_key so a slice
+  // from an older conversation files under ITS day, not today. Without this every
+  // imported fact lands in today's bucket (the 159-into-today bug). Undefined for
+  // non-day jobs → createMemoryFull defaults to today, as before.
+  const factDate = (job.scope === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(String(job.topicId ?? '')))
+    ? job.topicId : undefined;
   const pendingConsent = [];
   let created = 0;
 
@@ -609,6 +616,7 @@ async function processJob(job) {
       content,
       granularity: 'daily',
       standalone: true,
+      date: factDate,
       audience: factAudience,
       subjects: subjectIds,
       category,

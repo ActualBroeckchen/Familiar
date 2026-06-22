@@ -239,6 +239,16 @@ test('executeToolCall: malformed JSON args produce a structured failure into the
   assert.match(out, /^Error executing get_datetime: /);
 });
 
+test('read_memory_by_id: a missing id is caught before any store call', async () => {
+  const out = await executeToolCall('read_memory_by_id', '{}');
+  assert.match(out, /need the memory id/i);
+});
+
+test('move_memory_date: a missing id and a bad date are each caught before any store call', async () => {
+  assert.match(await executeToolCall('move_memory_date', JSON.stringify({ date: '2026-01-01' })), /need the memory id/i);
+  assert.match(await executeToolCall('move_memory_date', JSON.stringify({ id: 'abc', date: 'june 22' })), /YYYY-MM-DD/);
+});
+
 test('executeToolCall: a throwing executor produces a structured failure, not an exception', async () => {
   TOOL_EXECUTORS.__test_throw = () => { throw new Error('peer is down'); };
   try {
