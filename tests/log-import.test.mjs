@@ -90,6 +90,24 @@ test('applyFallbackDate stamps only undated messages, on the given local day', (
   assert.equal(out[1].timestamp, '2026-01-01T00:00:00Z'); // already-dated untouched
 });
 
+test('parses an OpenClaw event-log .jsonl (message events; non-text/non-message skipped)', () => {
+  const raw = [
+    JSON.stringify({ type: 'session', version: 3, id: 'x', timestamp: '2026-06-17T07:12:12.748Z' }),
+    JSON.stringify({ type: 'model_change', timestamp: '2026-06-17T07:12:13Z', provider: 'zai' }),
+    JSON.stringify({ type: 'message', timestamp: '2026-06-17T07:12:15.580Z', message: { role: 'user', content: [{ type: 'text', text: 'hello there' }] } }),
+    JSON.stringify({ type: 'message', timestamp: '2026-06-17T07:13:43.598Z', message: { role: 'assistant', content: [{ type: 'text', text: 'hi back' }, { type: 'tool_use', name: 'x' }] } }),
+    JSON.stringify({ type: 'message', timestamp: '2026-06-17T07:14:00Z', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'y' }] } }), // tool-only → skipped
+    JSON.stringify({ type: 'custom_message', customType: 'openclaw.runtime-context', content: 'System: noise', timestamp: '2026-06-17T07:14:01Z' }), // skipped
+  ].join('\n');
+  const r = parseImport(raw);
+  assert.equal(r.ok, true);
+  assert.equal(r.format, 'OpenClaw');
+  assert.equal(r.messages.length, 2);                  // tool-only + runtime-context dropped
+  assert.equal(r.messages[0].role, 'user');
+  assert.equal(r.messages[1].content, 'hi back');      // text part extracted, tool_use ignored
+  assert.equal(r.messages[1].timestamp, '2026-06-17T07:13:43.598Z');
+});
+
 test('unknown format → loud structured error listing what is supported', () => {
   const r = parseImport('just some prose with no structure at all');
   assert.equal(r.ok, false);

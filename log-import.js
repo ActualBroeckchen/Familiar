@@ -131,15 +131,44 @@ export function parseSillyTavern(raw) {
   return sawMessage && out.length >= 2 ? { messages: out, format: 'SillyTavern' } : null;
 }
 
-// Registry — order matters (JSON shapes before the text catch-all). OpenClaw
-// slots in here once its real format is confirmed.
+// ── Parser: OpenClaw session log (.jsonl event stream) ───────────────────────
+// One typed event per line (session / model_change / message / custom …). The
+// conversation is the `type:"message"` events, each carrying
+// `message:{ role, content:[{type:"text",text}|…], timestamp }`. Outer event has
+// a clean ISO `timestamp`. Non-text content parts (tool calls, thinking) and
+// non-message events (runtime-context, snapshots) are skipped.
+export function parseOpenClaw(raw) {
+  const lines = String(raw).split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) return null;
+  const out = [];
+  let looksOpenClaw = false;
+  for (const line of lines) {
+    let o;
+    try { o = JSON.parse(line); } catch { return null; } // not a JSONL event stream
+    if (o?.type === 'session' || o?.type === 'model_change') looksOpenClaw = true;
+    if (o?.type !== 'message' || !o.message) continue;
+    const m = o.message;
+    let text = '';
+    if (Array.isArray(m.content)) {
+      text = m.content.filter(p => p?.type === 'text' && typeof p.text === 'string').map(p => p.text).join('\n').trim();
+    } else if (typeof m.content === 'string') {
+      text = m.content.trim();
+    }
+    if (!text) continue;
+    out.push({ role: normRole(m.role), content: text, timestamp: toIso(o.timestamp) });
+  }
+  return looksOpenClaw && out.length >= 2 ? { messages: out, format: 'OpenClaw' } : null;
+}
+
+// Registry — order matters (JSON shapes before the text catch-all).
 const PARSERS = [
   parsePfJson,
   parseSillyTavern,
+  parseOpenClaw,
   parseTimestampedText,
 ];
 
-export const SUPPORTED_FORMATS = ['Proto-Familiar JSON', 'SillyTavern (.jsonl)', 'timestamped text'];
+export const SUPPORTED_FORMATS = ['Proto-Familiar JSON', 'SillyTavern (.jsonl)', 'OpenClaw (.jsonl)', 'timestamped text'];
 
 /**
  * Parse `raw` into normalized messages. Returns { ok, messages, format } or

@@ -746,10 +746,10 @@ Settings "Memory coverage sweep" / `PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1`.
 `log-import.js` parsers place foreign logs by date (one imported session per
 date) and enqueue them for immediate ingestion (confirm-gated in the Coverage-tab
 import form). Parsers: Proto-Familiar JSON, SillyTavern `.jsonl` (`is_user`→role, ISO
-`send_date`), timestamped text; OpenClaw slots into the `PARSERS` registry next.
-Undated logs are dated by an explicit `fallbackDate` or one read from the
-filename (`dateFromFilename`); if neither exists the preview asks for a date.
-*(see `docs/day-anchoring-build-spec.md`.)*
+`send_date`), OpenClaw `.jsonl` (event stream — `type:'message'` events, content
+blocks), timestamped text. Undated logs are dated by an explicit `fallbackDate`
+or one read from the filename (`dateFromFilename`); if neither exists the preview
+asks for a date. *(see `docs/day-anchoring-build-spec.md`.)*
 
 **Triggers** (all session-scope triggers route through `enqueueSessionByDay`;
 topic-scope stays whole-range):
