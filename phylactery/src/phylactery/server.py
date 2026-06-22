@@ -485,10 +485,12 @@ def graph_node_create(
     instanceId: Optional[str] = None,
 ) -> dict[str, Any]:
     """I use this to add a new node to my knowledge graph. I reach for it when I
-    encounter a person, place, organisation, or concept worth tracking. Returns
-    the new node's id for use in edge creation. `audience` (derived in code from
-    who the node is) governs where it may surface; it defaults to ward-private.
-    """
+    encounter a concrete, nameable entity worth tracking — a person, place,
+    organisation, pet, condition, project, or thing (never an abstraction, feeling
+    or topic). Returns the new node's id for use in edge creation. `audience`
+    (derived in code from who the node is) governs where it may surface; it
+    defaults to ward-private.
+    """  # entity vocabulary kept in sync with graph-vocab.js
     aud = audience if audience is not None else "ward-private"
     return graph.create_node(label, node_type=type, description=description, audience=aud, conn=_c())
 
@@ -576,12 +578,13 @@ def graph_relate(
     have it — so my graph never fills with duplicates. I reach for this (or it's
     called for me when I memorise a session) whenever I learn how two real things
     connect: "Sam works_at Acme", "Sam lives_in Bristol", "Mochi is_pet_of Sam".
-    fromLabel/toLabel are the entities' names; fromType/toType classify them
-    (person, place, pet, organisation, condition, project, …); type is the
-    relationship in snake_case. The audience tags (derived in code from who each
-    entity is) tag any NEW node/edge so a person-node surfaces only where they're
-    cleared; an existing node is never re-tagged.
-    """
+    fromLabel/toLabel are the entities' names; fromType/toType classify them —
+    one of person, place, organisation, pet, condition, project, thing (concrete,
+    nameable entities only, never abstractions); type is the relationship in
+    snake_case. The audience tags (derived in code from who each entity is) tag any
+    NEW node/edge so a person-node surfaces only where they're cleared; an existing
+    node is never re-tagged.
+    """  # entity vocabulary kept in sync with graph-vocab.js
     w = float(weight) if weight is not None else 1.0
     return graph.relate(
         fromLabel, fromType, toLabel, toType, type, weight=w,

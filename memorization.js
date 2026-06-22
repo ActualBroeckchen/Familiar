@@ -126,6 +126,7 @@ async function persistQueue() {
 import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap, graphRelate } from './thalamus.js';
 import { getRegistry, standingConsentActive } from './village.js';
 import { deriveMemoryAudience, deriveNodeAudience, mostRestrictiveAudience } from './audience.js';
+import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC } from './graph-vocab.js';
 import { segmentByDay } from './day-segments.js';
 import { recordSegmentRun, isSegmentMemorized } from './memory-coverage.js';
 import { readSettingsSync } from './cerebellum.js';
@@ -223,8 +224,8 @@ confidence — 0.0 to 1.0. How certain am I that this fact is accurate and not m
 Each relation is one concrete edge in my graph: two real, nameable entities and the relationship between them. This is the index I navigate by, so I only record edges I'm sure of.
 
 from / to — the NAMES of the two entities. My human's name is "${wardName}". I use real names (or how I know someone), never "the user" or a pronoun.
-fromType / toType — what each entity IS. Pick from: person, place, organisation, pet, condition, thing.
-  I only record entities that are concrete and nameable — a specific person, a city, an employer, a pet, a named health condition, a real object. I do NOT make nodes out of abstractions, feelings, ideas, themes or topics ("stress", "the future", "work-life balance" are NOT entities).
+fromType / toType — what each entity IS. Pick from: ${GRAPH_ENTITY_TYPES_STR}.
+  ${GRAPH_NODE_RUBRIC}
 type — a short snake_case label for the relationship, read from→to: works_at, lives_in, married_to, parent_of, friend_of, has_condition, owns, located_in, colleague_of, etc.
 
 ### Rules
@@ -303,7 +304,7 @@ confidence — 0.0 to 1.0. I omit facts below 0.4.
 A relation is one concrete edge in my graph: two named entities and the link between them. In a shared room I record an edge ONLY when at least one endpoint is my human ("${wardName}") or a REGISTERED person by name. I never map relationships between strangers.
 
 from / to — the NAMES of the two entities; one of them must be my human or a registered person.
-fromType / toType — pick from: person, place, organisation, pet, condition, thing. Concrete, nameable entities only — never abstractions, feelings, or topics.
+fromType / toType — pick from: ${GRAPH_ENTITY_TYPES_STR}. ${GRAPH_NODE_RUBRIC}
 type — a short snake_case label read from→to (lives_in, works_at, married_to, has_condition, owns, …).
 
 ### Rules
