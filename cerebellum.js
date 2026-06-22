@@ -55,6 +55,7 @@ import {
   searchMemoryRestricted, searchMemory,
 } from './thalamus.js';
 import { audienceTagFor, deriveNodeAudience } from './audience.js';
+import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './graph-vocab.js';
 import { searchWeb, readWebpage, lookUp } from './websearch.js';
 import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
 import { pruneConsentPending } from './memorization.js';
@@ -1071,12 +1072,12 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'create_graph_node',
-      description: 'I add a new entity (person, place, project, pet, organisation, etc.) to my knowledge graph — for naming something my relationship graph should know about and later connect with edges. I check first with find_graph_node so I don\'t duplicate an entity that already exists under a slightly different label. (A durable fact about who {{user}} is goes to update_identity; a dated moment goes to save_memory — this is for naming a thing.) Returns the new node\'s id so I can immediately wire edges to it.',
+      description: `I add a new entity (a ${GRAPH_ENTITY_TYPES_STR}) to my knowledge graph — for naming something my relationship graph should know about and later connect with edges. ${GRAPH_NODE_RUBRIC} I check first with find_graph_node so I don't duplicate an entity that already exists under a slightly different label. (A durable fact about who {{user}} is goes to update_identity; a dated moment goes to save_memory — this is for naming a thing.) Returns the new node's id so I can immediately wire edges to it.`,
       parameters: {
         type: 'object',
         properties: {
           label:       { type: 'string', description: 'Display name of the entity, e.g. "Dr. Okafor", "the allotment", "Aria (cat)".' },
-          type:        { type: 'string', description: 'Optional: entity type, e.g. "person", "place", "project", "pet", "organisation".' },
+          type:        { type: 'string', description: `Optional: entity type — one of ${GRAPH_ENTITY_TYPES_STR}.` },
           description: { type: 'string', description: 'Optional: a short note on who/what this is, in my own voice.' },
         },
         required: ['label'],
@@ -1087,7 +1088,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'create_graph_edge',
-      description: 'I record a relationship between two entities already in my knowledge graph — the structural counterpart to save_memory. I use this for durable, queryable relationships ("Dr. Okafor —is_therapist_of-> {{user}}", "{{user}} —lives_in-> Bristol"). Both endpoints must exist first: I resolve or create them with find_graph_node / create_graph_node and pass their ids. For a relationship that has ended I delete or re-type the edge rather than leaving a false one standing.',
+      description: `I record a relationship between two entities already in my knowledge graph — the structural counterpart to save_memory. ${GRAPH_EDGE_RUBRIC} I use this for durable, queryable relationships ("Dr. Okafor —is_therapist_of-> {{user}}", "{{user}} —lives_in-> Bristol"). Both endpoints must exist first: I resolve or create them with find_graph_node / create_graph_node and pass their ids. For a relationship that has ended I delete or re-type the edge rather than leaving a false one standing.`,
       parameters: {
         type: 'object',
         properties: {

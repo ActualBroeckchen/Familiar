@@ -635,6 +635,18 @@ exponential backoff, idempotent enqueue on
 where `category` ∈ `basics | emotional_content | health_info | relationships | whereabouts`.
 Facts with `confidence < 0.4` are silently skipped.
 
+**Shared graph rubric (`graph-vocab.js`, 0.7.63).** What earns a node/edge is defined
+**once** and read by every surface that creates one: the entity-type vocabulary
+(`person, place, organisation, pet, condition, project, thing`), the **no-abstractions**
+rule (the single biggest driver of graph quality — keeps "stress"/"work-life balance"
+from becoming nodes), and the edge rule (both endpoints concrete, never invented,
+snake_case type). Both memorization prompts (`buildPrompt` / `buildSharedRoomPrompt`)
+and the chat-path tools (`create_graph_node` / `create_graph_edge`) interpolate the same
+constants, so a node made mid-chat is held to the same standard as one made during
+memorization — closing a drift where the vocabulary differed across three surfaces and
+the chat tools lacked the no-abstractions rule. The Python `graph_relate` /
+`graph_node_create` docstrings carry the same list by hand (sync comment in both).
+
 **Tiering — standalone `daily` facts (0.8.2):** extracted facts land at the
 `daily` tier (the doc's baseline for conversation-derived memory), written with
 `standalone: true` so each keeps **its own row** carrying its `category` /
