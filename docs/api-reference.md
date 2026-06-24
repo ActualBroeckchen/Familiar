@@ -753,17 +753,23 @@ Appends to or updates a section of an identity file.
 
 ### Knowledge editor endpoints
 
-The endpoints below back the **Knowledge editor** modal in the sidebar and the LLM-callable editing tools (`update_memory`, `delete_memory`, `rewrite_identity_section`, `update_graph_node`, `delete_graph_node`, `update_graph_edge`, `delete_graph_edge`). Every destructive op (`PUT`, `PATCH`, `DELETE`) auto-snapshots Phylactery before the underlying MCP call, so a mistake is always recoverable via the snapshots endpoints. All return `502` when Phylactery is unavailable; reads return Phylactery's JSON verbatim.
+The endpoints below back the **Knowledge editor** modal in the sidebar and the LLM-callable editing tools (`update_memory`, `delete_memory`, `rewrite_identity_section`, `update_graph_node`, `delete_graph_node`, `update_graph_edge`, `delete_graph_edge`). Every destructive op auto-snapshots Phylactery before the change, so a mistake is recoverable via the snapshots endpoints. (The by-id memory ops and `…/move` snapshot inside Phylactery itself rather than at the thalamus layer the by-date ops use, but a snapshot is still taken either way.) All return `502` when Phylactery is unavailable; reads return Phylactery's JSON verbatim.
 
 #### Memory
 
 The `:date` segment accepts what `memory_list` actually returns: a plain date (`YYYY-MM-DD`, `YYYY-MM`, `YYYY`, or `YYYY-Www`) — or, for **significant** memories, the composite key `YYYY-MM-DD_slug` (one named file per milestone, e.g. `2026-06-11_why-melian-trusts-me`). The server splits the composite into the separate `date` + `slug` parameters Phylactery's read/update/delete tools expect (since 0.4.1-alpha; before that, slugged keys were rejected with `invalid date format`).
 
+The **by-id** routes are the reliable handle: many standalone per-fact memories share one date, so granularity + date can't single one out, but the unique `id` always can. They are registered **before** `/:granularity/:date` so `by-id` is never swallowed as a granularity. The `:id` must match `^[A-Za-z0-9_-]{1,64}$`. Because of this precedence, the by-DATE `PUT`/`DELETE` now scope to journal-bucket / significant entries (the slug-or-date addressable tier); per-fact rows are edited via their id.
+
 | Method & path | Purpose | Body / query |
 |---|---|---|
 | `GET /api/entity/memories` | List memories. Query: `granularity` (optional, one of the five tiers), `limit` (1–100, default 50) | — |
+| `GET /api/entity/memories/by-id/:id` | Read one memory by its unique id (`404` when no such id) | — |
+| `PUT /api/entity/memories/by-id/:id` | Update one memory by id. Any subset of the three fields | `{ "content"?: "…" (≤ 16 KB), "audience"?: "…", "careWeight"?: "high" \| "low" \| "" }` |
+| `DELETE /api/entity/memories/by-id/:id` | Delete one memory by id | — |
+| `POST /api/entity/memories/by-id/:id/move` | Re-file a memory to a different day — the fix for facts imported into the wrong day | `{ "date": "YYYY-MM-DD" }` |
 | `GET /api/entity/memories/:granularity/:date` | Read one memory | — |
-| `PUT /api/entity/memories/:granularity/:date` | Overwrite the memory's content (auto-snapshots) | `{ "content": "…", "editedBy": "user-edit" }` (≤ 16 KB) |
+| `PUT /api/entity/memories/:granularity/:date` | Overwrite the memory's content (auto-snapshots) | `{ "content": "…", "editedBy": "user-edit" }` (≤ 16 KB; also accepts optional `audience`, `careWeight`) |
 | `DELETE /api/entity/memories/:granularity/:date` | Delete the memory (auto-snapshots). Query: `instanceId`, `slug` (optional; an explicit `?slug=` wins over the composite key's slug) | — |
 | `POST /api/entity/memories/supersede` | Write a new dated memory contradicting an old one, prefixed with `[supersedes <granularity>/<date>]`. Preserves history; recency-decay demotes the stale entry | `{ "content": "…", "granularity": "daily", "supersedes": { "granularity": "daily", "date": "2026-05-15" } }` |
 
@@ -783,7 +789,7 @@ The `:date` segment accepts what `memory_list` actually returns: a plain date (`
 | `GET /api/entity/graph/nodes/:id/subgraph` | Node + 1-hop neighbours and edges (backs the `find_graph_edges` LLM tool). Query: `depth` (1–3, default 1) | — |
 | `GET /api/entity/graph/full` | All nodes + all deduplicated edges in one payload (backs the Knowledge editor's Map view). Walks each node's 1-hop subgraph under a 16-worker concurrency cap and drops edges whose endpoints fall outside the (possibly type-filtered) visible set so the rendered legend matches what's drawn. Query: `type` (optional), `limit` (1–500, default 500) | — |
 | `POST /api/entity/graph/nodes` | Create a new node via `graph_node_create`. At least one of `label` / `type` / `description` is required | `{ "label"?: "…", "type"?: "…", "description"?: "…" }` |
-| `PATCH /api/entity/graph/nodes/:id` | Update label / type / description (auto-snapshots) | `{ "label"?: "…", "type"?: "…", "description"?: "…" }` |
+| `PATCH /api/entity/graph/nodes/:id` | Update label / type / description / audience (auto-snapshots) | `{ "label"?: "…", "type"?: "…", "description"?: "…", "audience"?: "…" }` |
 | `DELETE /api/entity/graph/nodes/:id` | Delete the node and its edges (auto-snapshots). Query: `permanent=1` for hard delete | — |
 | `POST /api/entity/graph/edges` | Create a new edge via `graph_edge_create`. `fromId` and `toId` are required and must differ; `weight` is clamped to `[0, 1]` | `{ "fromId": "…", "toId": "…", "type"?: "…", "weight"?: 0.5 }` |
 | `PATCH /api/entity/graph/edges/:id` | Update edge type or weight (auto-snapshots) | `{ "type"?: "…", "weight"?: 0.85 }` |
