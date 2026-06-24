@@ -774,4 +774,15 @@ def remember_map_set(map: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> None:
     scheduler.start()
-    mcp.run(transport="stdio")
+    # KeyboardInterrupt + BrokenPipeError are normal shutdown paths for an stdio
+    # MCP child: a terminal Ctrl+C delivers SIGINT to the whole process group
+    # (so we take a KeyboardInterrupt mid-run), and Thalamus going away closes
+    # our stdin pipe. Either used to dump anyio's internal CancelledError trace
+    # as a wall of red — visually alarming for what's actually a clean exit. We
+    # swallow both and exit 0. (Mirrors unruh/server.py's main().)
+    try:
+        mcp.run(transport="stdio")
+    except (KeyboardInterrupt, BrokenPipeError):
+        pass
+    finally:
+        scheduler.stop()
