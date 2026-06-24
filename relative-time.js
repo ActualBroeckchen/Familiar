@@ -71,6 +71,19 @@ function calendarDayDelta(targetMs, nowMs) {
 }
 
 /**
+ * Directional interval phrase — "in 3 months" / "a year ago". Wraps
+ * plainInterval() with the right preposition so a relative phrase can
+ * always sit alongside an absolute date, even far out where the
+ * day/week phrasings give way to a calendar date. `future` is the
+ * caller's own sign test (it already knows the delta).
+ */
+function intervalPhrase(target, now, future) {
+  const mag = plainInterval(target, now);
+  if (!mag) return '';
+  return future ? `in ${mag}` : `${mag} ago`;
+}
+
+/**
  * Natural-English relative-time phrasing. Examples (with "now" =
  * Wednesday afternoon):
  *
@@ -81,7 +94,10 @@ function calendarDayDelta(targetMs, nowMs) {
  *   ±2..6 days, same week        → "last Monday at 2pm" / "this Friday at 3pm"
  *   ±7..13 days                  → "last week" / "next week"
  *   ±2..4 weeks                  → "2 weeks ago" / "in 3 weeks"
- *   beyond that                  → "Tuesday, June 4" (absolute date)
+ *   beyond that                  → "Tuesday, June 4 (in 3 months)" /
+ *                                  "Tuesday, March 4, 2025 (a year ago)"
+ *                                  — absolute date ALWAYS carries a relative
+ *                                  interval so nothing reads as a bare date
  *
  * Returns lowercase-first phrase suitable for embedding inline in a
  * sentence ("I last saw you yesterday at 4pm"). Capitalise at the
@@ -154,12 +170,15 @@ export function relativeTime(target, now = Date.now()) {
     return future ? `in ${wAbs} weeks` : `${wAbs} weeks ago`;
   }
 
-  // Beyond ~a month: fall back to absolute date (with year if it's not
-  // this year, so a memory from January 2025 read in June 2026 doesn't
-  // get rendered as just "January 22").
+  // Beyond ~a month: the absolute date carries the precision (with year if
+  // it's not this year), but it ALWAYS travels with a relative interval —
+  // "March 4, 2025 (a year ago)" — so a distant memory or appointment never
+  // reads as a bare date the Familiar has to date-arithmetic in its head.
   const nowYear = new Date(n).getFullYear();
   const targetYear = new Date(t).getFullYear();
-  return dayAndDate(t, { withYear: targetYear !== nowYear });
+  const abs = dayAndDate(t, { withYear: targetYear !== nowYear });
+  const rel = intervalPhrase(t, n, future);
+  return rel ? `${abs} (${rel})` : abs;
 }
 
 /**
@@ -170,7 +189,8 @@ export function relativeTime(target, now = Date.now()) {
  *   "today" | "yesterday" | "tomorrow"
  *   "last Monday" | "this Friday" | "next Wednesday"
  *   "2 weeks ago" | "in 3 weeks"
- *   "Tuesday, June 4" (absolute, beyond ~a month)
+ *   "Tuesday, June 4 (3 months ago)" — absolute beyond ~a month, but
+ *   ALWAYS with a relative interval so no date reads bare
  */
 export function relativeDay(targetDateStr, now = Date.now()) {
   // Daily memory dates are local-calendar; parse as local midnight to
@@ -200,7 +220,9 @@ export function relativeDay(targetDateStr, now = Date.now()) {
 
   const nowYear = new Date(n).getFullYear();
   const targetYear = new Date(t).getFullYear();
-  return dayAndDate(t, { withYear: targetYear !== nowYear });
+  const abs = dayAndDate(t, { withYear: targetYear !== nowYear });
+  const rel = intervalPhrase(t, n, dayDelta > 0);
+  return rel ? `${abs} (${rel})` : abs;
 }
 
 /**

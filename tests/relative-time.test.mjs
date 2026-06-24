@@ -87,11 +87,11 @@ test('relativeTime: 2-4 weeks → "N weeks ago" / "in N weeks"', () => {
   assert.equal(relativeTime(inThreeWeeks, NOW), 'in 3 weeks');
 });
 
-test('relativeTime: beyond a month → absolute date (with year if different)', () => {
+test('relativeTime: beyond a month → absolute date ALWAYS carries a relative interval', () => {
   const farPast = new Date(2025, 0, 22, 15, 0).getTime();
-  assert.equal(relativeTime(farPast, NOW), 'Wednesday, January 22, 2025');
+  assert.equal(relativeTime(farPast, NOW), 'Wednesday, January 22, 2025 (a year ago)');
   const farFuture = new Date(2026, 11, 25, 9, 0).getTime();
-  assert.equal(relativeTime(farFuture, NOW), 'Friday, December 25');
+  assert.equal(relativeTime(farFuture, NOW), 'Friday, December 25 (in 7 months)');
 });
 
 // ── relativeTime: bad inputs ───────────────────────────────────────
@@ -118,6 +118,11 @@ test('relativeDay: weekday phrasings within the week', () => {
 test('relativeDay: weeks beyond the immediate week', () => {
   assert.equal(relativeDay('2026-05-21', NOW), '2 weeks ago');
   assert.equal(relativeDay('2026-06-25', NOW), 'in 3 weeks');
+});
+
+test('relativeDay: beyond a month → absolute date ALWAYS carries a relative interval', () => {
+  assert.equal(relativeDay('2025-01-22', NOW), 'Wednesday, January 22, 2025 (a year ago)');
+  assert.equal(relativeDay('2026-12-25', NOW), 'Friday, December 25 (in 7 months)');
 });
 
 test('relativeDay: bad input → empty string', () => {
