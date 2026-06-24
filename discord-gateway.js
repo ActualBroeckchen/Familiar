@@ -345,6 +345,19 @@ async function fireRevisit(item) {
 // restart, and starting fresh just means one prompt re-evaluation.
 const ACTIVITY_WINDOW_MS = 600_000;            // 10 min of recent messages kept
 const ACTIVITY_MAX_SAMPLES = 60;
+
+// Active-mode reply batching (V8.x). In active mode a burst of unprompted
+// messages used to draw one reply per message; instead they coalesce into ONE
+// reply to the whole block — the way a person catches up on a few lines at once.
+// The settle window adapts to the room's pace (quiet rooms settle fast, busy
+// rooms wait a beat longer for the burst to finish), clamped, with a hard age
+// ceiling so a never-quiet room still gets answered. ONLY ambient/active turns
+// batch — a direct @-mention always replies immediately. Off-switch:
+// PROTO_FAMILIAR_DISCORD_BATCH_DISABLED=1 falls back to per-message replies.
+const BATCH_SETTLE_MIN_MS = 2_000;
+const BATCH_SETTLE_MAX_MS = 12_000;
+const BATCH_MAX_AGE_MS     = 25_000;
+
 const DEFAULT_TIER_CONFIG = {
   windowMs:    300_000,   // 5 min rate window for tiering
   mediumMin:   4,         // ≥ this many msgs/window → at least 'medium'
@@ -376,6 +389,76 @@ export function markAmbientTurn(locationKey, now = Date.now()) {
 }
 
 export function resetAmbientState() { ambientState.clear(); }
+
+/**
+ * Settle window for active-mode reply batching, adapted to room pace. Waits a
+ * little longer than the typical recent gap between messages — so a live burst
+ * is caught whole — and settles to the floor when the room is quiet. Clamped to
+ * [BATCH_SETTLE_MIN_MS, BATCH_SETTLE_MAX_MS]. Pure / exported for tests.
+ */
+export function adaptiveSettleMs(recentTs = [], now = Date.now()) {
+  const ts = (recentTs ?? [])
+    .filter(t => Number.isFinite(t) && now - t < 60_000)
+    .sort((a, b) => a - b);
+  if (ts.length < 2) return BATCH_SETTLE_MIN_MS; // quiet → settle fast
+  const gaps = [];
+  for (let i = 1; i < ts.length; i++) gaps.push(ts[i] - ts[i - 1]);
+  gaps.sort((a, b) => a - b);
+  const median = gaps[Math.floor(gaps.length / 2)];
+  // ~1.5× a typical gap detects "the burst paused" without over-waiting.
+  return Math.max(BATCH_SETTLE_MIN_MS, Math.min(BATCH_SETTLE_MAX_MS, Math.round(median * 1.5)));
+}
+
+// Pending active-mode batches: locationKey → { msg, decision, firstAt, timer }.
+// `msg` is the latest message in the burst (the eventual reply's trigger); every
+// earlier message has already been folded into the room's session log so the one
+// reply sees the whole block as history.
+const ambientBatches = new Map();
+
+function scheduleAmbientBatch(gw, d, decision) {
+  const key = decision.locationKey;
+  const now = Date.now();
+  let batch = ambientBatches.get(key);
+  if (batch) {
+    // A newer message supersedes the held trigger — fold the previous one into
+    // the room's log (observed, no reply) so it stays in history, and make THIS
+    // the new trigger. Enqueued so it serializes ahead of the reply turn.
+    const prevMsg = batch.msg, prevDec = batch.decision;
+    enqueueTurn(key, () => observeMessage(gw, prevMsg, prevDec)).catch(() => {});
+    batch.msg = d;
+    batch.decision = decision;
+  } else {
+    batch = { msg: d, decision, firstAt: now, timer: null };
+    ambientBatches.set(key, batch);
+  }
+  const settle  = adaptiveSettleMs(ambientFor(key).recentTs, now);
+  const ageLeft = BATCH_MAX_AGE_MS - (now - batch.firstAt);
+  const waitMs  = Math.max(0, Math.min(settle, ageLeft));
+  if (batch.timer) clearTimeout(batch.timer);
+  batch.timer = setTimeout(() => {
+    ambientBatches.delete(key);
+    markAmbientTurn(key); // cooldown starts when the batch actually fires
+    enqueueTurn(key, () => handleTurn(gw, batch.msg, batch.decision))
+      .catch(err => console.error('[discord] batched ambient turn failed:', err?.message ?? err));
+  }, waitMs);
+  batch.timer.unref?.();
+}
+
+// A direct (addressed) reply or a teardown cancels a pending ambient batch: fold
+// its held trigger into the log so the message isn't lost, then drop the timer.
+// (The addressed reply that follows will see it in history.)
+function cancelAmbientBatch(gw, locationKey) {
+  const batch = ambientBatches.get(locationKey);
+  if (!batch) return;
+  if (batch.timer) clearTimeout(batch.timer);
+  ambientBatches.delete(locationKey);
+  if (gw && batch.msg) enqueueTurn(locationKey, () => observeMessage(gw, batch.msg, batch.decision)).catch(() => {});
+}
+
+function clearAmbientBatches() {
+  for (const b of ambientBatches.values()) { if (b.timer) clearTimeout(b.timer); }
+  ambientBatches.clear();
+}
 
 /**
  * Decide whether to take an unprompted turn in an active room. Pure:
@@ -1452,8 +1535,21 @@ function onDispatch(t, d) {
             await enqueueTurn(decision.locationKey, () => observeMessage(gw, d, decision));
             return;
           }
-          markAmbientTurn(decision.locationKey);
+          if (process.env.PROTO_FAMILIAR_DISCORD_BATCH_DISABLED === '1') {
+            markAmbientTurn(decision.locationKey);
+            await enqueueTurn(decision.locationKey, () => handleTurn(gw, d, decision));
+            return;
+          }
+          // Batch: hold this as the burst's trigger and let it settle into one
+          // reply instead of answering line-by-line. markAmbientTurn (cooldown)
+          // and the actual turn fire when the batch does.
+          scheduleAmbientBatch(gw, d, decision);
+          return;
         }
+        // Addressed (non-ambient) reply: immediate. Cancel any pending ambient
+        // batch for this room first so the burst doesn't ALSO draw a delayed
+        // second reply — its held message is folded into history instead.
+        cancelAmbientBatch(gw, decision.locationKey);
         await enqueueTurn(decision.locationKey, () => handleTurn(gw, d, decision));
       } catch (err) {
         gw.status.failures += 1;
@@ -1596,6 +1692,7 @@ function desiredConfig() {
 
 function teardown() {
   clearTimers();
+  clearAmbientBatches();
   if (revisitTimer) { clearTimeout(revisitTimer); revisitTimer = null; }
   gw.running = false;
   gw.status.running = false;

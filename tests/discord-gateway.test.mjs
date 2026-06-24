@@ -11,6 +11,7 @@ import {
   consumeRateSlot,
   resetRateLimitState,
   decideAmbientReply,
+  adaptiveSettleMs,
   isAmbientAbstain,
   resolveMentions,
   directedAtOthers,
@@ -353,6 +354,31 @@ describe('decideAmbientReply', () => {
     });
     assert.equal(r.tier, 'fast');
     assert.equal(r.act, true);
+  });
+});
+
+// ── adaptiveSettleMs (active-mode batching window) ────────────────
+
+describe('adaptiveSettleMs', () => {
+  const NOW = 1_000_000_000;
+  it('a quiet room (0-1 recent messages) settles at the floor', () => {
+    assert.equal(adaptiveSettleMs([], NOW), 2_000);
+    assert.equal(adaptiveSettleMs([NOW - 500], NOW), 2_000);
+  });
+  it('a busy room waits ~1.5x the typical gap, so a burst is caught whole', () => {
+    // messages ~2s apart → median gap 2000 → 3000ms
+    const ts = [NOW - 8000, NOW - 6000, NOW - 4000, NOW - 2000, NOW];
+    assert.equal(adaptiveSettleMs(ts, NOW), 3_000);
+  });
+  it('a very bursty room is clamped to the ceiling, not unbounded', () => {
+    // 10s gaps → 1.5x = 15000, clamped to 12000
+    const ts = [NOW - 30_000, NOW - 20_000, NOW - 10_000, NOW];
+    assert.equal(adaptiveSettleMs(ts, NOW), 12_000);
+  });
+  it('stale timestamps (>60s old) are ignored when measuring pace', () => {
+    // only the two fresh ones count → quiet-ish, but 2 samples → one 1s gap
+    const ts = [NOW - 120_000, NOW - 90_000, NOW - 1000, NOW];
+    assert.equal(adaptiveSettleMs(ts, NOW), 2_000); // 1s gap → 1500 → floored to 2000
   });
 });
 

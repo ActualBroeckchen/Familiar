@@ -556,6 +556,22 @@ by `isAmbientAbstain`) or `tiers` (pure-code slow/medium/fast cadence
 scaled off the cooldown). The V3 knowledge gate runs identically in
 every mode — mode is *when* the Familiar speaks, never *what it knows*.
 
+*Active-mode reply batching (V8.x).* An unprompted turn no longer replies
+once per message — a burst coalesces into ONE reply to the whole block,
+the way a person catches up on a few lines at once. The first reply-worthy
+ambient message arms a per-location settle timer (`scheduleAmbientBatch`)
+instead of replying; later messages in the burst fold into the session log
+via the existing `observeMessage` path (so they land in history) and reset
+the timer; when the room goes quiet the single held trigger runs through
+`handleTurn`, which already reads the whole log. The settle window adapts to
+room pace — `adaptiveSettleMs()` (pure, tested) waits ~1.5× the typical
+recent inter-message gap, clamped to [2s, 12s], with a 25s hard age ceiling
+so a never-quiet room still gets answered; `markAmbientTurn` (the cooldown)
+fires when the batch does. **Only ambient turns batch** — a direct @-mention
+replies immediately and `cancelAmbientBatch` folds any pending burst into
+history so it isn't answered twice. Off-switch:
+`PROTO_FAMILIAR_DISCORD_BATCH_DISABLED=1` reverts to per-message replies.
+
 *Room legibility (V8).* `resolveMentions()` (pure, tested) rewrites
 inbound `<@id>` / `<@!id>` tokens to `@Name` (my own char name → a
 registered villager's name → the payload display name → `@someone`)
