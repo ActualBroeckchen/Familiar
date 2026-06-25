@@ -239,6 +239,7 @@ const state = {
   memorySweepEnabled:      true,
   tomeGraduationEnabled:   false,   // opt-in: writes to the canonical self
   needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
+  notificationSounds:      true,    // in-app chime on new messages (default on)
   tomeGraduationTidy:      'pointer',
   warmthQuietHoursStart:   23,
   warmthQuietHoursEnd:     8,
@@ -300,7 +301,7 @@ const SERVER_SYNCED_KEYS = [
   'ponderingEnabled', 'ponderingIntervalScale',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
   'memorySweepEnabled',
-  'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled',
+  'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'notificationSounds',
   'trustedContacts', 'userDiscordWebhook',
   'discordEnabled', 'discordBotToken', 'discordWardUserId',
 ];
@@ -2108,6 +2109,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
       saveHistory();
       refreshTopicGutter();
       wireCopyButton(shell.copyBtn, () => content);
+      notifyNewMessage();   // reply: pings only if the tab isn't focused
       clearRetryStatus();
       return;
     }
@@ -2248,6 +2250,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
       saveHistory();
       refreshTopicGutter();
       wireCopyButton(copyBtn, () => content);
+      notifyNewMessage();   // reply: pings only if the tab isn't focused
       clearRetryStatus();
       return;
     }
@@ -2373,6 +2376,7 @@ function readSettingsFromUI() {
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('needs-tracking-toggle')) state.needsTrackingEnabled = $('needs-tracking-toggle').checked;
+  if ($('notif-sound-toggle')) state.notificationSounds = $('notif-sound-toggle').checked;
   if ($('tome-graduation-tidy')) state.tomeGraduationTidy = $('tome-graduation-tidy').value === 'delete' ? 'delete' : 'pointer';
   if ($('warmth-quiet-start')) {
     const n = parseInt($('warmth-quiet-start').value, 10);
@@ -2456,6 +2460,7 @@ function writeSettingsToUI() {
   if ($('memory-sweep-toggle')) setIfNotFocused($('memory-sweep-toggle'), 'checked', state.memorySweepEnabled !== false);
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
+  if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
   if ($('tome-graduation-tidy'))   setIfNotFocused($('tome-graduation-tidy'),   'value',   state.tomeGraduationTidy === 'delete' ? 'delete' : 'pointer');
   if ($('warmth-quiet-start')) setIfNotFocused($('warmth-quiet-start'), 'value',   state.warmthQuietHoursStart ?? 23);
   if ($('warmth-quiet-end'))   setIfNotFocused($('warmth-quiet-end'),   'value',   state.warmthQuietHoursEnd ?? 8);
@@ -3319,7 +3324,8 @@ function init() {
     'pondering-toggle', 'pondering-scale',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
     'memory-sweep-toggle',
-    'tome-graduation-toggle', 'tome-graduation-tidy',
+    'tome-graduation-toggle', 'tome-graduation-tidy', 'needs-tracking-toggle',
+    'notif-sound-toggle',
     'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'post-history-role', 'tools-enabled', 'custom-tools',
@@ -3435,6 +3441,10 @@ function init() {
   $('user-input').addEventListener('input', function() {
     autoResize(this);
   });
+
+  // Test chime — plays regardless of the toggle (it's an explicit request),
+  // and doubles as the gesture that unlocks the AudioContext.
+  $('notif-sound-test')?.addEventListener('click', () => playNotificationSound());
 
   // ── Clear history ────────────────────────────────────────────
   $('clear-chat-btn').addEventListener('click', () => {
@@ -8139,6 +8149,54 @@ async function teConsumeHandoff(id) {
   }
 }
 
+// ── Notification sound (in-app chime for new messages) ────────────
+//
+// A short two-note chime synthesised with the Web Audio API — no asset to
+// ship, no network. Browsers suspend the AudioContext until a user gesture,
+// so we resume it on the first interaction; after that a proactive ping
+// (e.g. a reminder arriving with no recent gesture) can still sound.
+let _audioCtx = null;
+function _ensureAudioCtx() {
+  if (_audioCtx) return _audioCtx;
+  try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+  catch { _audioCtx = null; }
+  return _audioCtx;
+}
+window.addEventListener('pointerdown', () => _ensureAudioCtx()?.resume?.(), { once: true, capture: true });
+window.addEventListener('keydown',     () => _ensureAudioCtx()?.resume?.(), { once: true, capture: true });
+
+function playNotificationSound() {
+  const ctx = _ensureAudioCtx();
+  if (!ctx) return;
+  try {
+    if (ctx.state === 'suspended') ctx.resume();
+    const now = ctx.currentTime;
+    // Two soft sine notes, a gentle rising chime (E5 → B5).
+    for (const [freq, t0] of [[659.25, 0], [987.77, 0.12]]) {
+      const osc = ctx.createOscillator();
+      const g   = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const start = now + t0;
+      g.gain.setValueAtTime(0.0001, start);
+      g.gain.exponentialRampToValueAtTime(0.16, start + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, start + 0.22);
+      osc.connect(g); g.connect(ctx.destination);
+      osc.start(start); osc.stop(start + 0.24);
+    }
+  } catch { /* audio unavailable → silent */ }
+}
+
+// Ping for a newly arrived message. Default on; `notificationSounds === false`
+// disables. Proactive deliveries (reminders / reach-outs / triage) always
+// ping; a reply to your own turn pings only when the tab isn't focused, so
+// an active conversation you're watching stays quiet.
+function notifyNewMessage({ proactive = false } = {}) {
+  if (state.notificationSounds === false) return;
+  if (!proactive && document.hasFocus()) return;
+  playNotificationSound();
+}
+
 // ── Outbox delivery (M11/M12) → inject as chat messages ───────────
 //
 // Reminders + silence-triage reach-outs + outbound-alert receipts arrive
@@ -8210,6 +8268,7 @@ async function injectOutboxAsChatMessage(item) {
   saveToServer();
   refreshTopicGutter?.();
   wireCopyButton(copyBtn, () => content);
+  notifyNewMessage({ proactive: true });   // reminders / reach-outs / triage always ping
 
   await acknowledgeOutboxItem(item.id);
 }
