@@ -31,7 +31,7 @@ import {
   bumpInterest, demoteStanding, setStandingInterest,
   getScheduleWindow, addScheduleNode, updateScheduleNode,
   resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
-  addScheduleEdge, deleteScheduleEdge, listPhases, listRecurring,
+  addScheduleEdge, updateScheduleEdge, deleteScheduleEdge, listPhases, listRecurring,
   getHandoff, markHandoffConsumed,
   getDueReminders, getRemindersHealth,
   shutdownUnruh, shutdownPhylactery,
@@ -2359,6 +2359,13 @@ app.post('/api/temporal/schedule/edge', async (req, res) => {
   if (!dst  || typeof dst  !== 'string') return badRequest(res, 'dst (node id) is required');
   if (!kind || typeof kind !== 'string') return badRequest(res, 'kind (string) is required');
   try { res.json(await addScheduleEdge({ src, dst, kind, payload })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/temporal/schedule/edge/:id', async (req, res) => {
+  const { payload } = req.body ?? {};
+  if (!payload || typeof payload !== 'object') return badRequest(res, 'payload (object) is required');
+  try { res.json(await updateScheduleEdge({ id: req.params.id, payload })); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
