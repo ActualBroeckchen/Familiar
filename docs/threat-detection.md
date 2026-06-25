@@ -98,12 +98,14 @@ Five categories, fully auditable in `crisis-signals.js`:
     crisis_plan      — "have the pills", "this is goodbye"
 
   HIGH (weight 3-4)
-    hopelessness     — "no point", "what's the point", "nothing matters"
+    hopelessness     — "no point left", "what's the point anymore",
+                       "nothing matters", "giving up on life"
     severe_isolation — "no one cares about me", "completely alone"
-    cant_continue    — "can't take it anymore", "reached my breaking point"
+    cant_continue    — "can't take it anymore", "reached my breaking point",
+                       "I'm done with everything"
 
   MODERATE (weight 2)
-    severe_distress  — "really struggling", "falling apart", "can't cope"
+    severe_distress  — "really struggling", "I'm falling apart", "can't cope"
     dissociation     — "feel numb", "don't feel like myself"
     panic            — "panic attack", "can't breathe", "heart racing"
 
@@ -120,23 +122,70 @@ Five categories, fully auditable in `crisis-signals.js`:
     support_engagement  — "talked to my therapist", "called the hotline"
 ```
 
+### Patterns anchored to genuine distress
+
+Several patterns that used to fire on ordinary venting have been
+narrowed so they only match the self-referential, despairing form:
+
+- **hopelessness** — bare *"giving up"* no longer fires (it hit
+  *"giving up coffee"* / *"giving up on this bug"*); it now needs a
+  despair object — *"giving up on life / everything / myself"*.
+  Bare *"what's the point"* no longer fires either (*"what's the point
+  of this function?"* is a real question); it needs the despairing
+  form — *"what's the point anymore / of living / of going on"*.
+- **cant_continue** — bare *"I'm done"* no longer fires
+  (*"I'm done with dinner"* is mundane); it needs a despair object —
+  *"I'm done with everything / life / trying / fighting"*.
+- **severe_distress** — *"falling apart"* and *"breaking down"* now
+  require a first-person subject (*"I'm falling apart"*,
+  *"I'm breaking down"*), so *"the plan is falling apart"* /
+  *"breaking down the data"* no longer fire.
+- **dissociation** — *"not real"* is tightened to the derealisation
+  sense (*"nothing feels real"*), so *"not real leather"* doesn't fire.
+
 ---
 
 ## Damping — false-positive defence
 
-Every signal scans ±50 characters of context for **blockers**:
+Every signal scans ±50 characters of context for **blockers**. The
+first four apply to **all tiers**; the last two are **tier-limited** —
+they only soften non-severe signals and never touch a severe one:
 
-| Blocker type | Examples | Effect on distress signals | Effect on safety signals |
-|---|---|---|---|
-| **Negation** | "don't", "never", "wouldn't" | weight × 0.2 | weight set to 0 |
-| **Hypothetical** | "if someone", "what if", "imagine" | weight × 0.2 | weight set to 0 |
-| **Others-speech** | "my friend said", "she told me" | weight × 0.2 | weight set to 0 |
-| **Hyperbolic** | "lol", "haha", "joking", 😂 | weight × 0.2 | weight set to 0 |
+| Blocker type | Examples | Applies to | Effect on distress | Effect on safety |
+|---|---|---|---|---|
+| **Negation** | "don't", "never", "wouldn't" | all tiers | weight × 0.2 | weight set to 0 |
+| **Hypothetical** | "if someone", "what if", "imagine" | all tiers | weight × 0.2 | weight set to 0 |
+| **Others-speech** | "my friend said", "she told me" | all tiers | weight × 0.2 | weight set to 0 |
+| **Hyperbolic** | "lol", "haha", "joking", 😂 | all tiers | weight × 0.2 | weight set to 0 |
+| **Exertion / arousal** | "after my workout", "too much coffee", "so excited", "can't wait" | non-severe only | weight × 0.2 | weight set to 0 |
+| **Mundane / logistical** | "struggling with this build", "anxious about the deploy", "overwhelmed by my inbox", "can't cope with the printer" | non-severe only | weight × 0.2 | weight set to 0 |
 
 So *"I don't want to die"* still fires the signal but at ~1.6 instead of
-8. *"My friend said she wants to hurt herself"* fires at ~1.4 instead
-of 7. *"lol I can't take it anymore, this meme is too good 😂"* barely
-moves the needle.
+8. *"My sister told me she's been cutting again"* fires at ~1.4 instead
+of 7 (the others-speech blocker — the `cutting again` pattern matches
+regardless of who it's about, but "my sister told me" damps it). *"lol I
+can't take it anymore, this meme is too good 😂"* barely moves the needle.
+
+**Exertion / arousal.** A racing or pounding heart — or *"can't
+breathe"* — after a workout, too much caffeine, or excitement
+(*"so excited I can't breathe"*) is arousal, not panic. This damps the
+moderate `panic` signal but never a severe one.
+
+**Mundane / logistical.** Frustration with a *thing* — *"struggling
+with this build"*, *"anxious about the deploy"*, *"overwhelmed by my
+inbox"*, *"can't cope with the printer"* — is irritation, not personal
+distress. The list is deliberately restricted to clearly non-emotional
+objects (computing + trivial logistics like a car, a printer, traffic,
+a recipe). Emotionally-loaded stressors — a diagnosis, a loss,
+*"my job"*, money — are **excluded on purpose**, so real distress that
+happens to mention them is never softened.
+
+**Why these two never damp a severe signal.** A real crisis that merely
+mentions coffee, the gym, or a deadline must still fire at full weight.
+*"I had too much coffee and I want to kill myself"* is not a caffeine
+problem. So exertion and mundane context are applied to non-severe
+signals only — they soften the moderate/mild register, never the
+self-harm / suicidal one.
 
 **Why "I'm not okay" still works:** safety signals damp to ZERO (not
 0.2×), so a negated reassurance doesn't accidentally lower threat.
