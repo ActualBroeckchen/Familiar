@@ -821,7 +821,12 @@
             <div class="ke-graph-legend" id="ke-graph-legend"></div>
             <div class="ke-graph-tooltip hidden" id="ke-graph-tooltip"></div>
             <div class="ke-graph-popover hidden" id="ke-graph-popover" role="dialog" aria-label="Edit graph node"></div>
-            <div class="ke-graph-hint">drag to pan · wheel to zoom · hover for label · click a node to edit</div>
+            <div class="ke-graph-zoom" role="group" aria-label="Zoom controls">
+              <button type="button" id="ke-graph-zoom-in"  class="ke-graph-zoom-btn" title="Zoom in"  aria-label="Zoom in">+</button>
+              <button type="button" id="ke-graph-zoom-out" class="ke-graph-zoom-btn" title="Zoom out" aria-label="Zoom out">−</button>
+              <button type="button" id="ke-graph-zoom-fit" class="ke-graph-zoom-btn" title="Fit to view" aria-label="Fit to view">⤢</button>
+            </div>
+            <div class="ke-graph-hint">drag/one-finger to pan · wheel/pinch/＋− to zoom · click a node to edit</div>
           </div>
         </div>
 
@@ -1203,6 +1208,7 @@
             <div class="ke-view-toggle" role="tablist" aria-label="Schedule view mode">
               <button id="te-sched-view-list"     class="ke-view-btn ke-view-active" data-sched-view="list"     role="tab" aria-selected="true">List</button>
               <button id="te-sched-view-calendar" class="ke-view-btn"                data-sched-view="calendar" role="tab" aria-selected="false">Calendar</button>
+              <button id="te-sched-view-map"      class="ke-view-btn"                data-sched-view="map"      role="tab" aria-selected="false">Map</button>
             </div>
           </div>
           <div id="te-sched-form" style="display:none; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
@@ -1261,6 +1267,22 @@
             <div class="te-cal-grid" id="te-cal-grid">
               <!-- weekday header row + 6 weeks rendered in JS -->
             </div>
+          </div>
+          <!-- Consequence-graph map: the schedule's nodes (events / tasks /
+               phases / states) and the causal-temporal edges between them,
+               on the shared force-directed canvas. -->
+          <div class="ke-graph-map hidden" id="te-sched-map">
+            <canvas id="te-sched-canvas"></canvas>
+            <div class="ke-graph-status" id="te-sched-map-status">Loading…</div>
+            <div class="ke-graph-legend" id="te-sched-legend"></div>
+            <div class="ke-graph-tooltip hidden" id="te-sched-tooltip"></div>
+            <div class="ke-graph-popover hidden" id="te-sched-popover" role="dialog" aria-label="Edit schedule node"></div>
+            <div class="ke-graph-zoom" role="group" aria-label="Zoom controls">
+              <button type="button" id="te-sched-zoom-in"  class="ke-graph-zoom-btn" title="Zoom in"  aria-label="Zoom in">+</button>
+              <button type="button" id="te-sched-zoom-out" class="ke-graph-zoom-btn" title="Zoom out" aria-label="Zoom out">−</button>
+              <button type="button" id="te-sched-zoom-fit" class="ke-graph-zoom-btn" title="Fit to view" aria-label="Fit to view">⤢</button>
+            </div>
+            <div class="ke-graph-hint">drag/one-finger to pan · wheel/pinch/＋− to zoom · click a node to link or edit</div>
           </div>
         </div>
 
@@ -1382,6 +1404,7 @@
     </div>
   </div>
 
+  <script src="graph-map.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

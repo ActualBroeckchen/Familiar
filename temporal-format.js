@@ -67,6 +67,36 @@ function formatLocalTime(iso, opts = {}) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${hhmm}`;
 }
 
+// Directional edge kinds → readable verb. co_occurs_with is rendered
+// undirected ("A — co-occurs — B") because it asserts no direction.
+const EDGE_VERB = {
+  causes: 'causes', requires: 'requires', depends_on: 'depends on',
+  blocks: 'blocks', during: 'during', carries_forward: 'carries forward into',
+};
+
+/**
+ * Compact human-readable tag for an edge's consequence payload, e.g.
+ * " [on lapse · in ~4h · harms · high certainty]". Empty string when the
+ * edge carries no consequence metadata (a bare structural link). Built so
+ * the Familiar reads which future a consequence belongs to, when it lands,
+ * whether it helps or harms, and how sure it is (observed fact vs guess).
+ */
+function consequenceTag(p) {
+  if (!p || typeof p !== 'object') return '';
+  const parts = [];
+  if (p.condition === 'on_resolve') parts.push('on resolve');
+  else if (p.condition === 'on_lapse') parts.push('on lapse');
+  const h = Number(p.horizon_hours);
+  if (Number.isFinite(h)) parts.push(h >= 48 ? `in ~${Math.round(h / 24)}d` : h >= 1 ? `in ~${Math.round(h)}h` : 'within the hour');
+  if (p.valence === 'help') parts.push('helps');
+  else if (p.valence === 'harm') parts.push('harms');
+  if (p.severity === 'high') parts.push('high stakes');
+  // Honesty: an observed edge is a fact; a projection wears its certainty.
+  if (p.observed) parts.push('observed before');
+  else if (p.certainty) parts.push(`${p.certainty} certainty`);
+  return parts.length ? ` [${parts.join(' · ')}]` : '';
+}
+
 export function formatTemporalContext(payload) {
   if (!payload || typeof payload !== 'object') return '';
 
@@ -211,6 +241,56 @@ export function formatTemporalContext(payload) {
       }
     }
     if (schedLines.length) blocks.push(schedLines.join('\n'));
+  }
+
+  // Schedule-id legend. The human-readable lines above carry labels, not ids —
+  // but every schedule editing tool (re-time, snooze, resolve, delete) is
+  // addressed by id, and without this the Familiar can SEE its schedule yet
+  // can't act on it. Mirrors the knowledge-graph block's id legend: ids live in
+  // one compact list at the end rather than inline on every line. Covers both
+  // routine phases and the window so a phase can be deleted and an event/task
+  // re-timed or resolved. Deduped; skips nodes with no id.
+  const scheduleNodes = [
+    ...(Array.isArray(payload.routine) ? payload.routine : []),
+    ...(Array.isArray(schedule.window) ? schedule.window : []),
+  ];
+  // Consequence links — the edges of the schedule graph, finally rendered
+  // (they were stored but invisible). Only edges whose BOTH endpoints are
+  // in the visible window are shown; one whose endpoint scrolled out (or is
+  // a recurring anchor expanded under a different id) is dropped rather than
+  // rendered with a dangling end. This is what lets the Familiar reason over
+  // consequence instead of a flat list.
+  const nodeLabel = new Map();
+  for (const n of scheduleNodes) { if (n?.id) nodeLabel.set(n.id, n.label ?? n.id); }
+  const edges = Array.isArray(schedule.edges) ? schedule.edges : [];
+  const linkLines = [];
+  for (const e of edges) {
+    const a = nodeLabel.get(e.src);
+    const b = nodeLabel.get(e.dst);
+    if (!a || !b) continue;
+    const tag = consequenceTag(e.payload);
+    if (e.kind === 'co_occurs_with') {
+      linkLines.push(`  ${a} — co-occurs — ${b}${tag || ' [noticed]'}`);
+    } else {
+      linkLines.push(`  ${a} → ${EDGE_VERB[e.kind] ?? e.kind} → ${b}${tag}`);
+    }
+  }
+  if (linkLines.length) {
+    blocks.push(['Consequence links — how my human\'s scheduled items bear on each other:', ...linkLines].join('\n'));
+  }
+
+  const idLegend = [];
+  const seenScheduleIds = new Set();
+  for (const n of scheduleNodes) {
+    if (!n?.id || seenScheduleIds.has(n.id)) continue;
+    seenScheduleIds.add(n.id);
+    idLegend.push(`  ${n.label ?? n.id} [${n.type ?? 'task'}] = ${n.id}`);
+  }
+  if (idLegend.length) {
+    blocks.push([
+      '[schedule ids — to give a floating task a time (schedule_assign_time), park one (schedule_snooze_task), mark one done/cancelled (schedule_resolve), remove one entirely incl. a phase (schedule_delete), or connect two so I see how they bear on each other (schedule_link), pass the id(s)]',
+      ...idLegend,
+    ].join('\n'));
   }
 
   const interests = payload.interests ?? {};

@@ -148,6 +148,15 @@ Edges carry temporal and causal relationships:
 - *blocks* — the interview blocks late social plans tonight
 - *carries forward* — unfinished laundry carries forward to tomorrow
 
+> **Authoring (0.7.x).** These edges are now reachable from both sides.
+> The human draws them in the Schedule tab's **Map** view (click a node →
+> **+ connect** → target + kind); the Familiar draws them with the
+> `schedule_link` tool when it notices a relationship. Backed by
+> `schedule_add_edge` / `schedule_delete_edge` (Unruh MCP) →
+> `POST`/`DELETE /api/temporal/schedule/edge`. Before this the graph
+> schema existed but nothing could populate it — the consequence
+> structure was plumbed but empty.
+
 ### Interest Layer
 
 Each node represents something Familiar is oriented toward:

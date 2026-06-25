@@ -30,7 +30,8 @@ import {
   recordInterest, recordHandoff, listLiveInterests, listInterests,
   bumpInterest, demoteStanding, setStandingInterest,
   getScheduleWindow, addScheduleNode, updateScheduleNode,
-  resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode, listPhases, listRecurring,
+  resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
+  addScheduleEdge, updateScheduleEdge, deleteScheduleEdge, listPhases, listRecurring,
   getHandoff, markHandoffConsumed,
   getDueReminders, getRemindersHealth,
   shutdownUnruh, shutdownPhylactery,
@@ -2349,6 +2350,30 @@ app.delete('/api/temporal/schedule/:id', async (req, res) => {
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Consequence-graph edges between schedule nodes. The Map view (and the
+// Familiar's schedule_link tool) author these; deleting one corrects a
+// mis-stated link without removing the events.
+app.post('/api/temporal/schedule/edge', async (req, res) => {
+  const { src, dst, kind, payload } = req.body ?? {};
+  if (!src  || typeof src  !== 'string') return badRequest(res, 'src (node id) is required');
+  if (!dst  || typeof dst  !== 'string') return badRequest(res, 'dst (node id) is required');
+  if (!kind || typeof kind !== 'string') return badRequest(res, 'kind (string) is required');
+  try { res.json(await addScheduleEdge({ src, dst, kind, payload })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/temporal/schedule/edge/:id', async (req, res) => {
+  const { payload } = req.body ?? {};
+  if (!payload || typeof payload !== 'object') return badRequest(res, 'payload (object) is required');
+  try { res.json(await updateScheduleEdge({ id: req.params.id, payload })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/temporal/schedule/edge/:id', async (req, res) => {
+  try { res.json(await deleteScheduleEdge({ id: req.params.id })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Phases (Routine tab) — date-independent; schedule_get_window's
 // time filter misses phases stamped on previous calendar days.
 app.get('/api/temporal/phases', async (req, res) => {
@@ -2823,9 +2848,29 @@ function startAutonomousPondering() {
         raised:         e.raised,
         outcome:        e.outcome,
         outcome_at:     e.outcome_at,
+        // Where in the task's window the ward acted (when present) — the
+        // signal reflection learns start-timing from.
+        ...(Number.isFinite(e.window_fraction) ? { window_fraction: e.window_fraction } : {}),
         state_snapshot: e.state_snapshot,
       }));
-      return { mode: 'reflection', outcomes: projected, existingNotes };
+      // The Familiar's own PROJECTED consequence edges (not yet observed),
+      // with ids + endpoint labels, so reflection can grade and recalibrate
+      // its forecasts. Degrades to [] if Unruh is unreachable.
+      let consequenceEdges = [];
+      try {
+        const win = await getScheduleWindow({});
+        const nodes = Array.isArray(win?.nodes) ? win.nodes : [];
+        const labelById = new Map(nodes.map(n => [n.id, n.label]));
+        consequenceEdges = (Array.isArray(win?.edges) ? win.edges : [])
+          .filter(ed => ed?.payload && (ed.payload.valence || ed.payload.condition) && ed.payload.observed !== true)
+          .map(ed => ({
+            edge_id: ed.id, from: labelById.get(ed.src) ?? ed.src, to: labelById.get(ed.dst) ?? ed.dst,
+            kind: ed.kind, valence: ed.payload.valence, condition: ed.payload.condition,
+            horizon_hours: ed.payload.horizon_hours, severity: ed.payload.severity,
+            certainty: ed.payload.certainty, note: ed.payload.note,
+          }));
+      } catch { /* Unruh down → no calibration this cycle, prompt still works */ }
+      return { mode: 'reflection', outcomes: projected, existingNotes, consequenceEdges };
     },
     runPonder: async (topic /* string OR { mode:'reflection', ... } */) => {
       const s    = readSettingsSync();
@@ -2855,6 +2900,15 @@ function startAutonomousPondering() {
           })
             .then(r => console.log(`[pondering] reflection → ${r.ok ? 'wrote' : 'failed to write'} ${upd.heading} to what_lapses_cost.md`))
             .catch(err => console.error('[pondering] what_lapses_cost write failed:', err?.message ?? err));
+        }
+        // Apply any forecast recalibrations the reflection graded — raise/
+        // lower certainty, mark observed, add a note — onto the edges by id.
+        // Fire-and-forget per edge; one failing never blocks the others or
+        // the chat path.
+        for (const cal of (result.edge_calibrations ?? [])) {
+          updateScheduleEdge({ id: cal.edge_id, payload: cal.payload })
+            .then(r => console.log(`[pondering] reflection → ${r?.ok ? 'recalibrated' : 'failed to recalibrate'} edge ${cal.edge_id}`))
+            .catch(err => console.error('[pondering] edge recalibration failed:', err?.message ?? err));
         }
       }
       return result;

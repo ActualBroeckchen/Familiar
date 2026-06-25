@@ -171,6 +171,41 @@ test('buildPonderPrompt: reflection mode embeds outcomes JSON + existing notes',
   assert.match(prompt, /what_lapses_cost_update/);
 });
 
+test('buildPonderPrompt: reflection embeds window-timing guidance, a concrete threshold, and projected edges', () => {
+  const prompt = buildPonderPrompt({
+    mode: 'reflection',
+    outcomes: [{ task_label: 'exercise', outcome: 'engaged_and_completed', window_fraction: 0.7 }],
+    existingNotes: '',
+    consequenceEdges: [{ edge_id: 'e1', from: 'skip dinner', to: 'crash', kind: 'causes', condition: 'on_lapse', certainty: 'medium' }],
+  });
+  assert.match(prompt, /window_fraction/);
+  assert.match(prompt, /three or four of the same kind/i); // "enough" is defined
+  assert.match(prompt, /grade these forecasts|keep honest score/i);
+  assert.match(prompt, /edge_calibrations/);
+  assert.match(prompt, /"edge_id": "e1"|skip dinner/); // the projected edge is shown
+});
+
+test('parsePondering: reflection edge_calibrations — valid kept, malformed dropped', () => {
+  const r = parsePondering(JSON.stringify({
+    title: 't', content: 'c',
+    edge_calibrations: [
+      { edge_id: 'good1', certainty: 'high' },                    // kept (certainty)
+      { edge_id: 'good2', observed: true, note: 'saw it' },       // kept (observed + note)
+      { edge_id: 'bad1', certainty: 'sky-high' },                 // dropped (bad enum, no other field)
+      { certainty: 'low' },                                       // dropped (no edge_id)
+      { edge_id: 'bad2' },                                        // dropped (no grading field)
+    ],
+  }));
+  assert.equal(r.edge_calibrations.length, 2);
+  assert.deepEqual(r.edge_calibrations[0], { edge_id: 'good1', payload: { certainty: 'high' } });
+  assert.deepEqual(r.edge_calibrations[1], { edge_id: 'good2', payload: { observed: true, note: 'saw it' } });
+});
+
+test('parsePondering: no edge_calibrations key → field absent (not an empty array)', () => {
+  const r = parsePondering(JSON.stringify({ title: 't', content: 'c' }));
+  assert.equal(r.edge_calibrations, undefined);
+});
+
 test('parsePondering: reflection JSON with null update', () => {
   const r = parsePondering(JSON.stringify({
     title: 'reflection title',

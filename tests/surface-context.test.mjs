@@ -303,6 +303,9 @@ test('formatSurfaceCandidatesBlock: includes label, framing, prompts probe on lo
   assert.match(block, /Age: 3d/);
   assert.match(block, /confidence on the consequences here is low/);
   assert.match(block, /once, naturally, refusable/);
+  // The id must be surfaced — schedule_assign_time / snooze / resolve are
+  // addressed by id, so a candidate the Familiar can't identify is unactionable.
+  assert.match(block, /id: t1/);
 });
 
 test('formatSurfaceCandidatesBlock: explicit green/red conditions, cost of silence named, no bias-toward-quiet', () => {
@@ -330,6 +333,70 @@ test('formatSurfaceCandidatesBlock: explicit green/red conditions, cost of silen
   // Regression guard: the bias-toward-quiet language that shipped once
   // (and mirrors the recorded 1.5h-silence failure) must never return.
   assert.doesNotMatch(block, /None of these need to be mentioned|let them rest|bias toward (staying )?quiet|only .{0,40}when the answer feels obvious|err on the side of not/i);
+});
+
+test('CONSEQUENCE & PLANNING block: both futures + predict-then-learn, no bias-toward-quiet', () => {
+  const block = formatSurfaceCandidatesBlock([
+    { id: 't1', label: 'x', type: 'task', stakesTier: 'personal_wellbeing',
+      priorsBlock: '', personModel: '', taskSpecific: null, confidence: 'medium', ageDays: null },
+  ]);
+  assert.match(block, /CONSEQUENCE & PLANNING/);
+  assert.match(block, /resolving/);          // the motivating future
+  assert.match(block, /failing-to-resolve/);  // the cost future
+  assert.match(block, /which future I called right|adjust what I believe|learn .* real patterns/i); // predict→learn
+  // Honesty about projections, and no bias-toward-quiet creeping in here either.
+  assert.match(block, /projection is a projection|hold a low-certainty hunch lightly/i);
+  assert.doesNotMatch(block, /bias toward (staying )?quiet|err on the side of not|only .{0,40}when the answer feels obvious/i);
+});
+
+test('selectSurfaceCandidates: a task an imminent node requires gets a consequence reason + pressure', async () => {
+  const imminent = new Date(NOW + 6 * 3600 * 1000).toISOString(); // 6h out → imminent
+  const out = await selectSurfaceCandidates({
+    openTasks: [{ id: 'prep', label: 'interview prep', type: 'task' }],
+    threat: calm, routinePhaseLabel: '', personModel: '', surfacingHistory: {}, now: NOW,
+    edges: [{ id: 'e', src: 'prep', dst: 'iv', kind: 'requires' }],
+    scheduleNodes: [
+      { id: 'prep', label: 'interview prep', type: 'task' },
+      { id: 'iv', label: 'interview', type: 'event', when: imminent },
+    ],
+  });
+  assert.equal(out.length, 1);
+  assert.ok(out[0].consequencePressure >= 3, 'imminent dependent → pressure');
+  assert.match(out[0].consequenceReasons.join(' '), /unblocks|needs this done first/i);
+  // And it surfaces in the rendered block.
+  assert.match(formatSurfaceCandidatesBlock(out), /Hangs off this —/);
+});
+
+test('selectSurfaceCandidates: an on_lapse harm consequence renders honestly (certainty shown)', async () => {
+  const out = await selectSurfaceCandidates({
+    openTasks: [{ id: 'din', label: 'dinner', type: 'task' }],
+    threat: calm, routinePhaseLabel: '', personModel: '', surfacingHistory: {}, now: NOW,
+    edges: [{ id: 'e', src: 'din', dst: 'crash', kind: 'causes',
+      payload: { condition: 'on_lapse', valence: 'harm', certainty: 'high', horizon_hours: 4, severity: 'high' } }],
+    scheduleNodes: [{ id: 'crash', label: 'crash', type: 'state', when: new Date(NOW).toISOString() }],
+  });
+  const reason = out[0].consequenceReasons.join(' ');
+  assert.match(reason, /skipping this tends to cause crash/i);
+  assert.match(reason, /high certainty/i); // projection wears its confidence
+});
+
+test('selectSurfaceCandidates: consequence pressure floats a task above the per-turn cap', async () => {
+  // 4 plain tasks + 1 with an imminent dependent; cap at 2 → the
+  // high-pressure one must survive the cut.
+  const imminent = new Date(NOW + 3 * 3600 * 1000).toISOString();
+  const openTasks = [
+    { id: 'a', label: 'a', type: 'task' }, { id: 'b', label: 'b', type: 'task' },
+    { id: 'c', label: 'c', type: 'task' }, { id: 'd', label: 'd', type: 'task' },
+    { id: 'lever', label: 'lever', type: 'task' },
+  ];
+  const out = await selectSurfaceCandidates({
+    openTasks, threat: calm, routinePhaseLabel: '', personModel: '', surfacingHistory: {}, now: NOW,
+    maxCandidates: 2,
+    edges: [{ id: 'e', src: 'lever', dst: 'iv', kind: 'blocks' }],
+    scheduleNodes: [...openTasks, { id: 'iv', label: 'interview', type: 'event', when: imminent }],
+  });
+  assert.equal(out.length, 2);
+  assert.ok(out.some(c => c.id === 'lever'), 'the consequence-bearing task survived the cap');
 });
 
 test('formatSurfaceCandidatesBlock: high-confidence omits the probe nudge', () => {

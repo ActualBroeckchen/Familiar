@@ -725,6 +725,79 @@ export async function deleteScheduleNode({ id }) {
 }
 
 /**
+ * Connect two schedule nodes with a consequence/temporal edge. This is
+ * the authoring half of Unruh's consequence graph — the structure that
+ * was chosen over a flat table precisely so events can relate to each
+ * other (causes / requires / depends_on / blocks / during /
+ * carries_forward). Both endpoint ids come from the schedule window.
+ */
+export async function addScheduleEdge({ src, dst, kind, payload }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_add_edge',
+      arguments: { src, dst, kind, payload },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+/**
+ * Resolve-or-create a consequence-state node by label ('crash', 'good
+ * streak'), returning its id — so a consequence edge has something to
+ * point at when the consequence isn't itself a scheduled item. Reuses
+ * an existing same-label state rather than duplicating it.
+ */
+export async function upsertScheduleState({ label }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_upsert_state',
+      arguments: { label },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+/**
+ * Annotate/correct a consequence edge: shallow-merge consequence
+ * metadata (valence / condition / horizon / severity / certainty /
+ * observed / note) over its existing payload. Used to enrich a plain
+ * structural edge after the fact, and to recalibrate a projection's
+ * certainty once reality has weighed in.
+ */
+export async function updateScheduleEdge({ id, payload }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_update_edge',
+      arguments: { id, payload },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+/**
+ * Remove one consequence edge by id, leaving both endpoint nodes intact
+ * — the way a mis-stated link gets corrected without deleting the
+ * events themselves.
+ */
+export async function deleteScheduleEdge({ id }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_delete_edge',
+      arguments: { id },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+/**
  * List every phase node — date-independent. Phases recur daily; the
  * standard get_window query filters by calendar date and misses
  * phases stamped on previous days, which the Routine tab needs.
@@ -1636,6 +1709,10 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
             personModel,
             surfacingHistory,
             now: nowMs,
+            // Consequence awareness: the graph edges + the full window so a
+            // candidate's dependents/blocked-items resolve to read imminence.
+            edges: Array.isArray(temporalPayload?.schedule?.edges) ? temporalPayload.schedule.edges : [],
+            scheduleNodes: windowItems,
           });
 
           if (candidates.length > 0) {

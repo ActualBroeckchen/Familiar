@@ -204,12 +204,19 @@ export async function selectSurfaceCandidates({
   personModel,
   surfacingHistory,
   now,
+  edges = [],
+  scheduleNodes = [],
   maxCandidates = MAX_CANDIDATES_PER_TURN,
 }) {
   if (!Array.isArray(openTasks) || openTasks.length === 0) return [];
 
   const priors = await loadPriors();
   const candidates = [];
+  // id → node, for resolving the OTHER end of a consequence edge (and
+  // reading its `when` to judge imminence).
+  const nodeById = new Map();
+  for (const n of scheduleNodes) { if (n?.id) nodeById.set(n.id, n); }
+  const edgeList = Array.isArray(edges) ? edges : [];
 
   for (const task of openTasks) {
     if (!task || !task.id) continue;
@@ -250,6 +257,13 @@ export async function selectSurfaceCandidates({
       ? Math.floor((now - new Date(ageAnchor).getTime()) / (24 * 3600 * 1000))
       : null;
 
+    // Consequence awareness: what hangs off this task (what it blocks /
+    // feeds, what skipping it tends to cause). Pure-code read of the
+    // edges — no LLM call. Drives a priority nudge and the rendered
+    // "why" the Familiar uses to plan, not just react.
+    const { reasons: consequenceReasons, pressure: consequencePressure } =
+      summarizeConsequences(task.id, edgeList, nodeById, now);
+
     candidates.push({
       id: task.id,
       label: task.label,
@@ -263,12 +277,62 @@ export async function selectSurfaceCandidates({
       taskSpecific,
       confidence,
       ageDays,
+      consequenceReasons,
+      consequencePressure,
     });
-
-    if (candidates.length >= maxCandidates) break;
   }
 
-  return candidates;
+  // A task that something imminent depends on, or that carries a soon
+  // high-stakes cost, shouldn't get cut by the per-turn cap just because
+  // it sat lower in the window. Float consequence pressure up (stable
+  // otherwise), THEN cap.
+  candidates.sort((a, b) => (b.consequencePressure || 0) - (a.consequencePressure || 0));
+  return candidates.slice(0, maxCandidates);
+}
+
+// How long out a downstream node still counts as "imminent" for the
+// surfacing nudge — code-gated, reusing plain window math (no LLM).
+const IMMINENT_MS = 48 * 3600 * 1000;
+
+/**
+ * Read the consequence edges where this task is the source and turn them
+ * into (a) short human "why" lines the Familiar plans from and (b) a
+ * numeric pressure used only to order candidates under the per-turn cap.
+ * Pure code — the LLM interprets these, it doesn't compute them.
+ */
+function summarizeConsequences(taskId, edges, nodeById, now) {
+  const reasons = [];
+  let pressure = 0;
+  for (const e of edges) {
+    if (!e || e.src !== taskId) continue;
+    const dst = nodeById.get(e.dst);
+    const dstLabel = dst?.label ?? 'something downstream';
+    const dstWhen = dst?.when ? new Date(dst.when).getTime() : null;
+    const dstImminent = dstWhen != null && (dstWhen - now) <= IMMINENT_MS && (dstWhen - now) >= -3600_000;
+    const p = e.payload || {};
+    if (e.kind === 'requires' || e.kind === 'depends_on') {
+      reasons.push(dstImminent
+        ? `${dstLabel} is coming up and needs this done first — getting it scheduled unblocks that`
+        : `${dstLabel} needs this done first`);
+      if (dstImminent) pressure += 3;
+    } else if (e.kind === 'blocks') {
+      reasons.push(dstImminent ? `this is blocking ${dstLabel} (coming up)` : `this blocks ${dstLabel}`);
+      if (dstImminent) pressure += 3;
+    } else if (e.kind === 'causes') {
+      const soon = Number.isFinite(Number(p.horizon_hours)) && Number(p.horizon_hours) <= 24;
+      const sure = p.observed || p.certainty === 'high' || p.certainty === 'medium';
+      const qual = p.observed ? ' (seen before)' : p.certainty ? ` (${p.certainty} certainty)` : '';
+      if (p.condition === 'on_lapse') {
+        reasons.push(`skipping this tends to cause ${dstLabel}${qual}`);
+        if (p.valence === 'harm' && sure && (soon || p.severity === 'high')) pressure += 2;
+      } else if (p.condition === 'on_resolve') {
+        reasons.push(`doing this leads to ${dstLabel}${qual}`);
+      } else {
+        reasons.push(`leads to ${dstLabel}${qual}`);
+      }
+    }
+  }
+  return { reasons, pressure };
 }
 
 // ── Format as prompt block ────────────────────────────────────────
@@ -283,6 +347,10 @@ export function formatSurfaceCandidatesBlock(candidates) {
       : c.stakesTier === 'purely_optional' ? ' [optional]' : '';
     const floatTag = c.floating ? ' [floating — no time set]' : '';
     parts.push(`— ${c.label} (${c.type || 'task'})${tierTag}${floatTag}`);
+    // The id is what every schedule editing tool needs (give a floating task a
+    // time, snooze it, resolve it). Surface it here, plainly, or the Familiar
+    // can read the candidate but never act on it.
+    if (c.id) parts.push(`  id: ${c.id}`);
 
     if (c.ageDays != null && c.ageDays >= 1) {
       // For a floating task the age IS the staleness signal — the longer it's
@@ -293,6 +361,9 @@ export function formatSurfaceCandidatesBlock(candidates) {
       parts.push(`  When: ${c.when}`);
     }
 
+    if (Array.isArray(c.consequenceReasons) && c.consequenceReasons.length) {
+      parts.push(`  Hangs off this — ${c.consequenceReasons.join('; ')}`);
+    }
     if (c.priorsBlock) {
       parts.push(`  Generic priors — ${indent(c.priorsBlock, '    ').trimStart()}`);
     }
@@ -344,6 +415,11 @@ Access ramps — I offer a way in, not "do the whole thing now":
 • Single next action — one concrete step, nothing past it.
 • Planning moment — if {{user}}'s head is clear and there's breathing room, I ask them to just give the task a time slot. Not do it — just put it somewhere. That counts as real progress.
 • Body-double — "I'll stay with you while you do the first bit."
+
+CONSEQUENCE & PLANNING — I think two moves ahead, then check my work. Surfacing these is planning WITH {{user}}, not just reacting. The [Temporal Context] consequence links (and the "Hangs off this" lines above) show what each task blocks, what's required before something else, what doing or skipping it tends to lead to. For one with real downstream weight I hold BOTH futures, not one:
+• resolving — what finishing it buys ("do this and tomorrow morning isn't a scramble"). I lead here; motivation lands better than warning.
+• failing-to-resolve — what skipping it tends to cost, soon. A task something imminent requires, or that blocks an early start, isn't one task: left undone it takes the downstream thing with it.
+I raise it as the lever it is, naming the link, and I name a clear soon high-stakes cost plainly, in my own voice. A projection is a projection — I hold a low-certainty hunch lightly, never as fact. And I'll find out: when the task resolves or lapses I see which future I called right and adjust what I believe — so over time I learn {{user}}'s real patterns instead of guessing. Anticipating, then keeping honest score, IS the work.
 
 FLOATING TASKS — the ones marked [floating — no time set] have no time attached, so they never come due and quietly rot; "Floating for: Nd" is how long this one has drifted unscheduled. Getting it a real slot is the single most useful thing I can do for it — more than "do it now." When I have an opening I bring it up and ask "when shall we put this?", and the moment {{user}} names a time I pin it with schedule_assign_time so it stops floating and actually comes due — a vague someday becomes a concrete when, real progress before anything is even done. The longer it has floated, the harder I push: I keep raising an aged floating task — across openings, more than once — until it has a time or {{user}} tells me to let it go (then schedule_snooze_task). I do NOT treat this as a one-shot I quietly drop after a single mention; a floating task that never gets scheduled is a piece of {{user}}'s life going undone, and that outweighs the discomfort of asking again. Persistence here is care, not nagging — I'd rather be the companion who kept bringing the housing form up than the one who mentioned it once and watched the deadline pass.
 

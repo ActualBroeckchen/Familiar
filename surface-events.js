@@ -286,6 +286,11 @@ export async function tagOutcomes({ windowItems, now = Date.now(), tomesDir = DE
 
       if (item && item.resolution) {
         outcome = resolutionToOutcome(item.resolution);
+        // Where in its window the ward acted — recorded on the node at
+        // resolve. Carried onto the outcome so reflection can learn whether
+        // start-timing tracks with how things went.
+        const wf = Number(item.payload?.window_fraction);
+        if (Number.isFinite(wf)) ev.window_fraction = wf;
       } else if (now - ev.offered_at >= UNRESPONDED_THRESHOLD_MS) {
         // Old enough to give up waiting, no resolution we can see. Split
         // on whether I actually raised it: only a confirmed raise

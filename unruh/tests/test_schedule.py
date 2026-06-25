@@ -126,6 +126,69 @@ class TestAddEdge:
         remaining = conn.execute("SELECT COUNT(*) AS n FROM edges").fetchone()["n"]
         assert remaining == 0
 
+    def test_delete_edge_removes_only_the_edge(self, conn):
+        a = sched.add_node(conn, type="task", label="prep")
+        b = sched.add_node(conn, type="event", label="interview", when=now_iso())
+        eid = sched.add_edge(conn, src=a, dst=b, kind="requires")
+        assert sched.delete_edge(conn, id=eid) is True
+        # The edge is gone …
+        assert conn.execute("SELECT COUNT(*) AS n FROM edges").fetchone()["n"] == 0
+        # … but both endpoint nodes survive.
+        assert conn.execute("SELECT COUNT(*) AS n FROM nodes").fetchone()["n"] == 2
+
+    def test_delete_edge_unknown_id_returns_false(self, conn):
+        assert sched.delete_edge(conn, id="00000000nope") is False
+
+
+class TestConsequenceEdges:
+    def test_co_occurs_with_is_a_valid_kind(self, conn):
+        a = sched.add_node(conn, type="task", label="errands")
+        b = sched.add_node(conn, type="state", label="low stretch", when=now_iso())
+        eid = sched.add_edge(conn, src=a, dst=b, kind="co_occurs_with")
+        row = conn.execute("SELECT kind FROM edges WHERE id=?", (eid,)).fetchone()
+        assert row["kind"] == "co_occurs_with"
+
+    def test_consequence_payload_round_trips(self, conn):
+        a = sched.add_node(conn, type="task", label="skip dinner")
+        b = sched.add_node(conn, type="state", label="crash", when=now_iso())
+        eid = sched.add_edge(conn, src=a, dst=b, kind="causes", payload={
+            "valence": "harm", "condition": "on_lapse", "horizon_hours": "4",
+            "severity": "high", "certainty": "high", "observed": True,
+        })
+        import json
+        p = json.loads(conn.execute("SELECT payload_json FROM edges WHERE id=?", (eid,)).fetchone()["payload_json"])
+        assert p["valence"] == "harm" and p["condition"] == "on_lapse"
+        assert p["horizon_hours"] == 4.0  # coerced to number
+        assert p["observed"] is True
+
+    def test_bad_valence_rejected(self, conn):
+        a = sched.add_node(conn, type="task", label="a")
+        b = sched.add_node(conn, type="state", label="b", when=now_iso())
+        with pytest.raises(ValueError, match="unknown consequence valence"):
+            sched.add_edge(conn, src=a, dst=b, kind="causes", payload={"valence": "spicy"})
+
+    def test_bad_condition_rejected(self, conn):
+        a = sched.add_node(conn, type="task", label="a")
+        b = sched.add_node(conn, type="state", label="b", when=now_iso())
+        with pytest.raises(ValueError, match="unknown consequence condition"):
+            sched.add_edge(conn, src=a, dst=b, kind="causes", payload={"condition": "maybe"})
+
+    def test_update_edge_merges_payload(self, conn):
+        a = sched.add_node(conn, type="task", label="prep")
+        b = sched.add_node(conn, type="event", label="interview", when=now_iso())
+        eid = sched.add_edge(conn, src=a, dst=b, kind="requires")  # bare structural edge
+        assert sched.update_edge(conn, id=eid, payload={"valence": "help", "certainty": "low"})
+        import json
+        p = json.loads(conn.execute("SELECT payload_json FROM edges WHERE id=?", (eid,)).fetchone()["payload_json"])
+        assert p == {"valence": "help", "certainty": "low"}
+        # a second partial update keeps prior keys
+        sched.update_edge(conn, id=eid, payload={"certainty": "high"})
+        p = json.loads(conn.execute("SELECT payload_json FROM edges WHERE id=?", (eid,)).fetchone()["payload_json"])
+        assert p["valence"] == "help" and p["certainty"] == "high"
+
+    def test_update_edge_unknown_id_returns_false(self, conn):
+        assert sched.update_edge(conn, id="nope", payload={"valence": "help"}) is False
+
 
 class TestResolve:
     def test_done_transition(self, conn):
@@ -141,6 +204,27 @@ class TestResolve:
         t = sched.add_node(conn, type="task", label="x")
         with pytest.raises(ValueError, match="unknown resolution"):
             sched.resolve(conn, id=t, resolution="kinda done")
+
+    def test_resolve_stamps_acted_at(self, conn):
+        import json
+        t = sched.add_node(conn, type="task", label="laundry")
+        sched.resolve(conn, id=t, resolution="done")
+        p = json.loads(conn.execute("SELECT payload_json FROM nodes WHERE id=?", (t,)).fetchone()["payload_json"])
+        assert "acted_at" in p
+        # No window (no end) → no window_fraction.
+        assert "window_fraction" not in p
+
+    def test_resolve_records_window_fraction_for_a_window_task(self, conn):
+        import json
+        from datetime import datetime, timedelta, timezone
+        # A 4-hour window opening 1h ago and closing 3h from now → acting
+        # "now" lands at fraction 0.25.
+        start = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(timespec="seconds")
+        end   = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat(timespec="seconds")
+        t = sched.add_node(conn, type="task", label="exercise", when=start, end=end)
+        sched.resolve(conn, id=t, resolution="done")
+        p = json.loads(conn.execute("SELECT payload_json FROM nodes WHERE id=?", (t,)).fetchone()["payload_json"])
+        assert abs(p["window_fraction"] - 0.25) < 0.02
 
 
 # ── Update / delete (M9b) ─────────────────────────────────────────────

@@ -1954,6 +1954,32 @@ button { cursor: pointer; font-family: var(--font); }
   pointer-events: none;
   user-select: none;
 }
+/* Zoom controls — shared by the knowledge graph and the schedule map.
+   Top-right so they don't collide with the bottom-left hint or the
+   top-right legend overlaps gracefully (legend sits below). */
+.ke-graph-zoom {
+  position: absolute;
+  right: 10px; bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 3;
+}
+.ke-graph-zoom-btn {
+  width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.1rem; line-height: 1;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  user-select: none;
+}
+.ke-graph-zoom-btn:hover { background: var(--surface-hover, var(--border)); }
+.ke-graph-zoom-btn:active { transform: translateY(1px); }
+
 .ke-graph-tooltip {
   position: absolute;
   pointer-events: none;
@@ -2106,6 +2132,17 @@ button { cursor: pointer; font-family: var(--font); }
   display: flex; align-items: center; gap: 6px;
 }
 .ke-add-edge-form input[type="range"] { flex: 1; }
+/* Consequence detail in the schedule-map connect form + edge-row tag. */
+.te-conseq-detail { margin: 2px 0; }
+.te-conseq-detail > summary { font-size: 0.72rem; color: var(--text-dim); cursor: pointer; }
+.te-conseq-fields { display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 6px; }
+.te-conseq-fields label { font-size: 0.7rem; color: var(--text-dim); display: flex; align-items: center; gap: 4px; }
+.te-conseq-fields select, .te-conseq-fields input[type="number"] {
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-size: 0.72rem; padding: 2px 4px;
+}
+.te-edge-tag { color: var(--text-dim); font-size: 0.68rem; }
 .ke-edge-weight-display {
   font-family: var(--font-mono);
   font-size: 0.72rem;

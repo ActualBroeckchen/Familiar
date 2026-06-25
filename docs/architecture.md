@@ -174,6 +174,8 @@ ponderings injection, care-check framing) and as background loops
 ├── public/
 │   ├── index.html           App shell — sidebar, chat pane, Temporal editor modal, all modals
 │   ├── style.css            All styling — dark/light themes, modal/tab styles
+│   ├── graph-map.js         Shared force-directed graph-map engine (createGraphMap) — behind
+│   │                        BOTH the Phylactery knowledge graph and the Unruh schedule map
 │   └── app.js               All frontend logic — state, API calls, rendering, topics, Tomes,
 │                            temporal editor, outbox delivery polling (tool registry + execution
 │                            moved server-side to cerebellum.js in 0.4.0-alpha)
@@ -229,6 +231,9 @@ in `log-import.js` (Proto-Familiar JSON, timestamped text; rejects unknown loudl
 - `POST /api/temporal/schedule/:id/resolve` — mark done/cancelled/etc.
 - `POST /api/temporal/schedule/:id/resolve_occurrence` — resolve ONE occurrence of a recurring node (leaves the series alive)
 - `DELETE /api/temporal/schedule/:id` — hard delete (edges cascade)
+- `POST /api/temporal/schedule/edge` — connect two nodes into the consequence graph (`{src, dst, kind}`, optional consequence `payload`)
+- `PATCH /api/temporal/schedule/edge/:id` — merge consequence metadata onto an edge (`{payload}`)
+- `DELETE /api/temporal/schedule/edge/:id` — remove one consequence link (both endpoint nodes survive)
 - `GET /api/temporal/phases` — **date-independent** routine surface
 - `GET /api/temporal/handoff` + `POST .../handoff/:id/consume`
 - `GET /api/temporal/reminders/health` — observability on the loop
@@ -1030,6 +1035,29 @@ passphrase is never stored — a lost passphrase means an unrecoverable backup,
 which the UI states plainly. Surfaced in the Knowledge editor → Snapshots tab
 and via `POST /api/entity/backup/{export,restore}`.
 
+### `public/graph-map.js` — shared graph-map engine
+
+`createGraphMap(config)` is one reusable canvas engine behind **both**
+map views — the Phylactery knowledge graph and the Unruh schedule's
+consequence graph — because both stores hold genuinely graph-shaped
+data. It owns everything generic: the Fruchterman-Reingold force layout,
+the dots-and-quadratic-curve rendering, hit-testing (point-to-Bézier),
+the deterministic 24-hue palette + legend, the tooltip, and the viewport
+(`world = (screen − tx) / zoom`). Interaction is unified through Pointer
+events: **wheel** zooms, **one finger / drag** pans, **two-finger pinch**
+zooms, and the **＋ / − / Fit** buttons zoom around centre — the
+touchpad-friendly path for users who can't scroll-to-zoom.
+
+What stays with each host is the *domain* layer: data fetch, node/edge
+shapes, and the editor popover. Hosts normalise their edges to
+`{ id, fromId, toId, type, weight? }` before `setData`; the knowledge
+graph passes `weight` (edges fade by strength), the schedule passes none
+(edges hue by `kind`). This extraction replaced ~520 lines of inline
+`keGraph*` code that the schedule map would otherwise have had to
+copy-paste (CLAUDE.md — no copy-paste of substantial logic). The engine
+emits `onNodeClick` / `onBackgroundClick`; each host wires its own
+popover to those.
+
 ### `public/app.js` — frontend (one file)
 
 - **State + persistence** as before.
@@ -1048,7 +1076,7 @@ and via `POST /api/entity/backup/{export,restore}`.
   Ponderings / Schedule / Routine / Handoff), each with CRUD where
   applicable. The Routine tab hits `/api/temporal/phases` so phases
   on past dates surface (they recur). The Schedule tab has a **view
-  toggle** (mirrors the Knowledge-Editor graph List/Map pattern):
+  toggle** (List / Calendar / Map):
   - **List** — the existing linear schedule view with windowed
     look-ahead (default 48h, configurable).
   - **Calendar** — month-grid view, Monday-start, 6×7 cells.
@@ -1057,6 +1085,19 @@ and via `POST /api/entity/backup/{export,restore}`.
     their actual dates; phases stay in the Routine tab to avoid
     cluttering daily-recurring rows. Iconography: recurring
     occurrences prefix with ↻, resolved ones strike through.
+  - **Map** — the schedule's **consequence graph** on the shared
+    force-directed canvas (see *Graph-map engine* below): nodes are
+    events/tasks/phases/states (resolved ones faded), edges are the
+    `causes`/`requires`/`depends_on`/`blocks`/`during`/`carries_forward`
+    links between them, hued by kind. Clicking a node opens a popover
+    that lists its links (✕ to remove) and a "+ connect" form
+    (target node + kind) — the user-facing half of edge authoring,
+    posting to `/api/temporal/schedule/edge`. This is the home of the
+    graph Unruh was always shaped to hold; the Familiar authors the
+    same edges from its side via the `schedule_link` tool. **The planned
+    consequence-over-time model on top of these edges (valence / two
+    futures / certainty / window-position learning) is specced in
+    [`consequence-graph-build-spec.md`](consequence-graph-build-spec.md).**
 - **Local-time helpers** for the time pickers: convert between
   `<input type="time">` + `<input type="datetime-local">` and ISO UTC
   via real local-time semantics, not string-slicing.
@@ -1227,6 +1268,18 @@ Unruh tells the Familiar *when* events happened — but the Familiar perceives t
 
 **A relative phrase ALWAYS travels with a date (0.7.x).** Near-term phrasings ("yesterday", "in 3 weeks") were always present, but beyond ~a month `relativeTime`/`relativeDay` used to fall back to a bare absolute date the model had to date-arithmetic itself. They now append a directional interval (`intervalPhrase` → "in N months" / "a year ago"), so a distant memory or appointment reads "Friday, December 25 **(in 7 months)**" / "January 22, 2025 **(a year ago)**" — the absolute date keeps the precision, the parenthetical keeps the perception. One helper change covers every consumer below.
 
+**Future events carry a day count, coarsening with distance (0.7.x).** A relative-only future phrase ("this Sunday", "in 3 weeks") still forces the model to compute *how far away* that is — and LLMs are unreliable at date arithmetic, which is exactly what the **timeblindness alerts** depend on being right. So every future phrasing ≥2 calendar days out now carries a count alongside its human anchor, exact in the near window and coarsening further out so it stays readable:
+
+| Future distance | Renders as |
+|---|---|
+| 2–6 days | `this Friday at 3pm (in 3 days)` |
+| 7–13 days | `next Wednesday at 9am (in 9 days)` |
+| 14–21 days | `Thursday, June 25 at 2pm (in 21 days)` |
+| 22 days – ~2 months | `Thursday, July 9 at 2pm (in 5 weeks)` |
+| beyond ~2 months | `Friday, December 25 at 9am (in 7 months)` |
+
+The **exact-day window runs to 3 weeks** — that's where the timeblindness alerts actually fire and the model must not mis-estimate distance; past it, weeks then months read better than "in 204 days". The day count is `calendarDayDelta` (the same calendar-day measure the rest of the layer uses, so 23:59→00:01 reads as 1 day); the coarser weeks/months tiers reuse `intervalPhrase`/`plainInterval`. The 21-day threshold lives in one place (`futureInterval`). **Past** phrasings are deliberately left natural ("last Monday", "2 weeks ago"): day-count precision is a forward-scheduling need, and a memory recalled as "2 weeks ago" reads better than "14 days ago". `tomorrow`/`yesterday` stay bare — the count is already in the word.
+
 Surfaces using `relativeTime()` / `relativeDay()`:
 
 | Surface | Where | What it gets |
@@ -1364,7 +1417,15 @@ temporalPayload.schedule.window   ←  open tasks/events/reminders
 
 Inferred from label by `inferStakesTier()` in `surface-context.js`. Overridable by the Familiar at creation (BUILTIN_TOOLS `stakes_tier` arg) and by {{user}} in the temporal editor (Stakes dropdown).
 
-**`consequence_model`** is per-task free-text attached to the schedule node payload, informing framing when the task surfaces.
+**`consequence_model`** is per-task free-text attached to the schedule node payload, informing framing when the task surfaces. (Superseded for richer use by the consequence-graph model below; still read as a confidence input.)
+
+### Consequence graph — consequences over time (Pass 1)
+
+The schedule edges (shipped `0.7.74`) carry a **consequence payload** so the Familiar can reason about what an item leads to over time, not just how items connect. Specced in [`consequence-graph-build-spec.md`](consequence-graph-build-spec.md). A consequence is an edge (usually `causes`, or the new **`co_occurs_with`** — "noticed together, no causal claim") whose `payload_json` carries: `valence` (help/harm/neutral), `condition` (`on_resolve` / `on_lapse` / `unconditional` — the **two futures**, so the Familiar projects what finishing buys *and* what skipping costs), `horizon_hours`, `severity`, `certainty`, `observed` (the past↔future flag), `note`. Consequences that aren't scheduled items are `state` nodes (resolve-or-create by label via `schedule_upsert_state`). Validated in Unruh `schedule.py`; authored by the Familiar through the extended `schedule_link` and by the human in the Schedule **Map** (consequence detail in the connect form; harm edges red, projected edges dashed).
+
+**Visibility & planning.** `temporal-format.js` renders a *Consequence links* section into `[Temporal Context]` (the edges were stored but invisible before). `selectSurfaceCandidates` reads the edges: a task an imminent node **requires** or that **blocks** one gets a pure-code pressure bump (survives the per-turn cap) + a rendered "why"; the `[Surface candidates]` block gained a **CONSEQUENCE & PLANNING** directive (both futures, predict-then-check, honesty about certainty — proactivity-rule-compliant, regression-guarded).
+
+**Learning (predict→observe→learn).** `resolve()` records `acted_at` + **`window_fraction`** (where in a `[when,end]` window the ward acted). The reflection loop (`pondering.js`) learns window-timing into `what_lapses_cost.md` (needs ≥3–4 of a kind) and **calibrates its own forecasts** — it's fed its projected (unobserved) edges with ids and returns `edge_calibrations` (raise/lower `certainty`, mark `observed` only once truly seen), applied via `updateScheduleEdge`. Rides the existing reflection call; no new loop. *Deferred:* reflection promoting `co_occurs_with → causes` (needs general resolve-or-create) — for now the Familiar promotes during chat.
 
 **`snooze_until`** is an ISO timestamp on the task payload, set when {{user}} explicitly says "not now" and the Familiar calls the `schedule_snooze_task` tool (id + minutes, clamped 1min–1week). `passesHardGates` honours an active snooze across every tier — the human asked — so it blocks before the threat/quiet/dedup checks. The reminder loop remains the firm safety net for anything with a real deadline; the snooze only quiets the opportunistic surface path. Because Unruh's `schedule_update_node` REPLACES the whole payload, the tool reads the current payload from the schedule window and merges the stamp in (preserving `stakes_tier` / `consequence_model`).
 
@@ -1421,6 +1482,12 @@ Once tagged, an event's `outcome` is immutable — the LLM later reasons about a
 **Prompt stance:** the `[Surface candidates]` header is written for a ward with executive dysfunction — there is no "right moment" that arrives on its own, so the header tunes toward action. It names explicit GREEN LIGHT states the Familiar surfaces in and explicit RED LIGHT states it holds in (vagueness is *not* a reason to stay quiet — the servile-default model needs the inclusion/exclusion conditions spelled out or it collapses to silence), names the cost of silence (the task waits forever; a missed task outweighs a refusable check-in), and offers concrete access ramps (timebox, single next action, planning-only slot, body-double). It deliberately contains no bias-toward-quiet language — see CLAUDE.md's proactivity section; a regression test in `tests/surface-context.test.mjs` guards against its return.
 
 **Floating-task aging (0.7.x).** A floating task (no `when`) used to compute `ageDays` from `task.when` only — so it was always `null` and every floating task read as brand-new forever, with no staleness to prioritise. Now age falls back to `created_at` (which Unruh already serialised), the candidate carries a `floating` flag, and both surfaces show it — the candidate block (`[floating — no time set]` + `Floating for: Nd — still no time assigned`) and the `[Temporal Context]` open-tasks list (`(floating Nd — no time set)`). The prompt gains a dedicated FLOATING TASKS directive: the aged ones earn a gentle "when shall we put this?" in a calm moment, and the Familiar pins the agreed time with the new **`schedule_assign_time(id, when)`** tool (thin wrapper over `updateScheduleNode` → Unruh `schedule_update_node`, which always supported setting `when_ts` — the capability existed end-to-end but had no Familiar-facing surface). Turning a someday into a real `when` is itself counted as progress.
+
+**Addressing schedule nodes by id (0.7.x).** Every schedule editing tool — `schedule_assign_time`, `schedule_snooze_task`, `schedule_resolve`, and `schedule_delete` — is keyed by a node **id**, but the human-readable schedule renders **labels**. Both surfaces that show schedule state now also surface the ids the tools need, so the Familiar can *act on* what it can *see* (the CLAUDE.md operability rule: a tool whose key argument the Familiar can never name is a tool it can never use):
+- **`[Temporal Context]`** (`temporal-format.js`) appends a compact `[schedule ids]` legend at the end of the block — mirroring the knowledge-graph id legend — listing `label [type] = id` for both routine phases and the window, deduped, skipping nodes with no id. This is the only path by which a **phase** id reaches the model (phases are otherwise label-only in "Today's rhythm").
+- **`[Surface candidates]`** (`surface-context.js`) prints an `id:` line under each candidate, so a floating task surfaced for time-assignment carries its id in the same place the Familiar reads about it.
+
+**`schedule_delete(id)` (0.7.x).** Permanently removes a schedule node — event, task, reminder, or routine **phase** — via `deleteScheduleNode` → Unruh `schedule_delete_node` (which returns `{ok, deleted}`; `deleted:false` means no such id). Distinct from `schedule_resolve`, which marks a node `done`/`cancelled` while *keeping the record*: delete *erases* it, and is the only way to remove a phase or clean up a duplicate/mistaken entry. The plumbing (`deleteScheduleNode` thalamus helper + the Unruh MCP tool) already existed end-to-end; it simply had no Familiar-facing tool until now — the classic "capability not reachable BY the Familiar" gap.
 
 **Storage decision:** event records and reflection metadata live in `tomes/.surface-events.json` (per-embodiment, like ponderings). Identity-layer *insights* derived from them ("Eury crashes within 4h of skipping meals") get lifted to Phylactery's `custom/what_lapses_cost.md` only after the reflection LLM judges the pattern strong enough. The raw event stream belongs to Proto-Familiar; the durable knowledge belongs to the entity.
 

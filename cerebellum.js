@@ -48,7 +48,8 @@ import {
   searchGraphNodes, getGraphSubgraph,
   createGraphNode, createGraphEdge,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
-  addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence,
+  addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
+  addScheduleEdge, upsertScheduleState,
   bumpInterest, setStandingInterest,
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
@@ -1251,7 +1252,7 @@ export const BUILTIN_TOOLS = [
       parameters: {
         type: 'object',
         properties: {
-          id:   { type: 'string', description: 'The id of the floating task to give a time to (from [Surface candidates] or [Temporal Context]).' },
+          id:   { type: 'string', description: 'The id of the floating task to give a time to — from the [schedule ids] legend in [Temporal Context], or the `id:` line under the task in [Surface candidates].' },
           when: { type: 'string', description: 'ISO 8601 UTC time, e.g. "2026-06-18T13:00:00+00:00". Unruh compares against UTC with no timezone conversion — I read my [Now] block\'s UTC offset and convert {{user}}\'s stated local time to UTC exactly once.' },
         },
         required: ['id', 'when'],
@@ -1266,7 +1267,7 @@ export const BUILTIN_TOOLS = [
       parameters: {
         type: 'object',
         properties: {
-          id:      { type: 'string', description: 'The id of the task to snooze (from the [Surface candidates] block or [Temporal Context]).' },
+          id:      { type: 'string', description: 'The id of the task to snooze — from the `id:` line under the task in [Surface candidates], or the [schedule ids] legend in [Temporal Context].' },
           minutes: { type: 'integer', description: 'How long to park it before it can surface again. Clamped to 1 minute – 1 week.' },
         },
         required: ['id', 'minutes'],
@@ -1325,11 +1326,49 @@ export const BUILTIN_TOOLS = [
       parameters: {
         type: 'object',
         properties: {
-          id:         { type: 'string', description: 'Schedule node id (from my [Temporal Context]). For a recurring occurrence, this is the anchor node\'s id.' },
+          id:         { type: 'string', description: 'Schedule node id, from the [schedule ids] legend in my [Temporal Context]. For a recurring occurrence, this is the anchor node\'s id.' },
           resolution: { type: 'string', enum: ['done', 'cancelled', 'carried_forward'], description: 'How the node ends.' },
           occurrence_date: { type: 'string', description: 'Optional. For recurring nodes only. "YYYY-MM-DD" (local-TZ) date of the specific occurrence to resolve — e.g. resolve THIS Sunday\'s cleaning without affecting next Sunday. Omit to resolve the entire series.' },
         },
         required: ['id', 'resolution'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_delete',
+      description: 'I permanently remove a schedule item — an event, task, reminder, or a routine PHASE — when it should no longer exist at all, not merely be marked finished. For "done / cancelled / didn\'t get to it" I use schedule_resolve instead, which keeps the record; this one erases the node. It\'s how I clean up a duplicate or a mistaken entry, and the only way to remove a phase {{user}} wants gone. The id comes from the [schedule ids] legend in my [Temporal Context]. There is no undo, so I delete only when I\'m sure; for a recurring item I usually prefer schedule_resolve (optionally per-occurrence) so the rest of the series survives.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The id of the schedule item to remove, from the [schedule ids] legend in my [Temporal Context].' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_link',
+      description: 'I connect two scheduled items so I understand how they bear on each other — this is what turns a flat list into a map of consequence. I reach for it the moment I see a relationship: this prep *is required* before the interview, the late plans *block* an early start, this errand *depends on* that delivery. And I use it to record a CONSEQUENCE — what an item leads to over time, good or bad: "skip dinner *causes* a crash," "doing the prep *causes* a calm interview." When the consequence isn\'t itself a scheduled item (a crash, a flare, a good streak), I name it with dst_state and it becomes a state node I can reuse. I can also note a looser "co_occurs_with" — I saw these together — when I\'m not ready to claim cause yet. The src id comes from the [schedule ids] legend; for dst I pass either an existing id or a dst_state label. I lean toward capturing a real relationship rather than letting it stay invisible — but I mark a guess as a guess (low certainty, observed:false) and only call something observed once I\'ve actually seen it happen.',
+      parameters: {
+        type: 'object',
+        properties: {
+          src:  { type: 'string', description: 'The id of the source node — the one the relationship starts from. From the [schedule ids] legend in my [Temporal Context].' },
+          dst:  { type: 'string', description: 'The id of the destination node (from the [schedule ids] legend). I pass this OR dst_state, not both.' },
+          dst_state: { type: 'string', description: 'Instead of a dst id: the label of a consequence-state ("crash", "good streak", "anxiety flare"). Reused if I\'ve named it before, created if not. This is how I point at a consequence that isn\'t a scheduled item.' },
+          kind: { type: 'string', enum: ['causes', 'requires', 'depends_on', 'blocks', 'during', 'carries_forward', 'co_occurs_with'], description: 'How src relates to dst: "causes" (src brings dst about), "requires"/"depends_on" (dst needs src first), "blocks" (src prevents/crowds out dst), "during" (src happens within dst\'s span), "carries_forward" (src rolls over into dst), "co_occurs_with" (I noticed them together — no causal claim).' },
+          valence:   { type: 'string', enum: ['help', 'harm', 'neutral'], description: 'For a consequence: does it help or harm {{user}}? Omit for a purely structural link.' },
+          condition: { type: 'string', enum: ['on_resolve', 'on_lapse', 'unconditional'], description: 'Which future this belongs to: "on_resolve" (follows if src gets DONE — the motivating half), "on_lapse" (follows if src is MISSED — the cost of skipping), "unconditional" (either way).' },
+          horizon_hours: { type: 'number', description: 'Roughly how long after src this lands, in hours (e.g. 4 for "a crash ~4h after skipping dinner"). Omit if unknown.' },
+          severity:  { type: 'string', enum: ['low', 'medium', 'high'], description: 'How much this consequence matters.' },
+          certainty: { type: 'string', enum: ['low', 'medium', 'high'], description: 'How sure I am of a PROJECTION. A hunch is "low". Omit for something I\'ve observed.' },
+          observed:  { type: 'boolean', description: 'true = this actually happened (a fact, past). false / omitted = I\'m projecting it (future). I never call a guess observed.' },
+          note:      { type: 'string', description: 'A short note in my own words about this consequence.' },
+        },
+        required: ['src', 'kind'],
       },
     },
   },
@@ -2124,6 +2163,52 @@ export const TOOL_EXECUTORS = {
         ? `Marked ${id}'s ${occurrence_date} occurrence as ${resolution}. The series continues.`
         : `Marked ${id} as ${resolution}.`;
     } catch (err) { return `Failed to resolve: ${err.message}`; }
+  },
+
+  schedule_delete: async ({ id } = {}) => {
+    const sid = String(id ?? '').trim();
+    if (!sid) return 'I need the id of the schedule item to remove — it\'s in the [schedule ids] legend of my [Temporal Context].';
+    try {
+      const data = await deleteScheduleNode({ id: sid });
+      if (!data?.ok) return `I couldn't remove that schedule item: ${data?.error ?? 'Unruh unavailable'}.`;
+      if (data.deleted === false) return `There's no schedule item with id ${sid} — nothing to remove (it may already be gone).`;
+      return `Removed schedule item ${sid}.`;
+    } catch (err) { return `I couldn't remove that schedule item: ${err.message}`; }
+  },
+
+  schedule_link: async ({ src, dst, dst_state, kind, valence, condition, horizon_hours, severity, certainty, observed, note } = {}) => {
+    const s = String(src ?? '').trim();
+    const k = String(kind ?? '').trim();
+    const KINDS = ['causes', 'requires', 'depends_on', 'blocks', 'during', 'carries_forward', 'co_occurs_with'];
+    const stateLabel = String(dst_state ?? '').trim();
+    if (!s) return 'I need the src id — it\'s in the [schedule ids] legend of my [Temporal Context].';
+    if (!KINDS.includes(k)) return `I need a relationship kind, one of: ${KINDS.join(', ')}.`;
+    try {
+      // dst is either an existing node id, or a state I name (resolve-or-create).
+      let d = String(dst ?? '').trim();
+      if (!d && stateLabel) {
+        const st = await upsertScheduleState({ label: stateLabel });
+        if (!st?.ok || !st.id) return `I couldn't reach for the state "${stateLabel}": ${st?.error ?? 'Unruh unavailable'}.`;
+        d = st.id;
+      }
+      if (!d) return 'I need a dst — either an id from the [schedule ids] legend, or a dst_state label to point a consequence at.';
+      if (s === d) return 'I can\'t link a schedule item to itself.';
+
+      // Assemble the consequence payload from whatever was given (all optional).
+      const payload = {};
+      if (valence)   payload.valence   = valence;
+      if (condition) payload.condition = condition;
+      if (Number.isFinite(Number(horizon_hours))) payload.horizon_hours = Number(horizon_hours);
+      if (severity)  payload.severity  = severity;
+      if (certainty) payload.certainty = certainty;
+      if (observed !== undefined) payload.observed = !!observed;
+      if (note && String(note).trim()) payload.note = String(note).trim();
+
+      const data = await addScheduleEdge({ src: s, dst: d, kind: k, payload: Object.keys(payload).length ? payload : undefined });
+      if (!data?.ok) return `I couldn't connect those items: ${data?.error ?? 'Unruh unavailable'} (one of the ids may be stale).`;
+      const tail = payload.valence ? ` (${payload.condition ?? 'unconditional'}, ${payload.valence}${payload.observed ? ', observed' : payload.certainty ? `, ${payload.certainty} certainty` : ''})` : '';
+      return `Linked ${s} ${k} ${stateLabel ? `[${stateLabel}]` : d}${tail}.`;
+    } catch (err) { return `I couldn't connect those items: ${err.message}`; }
   },
 
   interest_bump: async ({ topic, delta }) => {
