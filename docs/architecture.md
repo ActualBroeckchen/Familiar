@@ -1093,7 +1093,10 @@ popover to those.
     (target node + kind) — the user-facing half of edge authoring,
     posting to `/api/temporal/schedule/edge`. This is the home of the
     graph Unruh was always shaped to hold; the Familiar authors the
-    same edges from its side via the `schedule_link` tool.
+    same edges from its side via the `schedule_link` tool. **The planned
+    consequence-over-time model on top of these edges (valence / two
+    futures / certainty / window-position learning) is specced in
+    [`consequence-graph-build-spec.md`](consequence-graph-build-spec.md).**
 - **Local-time helpers** for the time pickers: convert between
   `<input type="time">` + `<input type="datetime-local">` and ISO UTC
   via real local-time semantics, not string-slicing.
