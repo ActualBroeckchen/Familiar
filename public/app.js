@@ -3420,7 +3420,13 @@ function init() {
   });
 
   $('user-input').addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // On a touch device (phone/tablet) the soft keyboard's Enter is for
+    // line breaks, not submit — so Enter inserts a newline and sending is
+    // the Send button's job. On desktop, Enter sends and Shift+Enter is the
+    // newline. `(pointer: coarse)` is the primary-pointer test: a phone is
+    // coarse; a laptop with a trackpad (even with a touchscreen) is fine.
+    const touchPrimary = window.matchMedia?.('(pointer: coarse)')?.matches;
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !touchPrimary) {
       e.preventDefault();
       $('send-btn').click();
     }
