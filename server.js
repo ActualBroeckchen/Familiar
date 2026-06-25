@@ -30,7 +30,8 @@ import {
   recordInterest, recordHandoff, listLiveInterests, listInterests,
   bumpInterest, demoteStanding, setStandingInterest,
   getScheduleWindow, addScheduleNode, updateScheduleNode,
-  resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode, listPhases, listRecurring,
+  resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
+  addScheduleEdge, deleteScheduleEdge, listPhases, listRecurring,
   getHandoff, markHandoffConsumed,
   getDueReminders, getRemindersHealth,
   shutdownUnruh, shutdownPhylactery,
@@ -2346,6 +2347,23 @@ app.post('/api/temporal/schedule/:id/resolve_occurrence', async (req, res) => {
 
 app.delete('/api/temporal/schedule/:id', async (req, res) => {
   try { res.json(await deleteScheduleNode({ id: req.params.id })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Consequence-graph edges between schedule nodes. The Map view (and the
+// Familiar's schedule_link tool) author these; deleting one corrects a
+// mis-stated link without removing the events.
+app.post('/api/temporal/schedule/edge', async (req, res) => {
+  const { src, dst, kind, payload } = req.body ?? {};
+  if (!src  || typeof src  !== 'string') return badRequest(res, 'src (node id) is required');
+  if (!dst  || typeof dst  !== 'string') return badRequest(res, 'dst (node id) is required');
+  if (!kind || typeof kind !== 'string') return badRequest(res, 'kind (string) is required');
+  try { res.json(await addScheduleEdge({ src, dst, kind, payload })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/temporal/schedule/edge/:id', async (req, res) => {
+  try { res.json(await deleteScheduleEdge({ id: req.params.id })); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 

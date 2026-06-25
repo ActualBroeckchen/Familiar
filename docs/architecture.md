@@ -174,6 +174,8 @@ ponderings injection, care-check framing) and as background loops
 ├── public/
 │   ├── index.html           App shell — sidebar, chat pane, Temporal editor modal, all modals
 │   ├── style.css            All styling — dark/light themes, modal/tab styles
+│   ├── graph-map.js         Shared force-directed graph-map engine (createGraphMap) — behind
+│   │                        BOTH the Phylactery knowledge graph and the Unruh schedule map
 │   └── app.js               All frontend logic — state, API calls, rendering, topics, Tomes,
 │                            temporal editor, outbox delivery polling (tool registry + execution
 │                            moved server-side to cerebellum.js in 0.4.0-alpha)
@@ -229,6 +231,8 @@ in `log-import.js` (Proto-Familiar JSON, timestamped text; rejects unknown loudl
 - `POST /api/temporal/schedule/:id/resolve` — mark done/cancelled/etc.
 - `POST /api/temporal/schedule/:id/resolve_occurrence` — resolve ONE occurrence of a recurring node (leaves the series alive)
 - `DELETE /api/temporal/schedule/:id` — hard delete (edges cascade)
+- `POST /api/temporal/schedule/edge` — connect two nodes into the consequence graph (`{src, dst, kind}`)
+- `DELETE /api/temporal/schedule/edge/:id` — remove one consequence link (both endpoint nodes survive)
 - `GET /api/temporal/phases` — **date-independent** routine surface
 - `GET /api/temporal/handoff` + `POST .../handoff/:id/consume`
 - `GET /api/temporal/reminders/health` — observability on the loop
@@ -1030,6 +1034,29 @@ passphrase is never stored — a lost passphrase means an unrecoverable backup,
 which the UI states plainly. Surfaced in the Knowledge editor → Snapshots tab
 and via `POST /api/entity/backup/{export,restore}`.
 
+### `public/graph-map.js` — shared graph-map engine
+
+`createGraphMap(config)` is one reusable canvas engine behind **both**
+map views — the Phylactery knowledge graph and the Unruh schedule's
+consequence graph — because both stores hold genuinely graph-shaped
+data. It owns everything generic: the Fruchterman-Reingold force layout,
+the dots-and-quadratic-curve rendering, hit-testing (point-to-Bézier),
+the deterministic 24-hue palette + legend, the tooltip, and the viewport
+(`world = (screen − tx) / zoom`). Interaction is unified through Pointer
+events: **wheel** zooms, **one finger / drag** pans, **two-finger pinch**
+zooms, and the **＋ / − / Fit** buttons zoom around centre — the
+touchpad-friendly path for users who can't scroll-to-zoom.
+
+What stays with each host is the *domain* layer: data fetch, node/edge
+shapes, and the editor popover. Hosts normalise their edges to
+`{ id, fromId, toId, type, weight? }` before `setData`; the knowledge
+graph passes `weight` (edges fade by strength), the schedule passes none
+(edges hue by `kind`). This extraction replaced ~520 lines of inline
+`keGraph*` code that the schedule map would otherwise have had to
+copy-paste (CLAUDE.md — no copy-paste of substantial logic). The engine
+emits `onNodeClick` / `onBackgroundClick`; each host wires its own
+popover to those.
+
 ### `public/app.js` — frontend (one file)
 
 - **State + persistence** as before.
@@ -1048,7 +1075,7 @@ and via `POST /api/entity/backup/{export,restore}`.
   Ponderings / Schedule / Routine / Handoff), each with CRUD where
   applicable. The Routine tab hits `/api/temporal/phases` so phases
   on past dates surface (they recur). The Schedule tab has a **view
-  toggle** (mirrors the Knowledge-Editor graph List/Map pattern):
+  toggle** (List / Calendar / Map):
   - **List** — the existing linear schedule view with windowed
     look-ahead (default 48h, configurable).
   - **Calendar** — month-grid view, Monday-start, 6×7 cells.
@@ -1057,6 +1084,16 @@ and via `POST /api/entity/backup/{export,restore}`.
     their actual dates; phases stay in the Routine tab to avoid
     cluttering daily-recurring rows. Iconography: recurring
     occurrences prefix with ↻, resolved ones strike through.
+  - **Map** — the schedule's **consequence graph** on the shared
+    force-directed canvas (see *Graph-map engine* below): nodes are
+    events/tasks/phases/states (resolved ones faded), edges are the
+    `causes`/`requires`/`depends_on`/`blocks`/`during`/`carries_forward`
+    links between them, hued by kind. Clicking a node opens a popover
+    that lists its links (✕ to remove) and a "+ connect" form
+    (target node + kind) — the user-facing half of edge authoring,
+    posting to `/api/temporal/schedule/edge`. This is the home of the
+    graph Unruh was always shaped to hold; the Familiar authors the
+    same edges from its side via the `schedule_link` tool.
 - **Local-time helpers** for the time pickers: convert between
   `<input type="time">` + `<input type="datetime-local">` and ISO UTC
   via real local-time semantics, not string-slicing.

@@ -49,6 +49,7 @@ import {
   createGraphNode, createGraphEdge,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
+  addScheduleEdge,
   bumpInterest, setStandingInterest,
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
@@ -1350,6 +1351,22 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'schedule_link',
+      description: 'I connect two scheduled items so I understand how they bear on each other — this is what turns a flat list into a map of consequence. I reach for it the moment I see a relationship: this interview *causes* the anxiety I\'m watching, that prep *is required* before it, the late plans *block* an early start, this errand *depends on* that delivery landing first. Knowing these links is how I reason ahead for {{user}} instead of treating every item in isolation. Both ids come from the [schedule ids] legend in my [Temporal Context]; the relationship runs from src to dst (src {kind} dst). If I link the wrong pair I can\'t see the edge id from here to undo it, so I link only what I actually understand — but I lean toward capturing a real relationship rather than letting it stay invisible.',
+      parameters: {
+        type: 'object',
+        properties: {
+          src:  { type: 'string', description: 'The id of the source node — the one the relationship starts from. From the [schedule ids] legend in my [Temporal Context].' },
+          dst:  { type: 'string', description: 'The id of the destination node — the one the relationship points to. From the [schedule ids] legend.' },
+          kind: { type: 'string', enum: ['causes', 'requires', 'depends_on', 'blocks', 'during', 'carries_forward'], description: 'How src relates to dst: "causes" (src brings dst about), "requires"/"depends_on" (dst needs src first), "blocks" (src prevents/crowds out dst), "during" (src happens within dst\'s span), "carries_forward" (src rolls over into dst).' },
+        },
+        required: ['src', 'dst', 'kind'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'interest_bump',
       description: 'I nudge the weight of an interest topic — used when {{user}} explicitly tells me they care about something, or wants me to think about it more, or when I want to think about it more/find it interesting. The interest accrues engagement weight (same scale my [Temporal Context] interests block shows) and starts decaying gently from that moment. Small deltas (0.5–3.0) for typical mentions; larger (5+) only when {{user}} is being emphatic. A topic that doesn\'t exist yet is created on first bump. For ongoing values that should never decay, I use interest_set_standing instead. I am allowed to add new topics whenever I darn well please — but I keep the LABEL short and tag-like, because long propositional labels turn ponderings into fact-cards (see topic param).',
       parameters: {
@@ -2149,6 +2166,21 @@ export const TOOL_EXECUTORS = {
       if (data.deleted === false) return `There's no schedule item with id ${sid} — nothing to remove (it may already be gone).`;
       return `Removed schedule item ${sid}.`;
     } catch (err) { return `I couldn't remove that schedule item: ${err.message}`; }
+  },
+
+  schedule_link: async ({ src, dst, kind } = {}) => {
+    const s = String(src ?? '').trim();
+    const d = String(dst ?? '').trim();
+    const k = String(kind ?? '').trim();
+    const KINDS = ['causes', 'requires', 'depends_on', 'blocks', 'during', 'carries_forward'];
+    if (!s || !d) return 'I need both ids to connect — they\'re in the [schedule ids] legend of my [Temporal Context].';
+    if (s === d) return 'I can\'t link a schedule item to itself.';
+    if (!KINDS.includes(k)) return `I need a relationship kind, one of: ${KINDS.join(', ')}.`;
+    try {
+      const data = await addScheduleEdge({ src: s, dst: d, kind: k });
+      if (!data?.ok) return `I couldn't connect those items: ${data?.error ?? 'Unruh unavailable'} (one of the ids may be stale).`;
+      return `Linked ${s} ${k} ${d}.`;
+    } catch (err) { return `I couldn't connect those items: ${err.message}`; }
   },
 
   interest_bump: async ({ topic, delta }) => {

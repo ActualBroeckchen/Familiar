@@ -280,6 +280,21 @@ def schedule_delete_node(id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def schedule_delete_edge(id: str) -> dict[str, Any]:
+    """I use this to remove a single consequence link between two scheduled items
+    without touching the items themselves. I reach for it when I connected two nodes
+    and later realised the relationship was wrong or no longer holds — the events
+    stay, only the edge between them goes. To remove a node and all its edges at
+    once, I use schedule_delete_node instead.
+
+    Returns: {ok: True, deleted: <bool>}.
+    """
+    with get_conn() as conn:
+        deleted = sched.delete_edge(conn, id=id)
+    return {"ok": True, "deleted": deleted}
+
+
+@mcp.tool()
 def schedule_list_recurring(include_resolved: bool = False, limit: int = 200) -> dict[str, Any]:
     """I use this to list every schedule node that has a recurrence rule, regardless
     of stored date. I reach for it when I need all the recurring patterns in my

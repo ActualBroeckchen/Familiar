@@ -126,6 +126,19 @@ class TestAddEdge:
         remaining = conn.execute("SELECT COUNT(*) AS n FROM edges").fetchone()["n"]
         assert remaining == 0
 
+    def test_delete_edge_removes_only_the_edge(self, conn):
+        a = sched.add_node(conn, type="task", label="prep")
+        b = sched.add_node(conn, type="event", label="interview", when=now_iso())
+        eid = sched.add_edge(conn, src=a, dst=b, kind="requires")
+        assert sched.delete_edge(conn, id=eid) is True
+        # The edge is gone …
+        assert conn.execute("SELECT COUNT(*) AS n FROM edges").fetchone()["n"] == 0
+        # … but both endpoint nodes survive.
+        assert conn.execute("SELECT COUNT(*) AS n FROM nodes").fetchone()["n"] == 2
+
+    def test_delete_edge_unknown_id_returns_false(self, conn):
+        assert sched.delete_edge(conn, id="00000000nope") is False
+
 
 class TestResolve:
     def test_done_transition(self, conn):

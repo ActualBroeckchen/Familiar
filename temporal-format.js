@@ -233,7 +233,7 @@ export function formatTemporalContext(payload) {
   }
   if (idLegend.length) {
     blocks.push([
-      '[schedule ids — to give a floating task a time (schedule_assign_time), park one (schedule_snooze_task), mark one done/cancelled (schedule_resolve), or remove one entirely incl. a phase (schedule_delete), pass its id]',
+      '[schedule ids — to give a floating task a time (schedule_assign_time), park one (schedule_snooze_task), mark one done/cancelled (schedule_resolve), remove one entirely incl. a phase (schedule_delete), or connect two so I see how they bear on each other (schedule_link), pass the id(s)]',
       ...idLegend,
     ].join('\n'));
   }

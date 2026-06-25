@@ -3583,6 +3583,7 @@ function init() {
     $('te-sched-form-save').addEventListener('click', teSaveScheduleNode);
     $('te-sched-view-list').addEventListener('click',     () => teSetScheduleView('list'));
     $('te-sched-view-calendar').addEventListener('click', () => teSetScheduleView('calendar'));
+    $('te-sched-view-map').addEventListener('click',      () => teSetScheduleView('map'));
     $('te-cal-prev').addEventListener('click',  () => teShiftCalendarMonth(-1));
     $('te-cal-next').addEventListener('click',  () => teShiftCalendarMonth(+1));
     $('te-cal-today').addEventListener('click', () => teGotoCalendarToday());
@@ -5945,22 +5946,40 @@ async function keOpenGraphNode(id) {
 // dot opens the draggable popover editor.
 
 let _keGraphView = 'list';
-const _keGraph = {
-  nodes:    [],
-  edges:    [],
-  nodeById: new Map(),
-  // viewport transform: world = (screen - tx) / zoom
-  zoom:     1,
-  tx:       0,
-  ty:       0,
-  hover:    null,   // { kind: 'node'|'edge', ref }
-  drag:     null,
-  raf:      0,
-  inited:   false,
-};
 
-const KE_GRAPH_NODE_R   = 6;
-const KE_GRAPH_LABEL_ZOOM = 1.4;
+// The Phylactery knowledge graph drives the shared force-directed map
+// engine (graph-map.js). Domain editing — the node popover, edge weight
+// forms, type/label autocomplete — stays here; the engine owns
+// rendering, force layout, pan/zoom, touch, hit-testing, colours,
+// legend and tooltip, and is shared with the Unruh schedule map.
+let _keGraphMap = null;
+function keGraphMapInstance() {
+  if (_keGraphMap) return _keGraphMap;
+  _keGraphMap = createGraphMap({
+    canvas:    $('ke-graph-canvas'),
+    statusEl:  $('ke-graph-map-status'),
+    legendEl:  $('ke-graph-legend'),
+    tooltipEl: $('ke-graph-tooltip'),
+    isActive: () =>
+      !$('knowledge-modal').classList.contains('hidden') &&
+      !$('ke-graph-map').classList.contains('hidden'),
+    onNodeClick:       (node, cx, cy) => keGraphOpenPopover(node, cx, cy),
+    onBackgroundClick: () => keGraphClosePopover(),
+  });
+  _keGraphMap.init();
+  // Zoom buttons — the touchpad-friendly path for users who can't
+  // scroll-to-zoom (pinch + wheel both also work via the engine).
+  $('ke-graph-zoom-in') ?.addEventListener('click', () => _keGraphMap.zoomBy(1.25));
+  $('ke-graph-zoom-out')?.addEventListener('click', () => _keGraphMap.zoomBy(1 / 1.25));
+  $('ke-graph-zoom-fit')?.addEventListener('click', () => _keGraphMap.fit());
+  // Escape closes the editor popover (host UI, not the engine's concern).
+  window.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !$('ke-graph-popover').classList.contains('hidden')) {
+      keGraphClosePopover();
+    }
+  });
+  return _keGraphMap;
+}
 
 function keSetGraphView(view) {
   const changed = (view !== _keGraphView);
@@ -5975,81 +5994,9 @@ function keSetGraphView(view) {
   // the map view, or refreshing it, should dismiss it.
   if (changed) keGraphClosePopover();
   if (view === 'map') {
-    keInitGraphMapOnce();
+    keGraphMapInstance();
     keLoadGraphMap();
   }
-}
-
-function keInitGraphMapOnce() {
-  if (_keGraph.inited) return;
-  _keGraph.inited = true;
-  const canvas = $('ke-graph-canvas');
-
-  canvas.addEventListener('wheel', e => {
-    e.preventDefault();
-    const rect  = canvas.getBoundingClientRect();
-    const mx    = e.clientX - rect.left;
-    const my    = e.clientY - rect.top;
-    const wx    = (mx - _keGraph.tx) / _keGraph.zoom;
-    const wy    = (my - _keGraph.ty) / _keGraph.zoom;
-    const scale = Math.exp(-e.deltaY * 0.0015);
-    _keGraph.zoom = Math.max(0.2, Math.min(8, _keGraph.zoom * scale));
-    _keGraph.tx = mx - wx * _keGraph.zoom;
-    _keGraph.ty = my - wy * _keGraph.zoom;
-    keGraphRequestDraw();
-  }, { passive: false });
-
-  canvas.addEventListener('mousedown', e => {
-    _keGraph.drag = { x: e.clientX, y: e.clientY, tx: _keGraph.tx, ty: _keGraph.ty, moved: false };
-  });
-  window.addEventListener('mousemove', e => {
-    if (_keGraph.drag) {
-      const dx = e.clientX - _keGraph.drag.x;
-      const dy = e.clientY - _keGraph.drag.y;
-      if (Math.abs(dx) + Math.abs(dy) > 3) _keGraph.drag.moved = true;
-      _keGraph.tx = _keGraph.drag.tx + dx;
-      _keGraph.ty = _keGraph.drag.ty + dy;
-      keGraphRequestDraw();
-      return;
-    }
-    if (_keGraphView !== 'map') return;
-    if ($('knowledge-modal').classList.contains('hidden')) return;
-    if ($('ke-graph-map').classList.contains('hidden'))   return;
-    keGraphUpdateHover(e);
-  });
-  window.addEventListener('mouseup', e => {
-    if (!_keGraph.drag) return;
-    const moved = _keGraph.drag.moved;
-    _keGraph.drag = null;
-    if (!moved) keGraphHandleClick(e);
-  });
-
-  canvas.addEventListener('mouseleave', () => {
-    _keGraph.hover = null;
-    $('ke-graph-tooltip').classList.add('hidden');
-    keGraphRequestDraw();
-  });
-
-  window.addEventListener('keydown', e => {
-    if (e.key === 'Escape' && !$('ke-graph-popover').classList.contains('hidden')) {
-      keGraphClosePopover();
-    }
-  });
-
-  // Keep the canvas sized to its container.
-  const ro = new ResizeObserver(() => {
-    keGraphResize();
-    keGraphRequestDraw();
-  });
-  ro.observe(canvas.parentElement);
-}
-
-function keGraphResize() {
-  const canvas = $('ke-graph-canvas');
-  const dpr    = window.devicePixelRatio || 1;
-  const rect   = canvas.getBoundingClientRect();
-  canvas.width  = Math.max(1, Math.floor(rect.width  * dpr));
-  canvas.height = Math.max(1, Math.floor(rect.height * dpr));
 }
 
 // Generation counter — guards against a slow earlier load resolving
@@ -6066,404 +6013,16 @@ async function keLoadGraphMap() {
     const res = await fetch(url);
     if (gen !== _keGraphLoadGen) return;
     if (!res.ok) throw new Error(await keReadServerError(res));
-    const data  = await res.json();
+    const data = await res.json();
     if (gen !== _keGraphLoadGen) return;
-    // Preserve existing positions for nodes that survived a reload —
-    // avoids reshuffling the whole map when the user adds an edge.
-    const prevById = _keGraph.nodeById;
-    const nodes = (data.nodes ?? []).map(n => {
-      const prev = prevById?.get(n.id);
-      return prev ? { ...n, x: prev.x, y: prev.y } : { ...n };
-    });
-    const edges = (data.edges ?? []).slice();
-    if (!nodes.length) {
-      _keGraph.nodes = [];
-      _keGraph.edges = [];
-      _keGraph.nodeById = new Map();
-      status.textContent = 'No graph nodes yet.';
-      keGraphRequestDraw();
-      return;
-    }
-    keUpdateNodeTypes(nodes);
-    keUpdateEdgeTypes(edges);
-    const isFreshLayout = nodes.every(n => n.x === undefined);
-    _keGraph.nodes = nodes;
-    _keGraph.edges = edges;
-    _keGraph.nodeById = new Map(nodes.map(n => [n.id, n]));
-    keGraphResize();
-    const rect = $('ke-graph-canvas').getBoundingClientRect();
-    keGraphLayout(rect.width || 600, rect.height || 400, { fresh: isFreshLayout });
-    if (isFreshLayout) keGraphFit();
-    keGraphBuildLegend();
+    keUpdateNodeTypes(data.nodes ?? []);
+    keUpdateEdgeTypes(data.edges ?? []);
+    const { empty } = keGraphMapInstance().setData(data.nodes ?? [], data.edges ?? []);
+    if (empty) { status.textContent = 'No graph nodes yet.'; return; }
     status.classList.add('hidden');
-    keGraphRequestDraw();
   } catch (err) {
     status.textContent = 'Failed to load graph: ' + (err.message || err);
   }
-}
-
-// ── Layout (Fruchterman-Reingold) ───────────────────────────────────────
-//
-// `fresh` runs the full simulation; on incremental loads we only place
-// nodes that don't have positions yet (near the centroid of their
-// neighbors, falling back to the canvas centre) and skip iterations,
-// so existing nodes stay put.
-function keGraphLayout(width, height, { fresh = true } = {}) {
-  const nodes = _keGraph.nodes;
-  const edges = _keGraph.edges;
-  if (!nodes.length) return;
-  if (!fresh) {
-    for (const n of nodes) {
-      if (n.x !== undefined && n.y !== undefined) continue;
-      // Try to place near the centroid of already-placed neighbors so
-      // the new dot lands in a sensible neighborhood.
-      let sx = 0, sy = 0, c = 0;
-      for (const e of edges) {
-        const other = e.fromId === n.id ? _keGraph.nodeById.get(e.toId)
-                    : e.toId   === n.id ? _keGraph.nodeById.get(e.fromId) : null;
-        if (other && other.x !== undefined) { sx += other.x; sy += other.y; c++; }
-      }
-      if (c > 0) {
-        n.x = sx / c + (Math.random() - 0.5) * 40;
-        n.y = sy / c + (Math.random() - 0.5) * 40;
-      } else {
-        n.x = width  / 2 + (Math.random() - 0.5) * width  * 0.3;
-        n.y = height / 2 + (Math.random() - 0.5) * height * 0.3;
-      }
-    }
-    return;
-  }
-  const area = width * height;
-  const k    = Math.sqrt(area / nodes.length) * 0.75;
-  for (const n of nodes) {
-    n.x = width  / 2 + (Math.random() - 0.5) * width  * 0.6;
-    n.y = height / 2 + (Math.random() - 0.5) * height * 0.6;
-  }
-  const iterations = nodes.length <= 60 ? 300 : nodes.length <= 200 ? 220 : 140;
-  let t = Math.min(width, height) / 8;
-  const cool = t / iterations;
-  for (let iter = 0; iter < iterations; iter++) {
-    for (const n of nodes) { n.dx = 0; n.dy = 0; }
-    for (let i = 0; i < nodes.length; i++) {
-      const a = nodes[i];
-      for (let j = i + 1; j < nodes.length; j++) {
-        const b = nodes[j];
-        let dx = a.x - b.x, dy = a.y - b.y;
-        let d2 = dx * dx + dy * dy;
-        if (d2 < 0.01) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = dx*dx + dy*dy + 0.01; }
-        const d = Math.sqrt(d2);
-        const f = (k * k) / d;
-        const fx = (dx / d) * f, fy = (dy / d) * f;
-        a.dx += fx; a.dy += fy;
-        b.dx -= fx; b.dy -= fy;
-      }
-    }
-    for (const e of edges) {
-      const a = _keGraph.nodeById.get(e.fromId);
-      const b = _keGraph.nodeById.get(e.toId);
-      if (!a || !b) continue;
-      const dx = a.x - b.x, dy = a.y - b.y;
-      const d  = Math.sqrt(dx * dx + dy * dy) || 0.01;
-      const f  = (d * d) / k;
-      const fx = (dx / d) * f, fy = (dy / d) * f;
-      a.dx -= fx; a.dy -= fy;
-      b.dx += fx; b.dy += fy;
-    }
-    for (const n of nodes) {
-      const dlen = Math.sqrt(n.dx * n.dx + n.dy * n.dy) || 0.01;
-      n.x += (n.dx / dlen) * Math.min(dlen, t);
-      n.y += (n.dy / dlen) * Math.min(dlen, t);
-      n.x += (width  / 2 - n.x) * 0.01;
-      n.y += (height / 2 - n.y) * 0.01;
-    }
-    t = Math.max(0.5, t - cool);
-  }
-}
-
-function keGraphFit() {
-  const canvas = $('ke-graph-canvas');
-  const rect   = canvas.getBoundingClientRect();
-  if (!_keGraph.nodes.length || !rect.width) return;
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const n of _keGraph.nodes) {
-    if (n.x < minX) minX = n.x;
-    if (n.y < minY) minY = n.y;
-    if (n.x > maxX) maxX = n.x;
-    if (n.y > maxY) maxY = n.y;
-  }
-  const pad = 40;
-  const w   = (maxX - minX) || 1;
-  const h   = (maxY - minY) || 1;
-  const zoom = Math.min((rect.width - pad * 2) / w, (rect.height - pad * 2) / h, 2);
-  _keGraph.zoom = Math.max(0.3, zoom);
-  _keGraph.tx = rect.width  / 2 - ((minX + maxX) / 2) * _keGraph.zoom;
-  _keGraph.ty = rect.height / 2 - ((minY + maxY) / 2) * _keGraph.zoom;
-}
-
-// ── Color encoding ──────────────────────────────────────────────────────
-//
-// Per-graph deterministic assignment beats hashing for a small categorical
-// space: hashes happily put 10 of 16 common types into the magenta band.
-// Instead, sort the live type names and walk a 24-step hue palette in
-// alphabetical order. Edge types start half a palette later, so a node
-// and an edge with the same sort index can't pick the same hue.
-
-const KE_GRAPH_PALETTE = [
-    0,  15,  30,  45,  60,  75,  90, 105,
-  120, 135, 150, 165, 180, 195, 210, 225,
-  240, 255, 270, 285, 300, 315, 330, 345,
-];
-const _keGraphColors = { node: new Map(), edge: new Map() };
-
-function keGraphAssignColors() {
-  const nodeTypes = Array.from(new Set(_keGraph.nodes.map(n => n.type || 'untyped'))).sort();
-  const edgeTypes = Array.from(new Set(_keGraph.edges.map(e => e.type || e.customType || 'related'))).sort();
-  _keGraphColors.node.clear();
-  _keGraphColors.edge.clear();
-  const N      = KE_GRAPH_PALETTE.length;
-  // Stride coprime to N spreads adjacent indices around the wheel:
-  // index 0,1,2,3,… → palette[0,7,14,21,…] = red, green, blue, purple, …
-  // rather than the eye-killing 0,15,30,45 gradient.
-  const stride = 7;
-  const off    = Math.floor(N / 2);
-  nodeTypes.forEach((t, i) => _keGraphColors.node.set(t, KE_GRAPH_PALETTE[(i * stride) % N]));
-  edgeTypes.forEach((t, i) => _keGraphColors.edge.set(t, KE_GRAPH_PALETTE[((i * stride) + off) % N]));
-}
-
-function keGraphNodeHue(n) {
-  return _keGraphColors.node.get(n.type || 'untyped') ?? 0;
-}
-function keGraphEdgeHue(e) {
-  return _keGraphColors.edge.get(e.type || e.customType || 'related') ?? 0;
-}
-function keGraphNodeColor(n) {
-  return `hsl(${keGraphNodeHue(n)}, 65%, 60%)`;
-}
-function keGraphEdgeColor(e) {
-  const hue   = keGraphEdgeHue(e);
-  const w     = Math.max(0, Math.min(1, typeof e.weight === 'number' ? e.weight : 0.5));
-  const sat   = Math.round(20 + 70 * w);
-  const lt    = Math.round(32 + 30 * w);
-  const alpha = (0.35 + 0.55 * w).toFixed(2);
-  return `hsla(${hue}, ${sat}%, ${lt}%, ${alpha})`;
-}
-
-function keGraphBuildLegend() {
-  keGraphAssignColors();
-  const legend = $('ke-graph-legend');
-  const rows   = [];
-  const nodeTypes = Array.from(_keGraphColors.node.keys()).sort();
-  const edgeTypes = Array.from(_keGraphColors.edge.keys()).sort();
-  if (nodeTypes.length) {
-    rows.push('<div class="ke-graph-legend-section">Nodes</div>');
-    for (const t of nodeTypes) {
-      const hue = _keGraphColors.node.get(t);
-      rows.push(`<div class="ke-graph-legend-row"><span class="ke-graph-legend-swatch" style="background:hsl(${hue},65%,60%)"></span>${esc(t)}</div>`);
-    }
-  }
-  if (edgeTypes.length) {
-    rows.push('<div class="ke-graph-legend-section">Edges</div>');
-    for (const t of edgeTypes) {
-      const hue = _keGraphColors.edge.get(t);
-      rows.push(`<div class="ke-graph-legend-row"><span class="ke-graph-legend-swatch" style="background:hsl(${hue},75%,55%)"></span>${esc(t)}</div>`);
-    }
-  }
-  legend.innerHTML = rows.join('');
-  legend.classList.toggle('hidden', !rows.length);
-}
-
-// ── Rendering ───────────────────────────────────────────────────────────
-function keGraphRequestDraw() {
-  if (_keGraph.raf) return;
-  _keGraph.raf = requestAnimationFrame(() => {
-    _keGraph.raf = 0;
-    keGraphDraw();
-  });
-}
-
-function keGraphDraw() {
-  const canvas = $('ke-graph-canvas');
-  const ctx    = canvas.getContext('2d');
-  const dpr    = window.devicePixelRatio || 1;
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.translate(_keGraph.tx, _keGraph.ty);
-  ctx.scale(_keGraph.zoom, _keGraph.zoom);
-
-  // Edges
-  for (const e of _keGraph.edges) {
-    const a = _keGraph.nodeById.get(e.fromId);
-    const b = _keGraph.nodeById.get(e.toId);
-    if (!a || !b) continue;
-    const isHover = _keGraph.hover && _keGraph.hover.kind === 'edge' && _keGraph.hover.ref === e;
-    ctx.strokeStyle = isHover ? '#ffffff' : keGraphEdgeColor(e);
-    const w = Math.max(0, Math.min(1, typeof e.weight === 'number' ? e.weight : 0.5));
-    ctx.lineWidth   = (0.7 + w * 1.6) / _keGraph.zoom;
-    const dx  = b.x - a.x, dy = b.y - a.y;
-    const len = Math.sqrt(dx * dx + dy * dy) || 1;
-    const mx  = (a.x + b.x) / 2;
-    const my  = (a.y + b.y) / 2;
-    const cpx = mx + (-dy / len) * len * 0.12;
-    const cpy = my + ( dx / len) * len * 0.12;
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.quadraticCurveTo(cpx, cpy, b.x, b.y);
-    ctx.stroke();
-  }
-
-  // Nodes
-  const r = KE_GRAPH_NODE_R / _keGraph.zoom;
-  for (const n of _keGraph.nodes) {
-    const isHover = _keGraph.hover && _keGraph.hover.kind === 'node' && _keGraph.hover.ref === n;
-    ctx.fillStyle   = keGraphNodeColor(n);
-    ctx.strokeStyle = isHover ? '#ffffff' : 'rgba(0,0,0,0.45)';
-    ctx.lineWidth   = (isHover ? 2 : 1) / _keGraph.zoom;
-    ctx.beginPath();
-    ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-  }
-
-  // Labels — always for hovered node, and for everything when zoomed in.
-  const showAll = _keGraph.zoom >= KE_GRAPH_LABEL_ZOOM;
-  ctx.font         = `${12 / _keGraph.zoom}px sans-serif`;
-  ctx.textBaseline = 'middle';
-  ctx.fillStyle    = '#cdd6f4';
-  ctx.strokeStyle  = 'rgba(0,0,0,0.7)';
-  ctx.lineWidth    = 3 / _keGraph.zoom;
-  for (const n of _keGraph.nodes) {
-    const isHover = _keGraph.hover && _keGraph.hover.kind === 'node' && _keGraph.hover.ref === n;
-    if (!showAll && !isHover) continue;
-    const label = String(n.label ?? n.id);
-    const x = n.x + r + 4 / _keGraph.zoom;
-    ctx.strokeText(label, x, n.y);
-    ctx.fillText(label,   x, n.y);
-  }
-}
-
-// ── Hit testing & interaction ───────────────────────────────────────────
-function keGraphClientToWorld(clientX, clientY) {
-  const rect = $('ke-graph-canvas').getBoundingClientRect();
-  const sx = clientX - rect.left;
-  const sy = clientY - rect.top;
-  return { x: (sx - _keGraph.tx) / _keGraph.zoom, y: (sy - _keGraph.ty) / _keGraph.zoom, sx, sy };
-}
-
-function keGraphHitNode(wx, wy) {
-  const r = KE_GRAPH_NODE_R / _keGraph.zoom;
-  const tol = Math.max(r, 8 / _keGraph.zoom);
-  let best = null, bestD = tol * tol;
-  for (const n of _keGraph.nodes) {
-    const dx = n.x - wx, dy = n.y - wy;
-    const d2 = dx * dx + dy * dy;
-    if (d2 <= bestD) { bestD = d2; best = n; }
-  }
-  return best;
-}
-
-function keGraphHitEdge(wx, wy) {
-  const tol = 6 / _keGraph.zoom;
-  const tol2 = tol * tol;
-  let best = null, bestD = tol2;
-  for (const e of _keGraph.edges) {
-    const a = _keGraph.nodeById.get(e.fromId);
-    const b = _keGraph.nodeById.get(e.toId);
-    if (!a || !b) continue;
-    // Same quadratic the renderer draws: midpoint pushed perpendicular
-    // by 12% of the chord length. Flatten into segments and take the
-    // minimum point-to-segment distance — the chord approximation we
-    // used before missed by up to ~12% of the edge length at the apex.
-    const dx = b.x - a.x, dy = b.y - a.y;
-    const L  = Math.sqrt(dx * dx + dy * dy);
-    if (L < 1) continue;
-    const cpx = (a.x + b.x) / 2 + (-dy / L) * L * 0.12;
-    const cpy = (a.y + b.y) / 2 + ( dx / L) * L * 0.12;
-    // Cheap reject: if even the chord midpoint is far enough that the
-    // whole curve's bounding box can't reach the cursor, skip.
-    const minX = Math.min(a.x, b.x, cpx) - tol;
-    const maxX = Math.max(a.x, b.x, cpx) + tol;
-    const minY = Math.min(a.y, b.y, cpy) - tol;
-    const maxY = Math.max(a.y, b.y, cpy) + tol;
-    if (wx < minX || wx > maxX || wy < minY || wy > maxY) continue;
-    const d2 = keGraphDistSqToQuadratic(wx, wy, a.x, a.y, cpx, cpy, b.x, b.y);
-    if (d2 <= bestD) { bestD = d2; best = e; }
-  }
-  return best;
-}
-
-// Squared distance from (px,py) to a quadratic Bézier defined by
-// (x0,y0)-(cpx,cpy)-(x1,y1), via polyline flattening. 16 segments is
-// plenty: at the renderer's 12% bow the chord error of an N-segment
-// approximation is well under one pixel at any reasonable zoom.
-function keGraphDistSqToQuadratic(px, py, x0, y0, cpx, cpy, x1, y1) {
-  const SEG = 16;
-  let prevX = x0, prevY = y0;
-  let best  = Infinity;
-  for (let i = 1; i <= SEG; i++) {
-    const t   = i / SEG;
-    const omt = 1 - t;
-    const x   = omt * omt * x0 + 2 * omt * t * cpx + t * t * x1;
-    const y   = omt * omt * y0 + 2 * omt * t * cpy + t * t * y1;
-    const dx  = x - prevX, dy = y - prevY;
-    const L2  = dx * dx + dy * dy;
-    if (L2 > 0.0001) {
-      let tt = ((px - prevX) * dx + (py - prevY) * dy) / L2;
-      if (tt < 0) tt = 0; else if (tt > 1) tt = 1;
-      const ix = prevX + tt * dx, iy = prevY + tt * dy;
-      const ex = px - ix,         ey = py - iy;
-      const d2 = ex * ex + ey * ey;
-      if (d2 < best) best = d2;
-    }
-    prevX = x; prevY = y;
-  }
-  return best;
-}
-
-function keGraphUpdateHover(e) {
-  const { x, y, sx, sy } = keGraphClientToWorld(e.clientX, e.clientY);
-  const node = keGraphHitNode(x, y);
-  let hover  = node ? { kind: 'node', ref: node } : null;
-  if (!hover) {
-    const edge = keGraphHitEdge(x, y);
-    if (edge) hover = { kind: 'edge', ref: edge };
-  }
-  const changed = (hover?.ref !== _keGraph.hover?.ref);
-  _keGraph.hover = hover;
-  const tip = $('ke-graph-tooltip');
-  // Suppress the tooltip while the editor popover is open — they'd
-  // stack and the popover content is more authoritative.
-  const popoverOpen = !$('ke-graph-popover').classList.contains('hidden');
-  if (!hover || popoverOpen) {
-    tip.classList.add('hidden');
-    if (changed) keGraphRequestDraw();
-    return;
-  }
-  if (hover.kind === 'node') {
-    const n = hover.ref;
-    tip.innerHTML = `<div class="ke-graph-tooltip-title">${esc(n.label ?? n.id)}</div>
-      <div class="ke-graph-tooltip-sub">${esc(n.type ?? 'untyped')}</div>
-      ${n.description ? `<div>${esc(String(n.description).slice(0, 160))}</div>` : ''}`;
-  } else {
-    const ed = hover.ref;
-    const a  = _keGraph.nodeById.get(ed.fromId);
-    const b  = _keGraph.nodeById.get(ed.toId);
-    const w  = typeof ed.weight === 'number' ? ed.weight.toFixed(2) : '—';
-    tip.innerHTML = `<div class="ke-graph-tooltip-title">${esc(ed.type ?? ed.customType ?? 'related')}</div>
-      <div class="ke-graph-tooltip-sub">${esc(a?.label ?? ed.fromId)} → ${esc(b?.label ?? ed.toId)}</div>
-      <div class="ke-graph-tooltip-sub">weight: ${esc(w)}</div>`;
-  }
-  tip.style.left = `${sx + 12}px`;
-  tip.style.top  = `${sy + 12}px`;
-  tip.classList.remove('hidden');
-  if (changed) keGraphRequestDraw();
-}
-
-function keGraphHandleClick(e) {
-  const { x, y } = keGraphClientToWorld(e.clientX, e.clientY);
-  const node = keGraphHitNode(x, y);
-  if (!node) { keGraphClosePopover(); return; }
-  keGraphOpenPopover(node, e.clientX, e.clientY);
 }
 
 // ── Type & label autocomplete (shared by list & map editors) ──────────
@@ -6673,13 +6232,10 @@ async function keGraphCreateNewNode() {
   if (_keGraphView === 'map') {
     await keLoadGraphMap();
     if (newId) {
-      const node = _keGraph.nodeById.get(newId);
+      const node = keGraphMapInstance().getNode(newId);
       if (node) {
-        const canvas = $('ke-graph-canvas');
-        const r = canvas.getBoundingClientRect();
         // Open popover anchored to the new node's screen position.
-        const sx = r.left + node.x * _keGraph.zoom + _keGraph.tx;
-        const sy = r.top  + node.y * _keGraph.zoom + _keGraph.ty;
+        const { x: sx, y: sy } = keGraphMapInstance().screenOf(node);
         keGraphOpenPopover(node, sx, sy);
       }
     }
@@ -6809,8 +6365,7 @@ async function keGraphOpenPopover(node, clientX, clientY) {
       });
       if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
       Object.assign(node, body);
-      keGraphBuildLegend();
-      keGraphRequestDraw();
+      keGraphMapInstance().refresh();   // type may have changed → recolour + legend
       keGraphOpenPopover(node, clientX, clientY);
     });
 
@@ -6818,13 +6373,8 @@ async function keGraphOpenPopover(node, clientX, clientY) {
       if (!confirm('Delete this node and ALL its edges? An auto-snapshot is taken first.')) return;
       const r = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(node.id)}`, { method: 'DELETE' });
       if (!r.ok) { alert(`Delete failed: ${(await r.json()).error ?? r.status}`); return; }
-      _keGraph.nodes = _keGraph.nodes.filter(n => n.id !== node.id);
-      _keGraph.edges = _keGraph.edges.filter(e => e.fromId !== node.id && e.toId !== node.id);
-      _keGraph.nodeById.delete(node.id);
-      _keGraph.hover = null;
       keGraphClosePopover();
-      keGraphBuildLegend();
-      keGraphRequestDraw();
+      await keLoadGraphMap();   // refetch so the canvas drops the node + its edges
     });
 
     // Add / edit / delete edges share the same handler; on success we
@@ -6839,7 +6389,7 @@ async function keGraphOpenPopover(node, clientX, clientY) {
       // The await can take a while on a big graph; if the user clicked
       // a different node in the meantime, don't yank their popover back.
       if (_kePopoverNodeId !== startId) return;
-      const refreshed = _keGraph.nodeById.get(startId);
+      const refreshed = keGraphMapInstance().getNode(startId);
       keGraphOpenPopover(refreshed ?? node, clientX, clientY);
     });
   } catch (err) {
@@ -7809,27 +7359,225 @@ let _teCalCursor = null; // { year, month } — the month being displayed
 const _DOW_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 function teReloadScheduleView() {
-  if (_teSchedView === 'calendar') teLoadCalendar();
-  else teLoadSchedule();
+  if (_teSchedView === 'calendar')  teLoadCalendar();
+  else if (_teSchedView === 'map')  teLoadScheduleMap();
+  else                              teLoadSchedule();
 }
 
 function teSetScheduleView(view) {
-  if (view !== 'list' && view !== 'calendar') return;
+  if (view !== 'list' && view !== 'calendar' && view !== 'map') return;
   _teSchedView = view;
-  $('te-sched-view-list').classList.toggle('ke-view-active',     view === 'list');
-  $('te-sched-view-calendar').classList.toggle('ke-view-active', view === 'calendar');
-  $('te-sched-view-list').setAttribute('aria-selected',     view === 'list'     ? 'true' : 'false');
-  $('te-sched-view-calendar').setAttribute('aria-selected', view === 'calendar' ? 'true' : 'false');
-  // The hours/window control only meaningfully applies to the list
-  // view; calendar paginates by month. Hide it to reduce cognitive
-  // clutter on the calendar side.
-  $('te-sched-hours-label').classList.toggle('hidden', view !== 'list');
+  for (const v of ['list', 'calendar', 'map']) {
+    const btn = $(`te-sched-view-${v}`);
+    btn.classList.toggle('ke-view-active', view === v);
+    btn.setAttribute('aria-selected', view === v ? 'true' : 'false');
+  }
+  // The hours/window control bounds both the list and the map (calendar
+  // paginates by month instead); hide it only on the calendar.
+  $('te-sched-hours-label').classList.toggle('hidden', view === 'calendar');
   $('te-sched-list').classList.toggle('hidden',     view !== 'list');
   $('te-sched-calendar').classList.toggle('hidden', view !== 'calendar');
+  $('te-sched-map').classList.toggle('hidden',      view !== 'map');
   if (view === 'calendar') {
     if (!_teCalCursor) teGotoCalendarToday();
     else teLoadCalendar();
+  } else if (view === 'map') {
+    teScheduleMapInstance();
+    teLoadScheduleMap();
   }
+}
+
+// ── Schedule Map view — the consequence graph ─────────────────────
+//
+// The schedule's nodes (events / tasks / phases / states) and the
+// causal-temporal edges between them, on the shared force-directed
+// engine (graph-map.js — the same one behind the knowledge graph).
+// This is the home for Unruh's consequence graph: the reason a graph
+// was chosen over a flat table is so events can relate to each other,
+// and this is where those relationships get seen and authored. The
+// Familiar authors the same edges from its side via schedule_link.
+
+const TE_EDGE_KINDS = ['causes', 'requires', 'depends_on', 'blocks', 'during', 'carries_forward'];
+
+let _teSchedMap = null;
+function teScheduleMapInstance() {
+  if (_teSchedMap) return _teSchedMap;
+  _teSchedMap = createGraphMap({
+    canvas:    $('te-sched-canvas'),
+    statusEl:  $('te-sched-map-status'),
+    legendEl:  $('te-sched-legend'),
+    tooltipEl: $('te-sched-tooltip'),
+    isActive: () =>
+      !$('temporal-modal').classList.contains('hidden') &&
+      !$('te-sched-map').classList.contains('hidden'),
+    onNodeClick:       (node, cx, cy) => teSchedOpenPopover(node, cx, cy),
+    onBackgroundClick: () => teSchedClosePopover(),
+    // Resolved items fade so the live ones read first.
+    nodeColor: (n, hue) => n.resolution
+      ? `hsla(${hue}, 30%, 45%, 0.55)`
+      : `hsl(${hue}, 65%, 60%)`,
+    tooltipNodeHTML: n => {
+      const time = n.when
+        ? teIsoUtcToLocalFriendly(n.when) + (n.end ? ' → ' + teIsoUtcToLocalFriendly(n.end) : '')
+        : 'no time set';
+      return `<div class="ke-graph-tooltip-title">${teEscapeHtml(n.label ?? n.id)}</div>
+        <div class="ke-graph-tooltip-sub">${teEscapeHtml(n.type ?? 'task')}${n.resolution ? ' · ' + teEscapeHtml(n.resolution) : ''}</div>
+        <div class="ke-graph-tooltip-sub">${teEscapeHtml(time)}</div>`;
+    },
+  });
+  _teSchedMap.init();
+  $('te-sched-zoom-in') ?.addEventListener('click', () => _teSchedMap.zoomBy(1.25));
+  $('te-sched-zoom-out')?.addEventListener('click', () => _teSchedMap.zoomBy(1 / 1.25));
+  $('te-sched-zoom-fit')?.addEventListener('click', () => _teSchedMap.fit());
+  window.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !$('te-sched-popover').classList.contains('hidden')) {
+      teSchedClosePopover();
+    }
+  });
+  return _teSchedMap;
+}
+
+let _teSchedMapGen = 0;
+async function teLoadScheduleMap() {
+  const gen    = ++_teSchedMapGen;
+  const status = $('te-sched-map-status');
+  status.textContent = 'Loading…';
+  status.classList.remove('hidden');
+  const hours = Math.max(1, parseInt($('te-sched-hours')?.value, 10) || 48);
+  const now   = new Date();
+  const from  = new Date(now.getTime() - hours * 30 * 60_000).toISOString();
+  const to    = new Date(now.getTime() + hours * 30 * 60_000).toISOString();
+  try {
+    const r = await fetch(`/api/temporal/schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=500`);
+    if (gen !== _teSchedMapGen) return;
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (gen !== _teSchedMapGen) return;
+    if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
+    const nodes = (data.nodes || []).map(n => ({ ...n, type: n.type || 'task' }));
+    // Engine edges want { id, fromId, toId, type }. Schedule edges carry
+    // src / dst / kind — map them across (kind becomes the edge's type,
+    // which the engine hues and the legend lists).
+    const edges = (data.edges || []).map(e => ({ id: e.id, fromId: e.src, toId: e.dst, type: e.kind }));
+    const { empty } = teScheduleMapInstance().setData(nodes, edges);
+    if (empty) { status.textContent = 'Nothing scheduled in this window. Add events/tasks, then connect them.'; return; }
+    status.classList.add('hidden');
+  } catch (err) {
+    status.textContent = 'Failed to load schedule map: ' + (err.message || err);
+  }
+}
+
+let _teSchedPopId = null;
+function teSchedClosePopover() {
+  const pop = $('te-sched-popover');
+  if (pop) pop.classList.add('hidden');
+  _teSchedPopId = null;
+}
+
+function teSchedPositionPopover(pop, clientX, clientY) {
+  const r = $('te-sched-map').getBoundingClientRect();
+  pop.style.left = `${(clientX - r.left) + 14}px`;
+  pop.style.top  = `${(clientY - r.top)  + 14}px`;
+  requestAnimationFrame(() => {
+    const pr = pop.getBoundingClientRect();
+    let nx = pr.left - r.left, ny = pr.top - r.top;
+    if (pr.right  > r.right  - 6) nx = r.width  - pr.width  - 10;
+    if (pr.bottom > r.bottom - 6) ny = r.height - pr.height - 10;
+    pop.style.left = `${Math.max(6, nx)}px`;
+    pop.style.top  = `${Math.max(6, ny)}px`;
+  });
+}
+
+// Re-open the popover on the same node after a mutation reloads the map,
+// unless the user has since clicked elsewhere.
+function teSchedReopenAfterChange(nodeId, clientX, clientY) {
+  if (_teSchedPopId !== nodeId) return;
+  const refreshed = teScheduleMapInstance().getNode(nodeId);
+  if (refreshed) teSchedOpenPopover(refreshed, clientX, clientY);
+  else teSchedClosePopover();
+}
+
+function teSchedOpenPopover(node, clientX, clientY) {
+  const map = teScheduleMapInstance();
+  const pop = $('te-sched-popover');
+  _teSchedPopId = node.id;
+  pop.classList.remove('hidden');
+  teSchedPositionPopover(pop, clientX, clientY);
+
+  // The schedule window already carried every touching edge, so the
+  // node's links come straight from the loaded map — no extra fetch.
+  const edges  = map.edges.filter(e => e.fromId === node.id || e.toId === node.id);
+  const others = map.nodes.filter(n => n.id !== node.id);
+  const edgeRows = edges.map(e => {
+    const out     = e.fromId === node.id;
+    const otherId = out ? e.toId : e.fromId;
+    const other   = map.getNode(otherId);
+    const arrow   = out ? '→' : '←';
+    return `<div class="ke-edge-row" data-edge-id="${teEscapeHtml(e.id)}">
+      <span class="ke-edge-text">${arrow} ${teEscapeHtml(e.type)} ${arrow} <strong>${teEscapeHtml(other?.label ?? otherId)}</strong></span>
+      <button class="btn-ghost ke-danger te-edge-del" type="button" title="Remove link">✕</button>
+    </div>`;
+  }).join('');
+  const kindOptions   = TE_EDGE_KINDS.map(k => `<option value="${k}">${k}</option>`).join('');
+  const targetOptions = others.map(n => `<option value="${teEscapeHtml(n.id)}">${teEscapeHtml(n.label ?? n.id)}</option>`).join('');
+  const time = node.when
+    ? teIsoUtcToLocalFriendly(node.when) + (node.end ? ' → ' + teIsoUtcToLocalFriendly(node.end) : '')
+    : 'no time set';
+
+  pop.innerHTML = `
+    <div class="ke-graph-popover-head">
+      <h3>${teEscapeHtml(node.label ?? node.id)}</h3>
+      <button class="ke-graph-popover-close" type="button" aria-label="Close" id="te-sched-pop-close">✕</button>
+    </div>
+    <div class="ke-row-sub">${teEscapeHtml(node.type ?? 'task')}${node.resolution ? ' · ' + teEscapeHtml(node.resolution) : ''} · ${teEscapeHtml(time)}</div>
+    <h4 class="ke-subhead">Consequence links (${edges.length})</h4>
+    <div class="ke-edges">${edgeRows || '<p class="logs-empty">No links yet.</p>'}</div>
+    ${others.length ? `<details class="ke-add-edge">
+      <summary>+ connect to another item</summary>
+      <div class="ke-add-edge-form">
+        <label>this item <select class="te-ae-kind">${kindOptions}</select></label>
+        <select class="te-ae-target">${targetOptions}</select>
+        <div class="ke-actions"><button class="btn-send te-ae-create" type="button">Add link</button></div>
+      </div>
+    </details>` : ''}
+    <div class="ke-actions"><button id="te-sched-pop-del" class="btn-ghost ke-danger" type="button">Delete this item</button></div>`;
+
+  pop.querySelector('#te-sched-pop-close').addEventListener('click', teSchedClosePopover);
+
+  // src = this node; the relationship reads "this item {kind} target".
+  pop.querySelector('.te-ae-create')?.addEventListener('click', async () => {
+    const kind = pop.querySelector('.te-ae-kind').value;
+    const dst  = pop.querySelector('.te-ae-target').value;
+    if (!dst) return;
+    const res = await fetch('/api/temporal/schedule/edge', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ src: node.id, dst, kind }),
+    }).then(r => r.json()).catch(() => ({ ok: false }));
+    if (!res.ok) { alert('Add link failed: ' + (res.error || 'one of the ids may be stale')); return; }
+    await teLoadScheduleMap();
+    teSchedReopenAfterChange(node.id, clientX, clientY);
+  });
+
+  pop.querySelectorAll('.te-edge-del').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const eid = btn.closest('.ke-edge-row')?.dataset.edgeId;
+      if (!eid || !confirm('Remove this consequence link? The events themselves stay.')) return;
+      const res = await fetch(`/api/temporal/schedule/edge/${encodeURIComponent(eid)}`, { method: 'DELETE' })
+        .then(r => r.json()).catch(() => ({ ok: false }));
+      if (!res.ok) { alert('Remove failed: ' + (res.error || '')); return; }
+      await teLoadScheduleMap();
+      teSchedReopenAfterChange(node.id, clientX, clientY);
+    });
+  });
+
+  pop.querySelector('#te-sched-pop-del').addEventListener('click', async () => {
+    if (!confirm('Delete this schedule item and its links?')) return;
+    const res = await fetch(`/api/temporal/schedule/${encodeURIComponent(node.id)}`, { method: 'DELETE' })
+      .then(r => r.json()).catch(() => ({ ok: false }));
+    if (!res.ok) { alert('Delete failed: ' + (res.error || '')); return; }
+    teSchedClosePopover();
+    await teLoadScheduleMap();
+  });
 }
 
 function teGotoCalendarToday() {

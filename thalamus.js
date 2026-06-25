@@ -725,6 +725,42 @@ export async function deleteScheduleNode({ id }) {
 }
 
 /**
+ * Connect two schedule nodes with a consequence/temporal edge. This is
+ * the authoring half of Unruh's consequence graph — the structure that
+ * was chosen over a flat table precisely so events can relate to each
+ * other (causes / requires / depends_on / blocks / during /
+ * carries_forward). Both endpoint ids come from the schedule window.
+ */
+export async function addScheduleEdge({ src, dst, kind, payload }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_add_edge',
+      arguments: { src, dst, kind, payload },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+/**
+ * Remove one consequence edge by id, leaving both endpoint nodes intact
+ * — the way a mis-stated link gets corrected without deleting the
+ * events themselves.
+ */
+export async function deleteScheduleEdge({ id }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_delete_edge',
+      arguments: { id },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+/**
  * List every phase node — date-independent. Phases recur daily; the
  * standard get_window query filters by calendar date and misses
  * phases stamped on previous days, which the Routine tab needs.

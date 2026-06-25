@@ -114,6 +114,28 @@ def add_edge(
     return edge_id
 
 
+def delete_edge(conn: sqlite3.Connection, *, id: str) -> bool:
+    """Remove a single schedule edge by id, leaving both endpoint nodes
+    intact. This is how a mis-stated consequence link gets corrected
+    without deleting the events themselves (for that, delete_node
+    cascades the edges).
+
+    The layer guard mirrors delete_node: we only delete edges whose
+    source is a schedule-layer node, so a schedule-edge id can never
+    reach across and remove an interest/bookmark edge that happens to
+    share the edges table. Returns True if a row was deleted, False if
+    no schedule edge matched that id.
+    """
+    cur = conn.execute(
+        """DELETE FROM edges
+            WHERE id = ?
+              AND src_id IN (SELECT id FROM nodes WHERE layer = 'schedule')""",
+        (id,),
+    )
+    return cur.rowcount > 0
+
+
+
 def resolve(
     conn: sqlite3.Connection,
     *,

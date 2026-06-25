@@ -1954,6 +1954,32 @@ button { cursor: pointer; font-family: var(--font); }
   pointer-events: none;
   user-select: none;
 }
+/* Zoom controls — shared by the knowledge graph and the schedule map.
+   Top-right so they don't collide with the bottom-left hint or the
+   top-right legend overlaps gracefully (legend sits below). */
+.ke-graph-zoom {
+  position: absolute;
+  right: 10px; bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 3;
+}
+.ke-graph-zoom-btn {
+  width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.1rem; line-height: 1;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  user-select: none;
+}
+.ke-graph-zoom-btn:hover { background: var(--surface-hover, var(--border)); }
+.ke-graph-zoom-btn:active { transform: translateY(1px); }
+
 .ke-graph-tooltip {
   position: absolute;
   pointer-events: none;

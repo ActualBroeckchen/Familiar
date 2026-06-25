@@ -259,6 +259,18 @@ test('schedule_delete: a missing id is caught before any Unruh call', async () =
   assert.match(await executeToolCall('schedule_delete', '{}'), /need the id of the schedule item/i);
 });
 
+test('schedule_link: missing ids are caught before any Unruh call', async () => {
+  assert.match(await executeToolCall('schedule_link', '{}'), /need both ids/i);
+});
+
+test('schedule_link: a self-link is rejected', async () => {
+  assert.match(await executeToolCall('schedule_link', '{"src":"a","dst":"a","kind":"causes"}'), /itself/i);
+});
+
+test('schedule_link: an unknown kind is rejected before any Unruh call', async () => {
+  assert.match(await executeToolCall('schedule_link', '{"src":"a","dst":"b","kind":"nonsense"}'), /relationship kind/i);
+});
+
 test('executeToolCall: a throwing executor produces a structured failure, not an exception', async () => {
   TOOL_EXECUTORS.__test_throw = () => { throw new Error('peer is down'); };
   try {
