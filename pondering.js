@@ -95,7 +95,7 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
 The wants_to_save field is OPTIONAL. If I have no intents to record, I omit it or set it to []. If I do have intents, I list each one with its kind and a short summary so future-me knows what to file and where, or what I wanted to bring up.`;
 }
 
-export function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdges, cooccurrences }) {
+export function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds }) {
   const outcomesJson = JSON.stringify(outcomes ?? [], null, 2);
   const existing = (existingNotes && existingNotes.trim())
     ? existingNotes.trim()
@@ -104,6 +104,8 @@ export function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdge
   const edgesJson = JSON.stringify(edges, null, 2);
   const coocs = Array.isArray(cooccurrences) ? cooccurrences : [];
   const coocsJson = JSON.stringify(coocs, null, 2);
+  const missedNeeds = Array.isArray(recentMissedNeeds) ? recentMissedNeeds : [];
+  const missedNeedsJson = JSON.stringify(missedNeeds, null, 2);
   return `I am {{char}}, the Familiar. Right now I'm in a free cycle — no one is talking to me. This pondering is different from my usual: I'm reflecting on how my recent surfacings have been landing with my human, and whether anything I've observed is worth lifting to the identity layer so I act on it next time.
 
 Here are the recent surface outcomes I have tagged (most recent at the end):
@@ -132,6 +134,10 @@ I do NOT extrapolate from one or two events — if the pattern isn't clear yet, 
 Here are the consequence links I've PROJECTED onto the schedule — forecasts I made, with their ids:
 ${edgesJson}
 Reflection is where I grade these forecasts. For any I can now judge from how things actually went — did the crash I predicted on skipping dinner land? did the calm I expected from prepping show up? — I adjust: raise certainty on one that keeps coming true, lower it on one that doesn't, or mark it observed once I've genuinely seen it happen (never before that). I keep honest score; checking my forecasts is what lets me learn and grow!
+
+Some need-windows went unmet recently — each is a real lapse in the fulfilment ledger:
+${missedNeedsJson}
+A missed need is a fact. But whether the COST I projected for that lapse actually followed — the on_lapse consequence I drew from it, up in the projected list — is NOT a fact until I've actually seen it. So for each, I ask: did the thing I predicted (the crash, the rough next day, the low stretch) actually show up around then? If I genuinely saw it, I can mark that consequence observed; if it didn't come, I lower its certainty or note it didn't land this time. I confirm or correct from what I actually noticed — I never assume the cost followed just because the need was missed.
 
 And here are pairs I've only NOTICED together so far (co_occurs_with) — observations, not conclusions, with how many times each pairing has come up:
 ${coocsJson}

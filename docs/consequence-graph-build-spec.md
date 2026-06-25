@@ -1,14 +1,19 @@
 # Consequence graph — build spec
 
-> **Status: DESIGN — not yet built.** This captures the agreed shape of "consequences over
-> time" for Unruh's schedule graph, so it's a tracked roadmap artifact before any code lands.
-> The schedule **edges** themselves shipped in `0.7.74-alpha` (PR #142 — `causes` / `requires` /
-> `depends_on` / `blocks` / `during` / `carries_forward`, the map view, `schedule_link`). They
-> are currently **inert**: created and stored, but never rendered into the Familiar's prompt and
-> never read by surfacing. This spec turns that graph into a working model of consequence the
-> Familiar can *see, author, learn from, and reason ahead with* — so it plans better, assigns
-> times to floating tasks for the right reasons, and foresees when accommodating the ward *now*
-> would worsen their symptoms *later*.
+> **Status: SHIPPED.** The edges shipped in `0.7.74-alpha` (PR #142). **Pass 1** (the model +
+> visibility + reflection learning) shipped in `0.7.76-alpha` (PR #144), and the deferred
+> `co_occurs_with → causes` promotion in `0.7.77-alpha` (PR #145). **Pass 2** (needs-tracking)
+> shipped in `0.7.78-alpha`: recurring need-windows (`schedule_add_need`), the live "Needs today"
+> view, and the opt-in `needs-tracking-loop` that marks elapsed-unresolved windows `missed`
+> (default OFF, `PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1`, stands down at moderate+ threat). The
+> graph is now a working model of consequence the Familiar can *see, author, learn from, and
+> reason ahead with*.
+>
+> One design refinement landed during Pass 2 (maintainer sign-off): marking a need-window
+> `missed` makes only the **lapse** factual — it never auto-confirms the projected `on_lapse`
+> consequence. Whether the predicted cost actually followed stays the Familiar's observation,
+> confirmed *or corrected* via the reflection calibration loop (which marks `observed` only once
+> genuinely seen).
 >
 > Built in **two passes** (§8). Pass 1 = the model + visibility. Pass 2 = autonomous
 > needs-tracking (its own loop, its own off-switch, its own sign-off).

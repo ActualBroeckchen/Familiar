@@ -243,6 +243,30 @@ export function formatTemporalContext(payload) {
     if (schedLines.length) blocks.push(schedLines.join('\n'));
   }
 
+  // Needs-fulfilment view (Pass 2): today's status for each need-window
+  // I'm tracking. Observational — I read it and decide in my own voice
+  // whether a missed or still-open need is worth a gentle word. Sorted so
+  // the ones that might want attention (missed, then open) read first.
+  const needs = Array.isArray(payload.needs) ? payload.needs : [];
+  if (needs.length) {
+    const rank = { missed: 0, open: 1, upcoming: 2, met: 3 };
+    const needLines = needs
+      .slice()
+      .sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9))
+      .map(n => {
+        const endT   = formatLocalTime(new Date(n.endMs).toISOString(),   { timeOnly: true });
+        const startT = formatLocalTime(new Date(n.startMs).toISOString(), { timeOnly: true });
+        let s;
+        if (n.status === 'met')           s = 'met ✓';
+        else if (n.status === 'missed')   s = `missed — window passed unmet (closed ${endT})`;
+        else if (n.status === 'open')     s = `open now — window closes ${endT}`;
+        else if (n.status === 'upcoming') s = `later today (${startT}–${endT})`;
+        else                              s = n.status;
+        return `  ${n.label ?? ''} — ${s}`;
+      });
+    blocks.push(["Needs today — basic-needs windows I'm tracking for {{user}} (met / open / missed):", ...needLines].join('\n'));
+  }
+
   // Schedule-id legend. The human-readable lines above carry labels, not ids —
   // but every schedule editing tool (re-time, snooze, resolve, delete) is
   // addressed by id, and without this the Familiar can SEE its schedule yet

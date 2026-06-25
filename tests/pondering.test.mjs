@@ -185,6 +185,16 @@ test('buildPonderPrompt: reflection embeds window-timing guidance, a concrete th
   assert.match(prompt, /"edge_id": "e1"|skip dinner/); // the projected edge is shown
 });
 
+test('buildPonderPrompt: reflection cues confirm-or-correct on recent missed needs (no auto-assume)', () => {
+  const prompt = buildPonderPrompt({
+    mode: 'reflection', outcomes: [], existingNotes: '',
+    recentMissedNeeds: [{ label: 'dinner', dates: ['2026-06-24', '2026-06-25'] }],
+  });
+  assert.match(prompt, /went unmet recently|fulfilment ledger/i);
+  assert.match(prompt, /dinner/);
+  assert.match(prompt, /confirm or correct|never assume the cost followed/i);
+});
+
 test('parsePondering: reflection edge_calibrations — valid kept, malformed dropped', () => {
   const r = parsePondering(JSON.stringify({
     title: 't', content: 'c',
