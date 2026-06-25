@@ -1227,6 +1227,18 @@ Unruh tells the Familiar *when* events happened — but the Familiar perceives t
 
 **A relative phrase ALWAYS travels with a date (0.7.x).** Near-term phrasings ("yesterday", "in 3 weeks") were always present, but beyond ~a month `relativeTime`/`relativeDay` used to fall back to a bare absolute date the model had to date-arithmetic itself. They now append a directional interval (`intervalPhrase` → "in N months" / "a year ago"), so a distant memory or appointment reads "Friday, December 25 **(in 7 months)**" / "January 22, 2025 **(a year ago)**" — the absolute date keeps the precision, the parenthetical keeps the perception. One helper change covers every consumer below.
 
+**Future events carry a day count, coarsening with distance (0.7.x).** A relative-only future phrase ("this Sunday", "in 3 weeks") still forces the model to compute *how far away* that is — and LLMs are unreliable at date arithmetic, which is exactly what the **timeblindness alerts** depend on being right. So every future phrasing ≥2 calendar days out now carries a count alongside its human anchor, exact in the near window and coarsening further out so it stays readable:
+
+| Future distance | Renders as |
+|---|---|
+| 2–6 days | `this Friday at 3pm (in 3 days)` |
+| 7–13 days | `next Wednesday at 9am (in 9 days)` |
+| 14–21 days | `Thursday, June 25 at 2pm (in 21 days)` |
+| 22 days – ~2 months | `Thursday, July 9 at 2pm (in 5 weeks)` |
+| beyond ~2 months | `Friday, December 25 at 9am (in 7 months)` |
+
+The **exact-day window runs to 3 weeks** — that's where the timeblindness alerts actually fire and the model must not mis-estimate distance; past it, weeks then months read better than "in 204 days". The day count is `calendarDayDelta` (the same calendar-day measure the rest of the layer uses, so 23:59→00:01 reads as 1 day); the coarser weeks/months tiers reuse `intervalPhrase`/`plainInterval`. The 21-day threshold lives in one place (`futureInterval`). **Past** phrasings are deliberately left natural ("last Monday", "2 weeks ago"): day-count precision is a forward-scheduling need, and a memory recalled as "2 weeks ago" reads better than "14 days ago". `tomorrow`/`yesterday` stay bare — the count is already in the word.
+
 Surfaces using `relativeTime()` / `relativeDay()`:
 
 | Surface | Where | What it gets |

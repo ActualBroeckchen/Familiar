@@ -84,6 +84,20 @@ function intervalPhrase(target, now, future) {
 }
 
 /**
+ * Interval phrase for a FUTURE event, beyond the near-term weekday range.
+ * The figure coarsens with distance so it stays readable while the near
+ * window stays exact: an exact calendar-day count out to 3 weeks — the
+ * window the timeblindness alerts actually fire in, where the model must
+ * not mis-estimate distance — then weeks, then months/years (via
+ * intervalPhrase → plainInterval, whose own boundary tips weeks into
+ * months at ~2 months). Far-out events don't need "in 204 days". The 21-day
+ * threshold lives HERE only, so both callers stay in step.
+ */
+function futureInterval(target, now, dayDelta) {
+  return dayDelta <= 21 ? `in ${dayDelta} days` : intervalPhrase(target, now, true);
+}
+
+/**
  * Natural-English relative-time phrasing. Examples (with "now" =
  * Wednesday afternoon):
  *
@@ -91,11 +105,21 @@ function intervalPhrase(target, now, future) {
  *   diff < 1 hour                → "20 minutes ago" / "in 5 minutes"
  *   same day, > 1 hour off       → "this morning at 9am"
  *   yesterday / tomorrow         → "yesterday at 4pm" / "tomorrow at 10am"
- *   ±2..6 days, same week        → "last Monday at 2pm" / "this Friday at 3pm"
- *   ±7..13 days                  → "last week" / "next week"
- *   ±2..4 weeks                  → "2 weeks ago" / "in 3 weeks"
- *   beyond that                  → "Tuesday, June 4 (in 3 months)" /
- *                                  "Tuesday, March 4, 2025 (a year ago)"
+ *
+ * Future events carry a count the model never has to compute itself
+ * (timeblindness alerts depend on the near figure being right), coarsening
+ * with distance so it stays readable far out:
+ *   +2..6 days                   → "this Friday at 3pm (in 3 days)"
+ *   +7..13 days                  → "next Wednesday at 9am (in 9 days)"
+ *   +14..21 days                 → "Tuesday, June 25 at 2pm (in 21 days)"
+ *   +22 days..~2 months          → "Thursday, July 9 at 2pm (in 5 weeks)"
+ *   beyond ~2 months             → "Friday, December 25 at 9am (in 7 months)"
+ *
+ * Past events keep their natural phrasing (the day-count precision is a
+ * future-scheduling need, not a memory-recall one):
+ *   −2..13 days                  → "last Monday at 2pm"
+ *   −2..4 weeks                  → "2 weeks ago"
+ *   beyond that                  → "Tuesday, March 4, 2025 (a year ago)"
  *                                  — absolute date ALWAYS carries a relative
  *                                  interval so nothing reads as a bare date
  *
@@ -148,17 +172,30 @@ export function relativeTime(target, now = Date.now()) {
   if (dayDelta === -1) return `yesterday at ${clock}`;
   if (dayDelta ===  1) return `tomorrow at ${clock}`;
 
-  // Within the same week-ish: "last Monday" / "this Friday" / "next Wednesday"
-  if (dayDelta >= -6 && dayDelta <= -2) {
-    return `last ${WEEKDAY[new Date(t).getDay()]} at ${clock}`;
+  // ── Future, ≥2 calendar days out ─────────────────────────────────
+  // Every future phrasing carries an EXACT calendar-day count. A bare
+  // "this Sunday" forces the model to work out how far away that is, and
+  // LLMs are unreliable at date arithmetic — the timeblindness alerts
+  // downstream depend on the day figure being right. So the human anchor
+  // stays for legibility (weekday name near-term, absolute date further
+  // out) and "(in N days)" rides alongside as the precise figure the
+  // model never has to compute. Past events keep their natural phrasing
+  // below — the day-count precision is a future-scheduling need.
+  if (dayDelta >= 2) {
+    const wd = WEEKDAY[new Date(t).getDay()];
+    if (dayDelta <= 6)  return `this ${wd} at ${clock} (in ${dayDelta} days)`;
+    if (dayDelta <= 13) return `next ${wd} at ${clock} (in ${dayDelta} days)`;
+    // Past a weekday's reach a bare name is ambiguous ("which Thursday?"),
+    // so lead with the absolute date (with year when it's not this year).
+    // The interval coarsens with distance — exact days to 3 weeks, then
+    // weeks, then months — see futureInterval.
+    const withYear = new Date(t).getFullYear() !== new Date(n).getFullYear();
+    return `${dayAndDate(t, { withYear })} at ${clock} (${futureInterval(t, n, dayDelta)})`;
   }
-  if (dayDelta >= 2 && dayDelta <= 6) {
-    return `this ${WEEKDAY[new Date(t).getDay()]} at ${clock}`;
-  }
-  if (dayDelta >= 7 && dayDelta <= 13) {
-    return `next ${WEEKDAY[new Date(t).getDay()]} at ${clock}`;
-  }
-  if (dayDelta >= -13 && dayDelta <= -7) {
+
+  // ── Past, ≥2 calendar days back (phrasing unchanged) ─────────────
+  // "last Monday at 2pm" / "2 weeks ago" / "Tuesday, June 4 (a year ago)".
+  if (dayDelta >= -13 && dayDelta <= -2) {
     return `last ${WEEKDAY[new Date(t).getDay()]} at ${clock}`;
   }
 
@@ -166,18 +203,18 @@ export function relativeTime(target, now = Date.now()) {
   const weekDelta = Math.round(dayDelta / 7);
   if (Math.abs(weekDelta) <= 4) {
     const wAbs = Math.abs(weekDelta);
-    if (wAbs === 1) return future ? 'in about a week' : 'about a week ago';
-    return future ? `in ${wAbs} weeks` : `${wAbs} weeks ago`;
+    if (wAbs === 1) return 'about a week ago';
+    return `${wAbs} weeks ago`;
   }
 
   // Beyond ~a month: the absolute date carries the precision (with year if
   // it's not this year), but it ALWAYS travels with a relative interval —
-  // "March 4, 2025 (a year ago)" — so a distant memory or appointment never
-  // reads as a bare date the Familiar has to date-arithmetic in its head.
+  // "March 4, 2025 (a year ago)" — so a distant memory never reads as a
+  // bare date the Familiar has to date-arithmetic in its head.
   const nowYear = new Date(n).getFullYear();
   const targetYear = new Date(t).getFullYear();
   const abs = dayAndDate(t, { withYear: targetYear !== nowYear });
-  const rel = intervalPhrase(t, n, future);
+  const rel = intervalPhrase(t, n, false);
   return rel ? `${abs} (${rel})` : abs;
 }
 
@@ -187,10 +224,12 @@ export function relativeTime(target, now = Date.now()) {
  * only; never says "just now" or "20 minutes ago".
  *
  *   "today" | "yesterday" | "tomorrow"
- *   "last Monday" | "this Friday" | "next Wednesday"
- *   "2 weeks ago" | "in 3 weeks"
- *   "Tuesday, June 4 (3 months ago)" — absolute beyond ~a month, but
- *   ALWAYS with a relative interval so no date reads bare
+ *   future: "this Friday (in 3 days)" | "next Wednesday (in 9 days)" |
+ *           "Tuesday, June 25 (in 21 days)" | "Thursday, July 9 (in 5 weeks)"
+ *           — a count that coarsens with distance (exact days to 3 weeks)
+ *   past:   "last Monday" | "2 weeks ago" |
+ *           "Tuesday, June 4 (3 months ago)" — absolute beyond ~a month,
+ *           ALWAYS with a relative interval so no date reads bare
  */
 export function relativeDay(targetDateStr, now = Date.now()) {
   // Daily memory dates are local-calendar; parse as local midnight to
@@ -206,22 +245,32 @@ export function relativeDay(targetDateStr, now = Date.now()) {
   if (dayDelta === 0)  return 'today';
   if (dayDelta === -1) return 'yesterday';
   if (dayDelta ===  1) return 'tomorrow';
-  if (dayDelta >= -6 && dayDelta <= -2) return `last ${WEEKDAY[new Date(t).getDay()]}`;
-  if (dayDelta >= 2 && dayDelta <= 6)   return `this ${WEEKDAY[new Date(t).getDay()]}`;
-  if (dayDelta >= 7 && dayDelta <= 13)  return `next ${WEEKDAY[new Date(t).getDay()]}`;
-  if (dayDelta >= -13 && dayDelta <= -7) return `last ${WEEKDAY[new Date(t).getDay()]}`;
+
+  // Future ≥2 days: carry the exact day count (see relativeTime above for
+  // why — the model must never infer temporal distance itself). No clock
+  // here; memory/date strings have no time component.
+  if (dayDelta >= 2) {
+    const wd = WEEKDAY[new Date(t).getDay()];
+    if (dayDelta <= 6)  return `this ${wd} (in ${dayDelta} days)`;
+    if (dayDelta <= 13) return `next ${wd} (in ${dayDelta} days)`;
+    const withYear = new Date(t).getFullYear() !== new Date(n).getFullYear();
+    return `${dayAndDate(t, { withYear })} (${futureInterval(t, n, dayDelta)})`;
+  }
+
+  // Past ≥2 days: phrasing unchanged.
+  if (dayDelta >= -13 && dayDelta <= -2) return `last ${WEEKDAY[new Date(t).getDay()]}`;
 
   const weekDelta = Math.round(dayDelta / 7);
   if (Math.abs(weekDelta) <= 4) {
     const wAbs = Math.abs(weekDelta);
-    if (wAbs === 1) return dayDelta > 0 ? 'in about a week' : 'about a week ago';
-    return dayDelta > 0 ? `in ${wAbs} weeks` : `${wAbs} weeks ago`;
+    if (wAbs === 1) return 'about a week ago';
+    return `${wAbs} weeks ago`;
   }
 
   const nowYear = new Date(n).getFullYear();
   const targetYear = new Date(t).getFullYear();
   const abs = dayAndDate(t, { withYear: targetYear !== nowYear });
-  const rel = intervalPhrase(t, n, dayDelta > 0);
+  const rel = intervalPhrase(t, n, false);
   return rel ? `${abs} (${rel})` : abs;
 }
 
