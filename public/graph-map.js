@@ -55,6 +55,8 @@
       edgeTypeKey = e => e.type || e.customType || 'related',
       edgeWeight  = e => (typeof e.weight === 'number' ? e.weight : undefined),
       nodeColor   = null,           // (n, hue) => css; default below
+      edgeColor   = null,           // (e, hue) => css; default below (weight fade)
+      edgeDash    = null,           // (e) => truthy ⇒ dashed (e.g. a projection)
       labelFor    = n => String(n.label ?? n.id),
       tooltipNodeHTML = null,       // (n) => html
       tooltipEdgeHTML = null,       // (e, a, b) => html
@@ -88,6 +90,7 @@
     const defaultNodeColor = (n, hue) => `hsl(${hue}, 65%, 60%)`;
     const colorOfNode = n => (nodeColor || defaultNodeColor)(n, nodeHue(n));
     function colorOfEdge(e) {
+      if (edgeColor) return edgeColor(e, edgeHue(e));
       const hue = edgeHue(e);
       const raw = edgeWeight(e);
       const w   = Math.max(0, Math.min(1, typeof raw === 'number' ? raw : 0.5));
@@ -239,6 +242,10 @@
         const raw = edgeWeight(e);
         const w = Math.max(0, Math.min(1, typeof raw === 'number' ? raw : 0.5));
         ctx.lineWidth = (0.7 + w * 1.6) / state.zoom;
+        // Dashed = a projection (something the host hasn't confirmed yet);
+        // solid = structural or observed. Scaled by zoom so the dash reads
+        // the same at any scale.
+        ctx.setLineDash(edgeDash && edgeDash(e) ? [6 / state.zoom, 4 / state.zoom] : []);
         const dx = b.x - a.x, dy = b.y - a.y;
         const len = Math.sqrt(dx * dx + dy * dy) || 1;
         const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
@@ -250,6 +257,7 @@
         ctx.stroke();
       }
 
+      ctx.setLineDash([]);   // reset so node outlines aren't dashed
       const r = NODE_R / state.zoom;
       for (const n of state.nodes) {
         const isHover = state.hover && state.hover.kind === 'node' && state.hover.ref === n;

@@ -41,8 +41,51 @@ from .db import new_id, now_iso
 SCHEDULE_NODE_TYPES = {"event", "task", "phase", "state", "reminder"}
 SCHEDULE_EDGE_KINDS = {
     "causes", "requires", "depends_on", "blocks", "during", "carries_forward",
+    # co_occurs_with: src and dst overlapped in time — a NOTICED correlation,
+    # no causal claim. The honest first rung of the ladder the reflection
+    # loop climbs (co_occurs → causes) before asserting cause.
+    "co_occurs_with",
 }
 RESOLUTIONS = {"done", "cancelled", "carried_forward", "fired"}
+
+# ── Consequence metadata (rides in an edge's payload_json) ──────────────
+# A consequence is an edge (usually 'causes' or 'co_occurs_with') carrying
+# some of these. All optional — a bare structural edge carries none. See
+# docs/consequence-graph-build-spec.md.
+CONSEQUENCE_VALENCES   = {"help", "harm", "neutral"}
+CONSEQUENCE_CONDITIONS = {"on_resolve", "on_lapse", "unconditional"}
+CONSEQUENCE_SEVERITIES = {"low", "medium", "high"}
+CONSEQUENCE_CERTAINTIES = {"low", "medium", "high"}
+
+
+def validate_consequence_payload(payload: dict | None) -> dict:
+    """Validate/normalise the consequence keys inside an edge payload.
+
+    Only the consequence keys are checked; any other keys pass through
+    untouched (the payload is still arbitrary JSON). Unknown enum values
+    raise ValueError — the same 'you typed something wrong' signal
+    add_edge already gives for an unknown kind. Returns the payload
+    (possibly with horizon_hours coerced to a number/None).
+    """
+    if not payload:
+        return payload or {}
+    out = dict(payload)
+    for key, allowed in (
+        ("valence",   CONSEQUENCE_VALENCES),
+        ("condition", CONSEQUENCE_CONDITIONS),
+        ("severity",  CONSEQUENCE_SEVERITIES),
+        ("certainty", CONSEQUENCE_CERTAINTIES),
+    ):
+        if key in out and out[key] is not None and out[key] not in allowed:
+            raise ValueError(f"unknown consequence {key} {out[key]!r}; expected one of {sorted(allowed)}")
+    if out.get("horizon_hours") is not None:
+        try:
+            out["horizon_hours"] = float(out["horizon_hours"])
+        except (TypeError, ValueError):
+            raise ValueError(f"horizon_hours must be a number, got {out['horizon_hours']!r}")
+    if "observed" in out and out["observed"] is not None:
+        out["observed"] = bool(out["observed"])
+    return out
 
 DEFAULT_WINDOW_HOURS = 24
 
@@ -105,6 +148,7 @@ def add_edge(
     if src == dst:
         raise ValueError("an edge cannot connect a node to itself")
 
+    payload = validate_consequence_payload(payload)
     edge_id = new_id()
     conn.execute(
         """INSERT INTO edges (id, src_id, dst_id, kind, payload_json, created_at)
@@ -112,6 +156,23 @@ def add_edge(
         (edge_id, src, dst, kind, json.dumps(payload or {}), now_iso()),
     )
     return edge_id
+
+
+def update_edge(conn: sqlite3.Connection, *, id: str, payload: dict) -> bool:
+    """Merge consequence metadata into an existing edge's payload — the
+    way a structural link (prep requires interview) gets annotated with
+    valence/horizon/certainty after the fact, or a projection's certainty
+    gets recalibrated. Shallow-merges the given keys over the stored
+    payload (so partial updates don't wipe the rest). Returns True if the
+    edge existed, False otherwise.
+    """
+    row = conn.execute("SELECT payload_json FROM edges WHERE id = ?", (id,)).fetchone()
+    if row is None:
+        return False
+    merged = json.loads(row["payload_json"] or "{}")
+    merged.update(validate_consequence_payload(payload))
+    conn.execute("UPDATE edges SET payload_json = ? WHERE id = ?", (json.dumps(merged), id))
+    return True
 
 
 def delete_edge(conn: sqlite3.Connection, *, id: str) -> bool:
@@ -136,6 +197,21 @@ def delete_edge(conn: sqlite3.Connection, *, id: str) -> bool:
 
 
 
+def find_state_by_label(conn: sqlite3.Connection, *, label: str) -> str | None:
+    """The id of the most-recent schedule `state` node with this exact
+    (case-insensitive) label, or None. Backs resolve-or-create when the
+    Familiar names a consequence-state ('crash', 'good streak') by label
+    — so the graph reuses one node instead of growing a duplicate per
+    mention."""
+    row = conn.execute(
+        """SELECT id FROM nodes
+            WHERE layer = 'schedule' AND type = 'state' AND lower(label) = lower(?)
+            ORDER BY created_at DESC LIMIT 1""",
+        ((label or "").strip(),),
+    ).fetchone()
+    return row["id"] if row else None
+
+
 def resolve(
     conn: sqlite3.Connection,
     *,
@@ -154,9 +230,28 @@ def resolve(
     """
     if resolution not in RESOLUTIONS:
         raise ValueError(f"unknown resolution {resolution!r}; expected one of {sorted(RESOLUTIONS)}")
+    ts = now_iso()
+    # Action-position: stamp WHEN the ward acted, and — for a node with a
+    # [when, end] window — WHERE in that window they landed
+    # (window_fraction: 0 at the open, 1 at the close, >1 if they acted
+    # after it). This is the hook the reflection loop correlates with how
+    # things went ("starts past the midpoint → more stressed"). See the
+    # build spec. Stored in payload (no migration); harmless on instant
+    # nodes (no window → no fraction).
+    row = conn.execute(
+        "SELECT when_ts, end_ts, payload_json FROM nodes WHERE id = ? AND layer = 'schedule'",
+        (id,),
+    ).fetchone()
+    if row is None:
+        return False
+    payload = json.loads(row["payload_json"] or "{}")
+    payload["acted_at"] = ts
+    frac = _window_fraction(row["when_ts"], row["end_ts"], ts)
+    if frac is not None:
+        payload["window_fraction"] = frac
     cur = conn.execute(
-        "UPDATE nodes SET resolution = ?, updated_at = ? WHERE id = ? AND layer = 'schedule'",
-        (resolution, now_iso(), id),
+        "UPDATE nodes SET resolution = ?, updated_at = ?, payload_json = ? WHERE id = ? AND layer = 'schedule'",
+        (resolution, ts, json.dumps(payload), id),
     )
     return cur.rowcount > 0
 
@@ -355,6 +450,30 @@ def reminders_health(conn: sqlite3.Connection) -> dict[str, Any]:
 
 
 # ── Reads ──────────────────────────────────────────────────────────────
+
+
+def _parse_iso(s: str | None) -> datetime | None:
+    """Parse a stored ISO-8601 timestamp (which may end in 'Z' from JS
+    or '+00:00' from now_iso). Returns None on anything unparseable."""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _window_fraction(when: str | None, end: str | None, acted: str) -> float | None:
+    """Where in a [when, end] window an action at `acted` fell:
+    0.0 at the open, 1.0 at the close, >1.0 if acted after it closed.
+    Returns None when there's no real window (no end, or zero-width)."""
+    w, e, a = _parse_iso(when), _parse_iso(end), _parse_iso(acted)
+    if not (w and e and a):
+        return None
+    span = (e - w).total_seconds()
+    if span <= 0:
+        return None
+    return round((a - w).total_seconds() / span, 3)
 
 
 def _node_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:

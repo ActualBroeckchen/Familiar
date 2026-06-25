@@ -95,11 +95,13 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
 The wants_to_save field is OPTIONAL. If I have no intents to record, I omit it or set it to []. If I do have intents, I list each one with its kind and a short summary so future-me knows what to file and where, or what I wanted to bring up.`;
 }
 
-export function buildReflectionPrompt({ outcomes, existingNotes }) {
+export function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdges }) {
   const outcomesJson = JSON.stringify(outcomes ?? [], null, 2);
   const existing = (existingNotes && existingNotes.trim())
     ? existingNotes.trim()
     : '(no notes yet — this file may not exist or is empty)';
+  const edges = Array.isArray(consequenceEdges) ? consequenceEdges : [];
+  const edgesJson = JSON.stringify(edges, null, 2);
   return `I am {{char}}, the Familiar. Right now I'm in a free cycle — no one is talking to me. This pondering is different from my usual: I'm reflecting on how my recent surfacings have been landing with my human, and whether anything I've observed is worth lifting to the identity layer so I act on it next time.
 
 Here are the recent surface outcomes I have tagged (most recent at the end):
@@ -121,26 +123,36 @@ I look at the pattern. Not at any single event — events are noisy. I look for 
 - Are there kinds of lapses that consistently engage / get deferred / get ignored once I do raise them?
 - Is there something I'm learning about {{user}}'s specific costs of lapsing that I should remember at the identity layer?
 
+Some outcomes carry window_fraction — where in a task's time window my human actually acted (0 = right at the open, 1 = at the close, above 1 = after it closed). When I have at least three or four of the same kind of task to compare, I look for whether WHEN in the window they start tracks with how it went — e.g. starting past the midpoint going with a rougher result or more stress. I don't call it from one or two; but once three or four point the same way, that's exactly the kind of specific, grounded thing to lift to what_lapses_cost.md.
+
 I do NOT extrapolate from one or two events — if the pattern isn't clear yet, I say so in the content and leave the update field null. I especially do NOT write a claim about my human to identity off the back of not_raised outcomes — those are about me. A false claim written to identity is harder to undo than a missed insight I can catch next reflection.
+
+Here are the consequence links I've PROJECTED onto the schedule — forecasts I made, with their ids:
+${edgesJson}
+Reflection is where I grade these forecasts. For any I can now judge from how things actually went — did the crash I predicted on skipping dinner land? did the calm I expected from prepping show up? — I adjust: raise certainty on one that keeps coming true, lower it on one that doesn't, or mark it observed once I've genuinely seen it happen (never before that). I keep honest score; checking my forecasts is what lets me learn and grow!
 
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary outside the JSON):
 {
   "title":   "Short label (max 60 chars) for this reflection",
   "content": "My first-person thought — what I'm noticing, what I'm uncertain about, what I want to remember",
-  "what_lapses_cost_update": null
+  "what_lapses_cost_update": null,
+  "edge_calibrations": []
 }
 
-OR, if I'm confident enough to lift something to identity:
+OR, if I'm confident enough to lift something to identity and/or recalibrate a forecast:
 {
   "title":   "...",
   "content": "...",
   "what_lapses_cost_update": {
     "heading": "## meals",
     "content": "What I want to remember about {{user}} and this kind of lapse — specific, grounded in the observed pattern, in my voice. Replaces the existing section if one exists under this heading; otherwise creates it."
-  }
+  },
+  "edge_calibrations": [
+    { "edge_id": "<id from the list above>", "certainty": "low|medium|high", "observed": true, "note": "why I'm grading it this way" }
+  ]
 }
 
-The heading must be a single markdown heading line starting with "## ".`;
+The heading must be a single markdown heading line starting with "## ". In edge_calibrations each entry needs an edge_id from the list above plus at least one of: certainty (a new confidence), observed:true (only if I've genuinely seen it happen), or note. I leave edge_calibrations empty when I have nothing honest to grade.`;
 }
 
 // ── LLM call ─────────────────────────────────────────────────────
@@ -204,6 +216,26 @@ export function parsePondering(raw) {
     if (heading.startsWith('##') && body) {
       result.what_lapses_cost_update = { heading, content: body };
     }
+  }
+  // edge_calibrations: optional recalibration of the Familiar's own
+  // projected consequence edges (raise/lower certainty, mark observed,
+  // add a note). Only kept when an entry names an edge_id AND carries at
+  // least one valid grading field — so a malformed entry can't, say,
+  // blank a payload. The caller applies these via updateScheduleEdge.
+  if (Array.isArray(parsed.edge_calibrations)) {
+    const CERT = new Set(['low', 'medium', 'high']);
+    const cals = [];
+    for (const c of parsed.edge_calibrations) {
+      if (!c || typeof c !== 'object') continue;
+      const edge_id = String(c.edge_id ?? '').trim();
+      if (!edge_id) continue;
+      const payload = {};
+      if (CERT.has(c.certainty)) payload.certainty = c.certainty;
+      if (c.observed === true) payload.observed = true;
+      if (c.note && String(c.note).trim()) payload.note = String(c.note).trim();
+      if (Object.keys(payload).length) cals.push({ edge_id, payload });
+    }
+    if (cals.length) result.edge_calibrations = cals;
   }
   // wants_to_save: optional list of deferred-action intents the
   // Familiar surfaced while pondering. Each entry is a hint to act on
@@ -336,6 +368,7 @@ export async function ponderOnce({
     tomeId,
     mode:     isReflection ? 'reflection' : 'pondering',
     what_lapses_cost_update: parsed.what_lapses_cost_update ?? null,
+    edge_calibrations:       parsed.edge_calibrations ?? null,
     wants_to_save:           wantsToSave,
   };
 }

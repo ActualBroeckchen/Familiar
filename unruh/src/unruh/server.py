@@ -295,6 +295,49 @@ def schedule_delete_edge(id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def schedule_update_edge(id: str, payload: dict) -> dict[str, Any]:
+    """I use this to annotate or correct a consequence link without remaking it — to add
+    valence / horizon / certainty to a plain structural edge after I understand it better, or to
+    recalibrate a projection's certainty once reality has weighed in. It shallow-merges the keys I
+    pass over the edge's existing payload, so a partial update leaves the rest intact.
+
+    Args:
+        id: the edge id.
+        payload: consequence keys to merge — any of valence ('help'|'harm'|'neutral'),
+            condition ('on_resolve'|'on_lapse'|'unconditional'), horizon_hours (number),
+            severity/certainty ('low'|'medium'|'high'), observed (bool), note (str).
+
+    Returns: {ok: True, updated: <bool>}.
+    """
+    try:
+        with get_conn() as conn:
+            updated = sched.update_edge(conn, id=id, payload=payload)
+        return {"ok": True, "updated": updated}
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def schedule_upsert_state(label: str) -> dict[str, Any]:
+    """I use this to name a consequence-state ('crash', 'good streak', 'anxiety flare') and get a
+    node for it — reusing the existing one if I've named it before, creating it if I haven't. It's
+    how I get a dst to point a consequence edge at when the consequence isn't itself a scheduled
+    item. Reuse keeps the graph from sprouting ten 'crash' nodes.
+
+    Returns: {ok: True, id: '<node-id>', created: <bool>}.
+    """
+    try:
+        with get_conn() as conn:
+            existing = sched.find_state_by_label(conn, label=label)
+            if existing:
+                return {"ok": True, "id": existing, "created": False}
+            nid = sched.add_node(conn, type="state", label=label, when=_now_iso())
+        return {"ok": True, "id": nid, "created": True}
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
 def schedule_list_recurring(include_resolved: bool = False, limit: int = 200) -> dict[str, Any]:
     """I use this to list every schedule node that has a recurrence rule, regardless
     of stored date. I reach for it when I need all the recurring patterns in my
@@ -569,7 +612,7 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
 
       {
         ts:        '<iso-8601>',
-        schedule:  { phase: {...} | null, window: [...] },           # M3
+        schedule:  { phase: {...} | null, window: [...], edges: [...] }, # M3 (+ consequence edges)
         interests: { standing: [...], live: [...] },                 # M4–M5
         handoff:   { intent: ...|null, open_threads: [...], id: ...} # M6
       }
@@ -598,7 +641,15 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
         # it once (the renderer ignores `id`). NULL/[] when there's
         # nothing pending.
         handoff = handoffs.get_handoff(conn)
-    schedule_block: dict[str, Any] = {"phase": phase, "window": window["nodes"]}
+    # Edges ride along so the Familiar sees the consequence graph, not just
+    # a flat list (temporal-format renders a "Consequence links" block from
+    # these; edges whose endpoints aren't in the visible window are dropped
+    # by the renderer). Without this the graph it authors stays invisible.
+    schedule_block: dict[str, Any] = {
+        "phase": phase,
+        "window": window["nodes"],
+        "edges": window["edges"],
+    }
     return {
         "ts": now or _now_iso(),
         "schedule":  schedule_block,

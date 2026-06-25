@@ -7397,7 +7397,7 @@ function teSetScheduleView(view) {
 // and this is where those relationships get seen and authored. The
 // Familiar authors the same edges from its side via schedule_link.
 
-const TE_EDGE_KINDS = ['causes', 'requires', 'depends_on', 'blocks', 'during', 'carries_forward'];
+const TE_EDGE_KINDS = ['causes', 'requires', 'depends_on', 'blocks', 'during', 'carries_forward', 'co_occurs_with'];
 
 let _teSchedMap = null;
 function teScheduleMapInstance() {
@@ -7416,6 +7416,26 @@ function teScheduleMapInstance() {
     nodeColor: (n, hue) => n.resolution
       ? `hsla(${hue}, 30%, 45%, 0.55)`
       : `hsl(${hue}, 65%, 60%)`,
+    // Consequence edges read their meaning at a glance: harm = red, help =
+    // green, everything else hued by kind. Structural links keep the kind hue.
+    edgeColor: (e, hue) => e.valence === 'harm' ? 'hsl(2, 72%, 55%)'
+      : e.valence === 'help' ? 'hsl(140, 55%, 48%)'
+      : `hsla(${hue}, 70%, 55%, 0.85)`,
+    // Dashed = a consequence I'm PROJECTING (not yet observed); solid =
+    // structural, or a consequence I've confirmed.
+    edgeDash: e => (e.valence || e.condition) && e.observed !== true,
+    tooltipEdgeHTML: (e, a, b) => {
+      const bits = [];
+      if (e.condition === 'on_resolve') bits.push('on resolve');
+      else if (e.condition === 'on_lapse') bits.push('on lapse');
+      if (e.valence) bits.push(e.valence === 'harm' ? 'harms' : e.valence === 'help' ? 'helps' : e.valence);
+      if (Number.isFinite(Number(e.horizon_hours))) bits.push(`~${Math.round(Number(e.horizon_hours))}h`);
+      if (e.observed) bits.push('observed'); else if (e.certainty) bits.push(`${e.certainty} certainty`);
+      const verb = e.type === 'co_occurs_with' ? 'co-occurs' : (e.type || 'related');
+      return `<div class="ke-graph-tooltip-title">${teEscapeHtml(verb)}</div>
+        <div class="ke-graph-tooltip-sub">${teEscapeHtml(a ? (a.label ?? a.id) : e.fromId)} → ${teEscapeHtml(b ? (b.label ?? b.id) : e.toId)}</div>
+        ${bits.length ? `<div class="ke-graph-tooltip-sub">${teEscapeHtml(bits.join(' · '))}</div>` : ''}`;
+    },
     tooltipNodeHTML: n => {
       const time = n.when
         ? teIsoUtcToLocalFriendly(n.when) + (n.end ? ' → ' + teIsoUtcToLocalFriendly(n.end) : '')
@@ -7458,7 +7478,14 @@ async function teLoadScheduleMap() {
     // Engine edges want { id, fromId, toId, type }. Schedule edges carry
     // src / dst / kind — map them across (kind becomes the edge's type,
     // which the engine hues and the legend lists).
-    const edges = (data.edges || []).map(e => ({ id: e.id, fromId: e.src, toId: e.dst, type: e.kind }));
+    const edges = (data.edges || []).map(e => ({
+      id: e.id, fromId: e.src, toId: e.dst, type: e.kind,
+      // Carry the consequence payload onto the engine edge so it can tint
+      // by valence and dash projections, and the popover can read it back.
+      valence: e.payload?.valence, condition: e.payload?.condition,
+      horizon_hours: e.payload?.horizon_hours, severity: e.payload?.severity,
+      certainty: e.payload?.certainty, observed: e.payload?.observed, note: e.payload?.note,
+    }));
     const { empty } = teScheduleMapInstance().setData(nodes, edges);
     if (empty) { status.textContent = 'Nothing scheduled in this window. Add events/tasks, then connect them.'; return; }
     status.classList.add('hidden');
@@ -7513,8 +7540,14 @@ function teSchedOpenPopover(node, clientX, clientY) {
     const otherId = out ? e.toId : e.fromId;
     const other   = map.getNode(otherId);
     const arrow   = out ? '→' : '←';
+    const tBits = [];
+    if (e.condition === 'on_resolve') tBits.push('if done');
+    else if (e.condition === 'on_lapse') tBits.push('if skipped');
+    if (e.valence) tBits.push(e.valence === 'harm' ? 'harms' : e.valence === 'help' ? 'helps' : e.valence);
+    if (e.observed) tBits.push('observed'); else if (e.certainty) tBits.push(`${e.certainty} certainty`);
+    const tag = tBits.length ? ` <span class="te-edge-tag">[${teEscapeHtml(tBits.join(' · '))}]</span>` : '';
     return `<div class="ke-edge-row" data-edge-id="${teEscapeHtml(e.id)}">
-      <span class="ke-edge-text">${arrow} ${teEscapeHtml(e.type)} ${arrow} <strong>${teEscapeHtml(other?.label ?? otherId)}</strong></span>
+      <span class="ke-edge-text">${arrow} ${teEscapeHtml(e.type)} ${arrow} <strong>${teEscapeHtml(other?.label ?? otherId)}</strong>${tag}</span>
       <button class="btn-ghost ke-danger te-edge-del" type="button" title="Remove link">✕</button>
     </div>`;
   }).join('');
@@ -7537,6 +7570,17 @@ function teSchedOpenPopover(node, clientX, clientY) {
       <div class="ke-add-edge-form">
         <label>this item <select class="te-ae-kind">${kindOptions}</select></label>
         <select class="te-ae-target">${targetOptions}</select>
+        <details class="te-conseq-detail">
+          <summary>consequence detail (optional)</summary>
+          <div class="te-conseq-fields">
+            <label>effect <select class="te-ae-valence"><option value="">—</option><option value="help">helps</option><option value="harm">harms</option><option value="neutral">neutral</option></select></label>
+            <label>future <select class="te-ae-condition"><option value="">—</option><option value="on_resolve">if done</option><option value="on_lapse">if skipped</option><option value="unconditional">either way</option></select></label>
+            <label>in ~hrs <input class="te-ae-horizon" type="number" min="0" step="1" style="width:5em"></label>
+            <label>severity <select class="te-ae-severity"><option value="">—</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label>
+            <label>certainty <select class="te-ae-certainty"><option value="">—</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label>
+            <label class="te-ae-observed-l"><input class="te-ae-observed" type="checkbox"> already observed (not a projection)</label>
+          </div>
+        </details>
         <div class="ke-actions"><button class="btn-send te-ae-create" type="button">Add link</button></div>
       </div>
     </details>` : ''}
@@ -7549,9 +7593,18 @@ function teSchedOpenPopover(node, clientX, clientY) {
     const kind = pop.querySelector('.te-ae-kind').value;
     const dst  = pop.querySelector('.te-ae-target').value;
     if (!dst) return;
+    const payload = {};
+    const v    = pop.querySelector('.te-ae-valence')?.value;   if (v)    payload.valence   = v;
+    const cond = pop.querySelector('.te-ae-condition')?.value; if (cond) payload.condition = cond;
+    const hz   = pop.querySelector('.te-ae-horizon')?.value;   if (hz !== '' && Number.isFinite(+hz)) payload.horizon_hours = +hz;
+    const sev  = pop.querySelector('.te-ae-severity')?.value;  if (sev)  payload.severity  = sev;
+    const cert = pop.querySelector('.te-ae-certainty')?.value; if (cert) payload.certainty = cert;
+    if (pop.querySelector('.te-ae-observed')?.checked) payload.observed = true;
+    const body = { src: node.id, dst, kind };
+    if (Object.keys(payload).length) body.payload = payload;
     const res = await fetch('/api/temporal/schedule/edge', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ src: node.id, dst, kind }),
+      body: JSON.stringify(body),
     }).then(r => r.json()).catch(() => ({ ok: false }));
     if (!res.ok) { alert('Add link failed: ' + (res.error || 'one of the ids may be stale')); return; }
     await teLoadScheduleMap();

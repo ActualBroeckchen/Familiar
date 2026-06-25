@@ -231,7 +231,8 @@ in `log-import.js` (Proto-Familiar JSON, timestamped text; rejects unknown loudl
 - `POST /api/temporal/schedule/:id/resolve` — mark done/cancelled/etc.
 - `POST /api/temporal/schedule/:id/resolve_occurrence` — resolve ONE occurrence of a recurring node (leaves the series alive)
 - `DELETE /api/temporal/schedule/:id` — hard delete (edges cascade)
-- `POST /api/temporal/schedule/edge` — connect two nodes into the consequence graph (`{src, dst, kind}`)
+- `POST /api/temporal/schedule/edge` — connect two nodes into the consequence graph (`{src, dst, kind}`, optional consequence `payload`)
+- `PATCH /api/temporal/schedule/edge/:id` — merge consequence metadata onto an edge (`{payload}`)
 - `DELETE /api/temporal/schedule/edge/:id` — remove one consequence link (both endpoint nodes survive)
 - `GET /api/temporal/phases` — **date-independent** routine surface
 - `GET /api/temporal/handoff` + `POST .../handoff/:id/consume`
@@ -1416,7 +1417,15 @@ temporalPayload.schedule.window   ←  open tasks/events/reminders
 
 Inferred from label by `inferStakesTier()` in `surface-context.js`. Overridable by the Familiar at creation (BUILTIN_TOOLS `stakes_tier` arg) and by {{user}} in the temporal editor (Stakes dropdown).
 
-**`consequence_model`** is per-task free-text attached to the schedule node payload, informing framing when the task surfaces.
+**`consequence_model`** is per-task free-text attached to the schedule node payload, informing framing when the task surfaces. (Superseded for richer use by the consequence-graph model below; still read as a confidence input.)
+
+### Consequence graph — consequences over time (Pass 1)
+
+The schedule edges (shipped `0.7.74`) carry a **consequence payload** so the Familiar can reason about what an item leads to over time, not just how items connect. Specced in [`consequence-graph-build-spec.md`](consequence-graph-build-spec.md). A consequence is an edge (usually `causes`, or the new **`co_occurs_with`** — "noticed together, no causal claim") whose `payload_json` carries: `valence` (help/harm/neutral), `condition` (`on_resolve` / `on_lapse` / `unconditional` — the **two futures**, so the Familiar projects what finishing buys *and* what skipping costs), `horizon_hours`, `severity`, `certainty`, `observed` (the past↔future flag), `note`. Consequences that aren't scheduled items are `state` nodes (resolve-or-create by label via `schedule_upsert_state`). Validated in Unruh `schedule.py`; authored by the Familiar through the extended `schedule_link` and by the human in the Schedule **Map** (consequence detail in the connect form; harm edges red, projected edges dashed).
+
+**Visibility & planning.** `temporal-format.js` renders a *Consequence links* section into `[Temporal Context]` (the edges were stored but invisible before). `selectSurfaceCandidates` reads the edges: a task an imminent node **requires** or that **blocks** one gets a pure-code pressure bump (survives the per-turn cap) + a rendered "why"; the `[Surface candidates]` block gained a **CONSEQUENCE & PLANNING** directive (both futures, predict-then-check, honesty about certainty — proactivity-rule-compliant, regression-guarded).
+
+**Learning (predict→observe→learn).** `resolve()` records `acted_at` + **`window_fraction`** (where in a `[when,end]` window the ward acted). The reflection loop (`pondering.js`) learns window-timing into `what_lapses_cost.md` (needs ≥3–4 of a kind) and **calibrates its own forecasts** — it's fed its projected (unobserved) edges with ids and returns `edge_calibrations` (raise/lower `certainty`, mark `observed` only once truly seen), applied via `updateScheduleEdge`. Rides the existing reflection call; no new loop. *Deferred:* reflection promoting `co_occurs_with → causes` (needs general resolve-or-create) — for now the Familiar promotes during chat.
 
 **`snooze_until`** is an ISO timestamp on the task payload, set when {{user}} explicitly says "not now" and the Familiar calls the `schedule_snooze_task` tool (id + minutes, clamped 1min–1week). `passesHardGates` honours an active snooze across every tier — the human asked — so it blocks before the threat/quiet/dedup checks. The reminder loop remains the firm safety net for anything with a real deadline; the snooze only quiets the opportunistic surface path. Because Unruh's `schedule_update_node` REPLACES the whole payload, the tool reads the current payload from the schedule window and merges the stamp in (preserving `stakes_tier` / `consequence_model`).
 

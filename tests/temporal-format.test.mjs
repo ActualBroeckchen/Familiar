@@ -194,6 +194,46 @@ test('no [schedule ids] legend when there are no schedule nodes', () => {
   assert.doesNotMatch(out, /\[schedule ids/);
 });
 
+test('renders a Consequence links section with the consequence tag', () => {
+  const out = formatTemporalContext({
+    schedule: {
+      phase: null,
+      window: [
+        { id: 'tk-1', type: 'task',  label: 'skip dinner' },
+        { id: 'st-1', type: 'state', label: 'crash', when: '2026-06-22T20:00:00Z' },
+        { id: 'tk-2', type: 'task',  label: 'prep' },
+        { id: 'ev-1', type: 'event', label: 'interview', when: '2026-06-23T10:00:00Z' },
+      ],
+      edges: [
+        { id: 'e1', src: 'tk-1', dst: 'st-1', kind: 'causes', payload: { valence: 'harm', condition: 'on_lapse', horizon_hours: 4, severity: 'high', certainty: 'high' } },
+        { id: 'e2', src: 'tk-2', dst: 'ev-1', kind: 'requires' },
+      ],
+    },
+  });
+  assert.match(out, /Consequence links/);
+  assert.match(out, /skip dinner → causes → crash \[on lapse · in ~4h · harms · high stakes · high certainty\]/);
+  assert.match(out, /prep → requires → interview/);   // bare structural edge, no tag
+});
+
+test('co_occurs_with renders undirected with [noticed] when untagged', () => {
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [
+      { id: 'a', type: 'task',  label: 'errands' },
+      { id: 'b', type: 'state', label: 'low stretch', when: '2026-06-22T20:00:00Z' },
+    ], edges: [{ id: 'e', src: 'a', dst: 'b', kind: 'co_occurs_with' }] },
+  });
+  assert.match(out, /errands — co-occurs — low stretch \[noticed\]/);
+});
+
+test('drops an edge whose endpoint is not in the visible window (no dangling render)', () => {
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [
+      { id: 'a', type: 'task', label: 'visible task' },
+    ], edges: [{ id: 'e', src: 'a', dst: 'gone', kind: 'causes' }] },
+  });
+  assert.doesNotMatch(out, /Consequence links/);
+});
+
 test('open tasks (no when_ts, no resolution) get a {{user}}-bonded header', () => {
   const out = formatTemporalContext({
     schedule: { phase: null, window: [
