@@ -206,6 +206,35 @@ test('parsePondering: no edge_calibrations key → field absent (not an empty ar
   assert.equal(r.edge_calibrations, undefined);
 });
 
+test('buildPonderPrompt: reflection shows co-occurrence pairs + the noticed→suspected ladder', () => {
+  const prompt = buildPonderPrompt({
+    mode: 'reflection', outcomes: [], existingNotes: '',
+    cooccurrences: [{ edge_id: 'c1', from: 'errands', to: 'low stretch', times_noticed: 3 }],
+  });
+  assert.match(prompt, /NOTICED together/i);
+  assert.match(prompt, /noticed . suspected . confirmed|tentative cause/i);
+  assert.match(prompt, /promotions/);
+  assert.match(prompt, /times_noticed|errands/);
+});
+
+test('parsePondering: reflection promotions — valid kept, malformed dropped, observed never set', () => {
+  const r = parsePondering(JSON.stringify({
+    title: 't', content: 'c',
+    promotions: [
+      { edge_id: 'c1', condition: 'on_lapse', certainty: 'low', valence: 'harm', note: 'keeps recurring' }, // kept
+      { edge_id: 'c2' },                          // kept (edge_id alone is enough)
+      { condition: 'on_lapse' },                  // dropped (no edge_id)
+      { edge_id: 'c3', certainty: 'certain-ish' },// kept but bad certainty dropped from payload
+    ],
+  }));
+  assert.equal(r.promotions.length, 3);
+  assert.deepEqual(r.promotions[0], { edge_id: 'c1', certainty: 'low', valence: 'harm', condition: 'on_lapse', note: 'keeps recurring' });
+  assert.deepEqual(r.promotions[1], { edge_id: 'c2' });
+  assert.deepEqual(r.promotions[2], { edge_id: 'c3' }); // bad enum dropped, edge_id survives
+  // The parser never lets a promotion assert observed — that's enforced at apply time too.
+  assert.ok(r.promotions.every(p => p.observed === undefined));
+});
+
 test('parsePondering: reflection JSON with null update', () => {
   const r = parsePondering(JSON.stringify({
     title: 'reflection title',

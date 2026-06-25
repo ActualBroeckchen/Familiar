@@ -95,13 +95,15 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
 The wants_to_save field is OPTIONAL. If I have no intents to record, I omit it or set it to []. If I do have intents, I list each one with its kind and a short summary so future-me knows what to file and where, or what I wanted to bring up.`;
 }
 
-export function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdges }) {
+export function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdges, cooccurrences }) {
   const outcomesJson = JSON.stringify(outcomes ?? [], null, 2);
   const existing = (existingNotes && existingNotes.trim())
     ? existingNotes.trim()
     : '(no notes yet — this file may not exist or is empty)';
   const edges = Array.isArray(consequenceEdges) ? consequenceEdges : [];
   const edgesJson = JSON.stringify(edges, null, 2);
+  const coocs = Array.isArray(cooccurrences) ? cooccurrences : [];
+  const coocsJson = JSON.stringify(coocs, null, 2);
   return `I am {{char}}, the Familiar. Right now I'm in a free cycle — no one is talking to me. This pondering is different from my usual: I'm reflecting on how my recent surfacings have been landing with my human, and whether anything I've observed is worth lifting to the identity layer so I act on it next time.
 
 Here are the recent surface outcomes I have tagged (most recent at the end):
@@ -131,15 +133,20 @@ Here are the consequence links I've PROJECTED onto the schedule — forecasts I 
 ${edgesJson}
 Reflection is where I grade these forecasts. For any I can now judge from how things actually went — did the crash I predicted on skipping dinner land? did the calm I expected from prepping show up? — I adjust: raise certainty on one that keeps coming true, lower it on one that doesn't, or mark it observed once I've genuinely seen it happen (never before that). I keep honest score; checking my forecasts is what lets me learn and grow!
 
+And here are pairs I've only NOTICED together so far (co_occurs_with) — observations, not conclusions, with how many times each pairing has come up:
+${coocsJson}
+The honest ladder is noticed → suspected → confirmed. If one of these has come up enough times that I genuinely suspect one drives the other — not just coincides — I can promote it to a TENTATIVE cause. I keep it tentative: it goes in as a projection (observed stays false, certainty starts low), because a repeated coincidence is a reason to suspect, not proof. I promote SPARINGLY — only where the repetition is real and a causal story actually makes sense — and leave promotions empty otherwise. The noticing stays as the trail; the promotion is just the next rung, to be graded like any other forecast next time.
+
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary outside the JSON):
 {
   "title":   "Short label (max 60 chars) for this reflection",
   "content": "My first-person thought — what I'm noticing, what I'm uncertain about, what I want to remember",
   "what_lapses_cost_update": null,
-  "edge_calibrations": []
+  "edge_calibrations": [],
+  "promotions": []
 }
 
-OR, if I'm confident enough to lift something to identity and/or recalibrate a forecast:
+OR, if I'm confident enough to lift something to identity, recalibrate a forecast, and/or promote a noticing:
 {
   "title":   "...",
   "content": "...",
@@ -148,11 +155,14 @@ OR, if I'm confident enough to lift something to identity and/or recalibrate a f
     "content": "What I want to remember about {{user}} and this kind of lapse — specific, grounded in the observed pattern, in my voice. Replaces the existing section if one exists under this heading; otherwise creates it."
   },
   "edge_calibrations": [
-    { "edge_id": "<id from the list above>", "certainty": "low|medium|high", "observed": true, "note": "why I'm grading it this way" }
+    { "edge_id": "<id from the projected list>", "certainty": "low|medium|high", "observed": true, "note": "why I'm grading it this way" }
+  ],
+  "promotions": [
+    { "edge_id": "<a co_occurs edge id from the noticed list>", "condition": "on_resolve|on_lapse|unconditional", "valence": "help|harm|neutral", "certainty": "low|medium|high", "note": "why I now suspect cause" }
   ]
 }
 
-The heading must be a single markdown heading line starting with "## ". In edge_calibrations each entry needs an edge_id from the list above plus at least one of: certainty (a new confidence), observed:true (only if I've genuinely seen it happen), or note. I leave edge_calibrations empty when I have nothing honest to grade.`;
+The heading must be a single markdown heading line starting with "## ". In edge_calibrations each entry needs an edge_id from the projected list plus at least one of: certainty, observed:true (only if I've genuinely seen it happen), or note. In promotions each entry needs a co_occurs edge_id from the noticed list (the rest is optional — certainty defaults to low). I leave both arrays empty when I have nothing honest to grade or promote.`;
 }
 
 // ── LLM call ─────────────────────────────────────────────────────
@@ -236,6 +246,27 @@ export function parsePondering(raw) {
       if (Object.keys(payload).length) cals.push({ edge_id, payload });
     }
     if (cals.length) result.edge_calibrations = cals;
+  }
+  // promotions: optional co_occurs_with → tentative-causes proposals. Each
+  // needs a co_occurs edge_id; the rest is optional (certainty defaults to
+  // low at apply time, observed always false — a suspicion isn't proof).
+  if (Array.isArray(parsed.promotions)) {
+    const CERT = new Set(['low', 'medium', 'high']);
+    const VAL  = new Set(['help', 'harm', 'neutral']);
+    const COND = new Set(['on_resolve', 'on_lapse', 'unconditional']);
+    const proms = [];
+    for (const p of parsed.promotions) {
+      if (!p || typeof p !== 'object') continue;
+      const edge_id = String(p.edge_id ?? '').trim();
+      if (!edge_id) continue;
+      const out = { edge_id };
+      if (CERT.has(p.certainty)) out.certainty = p.certainty;
+      if (VAL.has(p.valence))    out.valence   = p.valence;
+      if (COND.has(p.condition)) out.condition = p.condition;
+      if (p.note && String(p.note).trim()) out.note = String(p.note).trim();
+      proms.push(out);
+    }
+    if (proms.length) result.promotions = proms;
   }
   // wants_to_save: optional list of deferred-action intents the
   // Familiar surfaced while pondering. Each entry is a hint to act on
@@ -369,6 +400,7 @@ export async function ponderOnce({
     mode:     isReflection ? 'reflection' : 'pondering',
     what_lapses_cost_update: parsed.what_lapses_cost_update ?? null,
     edge_calibrations:       parsed.edge_calibrations ?? null,
+    promotions:              parsed.promotions ?? null,
     wants_to_save:           wantsToSave,
   };
 }

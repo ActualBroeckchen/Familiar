@@ -2857,11 +2857,13 @@ function startAutonomousPondering() {
       // with ids + endpoint labels, so reflection can grade and recalibrate
       // its forecasts. Degrades to [] if Unruh is unreachable.
       let consequenceEdges = [];
+      let cooccurrences = [];
       try {
         const win = await getScheduleWindow({});
         const nodes = Array.isArray(win?.nodes) ? win.nodes : [];
         const labelById = new Map(nodes.map(n => [n.id, n.label]));
-        consequenceEdges = (Array.isArray(win?.edges) ? win.edges : [])
+        const allEdges = Array.isArray(win?.edges) ? win.edges : [];
+        consequenceEdges = allEdges
           .filter(ed => ed?.payload && (ed.payload.valence || ed.payload.condition) && ed.payload.observed !== true)
           .map(ed => ({
             edge_id: ed.id, from: labelById.get(ed.src) ?? ed.src, to: labelById.get(ed.dst) ?? ed.dst,
@@ -2869,8 +2871,26 @@ function startAutonomousPondering() {
             horizon_hours: ed.payload.horizon_hours, severity: ed.payload.severity,
             certainty: ed.payload.certainty, note: ed.payload.note,
           }));
-      } catch { /* Unruh down → no calibration this cycle, prompt still works */ }
-      return { mode: 'reflection', outcomes: projected, existingNotes, consequenceEdges };
+        // co_occurs_with noticings, grouped by unordered endpoint pair so
+        // reflection sees how often a pairing has come up (the signal for
+        // promoting a noticing to a tentative cause). Pairs that already
+        // have a causes edge are skipped — no point re-suggesting.
+        const hasCause = new Set();
+        for (const e of allEdges) if (e.kind === 'causes') { hasCause.add(`${e.src}|${e.dst}`); hasCause.add(`${e.dst}|${e.src}`); }
+        const byPair = new Map();
+        for (const ed of allEdges) {
+          if (ed.kind !== 'co_occurs_with' || hasCause.has(`${ed.src}|${ed.dst}`)) continue;
+          const key = [ed.src, ed.dst].sort().join('|');
+          const cur = byPair.get(key);
+          if (cur) cur.times_noticed += 1;
+          else byPair.set(key, {
+            edge_id: ed.id, src_id: ed.src, dst_id: ed.dst,
+            from: labelById.get(ed.src) ?? ed.src, to: labelById.get(ed.dst) ?? ed.dst, times_noticed: 1,
+          });
+        }
+        cooccurrences = [...byPair.values()];
+      } catch { /* Unruh down → no calibration/promotion this cycle, prompt still works */ }
+      return { mode: 'reflection', outcomes: projected, existingNotes, consequenceEdges, cooccurrences };
     },
     runPonder: async (topic /* string OR { mode:'reflection', ... } */) => {
       const s    = readSettingsSync();
@@ -2909,6 +2929,24 @@ function startAutonomousPondering() {
           updateScheduleEdge({ id: cal.edge_id, payload: cal.payload })
             .then(r => console.log(`[pondering] reflection → ${r?.ok ? 'recalibrated' : 'failed to recalibrate'} edge ${cal.edge_id}`))
             .catch(err => console.error('[pondering] edge recalibration failed:', err?.message ?? err));
+        }
+        // Promote a repeated co_occurs_with to a TENTATIVE cause: add a new
+        // causes edge between the same two nodes (observed:false, low default
+        // certainty). The noticing stays as the trail; the cause is the next
+        // rung, to be graded next reflection. Endpoints resolve from the
+        // co-occurrence list the prompt was built from (no resolve-or-create
+        // needed — both nodes already exist).
+        const coocList = (topic && typeof topic === 'object' && Array.isArray(topic.cooccurrences)) ? topic.cooccurrences : [];
+        for (const promo of (result.promotions ?? [])) {
+          const co = coocList.find(c => c.edge_id === promo.edge_id);
+          if (!co) continue;
+          const payload = { observed: false, certainty: promo.certainty || 'low' };
+          if (promo.valence)   payload.valence   = promo.valence;
+          if (promo.condition) payload.condition = promo.condition;
+          if (promo.note)      payload.note      = promo.note;
+          addScheduleEdge({ src: co.src_id, dst: co.dst_id, kind: 'causes', payload })
+            .then(r => console.log(`[pondering] reflection → ${r?.ok ? `promoted noticing to tentative cause (${co.from} → ${co.to})` : 'failed to promote'} `))
+            .catch(err => console.error('[pondering] promotion failed:', err?.message ?? err));
         }
       }
       return result;
