@@ -259,6 +259,10 @@ test('schedule_delete: a missing id is caught before any Unruh call', async () =
   assert.match(await executeToolCall('schedule_delete', '{}'), /need the id of the schedule item/i);
 });
 
+test('schedule_add_need: a need without both window edges is caught before any Unruh call', async () => {
+  assert.match(await executeToolCall('schedule_add_need', '{"label":"dinner","when":"2026-06-25T18:00:00Z"}'), /need both when .* and end|a WINDOW/i);
+});
+
 test('schedule_link: a missing src is caught before any Unruh call', async () => {
   assert.match(await executeToolCall('schedule_link', '{"kind":"causes"}'), /need the src id/i);
 });

@@ -46,7 +46,7 @@ SCHEDULE_EDGE_KINDS = {
     # loop climbs (co_occurs → causes) before asserting cause.
     "co_occurs_with",
 }
-RESOLUTIONS = {"done", "cancelled", "carried_forward", "fired"}
+RESOLUTIONS = {"done", "cancelled", "carried_forward", "fired", "missed"}
 
 # ── Consequence metadata (rides in an edge's payload_json) ──────────────
 # A consequence is an edge (usually 'causes' or 'co_occurs_with') carrying

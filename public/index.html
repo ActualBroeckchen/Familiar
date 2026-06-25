@@ -170,6 +170,12 @@
             </select>
           </div>
           <div class="field-hint">"Delete" removes the entry once the fact is safely in Phylactery — best if your tomes are cluttered. "Breadcrumb" keeps a small pointer so keyword triggers still resolve.</div>
+
+          <div class="field-row" style="margin-top:8px">
+            <label for="needs-tracking-toggle">Track unmet needs</label>
+            <input type="checkbox" id="needs-tracking-toggle">
+          </div>
+          <div class="field-hint">Off by default. When on, your Familiar quietly keeps a record of recurring need-windows it's set up for you (a meal, meds, winding down for sleep): once a window's time has passed without it being met, it's marked <em>missed</em> for that day, building a picture of how your basic needs are actually getting met over time. It stands down whenever you're in distress (that's triage's job, not this), and it only records the miss — whether any knock-on effect followed stays something it has to actually notice and confirm with you.</div>
         </div>
 
         <!-- Saved Connections & Fallbacks -->

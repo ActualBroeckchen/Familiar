@@ -1247,6 +1247,23 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'schedule_add_need',
+      description: 'I set up a recurring NEED-WINDOW for {{user}} — a daily need like a meal, medication, or winding down for sleep — as a time WINDOW (opens → closes) it should happen within, not a fixed appointment. This is how I keep track of whether their basic needs are actually getting met over time: each day the window is met or missed, and that running record tells me how {{user}} is really doing. I set these up once I understand their rhythm. "Skipped" then means something concrete — the window passed unmet — instead of a vague worry, and I can attach what a miss tends to cost via schedule_link. For a one-off task I use schedule_add_task; this is specifically for a recurring need I want to track the fulfilment of.',
+      parameters: {
+        type: 'object',
+        properties: {
+          label: { type: 'string', description: 'The need, short (e.g. "dinner", "evening meds", "wind down for sleep").' },
+          when:  { type: 'string', description: 'ISO 8601 UTC — when the window OPENS (earliest the need should be met). I convert {{user}}\'s local time to UTC once using my [Now] offset.' },
+          end:   { type: 'string', description: 'ISO 8601 UTC — when the window CLOSES. After this, an unmet need counts as missed for that day.' },
+          recurrence: { type: 'object', description: 'Optional. Defaults to daily. Same shape as schedule_add_task (e.g. {freq:"weekly", byweekday:1} for a need that isn\'t every day).' },
+        },
+        required: ['label', 'when', 'end'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'schedule_assign_time',
       description: 'I give an existing FLOATING task — one I\'ve been holding for {{user}} with no time set — a concrete time, so it stops drifting and actually comes due. I reach for this the moment {{user}} agrees on when to do a task: I pin it here instead of leaving it open-ended forever, which turns a vague someday into a real when (real progress, even before anything is done). The id comes from the [Surface candidates] or [Temporal Context] block. To park a task briefly I use schedule_snooze_task; to finish one I use schedule_resolve; this one is specifically for turning a someday into a when.',
       parameters: {
@@ -2088,6 +2105,21 @@ export const TOOL_EXECUTORS = {
       if (data?.ok === false) return `Failed to add task: ${data.error ?? 'unknown error'}`;
       return `Task added (id: ${data.id}). It will surface until resolved via schedule_resolve.`;
     } catch (err) { return `Failed to add task: ${err.message}`; }
+  },
+
+  schedule_add_need: async ({ label, when, end, recurrence } = {}) => {
+    if (!label || typeof label !== 'string') return 'Failed to add need: label (string) is required.';
+    if (!when || !end) return 'Failed to add need: a need is a WINDOW — I need both when (opens) and end (closes).';
+    try {
+      const payload = {
+        need: true,
+        stakes_tier: 'personal_wellbeing',
+        recurrence: (recurrence && typeof recurrence === 'object') ? recurrence : { freq: 'daily' },
+      };
+      const data = await addScheduleNode({ type: 'task', label, when, end, payload });
+      if (data?.ok === false) return `Failed to add need: ${data.error ?? 'unknown error'}`;
+      return `Need-window added (id: ${data.id}) — "${label}", tracked each day as met or missed.`;
+    } catch (err) { return `Failed to add need: ${err.message}`; }
   },
 
   schedule_assign_time: async ({ id, when }) => {
