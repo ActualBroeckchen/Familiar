@@ -63,35 +63,50 @@ test('relativeTime: yesterday / tomorrow at <clock>', () => {
 
 // ── relativeTime: week-scope phrasings ─────────────────────────────
 
-test('relativeTime: ±2..6 days → "last X" / "this X" with weekday', () => {
+test('relativeTime: past ±2..6 days → "last X" with weekday (unchanged)', () => {
   // Thu Jun 4 2026 is "now". Sat May 30 is 5 days ago (last Saturday).
   const lastSaturday = new Date(2026, 4, 30, 14, 0).getTime();
   assert.equal(relativeTime(lastSaturday, NOW), 'last Saturday at 2pm');
+});
 
-  // Mon Jun 8 is 4 days ahead (this Monday).
+test('relativeTime: future 2..6 days → "this X at <clock> (in N days)"', () => {
+  // Mon Jun 8 is 4 days ahead (this Monday). The exact day count rides
+  // alongside so the model never has to compute the distance itself.
   const thisMonday = new Date(2026, 5, 8, 10, 0).getTime();
-  assert.equal(relativeTime(thisMonday, NOW), 'this Monday at 10am');
+  assert.equal(relativeTime(thisMonday, NOW), 'this Monday at 10am (in 4 days)');
 });
 
-test('relativeTime: ±7..13 days → "last X" / "next X" with weekday', () => {
+test('relativeTime: future 7..13 days → "next X at <clock> (in N days)"', () => {
   const nextThursday = new Date(2026, 5, 11, 9, 0).getTime();
-  assert.equal(relativeTime(nextThursday, NOW), 'next Thursday at 9am');
+  assert.equal(relativeTime(nextThursday, NOW), 'next Thursday at 9am (in 7 days)');
 });
 
-// ── relativeTime: month-scope and beyond ───────────────────────────
+test('relativeTime: future 14..21 days → absolute date + clock + exact day count', () => {
+  // Jun 25 is 21 days out — too far for a bare weekday name, so the
+  // absolute date leads, and ≤3 weeks the day count stays exact.
+  const inThreeWeeks = NOW + 21 * 24 * 3600_000;
+  assert.equal(relativeTime(inThreeWeeks, NOW), 'Thursday, June 25 at 2:30pm (in 21 days)');
+});
 
-test('relativeTime: 2-4 weeks → "N weeks ago" / "in N weeks"', () => {
+test('relativeTime: future coarsens — weeks past 3 weeks, months past ~2 months', () => {
+  // 35 days out (exactly 5 weeks) → weeks, not "in 35 days".
+  const inFiveWeeks = NOW + 35 * 24 * 3600_000;
+  assert.equal(relativeTime(inFiveWeeks, NOW), 'Thursday, July 9 at 2:30pm (in 5 weeks)');
+  // Far future → months, not an unwieldy day count.
+  const farFuture = new Date(2026, 11, 25, 9, 0).getTime();
+  assert.equal(relativeTime(farFuture, NOW), 'Friday, December 25 at 9am (in 7 months)');
+});
+
+// ── relativeTime: past month-scope and beyond (phrasing unchanged) ─
+
+test('relativeTime: past 2-4 weeks → "N weeks ago"', () => {
   const twoWeeksAgo = NOW - 14 * 24 * 3600_000;
   assert.equal(relativeTime(twoWeeksAgo, NOW), '2 weeks ago');
-  const inThreeWeeks = NOW + 21 * 24 * 3600_000;
-  assert.equal(relativeTime(inThreeWeeks, NOW), 'in 3 weeks');
 });
 
-test('relativeTime: beyond a month → absolute date ALWAYS carries a relative interval', () => {
+test('relativeTime: past beyond a month → absolute date ALWAYS carries a relative interval', () => {
   const farPast = new Date(2025, 0, 22, 15, 0).getTime();
   assert.equal(relativeTime(farPast, NOW), 'Wednesday, January 22, 2025 (a year ago)');
-  const farFuture = new Date(2026, 11, 25, 9, 0).getTime();
-  assert.equal(relativeTime(farFuture, NOW), 'Friday, December 25 (in 7 months)');
 });
 
 // ── relativeTime: bad inputs ───────────────────────────────────────
@@ -110,19 +125,23 @@ test('relativeDay: today / yesterday / tomorrow', () => {
   assert.equal(relativeDay('2026-06-05', NOW), 'tomorrow');
 });
 
-test('relativeDay: weekday phrasings within the week', () => {
+test('relativeDay: past weekday phrasing unchanged; future carries a day count', () => {
   assert.equal(relativeDay('2026-05-30', NOW), 'last Saturday');
-  assert.equal(relativeDay('2026-06-08', NOW), 'this Monday');
+  assert.equal(relativeDay('2026-06-08', NOW), 'this Monday (in 4 days)');
 });
 
-test('relativeDay: weeks beyond the immediate week', () => {
+test('relativeDay: past weeks unchanged; future ≤3 weeks → absolute date + exact day count', () => {
   assert.equal(relativeDay('2026-05-21', NOW), '2 weeks ago');
-  assert.equal(relativeDay('2026-06-25', NOW), 'in 3 weeks');
+  assert.equal(relativeDay('2026-06-25', NOW), 'Thursday, June 25 (in 21 days)');
 });
 
-test('relativeDay: beyond a month → absolute date ALWAYS carries a relative interval', () => {
-  assert.equal(relativeDay('2025-01-22', NOW), 'Wednesday, January 22, 2025 (a year ago)');
+test('relativeDay: future coarsens past 3 weeks → weeks, then months', () => {
+  assert.equal(relativeDay('2026-07-09', NOW), 'Thursday, July 9 (in 5 weeks)');
   assert.equal(relativeDay('2026-12-25', NOW), 'Friday, December 25 (in 7 months)');
+});
+
+test('relativeDay: beyond a month → past keeps a relative interval', () => {
+  assert.equal(relativeDay('2025-01-22', NOW), 'Wednesday, January 22, 2025 (a year ago)');
 });
 
 test('relativeDay: bad input → empty string', () => {
