@@ -238,6 +238,7 @@ const state = {
   // PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1 env var on the server.
   memorySweepEnabled:      true,
   tomeGraduationEnabled:   false,   // opt-in: writes to the canonical self
+  needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
   tomeGraduationTidy:      'pointer',
   warmthQuietHoursStart:   23,
   warmthQuietHoursEnd:     8,
@@ -299,7 +300,7 @@ const SERVER_SYNCED_KEYS = [
   'ponderingEnabled', 'ponderingIntervalScale',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
   'memorySweepEnabled',
-  'tomeGraduationEnabled', 'tomeGraduationTidy',
+  'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled',
   'trustedContacts', 'userDiscordWebhook',
   'discordEnabled', 'discordBotToken', 'discordWardUserId',
 ];
@@ -2371,6 +2372,7 @@ function readSettingsFromUI() {
   if ($('warmth-toggle')) state.warmthEnabled = $('warmth-toggle').checked;
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
+  if ($('needs-tracking-toggle')) state.needsTrackingEnabled = $('needs-tracking-toggle').checked;
   if ($('tome-graduation-tidy')) state.tomeGraduationTidy = $('tome-graduation-tidy').value === 'delete' ? 'delete' : 'pointer';
   if ($('warmth-quiet-start')) {
     const n = parseInt($('warmth-quiet-start').value, 10);
@@ -2453,6 +2455,7 @@ function writeSettingsToUI() {
   if ($('warmth-toggle'))      setIfNotFocused($('warmth-toggle'),      'checked', state.warmthEnabled !== false);
   if ($('memory-sweep-toggle')) setIfNotFocused($('memory-sweep-toggle'), 'checked', state.memorySweepEnabled !== false);
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
+  if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
   if ($('tome-graduation-tidy'))   setIfNotFocused($('tome-graduation-tidy'),   'value',   state.tomeGraduationTidy === 'delete' ? 'delete' : 'pointer');
   if ($('warmth-quiet-start')) setIfNotFocused($('warmth-quiet-start'), 'value',   state.warmthQuietHoursStart ?? 23);
   if ($('warmth-quiet-end'))   setIfNotFocused($('warmth-quiet-end'),   'value',   state.warmthQuietHoursEnd ?? 8);

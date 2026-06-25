@@ -1108,6 +1108,7 @@ function wrapFile(filename, content, promptLabel) {
 import { formatTemporalContext } from './temporal-format.js';
 import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
 import { expandWindow } from './recurrence.js';
+import { summarizeNeedsForDay, isNeedWindow } from './needs-tracking.js';
 import { resolveEntityCoreRef, identityHasContent } from './entity-ref.js';
 import {
   getRecentPonderings,
@@ -1535,6 +1536,11 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
               .filter(item => !anchorIds.has(item?.id));
             temporalPayload.schedule.window = [...existing, ...expanded];
           }
+          // Needs-fulfilment view (Pass 2): today's status for each
+          // need-window, derived live from the same recurring anchors we
+          // already fetched (no extra MCP call). A missed window shows
+          // even though the expander drops resolved occurrences.
+          temporalPayload.needs = summarizeNeedsForDay(recurNodes.filter(isNeedWindow), Date.now());
         } catch (err) {
           console.error('[thalamus] recurrence expansion failed:', err?.message ?? err);
         }

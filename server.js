@@ -54,6 +54,7 @@ import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } fro
 import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';
 import { startMemorySweepLoop } from './memory-sweep-loop.js';
 import { startTomeGraduationLoop, stopTomeGraduationLoop } from './tome-graduation-loop.js';
+import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './needs-tracking-loop.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './reachout.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
 import { buildTimeAnchorBlock } from './relative-time.js';
@@ -3113,6 +3114,12 @@ function startReachout() {
   // drains durable facts stranded in tomes into identity/memory. Hard
   // off-switch: PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1.
   startTomeGraduationLoop();
+
+  // Needs-tracking (Pass 2). Opt-in (default OFF): marks a recurring
+  // need-window's occurrence `missed` once its window elapses unresolved,
+  // building the needs-fulfilment ledger. Stands down at moderate+ threat;
+  // hard off-switch: PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1.
+  startNeedsTrackingLoop();
 }
 
 // Memory coverage sweep (day-anchoring Phase 2). Memorizes past days that never
@@ -3165,6 +3172,7 @@ async function handleSignal(signal) {
   try { await stopSilenceTriageLoop(); } catch { /* already stopped */ }
   try { await stopReachoutLoop(); } catch { /* already stopped */ }
   try { await stopTomeGraduationLoop(); } catch { /* already stopped */ }
+  try { await stopNeedsTrackingLoop(); } catch { /* already stopped */ }
   try { stopDiscordGateway(); } catch { /* already stopped */ }
   try { shutdownPhylactery(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }

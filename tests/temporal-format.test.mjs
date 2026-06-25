@@ -225,6 +225,28 @@ test('co_occurs_with renders undirected with [noticed] when untagged', () => {
   assert.match(out, /errands — co-occurs — low stretch \[noticed\]/);
 });
 
+test('renders a Needs today block from payload.needs, sorted with missed/open first', () => {
+  const h = (hr) => { const d = new Date(); d.setHours(hr, 0, 0, 0); return d.getTime(); };
+  const out = formatTemporalContext({
+    needs: [
+      { label: 'evening meds', status: 'met',     startMs: h(8),  endMs: h(9) },
+      { label: 'dinner',       status: 'missed',  startMs: h(18), endMs: h(20) },
+      { label: 'wind down',    status: 'open',     startMs: h(21), endMs: h(23) },
+    ],
+  });
+  assert.match(out, /Needs today/);
+  assert.match(out, /dinner — missed/);
+  assert.match(out, /wind down — open now/);
+  assert.match(out, /evening meds — met/);
+  // missed sorts before met
+  assert.ok(out.indexOf('dinner') < out.indexOf('evening meds'), 'missed reads before met');
+});
+
+test('no Needs today block when payload.needs is empty/absent', () => {
+  assert.doesNotMatch(formatTemporalContext({ needs: [] }), /Needs today/);
+  assert.doesNotMatch(formatTemporalContext({ schedule: { window: [] } }), /Needs today/);
+});
+
 test('drops an edge whose endpoint is not in the visible window (no dangling render)', () => {
   const out = formatTemporalContext({
     schedule: { phase: null, window: [
