@@ -241,6 +241,12 @@ const state = {
   needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
   notificationSounds:      true,    // in-app chime on new messages (default on)
   wardTimeZone:            '',      // ward's IANA zone, auto-detected from the browser (see init overlay)
+  // Google Calendar sync (0.8). Opt-in: idles until an iCal URL is pasted
+  // and the toggle is on. Interval in minutes (hourly default; loop clamps
+  // to [5min, 24h]).
+  gcalEnabled:             false,
+  gcalIcalUrl:             '',
+  gcalSyncIntervalMinutes: 60,
   tomeGraduationTidy:      'pointer',
   warmthQuietHoursStart:   23,
   warmthQuietHoursEnd:     8,
@@ -304,6 +310,7 @@ const SERVER_SYNCED_KEYS = [
   'memorySweepEnabled',
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'notificationSounds',
   'wardTimeZone',
+  'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes',
   'trustedContacts', 'userDiscordWebhook',
   'discordEnabled', 'discordBotToken', 'discordWardUserId',
 ];
@@ -2398,6 +2405,12 @@ function readSettingsFromUI() {
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('needs-tracking-toggle')) state.needsTrackingEnabled = $('needs-tracking-toggle').checked;
   if ($('notif-sound-toggle')) state.notificationSounds = $('notif-sound-toggle').checked;
+  if ($('gcal-toggle')) state.gcalEnabled = $('gcal-toggle').checked;
+  if ($('gcal-ical-url')) state.gcalIcalUrl = $('gcal-ical-url').value.trim();
+  if ($('gcal-interval')) {
+    const n = parseInt($('gcal-interval').value, 10);
+    state.gcalSyncIntervalMinutes = Number.isInteger(n) && n >= 5 && n <= 1440 ? n : 60;
+  }
   if ($('tome-graduation-tidy')) state.tomeGraduationTidy = $('tome-graduation-tidy').value === 'delete' ? 'delete' : 'pointer';
   if ($('warmth-quiet-start')) {
     const n = parseInt($('warmth-quiet-start').value, 10);
@@ -2482,6 +2495,9 @@ function writeSettingsToUI() {
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
   if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
+  if ($('gcal-toggle')) setIfNotFocused($('gcal-toggle'), 'checked', state.gcalEnabled === true);
+  if ($('gcal-ical-url')) setIfNotFocused($('gcal-ical-url'), 'value', state.gcalIcalUrl ?? '');
+  if ($('gcal-interval')) setIfNotFocused($('gcal-interval'), 'value', state.gcalSyncIntervalMinutes ?? 60);
   if ($('tome-graduation-tidy'))   setIfNotFocused($('tome-graduation-tidy'),   'value',   state.tomeGraduationTidy === 'delete' ? 'delete' : 'pointer');
   if ($('warmth-quiet-start')) setIfNotFocused($('warmth-quiet-start'), 'value',   state.warmthQuietHoursStart ?? 23);
   if ($('warmth-quiet-end'))   setIfNotFocused($('warmth-quiet-end'),   'value',   state.warmthQuietHoursEnd ?? 8);
@@ -3347,6 +3363,7 @@ function init() {
     'memory-sweep-toggle',
     'tome-graduation-toggle', 'tome-graduation-tidy', 'needs-tracking-toggle',
     'notif-sound-toggle',
+    'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
     'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'post-history-role', 'tools-enabled', 'custom-tools',

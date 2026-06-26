@@ -414,3 +414,29 @@ test('block order is handoff → schedule → interests', () => {
   assert.ok(h < s, 'handoff should come before schedule');
   assert.ok(s < i, 'schedule should come before interests');
 });
+
+test('gcal-sourced items get a 📅 marker + a legend note (legibility §5)', () => {
+  const future = new Date(Date.now() + 3 * 3600_000).toISOString();
+  const out = formatTemporalContext({
+    schedule: {
+      phase: null,
+      window: [
+        { id: 'g1', type: 'event', when: future, label: 'Dentist', payload: { source: 'gcal' } },
+        { id: 'l1', type: 'event', when: future, label: 'Local thing' },
+      ],
+    },
+  });
+  // The Google item is marked; the local one is not.
+  assert.match(out, /Dentist 📅/);
+  assert.ok(!/Local thing 📅/.test(out), 'local item must not be marked');
+  // Legend explains the marker only when a gcal item is present.
+  assert.match(out, /from my human's Google Calendar/);
+});
+
+test('no gcal legend note when nothing is gcal-sourced', () => {
+  const future = new Date(Date.now() + 3 * 3600_000).toISOString();
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [{ id: 'l1', type: 'event', when: future, label: 'Local only' }] },
+  });
+  assert.ok(!/Google Calendar/.test(out));
+});

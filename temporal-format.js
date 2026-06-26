@@ -203,7 +203,10 @@ export function formatTemporalContext(payload) {
         const when = renderWhen(item.when ?? item.fires_at ?? '');
         const whenText = when ? `${when} — ` : '';
         const type = item.type ? `[${item.type}] ` : '';
-        schedLines.push(`  ${whenText}${type}${item.label ?? item.id ?? ''}`);
+        // 📅 marks an item the Google-Calendar sync manages (§5) — the
+        // Familiar can tell which fields aren't its to hand-edit.
+        const gcal = item.payload?.source === 'gcal' ? ' 📅' : '';
+        schedLines.push(`  ${whenText}${type}${item.label ?? item.id ?? ''}${gcal}`);
       }
     }
     if (reminders.length) {
@@ -305,15 +308,23 @@ export function formatTemporalContext(payload) {
 
   const idLegend = [];
   const seenScheduleIds = new Set();
+  let anyGcal = false;
   for (const n of scheduleNodes) {
     if (!n?.id || seenScheduleIds.has(n.id)) continue;
     seenScheduleIds.add(n.id);
-    idLegend.push(`  ${n.label ?? n.id} [${n.type ?? 'task'}] = ${n.id}`);
+    if (n.payload?.source === 'gcal') anyGcal = true;
+    const marker = n.payload?.source === 'gcal' ? ' 📅' : '';
+    idLegend.push(`  ${n.label ?? n.id} [${n.type ?? 'task'}]${marker} = ${n.id}`);
   }
   if (idLegend.length) {
     blocks.push([
       '[schedule ids — to give a floating task a time (schedule_assign_time), park one (schedule_snooze_task), mark one done/cancelled (schedule_resolve), remove one entirely incl. a phase (schedule_delete), or connect two so I see how they bear on each other (schedule_link), pass the id(s)]',
       ...idLegend,
+      // §5 legibility: a 📅 item is externally managed. Not forbidden — the
+      // sync just owns its time/title (a hand-edit there loses on the next
+      // reconcile, and a Google item isn't a task to resolve). I add
+      // consequence links, export it, and reason about it freely.
+      ...(anyGcal ? ['  (📅 = from my human\'s Google Calendar — the sync owns its time/title; I add consequence links and export it, but hand-edits to those fields get overwritten on the next sync)'] : []),
     ].join('\n'));
   }
 

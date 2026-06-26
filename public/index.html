@@ -176,6 +176,21 @@
             <input type="checkbox" id="needs-tracking-toggle">
           </div>
           <div class="field-hint">Off by default. When on, your Familiar quietly keeps a record of recurring need-windows it's set up for you (a meal, meds, winding down for sleep): once a window's time has passed without it being met, it's marked <em>missed</em> for that day, building a picture of how your basic needs are actually getting met over time. It stands down whenever you're in distress (that's triage's job, not this), and it only records the miss — whether any knock-on effect followed stays something it has to actually notice and confirm with you.</div>
+
+          <div class="field-row" style="margin-top:8px">
+            <label for="gcal-toggle">Google Calendar sync</label>
+            <input type="checkbox" id="gcal-toggle">
+          </div>
+          <div class="field-hint">Off by default. When on, your Familiar reads your Google Calendar (one-way) so your appointments show up in its sense of your day. Paste the calendar's <em>secret address in iCal format</em> below — in Google Calendar: Settings → your calendar → <em>Integrate calendar</em> → "Secret address in iCal format". Nothing is written back; it only reads, and a genuinely new appointment is the one thing it'll pause to think two moves ahead about. Keep that secret address private — anyone with it can read the calendar.</div>
+          <div class="field">
+            <label for="gcal-ical-url">iCal URL (secret address)</label>
+            <input type="text" id="gcal-ical-url" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="gcal-interval">Sync every (minutes)</label>
+            <input type="number" id="gcal-interval" value="60" min="5" max="1440" step="5">
+            <div class="field-hint">How often it re-reads the calendar. Hourly suits most people; tighten it if you re-plan through the day, widen it if your plans rarely move. (Clamped to 5 min – 24 h.)</div>
+          </div>
         </div>
 
         <!-- Saved Connections & Fallbacks -->

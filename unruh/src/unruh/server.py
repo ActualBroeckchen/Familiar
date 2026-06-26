@@ -43,6 +43,7 @@ from unruh.db import get_conn, now_iso
 from unruh import schedule as sched
 from unruh import interest as interests
 from unruh import handoff as handoffs
+from unruh import gcal as gcal_ingest_mod
 
 mcp = FastMCP("unruh")
 
@@ -368,6 +369,44 @@ def schedule_list_phases(include_resolved: bool = False, limit: int = 200) -> di
     with get_conn() as conn:
         phases = sched.list_phases(conn, include_resolved=include_resolved, limit=limit)
     return {"ok": True, "phases": phases}
+
+
+# ── Google Calendar ingestion (0.8) ────────────────────────────────────
+
+
+@mcp.tool()
+def gcal_ingest(
+    ics_text: str | None = None,
+    events: list | None = None,
+    reconcile_deletes: bool = True,
+) -> dict[str, Any]:
+    """I use this to fold my human's Google Calendar into their schedule. The
+    Node sync loop hands me either a raw `.ics` feed (`ics_text`) or already-
+    normalised events (`events`, from the gogcli/gcalcli adapters); I parse,
+    map each entry to an `event` node keyed by its stable Google UID, and
+    reconcile the whole gcal-sourced set in one shot. This is mechanical —
+    the only Familiar-facing effect is that genuinely NEW items get flagged
+    for me to think two moves ahead about later.
+
+    Args:
+        ics_text: a complete `.ics` document (the link adapter's output).
+        events: a list of pre-normalised events (the authenticated adapters'
+            output). Pass exactly one of `ics_text` / `events`.
+        reconcile_deletes: True for a confirmed-good FULL snapshot (an event
+            that vanished from Google is cancelled here). A windowed/partial
+            read passes False so it can't cancel events outside its window.
+
+    Returns: {ok, new: [...ids], updated: [...], unchanged: [...],
+    removed: [...], complex_series: [...uids]}. Only `new` ever reaches me.
+    """
+    try:
+        with get_conn() as conn:
+            return gcal_ingest_mod.gcal_ingest(
+                conn, ics_text=ics_text, events=events,
+                reconcile_deletes=reconcile_deletes,
+            )
+    except Exception as e:  # parse/DB failure must degrade, never crash the loop
+        return _err(f"gcal_ingest failed: {e}", code="ingest_error")
 
 
 # ── Reminders (M11) ────────────────────────────────────────────────────

@@ -887,6 +887,28 @@ export async function getRemindersHealth() {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+// ── Google Calendar ingestion wrapper (0.8) ──────────────────────
+//
+// The Node adapters (gcal-source.js for the link tier; gogcli/gcalcli in
+// Pass 4) fetch the calendar and hand the bytes/events here; Unruh parses
+// + reconciles and returns the change classification {new, updated,
+// removed}. Best-effort like every Unruh-facing call — a down peer or a
+// failed ingest degrades to ok:false and the sync loop simply skips this
+// tick. Pass exactly one of icsText / events.
+export async function ingestGcal({ icsText, events, reconcileDeletes = true } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', new: [], updated: [], removed: [] };
+  try {
+    const args = { reconcile_deletes: reconcileDeletes };
+    if (icsText !== undefined) args.ics_text = icsText;
+    if (events  !== undefined) args.events  = events;
+    const r = await unruhClient.callTool({ name: 'gcal_ingest', arguments: args });
+    return parseToolText(r, { ok: false, new: [], updated: [], removed: [] });
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err), new: [], updated: [], removed: [] };
+  }
+}
+
 // ── Handoff wrappers (M9b) ───────────────────────────────────────
 
 export async function getHandoff({ include_consumed = true } = {}) {
