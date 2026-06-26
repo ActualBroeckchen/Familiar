@@ -52,7 +52,7 @@ import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
 import { listOutbox, acknowledgeOutbox, clearAcknowledged } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
 import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';
-import { startMemorySweepLoop } from './memory-sweep-loop.js';
+import { startMemorySweepLoop, stopMemorySweepLoop } from './memory-sweep-loop.js';
 import { startTomeGraduationLoop, stopTomeGraduationLoop } from './tome-graduation-loop.js';
 import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './needs-tracking-loop.js';
 import { isNeedWindow } from './needs-tracking.js';
@@ -2923,6 +2923,7 @@ function startAutonomousPondering() {
         provider: conn.provider,
         apiKey:   conn.apiKey,
         model:    conn.model,
+        settings: s,
       });
       // Reflection follow-through: if the LLM proposed an
       // identity-layer update, write it. Mark the reflection so
@@ -3232,6 +3233,7 @@ async function handleSignal(signal) {
   try { await stopReachoutLoop(); } catch { /* already stopped */ }
   try { await stopTomeGraduationLoop(); } catch { /* already stopped */ }
   try { await stopNeedsTrackingLoop(); } catch { /* already stopped */ }
+  try { await stopMemorySweepLoop(); } catch { /* already stopped */ }
   try { stopDiscordGateway(); } catch { /* already stopped */ }
   try { shutdownPhylactery(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }

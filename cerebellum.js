@@ -58,6 +58,7 @@ import {
 import { audienceTagFor, deriveNodeAudience } from './audience.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './graph-vocab.js';
 import { searchWeb, readWebpage, lookUp } from './websearch.js';
+import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
 import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta } from './outbox.js';
@@ -629,7 +630,11 @@ The "message" field (to the human) must be 1–2 sentences. First person. Authen
     if (parsed?.action !== 'reach_out' || typeof parsed.message !== 'string' || !parsed.message.trim()) {
       return { action: 'wait', ...(nextCheckInMs != null ? { nextCheckInMs } : {}) };
     }
-    const out = { action: 'reach_out', message: parsed.message.trim(), ...(nextCheckInMs != null ? { nextCheckInMs } : {}) };
+    // Strip any hallucinated [HH:MM]/⫸HH:MM⫷ tokens the LLM echoed at the single
+    // point the triage message is minted, so every downstream consumer — the
+    // outbox banner, the Discord push, and the trusted-contact relay — is clean,
+    // and the stored body can't re-inject a fabricated time next turn.
+    const out = { action: 'reach_out', message: stripLlmTimestamps(parsed.message.trim()), ...(nextCheckInMs != null ? { nextCheckInMs } : {}) };
     // Validate contactHuman strictly — must be an exact name from the configured
     // list. Delivery is DEFERRED: the user receives the outbox item first.
     // The trusted contact is only reached after CONTACT_ESCALATION_DELAY_MS
@@ -646,7 +651,7 @@ The "message" field (to the human) must be 1–2 sentences. First person. Authen
         out.meta = {
           pendingContact: {
             name:    ch.name,
-            message: ch.message.trim(),
+            message: stripLlmTimestamps(ch.message.trim()),
             channel: match.channel ?? 'discord',
           },
           contactDelayMs: delayMs,

@@ -6877,9 +6877,18 @@ async function saveLoreEditorEntry() {
 // Modal mirrors the Knowledge editor pattern (reuses .ke-* CSS).
 // Read-mostly: shows live + standing interests with decay metadata,
 // current threat state + audit history (with reset button), and the
-// Familiar's autonomous ponderings (with per-entry delete). CRUD on
-// interests beyond demote is deferred to a later pass — for now the
-// observable surface is enough for catching bugs.
+// Familiar's autonomous ponderings (with per-entry delete).
+//
+// The ward can *demote* an interest (a gentle down-weight / boundary) but
+// CANNOT bump it or promote it to a standing value from here — that is
+// DELIBERATE, not a missing feature. Interests are the FAMILIAR's own
+// texture: they're how it grows a distinct, independent shape over time
+// instead of becoming a smooth, frictionless mirror of the ward. Letting
+// the ward curate them would defeat the mission — part of which is keeping
+// the ward's social muscles working by giving them a companion that is
+// genuinely someone, not a tool they tune. So promote-to-standing lives
+// only with the Familiar (the `interest_set_standing` tool); don't add a
+// ward control for it.
 
 const TE_TABS = ['interests', 'threat', 'ponderings', 'schedule', 'routine', 'handoff'];
 
@@ -8242,7 +8251,11 @@ function formatOutboxAsMessageContent(item) {
 }
 
 async function injectOutboxAsChatMessage(item) {
-  const content = formatOutboxAsMessageContent(item);
+  // Defense-in-depth: the server strips LLM-hallucinated timestamps at mint
+  // time, but strip here too before this proactive body is rendered, STORED in
+  // state.messages, and copied — every other assistant-commit path strips, and
+  // a stored fabricated time would re-inject next turn and compound.
+  const content = stripDisplayTimestamps(formatOutboxAsMessageContent(item));
   if (!content) return;
 
   const timestamp = item.ts || new Date().toISOString();

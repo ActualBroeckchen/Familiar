@@ -237,6 +237,14 @@ test('disclosure: per-category audience tags persist; empty clears', async () =>
   );
   // only known remember-categories with a non-empty string value survive
   assert.deepEqual(v.disclosure, { health_info: 'family', basics: 'friends' });
+  // Regression: it must survive the read-path normalizer too — and survive an
+  // unrelated mutate to ANOTHER villager (which re-reads + rewrites the whole
+  // registry). This is the round-trip the upsert-return-value assert above
+  // can't catch (the standingConsent/disclosure disappearing-value class).
+  await upsertVillager({ name: 'Someone Else' }, { filePath });
+  const reg = await getRegistry({ filePath });
+  assert.deepEqual(reg.villagers.find(x => x.id === v.id).disclosure,
+    { health_info: 'family', basics: 'friends' });
   const cleared = await upsertVillager({ id: v.id, disclosure: {} }, { filePath });
   assert.equal(cleared.disclosure, undefined);
 });

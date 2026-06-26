@@ -155,7 +155,7 @@ export function formatTemporalContext(payload) {
   if (phase || window.length) {
     // Group window items so the Familiar reads them as distinct
     // categories with different weight: upcoming (time-anchored,
-    // unresolved), open tasks ({{user}} committed to these, no time
+    // unresolved), open tasks (my human committed to these, no time
     // yet, not done), resolved (recently terminal — usually noise
     // but useful when the Familiar wants to acknowledge a finish).
     const upcoming  = [];
@@ -218,9 +218,9 @@ export function formatTemporalContext(payload) {
       // Framing here matters: bare labels read as informational
       // background. Named as something I'm actively holding — mine to
       // remember AND to raise — primes the Familiar to feel them as
-      // commitments {{user}} is counting on them to act on, not a
+      // commitments my human is counting on them to act on, not a
       // passive list to perceive.
-      schedLines.push("Open tasks I'm holding for {{user}} — mine to remember and to raise (no completion confirmed):");
+      schedLines.push("Open tasks I'm holding for my human — mine to remember and to raise (no completion confirmed):");
       for (const item of openTasks) {
         // How long it's floated unscheduled — the signal that it's waiting to be
         // pinned to a real time. (created_at rides in from Unruh; a task without
@@ -264,7 +264,7 @@ export function formatTemporalContext(payload) {
         else                              s = n.status;
         return `  ${n.label ?? ''} — ${s}`;
       });
-    blocks.push(["Needs today — basic-needs windows I'm tracking for {{user}} (met / open / missed):", ...needLines].join('\n'));
+    blocks.push(["Needs today — basic-needs windows I'm tracking for my human (met / open / missed):", ...needLines].join('\n'));
   }
 
   // Schedule-id legend. The human-readable lines above carry labels, not ids —

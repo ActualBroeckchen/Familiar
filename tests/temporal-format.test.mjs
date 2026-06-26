@@ -256,7 +256,7 @@ test('drops an edge whose endpoint is not in the visible window (no dangling ren
   assert.doesNotMatch(out, /Consequence links/);
 });
 
-test('open tasks (no when_ts, no resolution) get a {{user}}-bonded header', () => {
+test('open tasks (no when_ts, no resolution) get a my-human-bonded header', () => {
   const out = formatTemporalContext({
     schedule: { phase: null, window: [
       { type: 'task', label: 'file taxes' },
@@ -266,7 +266,7 @@ test('open tasks (no when_ts, no resolution) get a {{user}}-bonded header', () =
   // Header that primes the Familiar to feel them as commitments their
   // bonded human is counting on them to ACT on — to remember AND to
   // raise — not background noise.
-  assert.match(out, /Open tasks I'm holding for \{\{user\}\} — mine to remember and to raise/);
+  assert.match(out, /Open tasks I'm holding for my human — mine to remember and to raise/);
   assert.match(out, /- file taxes/);
   assert.match(out, /- review the report/);
 });
