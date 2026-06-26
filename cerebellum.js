@@ -1203,10 +1203,10 @@ export const BUILTIN_TOOLS = [
   // surfaces in my [Temporal Context] block on subsequent turns, so I
   // can see what I committed and update if {{user}} changes their mind.
   //
-  // Time format: ISO 8601. My [Temporal Context] block always carries
-  // "now" as a UTC timestamp; I compute the target moment from there +
-  // any timezone info {{user}} or the temporal context gives me. If
-  // unsure of {{user}}'s timezone, I ask them rather than guess.
+  // Time format: YYYY-MM-DDTHH:MM:SS — plain local wall-clock as my [Now]
+  // block shows it, no UTC offset (e.g. "2026-06-18T09:00:00"). Unruh stores
+  // and compares in local time and normalises any stray offset in code
+  // (db.to_local_naive), so I write the local time {{user}} states directly.
   {
     type: 'function',
     function: {
@@ -1216,8 +1216,8 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           label: { type: 'string', description: 'Short human-readable name of the event (e.g. "dentist appointment").' },
-          when:  { type: 'string', description: 'Local start time, e.g. "2026-06-01T14:00:00" — the exact wall-clock time my [Now] block shows. I write the local time directly: no UTC, no timezone conversion, no offset math. The system stores and compares in local time, so what I write is what happens.' },
-          end:   { type: 'string', description: 'Optional local end time (same plain-local format as when).' },
+          when:  { type: 'string', description: 'Start time. Format: YYYY-MM-DDTHH:MM:SS — the local time my [Now] block shows, no UTC offset. E.g. "2026-06-01T14:00:00". The time I write is the time it happens.' },
+          end:   { type: 'string', description: 'Optional end time, same format (YYYY-MM-DDTHH:MM:SS, local).' },
           recurrence: { type: 'object', description: 'Optional. Repeats this event. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N (every N units), until?: "YYYY-MM-DD" (cut-off date), bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Monday repeats Mondays. Examples: {freq:"weekly"} for a regular meet-up; {freq:"monthly", bysetpos:-1, byweekday:5} for "last Friday of every month"; {freq:"yearly"} for an anniversary.' },
         },
         required: ['label', 'when'],
@@ -1233,7 +1233,7 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           label: { type: 'string', description: 'Short description of the task (e.g. "file taxes", "reply to Sam").' },
-          when:  { type: 'string', description: 'Optional local deadline, e.g. "2026-06-01T17:00:00" — the wall-clock time my [Now] block shows, written directly (no UTC, no timezone conversion). Omit for open-ended tasks.' },
+          when:  { type: 'string', description: 'Optional deadline. Format: YYYY-MM-DDTHH:MM:SS — the local time my [Now] block shows, no UTC offset. E.g. "2026-06-01T17:00:00". Omit for open-ended tasks.' },
           stakes_tier: {
             type: 'string',
             enum: ['external_obligation', 'personal_wellbeing', 'purely_optional'],
@@ -1258,8 +1258,8 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           label: { type: 'string', description: 'The need, short (e.g. "dinner", "evening meds", "wind down for sleep").' },
-          when:  { type: 'string', description: 'Local time the window OPENS (earliest the need should be met), e.g. "2026-06-01T18:00:00" — the wall-clock my [Now] block shows, written directly. No UTC, no conversion.' },
-          end:   { type: 'string', description: 'Local time the window CLOSES (same plain-local format). After this, an unmet need counts as missed for that day.' },
+          when:  { type: 'string', description: 'When the window OPENS (earliest the need should be met). Format: YYYY-MM-DDTHH:MM:SS — local, no UTC offset. E.g. "2026-06-01T18:00:00".' },
+          end:   { type: 'string', description: 'When the window CLOSES, same format (YYYY-MM-DDTHH:MM:SS, local). After this, an unmet need counts as missed for that day.' },
           recurrence: { type: 'object', description: 'Optional. Defaults to daily. Same shape as schedule_add_task (e.g. {freq:"weekly", byweekday:1} for a need that isn\'t every day).' },
         },
         required: ['label', 'when', 'end'],
@@ -1275,7 +1275,7 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           id:   { type: 'string', description: 'The id of the floating task to give a time to — from the [schedule ids] legend in [Temporal Context], or the `id:` line under the task in [Surface candidates].' },
-          when: { type: 'string', description: 'Local time, e.g. "2026-06-18T13:00:00" — the exact wall-clock time my [Now] block shows, written directly. No UTC, no timezone conversion.' },
+          when: { type: 'string', description: 'Format: YYYY-MM-DDTHH:MM:SS — the local time my [Now] block shows, no UTC offset. E.g. "2026-06-18T13:00:00".' },
         },
         required: ['id', 'when'],
       },
@@ -1305,7 +1305,7 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           label:   { type: 'string', description: 'Short label of what the reminder is about.' },
-          when:    { type: 'string', description: 'Local fire time, e.g. "2026-06-17T14:56:00" — exactly the wall-clock time my [Now] block shows. I write the local time directly: no UTC, no timezone conversion, no offset math. The system stores and compares in local time, so the time I write is the time it fires.' },
+          when:    { type: 'string', description: 'Fire time. Format: YYYY-MM-DDTHH:MM:SS — the local time my [Now] block shows, no UTC offset. E.g. "2026-06-17T14:56:00". The time I write is the time it fires.' },
           message: { type: 'string', description: 'Optional longer text delivered as the reminder message, in my voice.' },
           stakes_tier: {
             type: 'string',
@@ -1331,8 +1331,8 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           label:   { type: 'string', description: 'Short name of the phase (e.g. "morning correspondence").' },
-          when:    { type: 'string', description: 'Local start time. The date portion is re-templated daily — only the time-of-day matters. I write the local wall-clock directly, e.g. "2026-06-18T09:00:00" for a 9am phase; no UTC, no conversion.' },
-          end:     { type: 'string', description: 'Local end time (same plain-local format). Required for phases.' },
+          when:    { type: 'string', description: 'Start time. Format: YYYY-MM-DDTHH:MM:SS — local, no UTC offset. The date portion is re-templated daily, so only the time-of-day matters. E.g. "2026-06-18T09:00:00" for a 9am phase.' },
+          end:     { type: 'string', description: 'End time, same format (YYYY-MM-DDTHH:MM:SS, local). Required for phases.' },
           texture: { type: 'string', description: 'Optional short description of what I\'m like in this phase (e.g. "getting a bit stricter to make sure {{user}} actually goes to sleep."). I am allowed to be any kind of way I want to be - warm, sleepy, distracted, anything!' },
           recurrence: { type: 'object', description: 'Optional. Without this, phases recur daily by design — they match on time-of-day only. With recurrence, a phase shows only on the matched weekday/day-of-month/etc. Useful for "Sunday cleaning block" or "monthly review". Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. Examples: {freq:"weekly"} for "Sunday-only phase"; {freq:"monthly", bysetpos:-1, byweekday:5} for "last-Friday-of-month review".' },
         },
