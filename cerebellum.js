@@ -1203,10 +1203,10 @@ export const BUILTIN_TOOLS = [
   // surfaces in my [Temporal Context] block on subsequent turns, so I
   // can see what I committed and update if {{user}} changes their mind.
   //
-  // Time format: ISO 8601. My [Temporal Context] block always carries
-  // "now" as a UTC timestamp; I compute the target moment from there +
-  // any timezone info {{user}} or the temporal context gives me. If
-  // unsure of {{user}}'s timezone, I ask them rather than guess.
+  // Time format: plain LOCAL wall-clock ISO (e.g. "2026-06-18T09:00:00"),
+  // exactly the time my [Now] block shows — no UTC, no timezone math. Unruh
+  // stores and compares in local time and normalises any stray offset in code
+  // (db.to_local_naive), so I write the local time {{user}} states directly.
   {
     type: 'function',
     function: {

@@ -94,8 +94,10 @@ def schedule_add_node(
             requires `end`; task is the only type that may omit
             both (an open-ended 'to do' item).
         label: human-readable name. Required.
-        when: ISO-8601 UTC start time. Required for event/phase/state.
-        end: ISO-8601 UTC end time. Required for phase; optional for
+        when: ISO-8601 LOCAL-naive start time (no offset; e.g.
+            "2026-06-18T09:00:00"). An offset-bearing value is normalised to
+            local in code (to_local_naive). Required for event/phase/state.
+        end: ISO-8601 local-naive end time. Required for phase; optional for
             event/state (open-ended).
         payload: arbitrary extras stored as JSON (notes, source,
             categorisation that doesn't fit the four columns).
@@ -168,8 +170,8 @@ def schedule_get_window(
     coming up, what just passed, and what open tasks are pending.
 
     Args:
-        from_ts: ISO-8601 UTC inclusive lower bound. Default: now - 12h.
-        to_ts: ISO-8601 UTC inclusive upper bound. Default: now + 12h.
+        from_ts: ISO-8601 local-naive inclusive lower bound. Default: now - 12h.
+        to_ts: ISO-8601 local-naive inclusive upper bound. Default: now + 12h.
         limit: max nodes (and separately, max edges). Default 200 —
             generous for the design's "kilobytes-scale" graph.
         include_open_tasks: include tasks with no when_ts and no
@@ -251,8 +253,9 @@ def schedule_update_node(
     Args:
         id: node id to update.
         label: new label (non-empty). Omit / None to leave unchanged.
-        when: new ISO-8601 UTC start. Pass "" (empty string) to clear.
-        end: new ISO-8601 UTC end. Pass "" to clear.
+        when: new ISO-8601 local-naive start (offset normalised in code).
+            Pass "" (empty string) to clear.
+        end: new ISO-8601 local-naive end. Pass "" to clear.
         payload: new payload dict — REPLACES the existing payload.
 
     Returns: {ok: True, updated: <bool>}.
@@ -378,7 +381,7 @@ def reminders_due(now: str | None = None, limit: int = 50) -> dict[str, Any]:
     schedule_resolve(id, 'fired') after delivery succeeds.
 
     Args:
-        now: ISO-8601 UTC timestamp. Default = current wall clock.
+        now: ISO-8601 local-naive timestamp. Default = current local wall clock.
         limit: max reminders to return. Default 50.
 
     Returns: {ok: True, reminders: [...]}
