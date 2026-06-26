@@ -1111,8 +1111,12 @@ popover to those.
     futures / certainty / window-position learning) is specced in
     [`consequence-graph-build-spec.md`](consequence-graph-build-spec.md).**
 - **Local-time helpers** for the time pickers: convert between
-  `<input type="time">` + `<input type="datetime-local">` and ISO UTC
-  via real local-time semantics, not string-slicing.
+  `<input type="time">` + `<input type="datetime-local">` and the ISO
+  timestamps Unruh stores (**local-naive**, no offset — see
+  `docs/unruh-design.md` "Time model") via real local-time semantics, not
+  string-slicing. (A picker value that still serialises with an offset is
+  normalised to local server-side by `db.to_local_naive`, so the round-trip
+  is correct either way.)
 - **Outbox delivery polling** — `startOutboxPolling()` polls
   `/api/outbox` every 30s; reminder / triage / outbound_alert items
   are injected as ordinary assistant chat messages in the active

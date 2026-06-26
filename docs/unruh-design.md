@@ -207,7 +207,7 @@ Familiar's routine should emerge from direct conversation about what rhythm woul
 
 Two distinct systems coexist under the temporal umbrella:
 
-**Reminders** — specific time-triggered events (doctor's appointment at 4 PM requires a reminder at 3 PM). These need their own mechanism tied directly to Unruh's event graph rather than conversation rhythm. The implementation approach is an open question — cronjob-style timers are the obvious tool but have shown reliability problems in practice (firing into wrong sessions, timing drift, silent failures). The right solution is one that is robust enough to be trusted with genuinely time-sensitive information, since a missed reminder for a medical appointment or job interview is not a minor failure.
+**Reminders** — specific time-triggered events (doctor's appointment at 4 PM requires a reminder at 3 PM). These need their own mechanism tied directly to Unruh's event graph rather than conversation rhythm. *(Status: implemented as `reminders-loop.js` — a 30s `setInterval` poll over `reminder` nodes whose `when_ts` has arrived, with a health-watch for silent failure. The "silent failure" worry below was prophetic: the original UTC-internal storage let the model write a naive local `when_ts` the comparison never matched, so reminders scheduled fine but never fired — closed by the local-naive time model, see below.)* The reliability bar is high because a missed reminder for a medical appointment or job interview is not a minor failure.
 
 **Routine** — the softer daily rhythm. Not a checklist. More like a character's natural state at a given time of day, which colours how Familiar shows up in conversation without demanding anything from either party.
 

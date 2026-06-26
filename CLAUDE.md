@@ -332,6 +332,24 @@ Same posture for `node --check`, `bash -n`, syntax probes, `grep -c`, "smoke tes
 This is operational hygiene that compounds. A 30-message session that runs the test suite once per turn for no reason costs an order of magnitude more than a session that runs it twice — both produce
 the same code.
 
+## ⚠️ The LLM is not a source of exact machine values
+
+Any value that has to be **machine-correct** — a timestamp, a timezone offset, a UID, a URL, an `.ics` blob, an RRULE, a precise threshold or count — must be **produced or canonicalised by code, never trusted from the model's free output.** The model may *reference* such a value ("the local time my [Now] block shows", "the node `id` from the legend") but must not *compute* or *format* it. Reasoning and language are the model's job; arithmetic and exact strings are code's.
+
+This is not a style preference — it is a repeatedly-paid-for lesson. Each instance looked fine until it failed silently:
+
+1. **Hallucinated `[HH:MM]` timestamps.** The model imitates the `[HH:MM]`/`⫸HH:MM⫷` prefixes in injected history and emits fabricated times → the whole stripping regime below exists to delete them at every outgoing boundary. (The general rule, applied to one value.)
+2. **The reminder timezone bug (0.7.84).** The schedule tools asked the model to convert the ward's local time to UTC and emit an offset-bearing string. It stored a naive local time the UTC string-comparison never matched → a reminder that scheduled fine, *showed as fired*, and never delivered, with no error and no chime. Fixed by making Unruh **local-naive** so the model writes plain local time and `to_local_naive` owns any conversion in code. (See the Unruh "Time model" note above and `docs/unruh-design.md`.)
+3. **The Google-calendar spec is built entirely on this.** The Familiar pokes Unruh with a node `id`; Unruh/Google generate the dates, the URL, the `.ics` bytes, the RRULE. The model never types a calendar artifact — `docs/google-integration-build-spec.md` §3 is this principle stated as a feature's spine.
+4. **Forward-looking: certainty / numeric scores.** When the consequence-graph or any feature needs counts, thresholds, or confidence numbers, code does the counting and the model interprets the *pattern* — never "ask the model for the number."
+
+**The rule in practice:**
+- Before a feature relies on an exact value, ask: *can code derive it from something the model already references?* Usually yes — the node `id`, the live `[Now]` clock, the stored fields, a machine `timestamp`. Route the model around the arithmetic.
+- When you must accept a value from the model, **normalise/validate it at the boundary in code** (the `to_local_naive` pattern), and treat a malformed value as the model's *expected* failure mode, not an edge case.
+- A value the model formats by hand is a value that will be wrong some fraction of the time, and the failure is usually silent. Design so that fraction can't reach a human-facing or safety-relevant surface.
+
+The sections below are specific enforcements of this principle.
+
 ## ⚠️ LLM-generated timestamps must be stripped — only machine timestamps are trustworthy
 
 Chat history is injected with `[HH:MM]` prefixes (Discord) or `⫸HH:MM⫷` prefixes (web chat) derived from each message's canonical `timestamp` field. The LLM sees these and imitates them in its replies — producing output like `[14:35] I was thinking...` that bears a fabricated time. These echoed tokens must be stripped at every outgoing boundary before a message reaches a human or a platform. They must never be stored or re-injected as history, because re-injection causes compounding across turns.

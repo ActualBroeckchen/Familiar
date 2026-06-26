@@ -253,6 +253,13 @@ from the node's stored fields**:
 }
 ```
 
+> **Local → UTC at export (mirror of §1.2 ingest).** The node's `when_ts`/`end_ts`
+> are local-naive; external calendars need a real instant, so `schedule_export`
+> converts UP to UTC in code when emitting the `.ics` `DTSTART`/`DTEND` and the
+> `dates=…Z` of the Google-render URL (using the server's local offset — the same
+> tz the times were stored in). Still no model arithmetic: the Familiar passes an
+> `id`; Unruh does the local→UTC formatting.
+
 - The Familiar calls it with a node `id` from the `[schedule ids]` legend it
   already reads, and gets back a correct link/file. It never assembles the URL or
   the date math. (Operability: the only input — the `id` — is already in a
