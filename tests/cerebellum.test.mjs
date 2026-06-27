@@ -217,6 +217,8 @@ test('composeActiveTools gates calendar write-back behind the opt-in', () => {
   assert.ok(names({ gcalWriteEnabled: true, gcalWriteCommand: 'gcalcli import {file}' }).has('schedule_push_to_google'));
   // A gogcli/gcalcli source counts as a resolvable command (preset).
   assert.ok(names({ gcalWriteEnabled: true, gcalSource: 'gcalcli' }).has('schedule_push_to_google'));
+  // A native Google account source counts too (the executor verifies the token).
+  assert.ok(names({ gcalWriteEnabled: true, gcalSource: 'google' }).has('schedule_push_to_google'));
 });
 
 test('composeActiveTools gates the web tools behind webSearchEnabled', () => {

@@ -411,6 +411,21 @@ def gcal_ingest(
 
 
 @mcp.tool()
+def schedule_get(id: str) -> dict[str, Any]:
+    """I use this to read one schedule node's full stored fields by id. I reach
+    for it when I need an item's exact label/time/payload to act on it — e.g. to
+    add it to my human's real calendar. Returns the node or a not-found error.
+
+    Returns: {ok: True, node: {...}} or the standard error shape.
+    """
+    with get_conn() as conn:
+        node = sched.get_node(conn, id=id)
+    if node is None:
+        return _err(f"no schedule node with id {id!r}", code="not_found")
+    return {"ok": True, "node": node}
+
+
+@mcp.tool()
 def schedule_export(id: str) -> dict[str, Any]:
     """I use this to turn one of my human's scheduled items into something they
     can drop into their own calendar — a downloadable `.ics` file and a

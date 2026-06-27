@@ -185,11 +185,12 @@
           <div class="field">
             <label for="gcal-source">How to read the calendar</label>
             <select id="gcal-source">
-              <option value="link">iCal URL (out of the box)</option>
-              <option value="gogcli">gogcli (full Google Workspace CLI)</option>
-              <option value="gcalcli">gcalcli (calendar-only CLI)</option>
+              <option value="link">iCal URL (no setup, read-only)</option>
+              <option value="google">Google account (sign in — no terminal)</option>
+              <option value="gogcli">gogcli (advanced CLI)</option>
+              <option value="gcalcli">gcalcli (advanced CLI)</option>
             </select>
-            <div class="field-hint">The iCal URL works with no setup. The CLI options are for advanced users who already have <code>gogcli</code> or <code>gcalcli</code> installed and authenticated on this machine — pick whichever you use; they read the same way behind the scenes.</div>
+            <div class="field-hint">The iCal URL works with zero setup but is read-only. <strong>Google account</strong> signs in with your own Google credentials right here — no terminal — and is what unlocks write-back. The CLI options are for advanced users who already run <code>gogcli</code>/<code>gcalcli</code> in a terminal.</div>
           </div>
           <div id="gcal-link-panel">
             <div class="field">
@@ -197,6 +198,24 @@
               <input type="text" id="gcal-ical-url" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics" autocomplete="off" spellcheck="false">
               <div class="field-hint">In Google Calendar: Settings → your calendar → <em>Integrate calendar</em> → "Secret address in iCal format". Keep it private — anyone with it can read the calendar.</div>
             </div>
+          </div>
+          <div id="gcal-google-panel" class="hidden">
+            <div class="field-hint" id="gcal-google-status" style="font-weight:600">Checking connection…</div>
+            <div class="field">
+              <label>Connect (recommended)</label>
+              <div class="field-hint">One-time setup, all in the browser. In Google Cloud Console, create an OAuth client of type <em>Desktop app</em> and download its <code>credentials.json</code>. Upload it here, then click Connect — a Google tab opens, you click <em>Allow</em> once, and you're done. It refreshes itself from then on; you never touch a terminal.</div>
+              <input type="file" id="gcal-google-credfile" accept=".json,application/json">
+              <button type="button" id="gcal-google-connect" class="btn-secondary" style="margin-top:6px">Connect Google Calendar</button>
+            </div>
+            <details style="margin:6px 0">
+              <summary style="cursor:pointer;color:var(--text-dim)">…or paste a token instead</summary>
+              <div class="field" style="margin-top:6px">
+                <div class="field-hint">If you'd rather not upload <code>credentials.json</code>, mint a refresh token on Google's side (e.g. the <a href="https://developers.google.com/oauthplayground" target="_blank" rel="noopener">OAuth Playground</a>, scope <code>calendar.events</code>) and paste the token JSON here. Include <code>client_id</code>/<code>client_secret</code> if they aren't already in it.</div>
+                <textarea id="gcal-google-tokenpaste" rows="4" placeholder='{ "refresh_token": "…", "client_id": "…", "client_secret": "…" }' spellcheck="false" style="width:100%"></textarea>
+                <button type="button" id="gcal-google-savetoken" class="btn-secondary" style="margin-top:6px">Save token</button>
+              </div>
+            </details>
+            <button type="button" id="gcal-google-disconnect" class="btn-ghost">Disconnect Google</button>
           </div>
           <div id="gcal-cli-panel" class="hidden">
             <div class="field">
@@ -211,15 +230,17 @@
                 <option value="json">JSON array of events</option>
               </select>
             </div>
+          </div>
+          <div id="gcal-write-panel" class="hidden">
             <div class="field-row" style="margin-top:8px">
               <label for="gcal-write-toggle">Allow adding to my calendar (write-back)</label>
               <input type="checkbox" id="gcal-write-toggle">
             </div>
-            <div class="field-hint">Off by default, and the <em>only</em> thing that changes your real calendar. When on, your Familiar can add an item from its schedule into your actual Google Calendar — it always confirms with you first, and it only <em>adds</em> (never edits or deletes your existing events). Reading your calendar never needs this; leave it off unless you want the Familiar to be able to put things back.</div>
-            <div class="field">
+            <div class="field-hint">Off by default, and the <em>only</em> thing that changes your real calendar. When on, your Familiar can add an item from its schedule into your actual Google Calendar — it always confirms with you first, and it only <em>adds</em> (never edits or deletes your existing events). Reading your calendar never needs this.</div>
+            <div class="field" id="gcal-write-command-field">
               <label for="gcal-write-command">Import command (override)</label>
               <input type="text" id="gcal-write-command" placeholder="leave blank to use the tool's default import command" autocomplete="off" spellcheck="false">
-              <div class="field-hint">A command that imports an <code>.ics</code> file into your calendar; use <code>{file}</code> where the file path should go (appended if omitted). Blank uses the selected tool's default (e.g. <code>gcalcli import {file}</code>).</div>
+              <div class="field-hint">CLI sources only: a command that imports an <code>.ics</code> file into your calendar; use <code>{file}</code> for the file path (appended if omitted). Blank uses the tool's default (e.g. <code>gcalcli import {file}</code>). The Google-account source adds directly via the API, so it ignores this.</div>
             </div>
           </div>
           <div class="field">

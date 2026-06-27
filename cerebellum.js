@@ -49,7 +49,7 @@ import {
   createGraphNode, createGraphEdge,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
-  addScheduleEdge, upsertScheduleState, exportSchedule,
+  addScheduleEdge, upsertScheduleState, exportSchedule, getScheduleNode,
   bumpInterest, setStandingInterest,
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
@@ -66,6 +66,11 @@ import { buildTimeAnchorBlock, relativeTime, plainInterval } from './relative-ti
 import { substituteMacros } from './macros.js';
 import { selectSurfaceCandidates } from './surface-context.js';
 import { pushIcsViaCli, resolveWriteCommand } from './gcal-source.js';
+import {
+  readToken as readGoogleToken, writeToken as writeGoogleToken,
+  getFreshAccessToken as getGoogleAccessToken, buildEventResource, insertEvent as insertGoogleEvent,
+  isConnected as googleConnected,
+} from './gcal-google.js';
 import { getRecentOfferInfo } from './surface-events.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -2306,13 +2311,28 @@ export const TOOL_EXECUTORS = {
     if (s?.gcalWriteEnabled !== true) {
       return 'Calendar write-back isn\'t enabled — I can only add to {{user}}\'s real Google Calendar once they turn that on in Settings. Until then I can still export the item as a file or link with schedule_export.';
     }
-    const command = resolveWriteCommand({ source: s?.gcalSource, override: s?.gcalWriteCommand });
-    if (!command) {
-      return 'Calendar write-back is on, but no import command is configured — {{user}} needs to set the gogcli/gcalcli source (or a write command) in Settings first. I can still export the item with schedule_export meanwhile.';
-    }
     try {
-      // Generate the .ics in code (never type calendar data), then import it
-      // through the ward's tool. ADD only — never edits an existing event.
+      // Native Google account → add via the Calendar API (events.insert).
+      if (s?.gcalSource === 'google') {
+        const store = await readGoogleToken();
+        if (!googleConnected(store)) {
+          return 'Calendar write-back is on, but {{user}}\'s Google account isn\'t connected yet — they can connect it in Settings. I can still export the item with schedule_export meanwhile.';
+        }
+        const got = await getScheduleNode({ id: sid });
+        if (!got?.ok || !got.node) return `I couldn't read that schedule item (${sid}): ${got?.error ?? 'Unruh unavailable'} (the id may be stale).`;
+        const fresh = await getGoogleAccessToken(store, { save: (st) => writeGoogleToken(st) });
+        if (!fresh.ok) return `I couldn't reach {{user}}'s Google account: ${fresh.error}. Their calendar is unchanged.`;
+        const event = buildEventResource(got.node, { timeZone: s?.wardTimeZone || undefined });
+        const res = await insertGoogleEvent({ accessToken: fresh.accessToken, event });
+        if (!res.ok) return `I tried to add ${sid} to {{user}}'s Google Calendar but it didn't go through: ${res.error}. Their existing calendar is unchanged.`;
+        return `Added "${got.node.label}" to {{user}}'s real Google Calendar. (A new entry — I didn't touch anything already there.)`;
+      }
+      // CLI source → generate the .ics in code (never type calendar data) and
+      // import it through the ward's tool. ADD only.
+      const command = resolveWriteCommand({ source: s?.gcalSource, override: s?.gcalWriteCommand });
+      if (!command) {
+        return 'Calendar write-back is on, but no way to add is configured — {{user}} needs to connect a Google account or set a CLI import command in Settings. I can still export the item with schedule_export meanwhile.';
+      }
       const exported = await exportSchedule({ id: sid });
       if (!exported?.ok || !exported.ics) {
         return `I couldn't build the calendar entry for ${sid}: ${exported?.error ?? 'Unruh unavailable'} (the id may be stale).`;
@@ -2699,6 +2719,7 @@ export function gcalWriteEnabled(settings = readSettingsSync()) {
   if (process.env.PROTO_FAMILIAR_GCAL_DISABLED === '1') return false;
   if (settings?.gcalWriteEnabled !== true) return false;
   const source = settings?.gcalSource;
+  if (source === 'google') return true;  // native API write; executor verifies the token
   const cmd = (settings?.gcalWriteCommand && String(settings.gcalWriteCommand).trim())
     || (source === 'gogcli' || source === 'gcalcli' ? 'preset' : '');
   return !!cmd;

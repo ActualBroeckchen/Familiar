@@ -393,13 +393,83 @@ function syncWebSearchPanels() {
   $('websearch-marginalia-hint')?.classList.toggle('hidden', provider !== 'marginalia');
 }
 
-// Show the iCal-URL field for the link source, the CLI command/format fields
-// for an authenticated CLI source (gogcli / gcalcli).
+// Show the panel matching the chosen source: iCal URL (link), native Google
+// sign-in (google), or the CLI command fields (gogcli/gcalcli). Write-back is
+// offered for the two authenticated sources; the import-command field is
+// CLI-only.
 function syncGcalSourcePanels() {
   const source = $('gcal-source')?.value || state.gcalSource || 'link';
   const isCli = source === 'gogcli' || source === 'gcalcli';
-  $('gcal-link-panel')?.classList.toggle('hidden', isCli);
+  const isGoogle = source === 'google';
+  $('gcal-link-panel')?.classList.toggle('hidden', source !== 'link');
+  $('gcal-google-panel')?.classList.toggle('hidden', !isGoogle);
   $('gcal-cli-panel')?.classList.toggle('hidden', !isCli);
+  $('gcal-write-panel')?.classList.toggle('hidden', !(isCli || isGoogle));
+  $('gcal-write-command-field')?.classList.toggle('hidden', !isCli);
+  if (isGoogle) refreshGoogleCalStatus();
+}
+
+// ── Native Google Calendar connection (no terminal) ──────────────
+async function refreshGoogleCalStatus() {
+  const el = $('gcal-google-status');
+  if (!el) return;
+  try {
+    const s = await (await fetch('/api/gcal/google/status')).json();
+    if (s.connected) {
+      el.textContent = '✓ Connected to Google' + (s.account ? ` (${s.account})` : '');
+      el.style.color = 'var(--accent, #3a7)';
+    } else if (s.hasCredentials) {
+      el.textContent = 'Credentials loaded — click Connect to finish signing in.';
+      el.style.color = '';
+    } else {
+      el.textContent = 'Not connected. Upload your credentials.json (or paste a token) to begin.';
+      el.style.color = '';
+    }
+  } catch {
+    el.textContent = 'Could not check connection status.';
+  }
+}
+
+async function gcalGoogleConnect() {
+  const fileEl = $('gcal-google-credfile');
+  const statusEl = $('gcal-google-status');
+  const file = fileEl?.files?.[0];
+  if (!file) { if (statusEl) statusEl.textContent = 'Choose your credentials.json first.'; return; }
+  try {
+    const text = await file.text();
+    const credRes = await fetch('/api/gcal/google/credentials', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credentials: text }),
+    });
+    if (!credRes.ok) { const e = await credRes.json().catch(() => ({})); if (statusEl) statusEl.textContent = 'Couldn\'t read that file: ' + (e.error || credRes.status); return; }
+    const { url, error } = await (await fetch('/api/gcal/google/auth-url')).json();
+    if (!url) { if (statusEl) statusEl.textContent = error || 'Could not start sign-in.'; return; }
+    if (statusEl) statusEl.textContent = 'Opening Google… approve in the new tab, then come back here.';
+    window.open(url, '_blank', 'noopener');
+    // Poll briefly so the status flips to Connected once they approve.
+    let tries = 0;
+    const poll = setInterval(async () => { tries++; await refreshGoogleCalStatus(); if (tries > 40) clearInterval(poll); }, 3000);
+  } catch (err) {
+    if (statusEl) statusEl.textContent = 'Something went wrong: ' + (err?.message || err);
+  }
+}
+
+async function gcalGoogleSaveToken() {
+  const statusEl = $('gcal-google-status');
+  const raw = $('gcal-google-tokenpaste')?.value?.trim();
+  if (!raw) { if (statusEl) statusEl.textContent = 'Paste a token first.'; return; }
+  const res = await fetch('/api/gcal/google/token', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: raw }),
+  });
+  if (!res.ok) { const e = await res.json().catch(() => ({})); if (statusEl) statusEl.textContent = 'Couldn\'t save token: ' + (e.error || res.status); return; }
+  if ($('gcal-google-tokenpaste')) $('gcal-google-tokenpaste').value = '';
+  await refreshGoogleCalStatus();
+}
+
+async function gcalGoogleDisconnect() {
+  await fetch('/api/gcal/google/disconnect', { method: 'POST' });
+  await refreshGoogleCalStatus();
 }
 
 // Apply just persists the chosen backend/provider/key (fields also auto-sync on
@@ -2431,7 +2501,7 @@ function readSettingsFromUI() {
     const n = parseInt($('gcal-interval').value, 10);
     state.gcalSyncIntervalMinutes = Number.isInteger(n) && n >= 5 && n <= 1440 ? n : 60;
   }
-  if ($('gcal-source')) state.gcalSource = ['link', 'gogcli', 'gcalcli'].includes($('gcal-source').value) ? $('gcal-source').value : 'link';
+  if ($('gcal-source')) state.gcalSource = ['link', 'google', 'gogcli', 'gcalcli'].includes($('gcal-source').value) ? $('gcal-source').value : 'link';
   if ($('gcal-cli-command')) state.gcalCliCommand = $('gcal-cli-command').value.trim();
   if ($('gcal-cli-format')) state.gcalCliFormat = $('gcal-cli-format').value === 'json' ? 'json' : 'ics';
   if ($('gcal-write-toggle')) state.gcalWriteEnabled = $('gcal-write-toggle').checked;
@@ -3381,8 +3451,11 @@ function init() {
   });
   $('websearch-apply-btn')?.addEventListener('click', applyWebSearchBackend);
 
-  // Google Calendar source selector — toggle the link vs CLI panels on change.
+  // Google Calendar source selector — toggle the source panels on change.
   $('gcal-source')?.addEventListener('change', () => { readSettingsFromUI(); syncGcalSourcePanels(); });
+  $('gcal-google-connect')?.addEventListener('click', gcalGoogleConnect);
+  $('gcal-google-savetoken')?.addEventListener('click', gcalGoogleSaveToken);
+  $('gcal-google-disconnect')?.addEventListener('click', gcalGoogleDisconnect);
   $('guide-chat-send')?.addEventListener('click', sendGuideChat);
   $('guide-chat-input')?.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendGuideChat(); }

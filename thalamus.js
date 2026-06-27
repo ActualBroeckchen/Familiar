@@ -902,6 +902,17 @@ export async function exportSchedule({ id }) {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+/** Read one schedule node's stored fields by id (for native calendar
+ *  write-back, which builds the Google event resource from the node). */
+export async function getScheduleNode({ id }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'schedule_get', arguments: { id } });
+    return parseToolText(r, { ok: false });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
 // ── Google Calendar ingestion wrapper (0.8) ──────────────────────
 //
 // The Node adapters (gcal-source.js for the link tier; gogcli/gcalcli in

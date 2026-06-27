@@ -15,6 +15,18 @@
 > are implemented as one generic, override-friendly adapter behind the single
 > `gcal_ingest` seam rather than two hardcoded tool integrations — the ward picks
 > a preset and may override the command. This doc stays as the design record.
+>
+> **Follow-up (0.8.1): native Google OAuth, no terminal.** Testing surfaced that
+> the CLI tier assumes terminal authentication — a non-starter for a ward who
+> doesn't live in a shell, and the `gogcli` binary couldn't be verified anyway.
+> So 0.8.1 adds a **native Google account source** (`gcal-google.js`): the ward
+> uploads their Cloud-Console `credentials.json` and clicks Allow once (a loopback
+> OAuth flow entirely in the browser), or pastes a refresh token minted on
+> Google's side — and Proto-Familiar then talks to the Calendar API directly
+> (windowed read with `showDeleted`, `events.insert` for write-back), refreshing
+> the token itself forever. This is now the recommended authenticated path; the
+> CLI tiers remain for users who already run them. The iCal-URL link tier is
+> unchanged as the zero-setup default.
 
 ## 0. What this builds on — inlined, so you don't open another doc to start
 
