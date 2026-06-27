@@ -159,7 +159,16 @@ def gcal_ingest(
     now_local = now or now_iso()
     complex_series: list[str] = []
     if events is None:
-        parsed = ical.parse_ical(ics_text or "")
+        # Anchor the §1.4 fallback-expansion horizon to the SAME `now` the rest
+        # of this call uses (deletion reconcile, and the projection horizon
+        # downstream), instead of letting parse_ical default to the wall clock.
+        # Identical in production (now is real-now everywhere) but keeps the
+        # horizon consistent and the whole call deterministic under a passed now.
+        try:
+            parse_now = datetime.fromisoformat(now_local)
+        except (TypeError, ValueError):
+            parse_now = None
+        parsed = ical.parse_ical(ics_text or "", now=parse_now)
         events = parsed["events"]
         complex_series = parsed["complex_series"]
     events = events or []
