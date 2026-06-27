@@ -27,6 +27,12 @@ tomes/.discord-revisits.json
 tomes/.discord-revisits.json.tmp
 tomes/.rate-limits.json
 tomes/.rate-limits.json.tmp
+# Google Calendar projection-cue aging state (§4).
+tomes/.gcal-projection-cue.json
+tomes/.gcal-projection-cue.json.tmp
+# Google OAuth token store (refresh/access tokens — NEVER commit).
+tomes/.gcal-google-token.json
+tomes/.gcal-google-token.json.tmp
 # Consent-pending tracking for the memorization greenlight flow.
 tomes/.consent-pending.json
 tomes/.consent-pending.json.tmp

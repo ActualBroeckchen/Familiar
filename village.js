@@ -230,6 +230,8 @@ export function normalizeRegistry(raw) {
       const relFam = RELATION_TO_FAMILIAR_VALUES.includes(v.relationToFamiliar)
         ? v.relationToFamiliar : 'unaware';
       const rem = sanitizeRemember(v.remember);
+      const stdConsent = sanitizeStandingConsent(v.standingConsent);
+      const disc = sanitizeDisclosure(v.disclosure);
       return {
         id: v.id,
         name: v.name.trim(),
@@ -254,6 +256,8 @@ export function normalizeRegistry(raw) {
         ...(typeof v.privateNotes === 'string' && v.privateNotes.trim() ? { privateNotes: v.privateNotes.trim() } : {}),
         ...(typeof v.graphNodeId === 'string' && v.graphNodeId.trim() ? { graphNodeId: v.graphNodeId.trim() } : {}),
         ...(rem ? { remember: rem } : {}),
+        ...(stdConsent ? { standingConsent: stdConsent } : {}),
+        ...(disc ? { disclosure: disc } : {}),
         ...(v.triage && typeof v.triage === 'object' && typeof v.triage.webhook === 'string'
           ? { triage: { webhook: v.triage.webhook, ...(typeof v.triage.channel === 'string' ? { channel: v.triage.channel } : {}) } }
           : {}),

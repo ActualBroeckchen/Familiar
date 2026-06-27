@@ -34,27 +34,73 @@ function toMs(v) {
  * "noon", "midnight"). Drops the ":00" on whole hours for readability
  * — "at 9am" reads more naturally than "at 9:00am".
  */
-export function clockTime(target) {
-  const t = toMs(target);
-  if (!Number.isFinite(t)) return '';
+// Wall-clock components for `t`, read in `timeZone` if given, else the server's
+// own local zone. The ward's machine may run in a DIFFERENT zone than the ward
+// (a UTC container while the ward is in PDT), so any clock the ward reads — or
+// that gets compared against ward-stated times — must be computed in the ward's
+// zone, not the server's. Intl handles DST.
+function _clockParts(t, timeZone) {
   const d = new Date(t);
-  const h = d.getHours();
-  const m = d.getMinutes();
+  if (!timeZone) {
+    return { year: d.getFullYear(), month: d.getMonth(), day: d.getDate(),
+             hour: d.getHours(), minute: d.getMinutes(), weekday: d.getDay() };
+  }
+  const f = new Intl.DateTimeFormat('en-US', {
+    timeZone, hourCycle: 'h23',
+    year: 'numeric', month: 'numeric', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', weekday: 'short',
+  }).formatToParts(d).reduce((a, p) => (a[p.type] = p.value, a), {});
+  const WD = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return { year: +f.year, month: +f.month - 1, day: +f.day,
+           hour: +f.hour, minute: +f.minute, weekday: WD[f.weekday] ?? 0 };
+}
+
+function _formatClock(h, m) {
   if (h === 0 && m === 0) return 'midnight';
   if (h === 12 && m === 0) return 'noon';
   const period = h >= 12 ? 'pm' : 'am';
   const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-  if (m === 0) return `${h12}${period}`;
-  return `${h12}:${String(m).padStart(2, '0')}${period}`;
+  return m === 0 ? `${h12}${period}` : `${h12}:${String(m).padStart(2, '0')}${period}`;
 }
 
-/** "Tuesday, June 4" — no year unless requested. */
-export function dayAndDate(target, { withYear = false } = {}) {
+export function clockTime(target, timeZone = null) {
   const t = toMs(target);
   if (!Number.isFinite(t)) return '';
-  const d = new Date(t);
-  const base = `${WEEKDAY[d.getDay()]}, ${MONTH[d.getMonth()]} ${d.getDate()}`;
-  return withYear ? `${base}, ${d.getFullYear()}` : base;
+  const { hour, minute } = _clockParts(t, timeZone);
+  return _formatClock(hour, minute);
+}
+
+/** "Tuesday, June 4" — no year unless requested. In `timeZone` if given. */
+export function dayAndDate(target, { withYear = false, timeZone = null } = {}) {
+  const t = toMs(target);
+  if (!Number.isFinite(t)) return '';
+  const { year, month, day, weekday } = _clockParts(t, timeZone);
+  const base = `${WEEKDAY[weekday]}, ${MONTH[month]} ${day}`;
+  return withYear ? `${base}, ${year}` : base;
+}
+
+/**
+ * Current instant as a LOCAL-naive ISO string ("YYYY-MM-DDTHH:MM:SS") in the
+ * WARD's timezone — the reference Unruh stores and compares against. Use this
+ * (not the server's clock) for any "now" that interacts with ward-stated times,
+ * because the server process may run in a different zone than the ward. Falls
+ * back to the server's own local time when no zone is given (the co-located
+ * case, where they coincide). DST-correct via Intl.
+ */
+export function wardLocalNowISO(timeZone, now = Date.now()) {
+  const d = new Date(now);
+  if (timeZone) {
+    try {
+      const f = new Intl.DateTimeFormat('en-US', {
+        timeZone, hourCycle: 'h23',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+      }).formatToParts(d).reduce((a, p) => (a[p.type] = p.value, a), {});
+      return `${f.year}-${f.month}-${f.day}T${f.hour}:${f.minute}:${f.second}`;
+    } catch { /* invalid zone → fall through to server-local */ }
+  }
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
 /**
@@ -330,19 +376,21 @@ export function plainInterval(target, now = Date.now()) {
  * doing date arithmetic. Errors degrade silently to '' so a clock
  * glitch never corrupts the rest of the prompt.
  */
-export function buildTimeAnchorBlock({ now = Date.now(), lastUserMessageAt = null } = {}) {
+export function buildTimeAnchorBlock({ now = Date.now(), lastUserMessageAt = null, timeZone = null } = {}) {
   try {
-    const nowDate    = new Date(now);
-    const offsetMin  = -nowDate.getTimezoneOffset();
-    const offsetSign = offsetMin >= 0 ? '+' : '-';
-    const absMin     = Math.abs(offsetMin);
-    const offsetStr  = `UTC${offsetSign}${String(Math.floor(absMin / 60)).padStart(2, '0')}:${String(absMin % 60).padStart(2, '0')}`;
-    const lines = [`Now: ${clockTime(now)} (${offsetStr}) on ${dayAndDate(now)}.`];
+    // Plain LOCAL wall-clock in the WARD's timezone — Unruh stores and compares
+    // in that local time, so the times I schedule (reminders, events, tasks) use
+    // exactly this clock, written directly. The zone is the ward's, not the
+    // server's: those differ when the server runs in another zone (a UTC
+    // container), and reading the server's clock here is what made reminders set
+    // for the ward's afternoon fire in their morning. No UTC offset shown on
+    // purpose — there is no conversion to do.
+    const lines = [`Now: ${clockTime(now, timeZone)} on ${dayAndDate(now, { timeZone })} (my human's local time).`];
     if (lastUserMessageAt) {
       const lastMs = toMs(lastUserMessageAt);
       if (Number.isFinite(lastMs)) {
         lines.push(
-          `Before this, my human last sent a message at ${clockTime(lastMs)}, which was ${plainInterval(lastMs, now)} ago.`,
+          `Before this, my human last sent a message at ${clockTime(lastMs, timeZone)}, which was ${plainInterval(lastMs, now)} ago.`,
         );
       }
     }

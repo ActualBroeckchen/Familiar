@@ -155,7 +155,7 @@ export function formatTemporalContext(payload) {
   if (phase || window.length) {
     // Group window items so the Familiar reads them as distinct
     // categories with different weight: upcoming (time-anchored,
-    // unresolved), open tasks ({{user}} committed to these, no time
+    // unresolved), open tasks (my human committed to these, no time
     // yet, not done), resolved (recently terminal — usually noise
     // but useful when the Familiar wants to acknowledge a finish).
     const upcoming  = [];
@@ -203,7 +203,10 @@ export function formatTemporalContext(payload) {
         const when = renderWhen(item.when ?? item.fires_at ?? '');
         const whenText = when ? `${when} — ` : '';
         const type = item.type ? `[${item.type}] ` : '';
-        schedLines.push(`  ${whenText}${type}${item.label ?? item.id ?? ''}`);
+        // 📅 marks an item the Google-Calendar sync manages (§5) — the
+        // Familiar can tell which fields aren't its to hand-edit.
+        const gcal = item.payload?.source === 'gcal' ? ' 📅' : '';
+        schedLines.push(`  ${whenText}${type}${item.label ?? item.id ?? ''}${gcal}`);
       }
     }
     if (reminders.length) {
@@ -218,9 +221,9 @@ export function formatTemporalContext(payload) {
       // Framing here matters: bare labels read as informational
       // background. Named as something I'm actively holding — mine to
       // remember AND to raise — primes the Familiar to feel them as
-      // commitments {{user}} is counting on them to act on, not a
+      // commitments my human is counting on them to act on, not a
       // passive list to perceive.
-      schedLines.push("Open tasks I'm holding for {{user}} — mine to remember and to raise (no completion confirmed):");
+      schedLines.push("Open tasks I'm holding for my human — mine to remember and to raise (no completion confirmed):");
       for (const item of openTasks) {
         // How long it's floated unscheduled — the signal that it's waiting to be
         // pinned to a real time. (created_at rides in from Unruh; a task without
@@ -264,7 +267,7 @@ export function formatTemporalContext(payload) {
         else                              s = n.status;
         return `  ${n.label ?? ''} — ${s}`;
       });
-    blocks.push(["Needs today — basic-needs windows I'm tracking for {{user}} (met / open / missed):", ...needLines].join('\n'));
+    blocks.push(["Needs today — basic-needs windows I'm tracking for my human (met / open / missed):", ...needLines].join('\n'));
   }
 
   // Schedule-id legend. The human-readable lines above carry labels, not ids —
@@ -305,15 +308,23 @@ export function formatTemporalContext(payload) {
 
   const idLegend = [];
   const seenScheduleIds = new Set();
+  let anyGcal = false;
   for (const n of scheduleNodes) {
     if (!n?.id || seenScheduleIds.has(n.id)) continue;
     seenScheduleIds.add(n.id);
-    idLegend.push(`  ${n.label ?? n.id} [${n.type ?? 'task'}] = ${n.id}`);
+    if (n.payload?.source === 'gcal') anyGcal = true;
+    const marker = n.payload?.source === 'gcal' ? ' 📅' : '';
+    idLegend.push(`  ${n.label ?? n.id} [${n.type ?? 'task'}]${marker} = ${n.id}`);
   }
   if (idLegend.length) {
     blocks.push([
       '[schedule ids — to give a floating task a time (schedule_assign_time), park one (schedule_snooze_task), mark one done/cancelled (schedule_resolve), remove one entirely incl. a phase (schedule_delete), or connect two so I see how they bear on each other (schedule_link), pass the id(s)]',
       ...idLegend,
+      // §5 legibility: a 📅 item is externally managed. Not forbidden — the
+      // sync just owns its time/title (a hand-edit there loses on the next
+      // reconcile, and a Google item isn't a task to resolve). I add
+      // consequence links, export it, and reason about it freely.
+      ...(anyGcal ? ['  (📅 = from my human\'s Google Calendar — the sync owns its time/title; I add consequence links and export it, but hand-edits to those fields get overwritten on the next sync)'] : []),
     ].join('\n'));
   }
 

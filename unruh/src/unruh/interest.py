@@ -109,10 +109,16 @@ def effective_weight(
         return 0.0
     if raw_weight <= 0:
         return 0.0
-    n = now if now is not None else datetime.now(timezone.utc)
+    # Local-naive throughout. Normalise BOTH sides to naive so a stray
+    # offset (an injected aware `now` in a test, or a pre-migration
+    # last_touched) can't raise naive-vs-aware. The elapsed delta is
+    # unaffected by which clock — both shift together.
+    n = now if now is not None else datetime.now()
+    if n.tzinfo is not None:
+        n = n.astimezone().replace(tzinfo=None)
     last = datetime.fromisoformat(last_touched)
-    if last.tzinfo is None:
-        last = last.replace(tzinfo=timezone.utc)
+    if last.tzinfo is not None:
+        last = last.astimezone().replace(tzinfo=None)
     elapsed_days = (n - last).total_seconds() / 86_400.0
     if elapsed_days <= 0:
         return raw_weight

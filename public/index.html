@@ -176,6 +176,13 @@
             <input type="checkbox" id="needs-tracking-toggle">
           </div>
           <div class="field-hint">Off by default. When on, your Familiar quietly keeps a record of recurring need-windows it's set up for you (a meal, meds, winding down for sleep): once a window's time has passed without it being met, it's marked <em>missed</em> for that day, building a picture of how your basic needs are actually getting met over time. It stands down whenever you're in distress (that's triage's job, not this), and it only records the miss — whether any knock-on effect followed stays something it has to actually notice and confirm with you.</div>
+
+          <div class="field-row" style="margin-top:8px">
+            <label for="gcal-toggle">Google Calendar sync</label>
+            <input type="checkbox" id="gcal-toggle">
+          </div>
+          <div class="field-hint">Off by default. When on, your Familiar reads your calendar (one-way) so your appointments show up in its sense of your day. Choose how to connect — and optionally allow write-back — in the configuration below.</div>
+          <button class="btn-secondary" id="gcal-configure-btn" type="button">⚙ Configure calendar…</button>
         </div>
 
         <!-- Saved Connections & Fallbacks -->
@@ -329,6 +336,12 @@
           <div class="action-row" style="margin-top:6px">
             <button id="clear-chat-btn" class="btn-danger">✕ Clear history</button>
           </div>
+          <div class="field-row" style="margin-top:8px">
+            <label for="notif-sound-toggle">Notification sounds</label>
+            <input type="checkbox" id="notif-sound-toggle" checked>
+            <button id="notif-sound-test" class="btn-ghost" type="button" title="Play a test chime" style="margin-left:6px">▶</button>
+          </div>
+          <div class="field-hint">A soft chime when a new message arrives while this tab is open — always for proactive ones (reminders, check-ins), and for replies only when the tab isn't focused, so an active conversation stays quiet.</div>
         </div>
 
         <!-- Tomes -->
@@ -656,6 +669,109 @@
         <span class="field-hint" id="websearch-apply-status" style="margin-right:auto"></span>
         <button class="btn-ghost" id="websearch-modal-cancel" type="button">Close</button>
         <button class="btn-send" id="websearch-apply-btn" type="button">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Google Calendar configuration modal -->
+  <div class="modal-backdrop hidden" id="gcal-modal" role="dialog" aria-modal="true" aria-labelledby="gcal-modal-title">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2 class="modal-title" id="gcal-modal-title">Google Calendar</h2>
+        <button class="icon-btn modal-close" id="gcal-modal-close" aria-label="Close modal">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="field-hint">Reading your calendar is <strong>one-way</strong> and never changes it. The only thing that ever writes back is the explicit option near the bottom — and only if you turn it on.</p>
+
+        <div class="field">
+          <label for="gcal-source">How to connect</label>
+          <select id="gcal-source">
+            <option value="link">iCal URL (no setup, read-only)</option>
+            <option value="google">Google account (sign in — no terminal)</option>
+            <option value="gogcli">gogcli (advanced CLI)</option>
+            <option value="gcalcli">gcalcli (advanced CLI)</option>
+          </select>
+          <div class="field-hint">The iCal URL works with zero setup but is read-only. <strong>Google account</strong> signs in with your own Google credentials right here — no terminal — and is what unlocks write-back. The CLI options are for advanced users who already run <code>gogcli</code>/<code>gcalcli</code> in a terminal.</div>
+        </div>
+
+        <div id="gcal-link-panel">
+          <div class="field">
+            <label for="gcal-ical-url">iCal URL (secret address)</label>
+            <input type="text" id="gcal-ical-url" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics" autocomplete="off" spellcheck="false">
+            <div class="field-hint">In Google Calendar: Settings → your calendar → <em>Integrate calendar</em> → "Secret address in iCal format". Keep it private — anyone with it can read the calendar.</div>
+          </div>
+        </div>
+
+        <div id="gcal-google-panel" class="hidden" style="border-left:2px solid var(--border, #444);padding-left:12px;margin:8px 0">
+          <div class="field-hint" id="gcal-google-status" style="font-weight:600">Checking connection…</div>
+          <div class="field">
+            <label>Connect (recommended)</label>
+            <div class="field-hint">One-time setup, all in the browser. In Google Cloud Console, create an OAuth client of type <em>Desktop app</em> and download its <code>credentials.json</code>. Choose that file here, then click Connect — a Google tab opens, you click <em>Allow</em> once, and you're done. It refreshes itself from then on; you never touch a terminal. (Sign in from <code>localhost</code> so Google's loopback rule is happy.)</div>
+            <input type="file" id="gcal-google-credfile" accept=".json,application/json">
+            <button type="button" id="gcal-google-connect" class="btn-secondary" style="margin-top:6px">Connect Google Calendar</button>
+          </div>
+          <details style="margin:6px 0">
+            <summary style="cursor:pointer;color:var(--text-dim)">…or paste a token instead</summary>
+            <div class="field" style="margin-top:6px">
+              <div class="field-hint">If you'd rather not upload <code>credentials.json</code>, mint a refresh token on Google's side (e.g. the <a href="https://developers.google.com/oauthplayground" target="_blank" rel="noopener">OAuth Playground</a>, scope <code>calendar.events</code>) and paste the token JSON here. Include <code>client_id</code>/<code>client_secret</code> if they aren't already in it.</div>
+              <textarea id="gcal-google-tokenpaste" rows="4" placeholder='{ "refresh_token": "…", "client_id": "…", "client_secret": "…" }' spellcheck="false" style="width:100%"></textarea>
+              <button type="button" id="gcal-google-savetoken" class="btn-secondary" style="margin-top:6px">Save token</button>
+            </div>
+          </details>
+          <button type="button" id="gcal-google-disconnect" class="btn-ghost">Disconnect Google</button>
+        </div>
+
+        <div id="gcal-cli-panel" class="hidden" style="border-left:2px solid var(--border, #444);padding-left:12px;margin:8px 0">
+          <details class="field" style="margin-bottom:4px">
+            <summary style="cursor:pointer;font-weight:600">ⓘ How do I set this up? (one-time, in a terminal)</summary>
+            <div class="field-hint" style="margin-top:8px">
+              <p>These advanced options read your calendar by running a command-line tool that <strong>you</strong> install and sign into yourself, once, in a terminal. Proto-Familiar then just runs that command and reads what it prints — it never sees your Google password, and it only reads.</p>
+              <p style="margin-top:8px"><strong>No terminal? Use “Google account” above instead</strong> — it signs in right here in the browser and needs none of this.</p>
+              <p style="margin-top:8px">The usual tool is <strong>gcalcli</strong> (<a href="https://github.com/insanum/gcalcli" target="_blank" rel="noopener">github.com/insanum/gcalcli</a>):</p>
+              <ol style="margin:6px 0 0 1.2em;padding:0">
+                <li>Install it (its README covers your OS).</li>
+                <li>Run its one-time sign-in once — <code>gcalcli list</code> opens a browser to authorize.</li>
+                <li>Check it works: <code>gcalcli agenda</code> should print your events.</li>
+                <li>Back here: leave <em>Command</em> blank for the default, or paste your exact read command (e.g. <code>gcalcli agenda --details=all</code>), and set <em>Command output</em> to match what it prints (<code>.ics</code> or JSON).</li>
+              </ol>
+              <p style="margin-top:8px">Any other tool that can print your calendar as an <code>.ics</code> feed or a JSON array of events works too — point the <em>Command</em> field at it. (For <code>gogcli</code> specifically, follow that project's own setup; if you're not already using it, the gcalcli route or the Google-account option above are the well-trodden ones.)</p>
+            </div>
+          </details>
+          <div class="field">
+            <label for="gcal-cli-command">Command (override)</label>
+            <input type="text" id="gcal-cli-command" placeholder="leave blank to use the tool's default" autocomplete="off" spellcheck="false">
+            <div class="field-hint">A command that prints your calendar to stdout as an <code>.ics</code> feed or a JSON array of events. Leave blank to use the selected tool's default. The Familiar runs this on this machine to read your calendar — it's an authenticated, windowed read, so it never cancels events outside the window it fetched.</div>
+          </div>
+          <div class="field">
+            <label for="gcal-cli-format">Command output</label>
+            <select id="gcal-cli-format">
+              <option value="ics">iCalendar (.ics)</option>
+              <option value="json">JSON array of events</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="gcal-write-panel" class="hidden">
+          <div class="field-row" style="margin-top:8px">
+            <label for="gcal-write-toggle">Allow adding to my calendar (write-back)</label>
+            <input type="checkbox" id="gcal-write-toggle">
+          </div>
+          <div class="field-hint">Off by default, and the <em>only</em> thing that changes your real calendar. When on, your Familiar can add an item from its schedule into your actual Google Calendar — it always confirms with you first, and it only <em>adds</em> (never edits or deletes your existing events). Reading your calendar never needs this.</div>
+          <div class="field" id="gcal-write-command-field">
+            <label for="gcal-write-command">Import command (override)</label>
+            <input type="text" id="gcal-write-command" placeholder="leave blank to use the tool's default import command" autocomplete="off" spellcheck="false">
+            <div class="field-hint">CLI sources only: a command that imports an <code>.ics</code> file into your calendar; use <code>{file}</code> for the file path (appended if omitted). Blank uses the tool's default (e.g. <code>gcalcli import {file}</code>). The Google-account source adds directly via the API, so it ignores this.</div>
+          </div>
+        </div>
+
+        <div class="field" style="margin-top:10px">
+          <label for="gcal-interval">Sync every (minutes)</label>
+          <input type="number" id="gcal-interval" value="60" min="5" max="1440" step="5" style="width:6em">
+          <div class="field-hint">How often it re-reads the calendar. Hourly suits most people; tighten it if you re-plan through the day, widen it if your plans rarely move. (Clamped to 5 min – 24 h.)</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-ghost" id="gcal-modal-cancel" type="button">Close</button>
       </div>
     </div>
   </div>

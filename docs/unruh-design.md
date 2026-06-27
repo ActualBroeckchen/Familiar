@@ -207,11 +207,27 @@ Familiar's routine should emerge from direct conversation about what rhythm woul
 
 Two distinct systems coexist under the temporal umbrella:
 
-**Reminders** — specific time-triggered events (doctor's appointment at 4 PM requires a reminder at 3 PM). These need their own mechanism tied directly to Unruh's event graph rather than conversation rhythm. The implementation approach is an open question — cronjob-style timers are the obvious tool but have shown reliability problems in practice (firing into wrong sessions, timing drift, silent failures). The right solution is one that is robust enough to be trusted with genuinely time-sensitive information, since a missed reminder for a medical appointment or job interview is not a minor failure.
+**Reminders** — specific time-triggered events (doctor's appointment at 4 PM requires a reminder at 3 PM). These need their own mechanism tied directly to Unruh's event graph rather than conversation rhythm. *(Status: implemented as `reminders-loop.js` — a 30s `setInterval` poll over `reminder` nodes whose `when_ts` has arrived, with a health-watch for silent failure. The "silent failure" worry below was prophetic: the original UTC-internal storage let the model write a naive local `when_ts` the comparison never matched, so reminders scheduled fine but never fired — closed by the local-naive time model, see below.)* The reliability bar is high because a missed reminder for a medical appointment or job interview is not a minor failure.
 
 **Routine** — the softer daily rhythm. Not a checklist. More like a character's natural state at a given time of day, which colours how Familiar shows up in conversation without demanding anything from either party.
 
 These two things coexist without conflicting. The schedule creates meaning; the reminders handle the genuinely time-sensitive.
+
+### Time model — local-naive, not UTC
+
+Unruh stores and compares every timestamp (`when_ts`, `end_ts`, `created_at`, …) in the **ward's local wall-clock with no timezone offset**, against a local-naive `now` (`db.now_iso`). This is a deliberate reversal of the earlier UTC-internal design.
+
+The reasoning: Unruh models **one** person's **local** day on a **co-located** machine, and every human-facing surface is already local (the `[Now]` block, the formatter, the times the Familiar speaks). Carrying UTC underneath meant a conversion at every boundary — and the LLM was the bridge for the write boundary. It kept getting it wrong in both directions (storing a naive local time the old UTC comparison never matched → a reminder that never fired; and double-applying the offset → an event two hours off). Local-internal deletes that entire class of bug: the Familiar writes plain local time, `now` is read live from the system clock (so DST is handled by the OS), and "9am daily" stays 9am without per-occurrence UTC re-derivation.
+
+The conversion doesn't vanish — it moves to a single code seam: an offset-bearing value (an external calendar, or a pre-migration row) is normalised to local once via `db.to_local_naive`, never by the model. The trade-off is a bounded DST edge case (a *one-off* time inside the spring-forward gap / fall-back overlap is ambiguous — rare, ±1h, twice a year). Existing UTC rows are healed once by `db.migrate_timestamps_to_local` on first connect.
+
+**Local means the *ward's* local, not the server's.** Local-naive only works if "now" is read on the ward's clock. The original implementation took `now` from the server process clock, which is correct only when the server happens to run in the ward's timezone — true for a home machine, but violated the moment the server runs in UTC (WSL, Docker, a hosted box) while the ward is in PDT. That mismatch fired every reminder immediately (server's UTC `now` was hours *ahead* of the ward-local `when_ts`), the mirror-image of the Berlin never-fired bug. The fix makes the ward's timezone explicit rather than assumed:
+
+- The browser auto-captures its IANA zone (`Intl.DateTimeFormat().resolvedOptions().timeZone`) into the synced `wardTimeZone` setting — no ward-facing config, it just happens on load.
+- The safety-critical firing path computes ward-local "now" directly in Node via `wardLocalNowISO(wardTimeZone)` (an `Intl`-formatted wall-clock string in the ward's zone), so the reminders loop and the `[Now]` block / `temporal_context` are always anchored to the ward's clock regardless of where the server runs. This path doesn't depend on env/respawn timing.
+- Thalamus additionally spawns the Unruh MCP child with `TZ=wardTimeZone`, so Unruh's own internal `db.now_iso` stamps land in the ward's zone too — a comprehensive catch-all beneath the explicit Node-side computation.
+
+When `wardTimeZone` is unset (first run before any browser load), every seam falls back to the server-local clock — identical to the pre-fix behaviour, so a co-located install is unaffected.
 
 ---
 

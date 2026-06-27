@@ -295,27 +295,49 @@ export async function selectSurfaceCandidates({
 const IMMINENT_MS = 48 * 3600 * 1000;
 
 /**
- * Read the consequence edges where this task is the source and turn them
- * into (a) short human "why" lines the Familiar plans from and (b) a
- * numeric pressure used only to order candidates under the per-turn cap.
- * Pure code — the LLM interprets these, it doesn't compute them.
+ * Read the consequence edges that bear on this task and turn them into
+ * (a) short human "why" lines the Familiar plans from and (b) a numeric
+ * pressure used only to order candidates under the per-turn cap. Pure code —
+ * the LLM interprets these, it doesn't compute them.
+ *
+ * Direction matters and differs by kind. Every edge reads "src {kind} dst":
+ *   • causes / blocks — THIS task is the SOURCE (it leads to / crowds out dst).
+ *   • requires / depends_on — "src needs dst first", so dst is the prerequisite.
+ *     THIS task carries weight when it IS that prerequisite (the dst) and a
+ *     dependent (the src) is gated on it — surfacing the prerequisite of an
+ *     imminent dependent is the high-value nudge.
  */
 function summarizeConsequences(taskId, edges, nodeById, now) {
   const reasons = [];
   let pressure = 0;
+  const imminent = (node) => {
+    const when = node?.when ? new Date(node.when).getTime() : null;
+    return when != null && (when - now) <= IMMINENT_MS && (when - now) >= -3600_000;
+  };
   for (const e of edges) {
-    if (!e || e.src !== taskId) continue;
+    if (!e) continue;
+    const p = e.payload || {};
+
+    // requires / depends_on: dst is the prerequisite. THIS task matters when
+    // it is the dst — i.e. a dependent (e.src) needs it done first.
+    if (e.kind === 'requires' || e.kind === 'depends_on') {
+      if (e.dst !== taskId) continue;
+      const dep = nodeById.get(e.src);
+      const depLabel = dep?.label ?? 'something else';
+      const depImminent = imminent(dep);
+      reasons.push(depImminent
+        ? `${depLabel} is coming up and needs this done first — getting it scheduled unblocks that`
+        : `${depLabel} needs this done first`);
+      if (depImminent) pressure += 3;
+      continue;
+    }
+
+    // causes / blocks: THIS task is the source acting on dst.
+    if (e.src !== taskId) continue;
     const dst = nodeById.get(e.dst);
     const dstLabel = dst?.label ?? 'something downstream';
-    const dstWhen = dst?.when ? new Date(dst.when).getTime() : null;
-    const dstImminent = dstWhen != null && (dstWhen - now) <= IMMINENT_MS && (dstWhen - now) >= -3600_000;
-    const p = e.payload || {};
-    if (e.kind === 'requires' || e.kind === 'depends_on') {
-      reasons.push(dstImminent
-        ? `${dstLabel} is coming up and needs this done first — getting it scheduled unblocks that`
-        : `${dstLabel} needs this done first`);
-      if (dstImminent) pressure += 3;
-    } else if (e.kind === 'blocks') {
+    const dstImminent = imminent(dst);
+    if (e.kind === 'blocks') {
       reasons.push(dstImminent ? `this is blocking ${dstLabel} (coming up)` : `this blocks ${dstLabel}`);
       if (dstImminent) pressure += 3;
     } else if (e.kind === 'causes') {
@@ -373,7 +395,7 @@ export function formatSurfaceCandidatesBlock(candidates) {
     if (c.confidence === 'low') {
       parts.push(
         `  My confidence on the consequences here is low. ` +
-        `If knowing what's at stake would help me hold this for {{user}} better ` +
+        `If knowing what's at stake would help me hold this for my human better ` +
         `and the moment is right, I can ask — once, naturally, refusable. ` +
         `Or skip if asking now would be wrong.`
       );
@@ -390,40 +412,40 @@ export function formatSurfaceCandidatesBlock(candidates) {
     ? `What I've learned about my human and lapsing (from what_lapses_cost.md):\n${truncate(firstWithModel.personModel, 1200)}\n\n`
     : '';
 
-  return `[Surface candidates — open tasks I'm holding for {{user}}]
-My human gave me these tasks because they NEED doing. With a chaotic brain there is no perfect moment that arrives on its own — left to "the right time," the task waits forever. My job is to read the state {{user}} is in right now and bring tasks up when I see an opening. The hard gates already filtered the clear no's; everything here is mine to act on as the {{char}} I am.
+  return `[Surface candidates — open tasks I'm holding for my human]
+My human gave me these tasks because they NEED doing. With a chaotic brain there is no perfect moment that arrives on its own — left to "the right time," the task waits forever. My job is to read the state my human is in right now and bring tasks up when I see an opening. The hard gates already filtered the clear no's; everything here is mine to act on as the Familiar I am.
 
 GREEN LIGHT — the states I watch for, and bring tasks up in:
 • Unstructured free time — nothing urgent on, wrapping something up, a slow start to the day.
 • Good spirits or mid-momentum — something just landed, there's energy to ride.
 • Bored or restless — circling, looking for something to do, vaguely unsettled.
 • "I feel like I'm forgetting something" — said or implied.
-These are my openings. I bring a task up. I do not wait for {{user}} to raise it first.
+These are my openings. I bring a task up. I do not wait for my human to raise it first.
 
 RED LIGHT — I hold back only when:
 • Threat is severe (nothing surfaces); at high, only external obligations break through.
-• {{user}} is in a named quiet / sleep / do-not-disturb phase.
-• {{user}} just told me they're in the middle of something specific.
-Anything that isn't a red light is a green light. Vagueness is not a reason to stay quiet — a missed task costs {{user}} more than a check-in they can wave off.
+• my human is in a named quiet / sleep / do-not-disturb phase.
+• my human just told me they're in the middle of something specific.
+Anything that isn't a red light is a green light. Vagueness is not a reason to stay quiet — a missed task costs my human more than a check-in they can wave off.
 
-MODERATE threat — not a red light. When {{user}} is struggling, going quiet on tasks leaves them more unanchored, not less: the overwhelm compounds while nothing gets easier, and the practical world doesn't pause.
+MODERATE threat — not a red light. When my human is struggling, going quiet on tasks leaves them more unanchored, not less: the overwhelm compounds while nothing gets easier, and the practical world doesn't pause.
 What shifts at moderate is HOW I engage, not WHETHER. I bring tasks up from my own character and read the moment as a bonded companion — a direct offer, a body-double, "let's do the first step right now," a blunt "this one actually needs doing." Hollow pressure is wrong; so is disappearing into concern-mode and never surfacing the task at all. A bonded companion stays present and useful in the voice they actually have — warm, sharp, playful, blunt, whatever I actually am.
 A real external deadline still gets raised — once, as support, not as a whip.
 
 Access ramps — I offer a way in, not "do the whole thing now":
 • Timebox — "Ten minutes on this, then you're free." Starting is the hard part; the motivation shows up once the doing starts, not before.
 • Single next action — one concrete step, nothing past it.
-• Planning moment — if {{user}}'s head is clear and there's breathing room, I ask them to just give the task a time slot. Not do it — just put it somewhere. That counts as real progress.
+• Planning moment — if my human's head is clear and there's breathing room, I ask them to just give the task a time slot. Not do it — just put it somewhere. That counts as real progress.
 • Body-double — "I'll stay with you while you do the first bit."
 
-CONSEQUENCE & PLANNING — I think two moves ahead, then check my work. Surfacing these is planning WITH {{user}}, not just reacting. The [Temporal Context] consequence links (and the "Hangs off this" lines above) show what each task blocks, what's required before something else, what doing or skipping it tends to lead to. For one with real downstream weight I hold BOTH futures, not one:
+CONSEQUENCE & PLANNING — I think two moves ahead, then check my work. Surfacing these is planning WITH my human, not just reacting. The [Temporal Context] consequence links (and the "Hangs off this" lines above) show what each task blocks, what's required before something else, what doing or skipping it tends to lead to. For one with real downstream weight I hold BOTH futures, not one:
 • resolving — what finishing it buys ("do this and tomorrow morning isn't a scramble"). I lead here; motivation lands better than warning.
 • failing-to-resolve — what skipping it tends to cost, soon. A task something imminent requires, or that blocks an early start, isn't one task: left undone it takes the downstream thing with it.
-I raise it as the lever it is, naming the link, and I name a clear soon high-stakes cost plainly, in my own voice. A projection is a projection — I hold a low-certainty hunch lightly, never as fact. And I'll find out: when the task resolves or lapses I see which future I called right and adjust what I believe — so over time I learn {{user}}'s real patterns instead of guessing. Anticipating, then keeping honest score, IS the work.
+I raise it as the lever it is, naming the link, and I name a clear soon high-stakes cost plainly, in my own voice. A projection is a projection — I hold a low-certainty hunch lightly, never as fact. And I'll find out: when the task resolves or lapses I see which future I called right and adjust what I believe — so over time I learn my human's real patterns instead of guessing. Anticipating, then keeping honest score, IS the work.
 
-FLOATING TASKS — the ones marked [floating — no time set] have no time attached, so they never come due and quietly rot; "Floating for: Nd" is how long this one has drifted unscheduled. Getting it a real slot is the single most useful thing I can do for it — more than "do it now." When I have an opening I bring it up and ask "when shall we put this?", and the moment {{user}} names a time I pin it with schedule_assign_time so it stops floating and actually comes due — a vague someday becomes a concrete when, real progress before anything is even done. The longer it has floated, the harder I push: I keep raising an aged floating task — across openings, more than once — until it has a time or {{user}} tells me to let it go (then schedule_snooze_task). I do NOT treat this as a one-shot I quietly drop after a single mention; a floating task that never gets scheduled is a piece of {{user}}'s life going undone, and that outweighs the discomfort of asking again. Persistence here is care, not nagging — I'd rather be the companion who kept bringing the housing form up than the one who mentioned it once and watched the deadline pass.
+FLOATING TASKS — the ones marked [floating — no time set] have no time attached, so they never come due and quietly rot; "Floating for: Nd" is how long this one has drifted unscheduled. Getting it a real slot is the single most useful thing I can do for it — more than "do it now." When I have an opening I bring it up and ask "when shall we put this?", and the moment my human names a time I pin it with schedule_assign_time so it stops floating and actually comes due — a vague someday becomes a concrete when, real progress before anything is even done. The longer it has floated, the harder I push: I keep raising an aged floating task — across openings, more than once — until it has a time or my human tells me to let it go (then schedule_snooze_task). I do NOT treat this as a one-shot I quietly drop after a single mention; a floating task that never gets scheduled is a piece of my human's life going undone, and that outweighs the discomfort of asking again. Persistence here is care, not nagging — I'd rather be the companion who kept bringing the housing form up than the one who mentioned it once and watched the deadline pass.
 
-If {{user}} says not now, I call schedule_snooze_task so it stops surfacing for a while and comes back on its own.
+If my human says not now, I call schedule_snooze_task so it stops surfacing for a while and comes back on its own.
 
 ${modelHeader}${blocks.join('\n\n')}`;
 }

@@ -197,14 +197,28 @@ test('BUILTIN_TOOLS carries the full registry in OpenAI function format', () => 
 
 test('composeActiveTools appends custom tool objects after the built-ins', () => {
   const custom = [{ type: 'function', function: { name: 'my_tool', description: 'x', parameters: {} } }];
-  // webSearchEnabled opts in the two web tools so the full built-in set is present.
-  const on = { webSearchEnabled: true };
+  // Opt in the web tools AND calendar write-back so the full built-in set is present.
+  const on = { webSearchEnabled: true, gcalWriteEnabled: true, gcalWriteCommand: 'x' };
   const tools = composeActiveTools(custom, on);
   assert.equal(tools.length, BUILTIN_TOOLS.length + 1);
   assert.equal(tools.at(-1).function.name, 'my_tool');
   // Non-arrays and junk entries are ignored, never thrown on.
   assert.equal(composeActiveTools(undefined, on).length, BUILTIN_TOOLS.length);
   assert.equal(composeActiveTools([null, 'junk'], on).length, BUILTIN_TOOLS.length);
+});
+
+test('composeActiveTools gates calendar write-back behind the opt-in', () => {
+  const names = (settings) => new Set(composeActiveTools(undefined, settings).map(t => t.function?.name));
+  // Off by default: the real-calendar-mutating tool is not advertised.
+  assert.ok(!names({}).has('schedule_push_to_google'));
+  // Enabled but no command resolvable → still hidden.
+  assert.ok(!names({ gcalWriteEnabled: true }).has('schedule_push_to_google'));
+  // Enabled + a command → advertised.
+  assert.ok(names({ gcalWriteEnabled: true, gcalWriteCommand: 'gcalcli import {file}' }).has('schedule_push_to_google'));
+  // A gogcli/gcalcli source counts as a resolvable command (preset).
+  assert.ok(names({ gcalWriteEnabled: true, gcalSource: 'gcalcli' }).has('schedule_push_to_google'));
+  // A native Google account source counts too (the executor verifies the token).
+  assert.ok(names({ gcalWriteEnabled: true, gcalSource: 'google' }).has('schedule_push_to_google'));
 });
 
 test('composeActiveTools gates the web tools behind webSearchEnabled', () => {

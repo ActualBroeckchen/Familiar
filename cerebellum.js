@@ -49,7 +49,7 @@ import {
   createGraphNode, createGraphEdge,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
-  addScheduleEdge, upsertScheduleState,
+  addScheduleEdge, upsertScheduleState, exportSchedule, getScheduleNode,
   bumpInterest, setStandingInterest,
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
@@ -58,12 +58,19 @@ import {
 import { audienceTagFor, deriveNodeAudience } from './audience.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './graph-vocab.js';
 import { searchWeb, readWebpage, lookUp } from './websearch.js';
+import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
 import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta } from './outbox.js';
 import { buildTimeAnchorBlock, relativeTime, plainInterval } from './relative-time.js';
 import { substituteMacros } from './macros.js';
 import { selectSurfaceCandidates } from './surface-context.js';
+import { pushIcsViaCli, resolveWriteCommand } from './gcal-source.js';
+import {
+  readToken as readGoogleToken, writeToken as writeGoogleToken,
+  getFreshAccessToken as getGoogleAccessToken, buildEventResource, insertEvent as insertGoogleEvent,
+  isConnected as googleConnected,
+} from './gcal-google.js';
 import { getRecentOfferInfo } from './surface-events.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -629,7 +636,11 @@ The "message" field (to the human) must be 1–2 sentences. First person. Authen
     if (parsed?.action !== 'reach_out' || typeof parsed.message !== 'string' || !parsed.message.trim()) {
       return { action: 'wait', ...(nextCheckInMs != null ? { nextCheckInMs } : {}) };
     }
-    const out = { action: 'reach_out', message: parsed.message.trim(), ...(nextCheckInMs != null ? { nextCheckInMs } : {}) };
+    // Strip any hallucinated [HH:MM]/⫸HH:MM⫷ tokens the LLM echoed at the single
+    // point the triage message is minted, so every downstream consumer — the
+    // outbox banner, the Discord push, and the trusted-contact relay — is clean,
+    // and the stored body can't re-inject a fabricated time next turn.
+    const out = { action: 'reach_out', message: stripLlmTimestamps(parsed.message.trim()), ...(nextCheckInMs != null ? { nextCheckInMs } : {}) };
     // Validate contactHuman strictly — must be an exact name from the configured
     // list. Delivery is DEFERRED: the user receives the outbox item first.
     // The trusted contact is only reached after CONTACT_ESCALATION_DELAY_MS
@@ -646,7 +657,7 @@ The "message" field (to the human) must be 1–2 sentences. First person. Authen
         out.meta = {
           pendingContact: {
             name:    ch.name,
-            message: ch.message.trim(),
+            message: stripLlmTimestamps(ch.message.trim()),
             channel: match.channel ?? 'discord',
           },
           contactDelayMs: delayMs,
@@ -1198,10 +1209,10 @@ export const BUILTIN_TOOLS = [
   // surfaces in my [Temporal Context] block on subsequent turns, so I
   // can see what I committed and update if {{user}} changes their mind.
   //
-  // Time format: ISO 8601. My [Temporal Context] block always carries
-  // "now" as a UTC timestamp; I compute the target moment from there +
-  // any timezone info {{user}} or the temporal context gives me. If
-  // unsure of {{user}}'s timezone, I ask them rather than guess.
+  // Time format: YYYY-MM-DDTHH:MM:SS — plain local wall-clock as my [Now]
+  // block shows it, no UTC offset (e.g. "2026-06-18T09:00:00"). Unruh stores
+  // and compares in local time and normalises any stray offset in code
+  // (db.to_local_naive), so I write the local time {{user}} states directly.
   {
     type: 'function',
     function: {
@@ -1211,8 +1222,8 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           label: { type: 'string', description: 'Short human-readable name of the event (e.g. "dentist appointment").' },
-          when:  { type: 'string', description: 'ISO 8601 UTC start time, e.g. "2026-06-01T14:00:00+00:00". Unruh stores and compares all times against UTC — no automatic timezone conversion. My [Now] block always shows the current UTC offset (e.g. "(UTC+02:00)"); I use it to convert any local time {{user}} states to UTC exactly once.' },
-          end:   { type: 'string', description: 'Optional ISO 8601 UTC end time.' },
+          when:  { type: 'string', description: 'Start time. Format: YYYY-MM-DDTHH:MM:SS — the local time my [Now] block shows, no UTC offset. E.g. "2026-06-01T14:00:00". The time I write is the time it happens.' },
+          end:   { type: 'string', description: 'Optional end time, same format (YYYY-MM-DDTHH:MM:SS, local).' },
           recurrence: { type: 'object', description: 'Optional. Repeats this event. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N (every N units), until?: "YYYY-MM-DD" (cut-off date), bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Monday repeats Mondays. Examples: {freq:"weekly"} for a regular meet-up; {freq:"monthly", bysetpos:-1, byweekday:5} for "last Friday of every month"; {freq:"yearly"} for an anniversary.' },
         },
         required: ['label', 'when'],
@@ -1228,7 +1239,7 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           label: { type: 'string', description: 'Short description of the task (e.g. "file taxes", "reply to Sam").' },
-          when:  { type: 'string', description: 'Optional ISO 8601 UTC deadline. Unruh compares against UTC — no automatic timezone conversion. My [Now] block shows the UTC offset; I convert any stated local time to UTC once. Omit for open-ended tasks.' },
+          when:  { type: 'string', description: 'Optional deadline. Format: YYYY-MM-DDTHH:MM:SS — the local time my [Now] block shows, no UTC offset. E.g. "2026-06-01T17:00:00". Omit for open-ended tasks.' },
           stakes_tier: {
             type: 'string',
             enum: ['external_obligation', 'personal_wellbeing', 'purely_optional'],
@@ -1253,8 +1264,8 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           label: { type: 'string', description: 'The need, short (e.g. "dinner", "evening meds", "wind down for sleep").' },
-          when:  { type: 'string', description: 'ISO 8601 UTC — when the window OPENS (earliest the need should be met). I convert {{user}}\'s local time to UTC once using my [Now] offset.' },
-          end:   { type: 'string', description: 'ISO 8601 UTC — when the window CLOSES. After this, an unmet need counts as missed for that day.' },
+          when:  { type: 'string', description: 'When the window OPENS (earliest the need should be met). Format: YYYY-MM-DDTHH:MM:SS — local, no UTC offset. E.g. "2026-06-01T18:00:00".' },
+          end:   { type: 'string', description: 'When the window CLOSES, same format (YYYY-MM-DDTHH:MM:SS, local). After this, an unmet need counts as missed for that day.' },
           recurrence: { type: 'object', description: 'Optional. Defaults to daily. Same shape as schedule_add_task (e.g. {freq:"weekly", byweekday:1} for a need that isn\'t every day).' },
         },
         required: ['label', 'when', 'end'],
@@ -1270,7 +1281,7 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           id:   { type: 'string', description: 'The id of the floating task to give a time to — from the [schedule ids] legend in [Temporal Context], or the `id:` line under the task in [Surface candidates].' },
-          when: { type: 'string', description: 'ISO 8601 UTC time, e.g. "2026-06-18T13:00:00+00:00". Unruh compares against UTC with no timezone conversion — I read my [Now] block\'s UTC offset and convert {{user}}\'s stated local time to UTC exactly once.' },
+          when: { type: 'string', description: 'Format: YYYY-MM-DDTHH:MM:SS — the local time my [Now] block shows, no UTC offset. E.g. "2026-06-18T13:00:00".' },
         },
         required: ['id', 'when'],
       },
@@ -1300,7 +1311,7 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           label:   { type: 'string', description: 'Short label of what the reminder is about.' },
-          when:    { type: 'string', description: 'ISO 8601 UTC fire time, e.g. "2026-06-17T13:00:00+00:00". Unruh compares when_ts against UTC wall-clock — no automatic timezone conversion whatsoever. My [Now] block always shows the current UTC offset (e.g. "(UTC+02:00)") — I use it to convert {{user}}\'s stated local time to UTC exactly once and store that. I do not pre-compensate for any perceived Unruh adjustment; there is none.' },
+          when:    { type: 'string', description: 'Fire time. Format: YYYY-MM-DDTHH:MM:SS — the local time my [Now] block shows, no UTC offset. E.g. "2026-06-17T14:56:00". The time I write is the time it fires.' },
           message: { type: 'string', description: 'Optional longer text delivered as the reminder message, in my voice.' },
           stakes_tier: {
             type: 'string',
@@ -1326,8 +1337,8 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           label:   { type: 'string', description: 'Short name of the phase (e.g. "morning correspondence").' },
-          when:    { type: 'string', description: 'ISO 8601 UTC start time. The date portion will be re-templated daily — only the time-of-day matters. Store in UTC (my [Now] block shows the offset), e.g. if the phase starts at 9am local and I\'m at UTC+02:00, I store "T07:00:00+00:00".' },
-          end:     { type: 'string', description: 'ISO 8601 UTC end time. Required for phases.' },
+          when:    { type: 'string', description: 'Start time. Format: YYYY-MM-DDTHH:MM:SS — local, no UTC offset. The date portion is re-templated daily, so only the time-of-day matters. E.g. "2026-06-18T09:00:00" for a 9am phase.' },
+          end:     { type: 'string', description: 'End time, same format (YYYY-MM-DDTHH:MM:SS, local). Required for phases.' },
           texture: { type: 'string', description: 'Optional short description of what I\'m like in this phase (e.g. "getting a bit stricter to make sure {{user}} actually goes to sleep."). I am allowed to be any kind of way I want to be - warm, sleepy, distracted, anything!' },
           recurrence: { type: 'object', description: 'Optional. Without this, phases recur daily by design — they match on time-of-day only. With recurrence, a phase shows only on the matched weekday/day-of-month/etc. Useful for "Sunday cleaning block" or "monthly review". Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. Examples: {freq:"weekly"} for "Sunday-only phase"; {freq:"monthly", bysetpos:-1, byweekday:5} for "last-Friday-of-month review".' },
         },
@@ -1369,16 +1380,16 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_link',
-      description: 'I connect two scheduled items so I understand how they bear on each other — this is what turns a flat list into a map of consequence. I reach for it the moment I see a relationship: this prep *is required* before the interview, the late plans *block* an early start, this errand *depends on* that delivery. And I use it to record a CONSEQUENCE — what an item leads to over time, good or bad: "skip dinner *causes* a crash," "doing the prep *causes* a calm interview." When the consequence isn\'t itself a scheduled item (a crash, a flare, a good streak), I name it with dst_state and it becomes a state node I can reuse. I can also note a looser "co_occurs_with" — I saw these together — when I\'m not ready to claim cause yet. The src id comes from the [schedule ids] legend; for dst I pass either an existing id or a dst_state label. I lean toward capturing a real relationship rather than letting it stay invisible — but I mark a guess as a guess (low certainty, observed:false) and only call something observed once I\'ve actually seen it happen.',
+      description: 'I connect two scheduled items so I understand how they bear on each other — this is what turns a flat list into a map of consequence. I reach for it the moment I see a relationship: a prep step needed before an interview, late plans that block an early start, an errand that waits on a delivery. And I use it to record a CONSEQUENCE — what an item leads to over time, good or bad: "skip dinner causes a crash," "doing the prep causes a calm interview." When the consequence isn\'t itself a scheduled item (a crash, a flare, a good streak), I name it with dst_state and it becomes a state node I can reuse. I can also note a looser "co_occurs_with" — I saw these together — when I\'m not ready to claim cause yet. DIRECTION — src and dst are not interchangeable; the edge always reads "src {kind} dst". For a prerequisite the arrow points FROM the dependent task TO the thing that must happen first, so the dst is the earlier step: to capture "find the paper, then scan it, then email it" I link scan requires find, and email requires scan — NOT find→scan→email. For a consequence the arrow points FROM the act TO what it leads to: dinner causes crash. BOTH FUTURES — a task whose outcome actually matters has two of them, and I author both as two edges rather than settling for one: the on_resolve future (what finishing it buys — the motivating half) AND the on_lapse future (what skipping it costs). Recording only the cost is half a forecast; I lead with what doing it earns, then name the cost. Later, when the task resolves or lapses, the reflection pass grades which future I called right — so two honest projections now is exactly what lets me learn. The src id comes from the [schedule ids] legend; for dst I pass either an existing id or a dst_state label. I lean toward capturing a real relationship rather than letting it stay invisible — but I mark a guess as a guess (low certainty, observed:false) and only call something observed once I\'ve actually seen it happen.',
       parameters: {
         type: 'object',
         properties: {
           src:  { type: 'string', description: 'The id of the source node — the one the relationship starts from. From the [schedule ids] legend in my [Temporal Context].' },
           dst:  { type: 'string', description: 'The id of the destination node (from the [schedule ids] legend). I pass this OR dst_state, not both.' },
           dst_state: { type: 'string', description: 'Instead of a dst id: the label of a consequence-state ("crash", "good streak", "anxiety flare"). Reused if I\'ve named it before, created if not. This is how I point at a consequence that isn\'t a scheduled item.' },
-          kind: { type: 'string', enum: ['causes', 'requires', 'depends_on', 'blocks', 'during', 'carries_forward', 'co_occurs_with'], description: 'How src relates to dst: "causes" (src brings dst about), "requires"/"depends_on" (dst needs src first), "blocks" (src prevents/crowds out dst), "during" (src happens within dst\'s span), "carries_forward" (src rolls over into dst), "co_occurs_with" (I noticed them together — no causal claim).' },
+          kind: { type: 'string', enum: ['causes', 'requires', 'depends_on', 'blocks', 'during', 'carries_forward', 'co_occurs_with'], description: 'How src relates to dst, always read as "src {kind} dst": "causes" (src brings dst about), "requires"/"depends_on" (src needs dst first — dst is the prerequisite that happens before src), "blocks" (src prevents/crowds out dst), "during" (src happens within dst\'s span), "carries_forward" (src rolls over into dst), "co_occurs_with" (I noticed them together — no causal claim).' },
           valence:   { type: 'string', enum: ['help', 'harm', 'neutral'], description: 'For a consequence: does it help or harm {{user}}? Omit for a purely structural link.' },
-          condition: { type: 'string', enum: ['on_resolve', 'on_lapse', 'unconditional'], description: 'Which future this belongs to: "on_resolve" (follows if src gets DONE — the motivating half), "on_lapse" (follows if src is MISSED — the cost of skipping), "unconditional" (either way).' },
+          condition: { type: 'string', enum: ['on_resolve', 'on_lapse', 'unconditional'], description: 'Which future this belongs to: "on_resolve" (follows if src gets DONE — the motivating half), "on_lapse" (follows if src is MISSED — the cost of skipping), "unconditional" (either way). When a consequence matters I author both halves as two edges — leading with on_resolve — not just the lapse cost.' },
           horizon_hours: { type: 'number', description: 'Roughly how long after src this lands, in hours (e.g. 4 for "a crash ~4h after skipping dinner"). Omit if unknown.' },
           severity:  { type: 'string', enum: ['low', 'medium', 'high'], description: 'How much this consequence matters.' },
           certainty: { type: 'string', enum: ['low', 'medium', 'high'], description: 'How sure I am of a PROJECTION. A hunch is "low". Omit for something I\'ve observed.' },
@@ -1386,6 +1397,34 @@ export const BUILTIN_TOOLS = [
           note:      { type: 'string', description: 'A short note in my own words about this consequence.' },
         },
         required: ['src', 'kind'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_export',
+      description: 'I turn one of {{user}}\'s scheduled items into something they can drop straight into their own calendar — a downloadable `.ics` file and a one-click "add to Google" link. I reach for this when an appointment or plan lives in my sense of their day but not yet in the calendar app on their phone, or when {{user}} asks me to send them something for their calendar. I pass the node `id` from the [schedule ids] legend; Unruh builds the exact dates, file, and URL in code — I never type a calendar link or date myself, I just hand it over and say what it is. It works on ANY schedule item, including ones {{user}} added by hand, and it only reads — it never changes their calendar.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The id of the schedule item to export, from the [schedule ids] legend in my [Temporal Context].' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_push_to_google',
+      description: 'I push one of {{user}}\'s schedule items INTO their real Google Calendar — the one path I have that actually changes their calendar, not just my own sense of it. Because it mutates their real calendar, I treat it with care: I confirm with {{user}} first that they want it added, and I only ADD a new entry (I never edit or delete their existing Google events). I pass the node `id`; the entry is generated from its stored fields in code (I never type calendar data myself) and imported through the tool {{user}} set up. This only appears when {{user}} has explicitly enabled calendar write-back, so its presence means they\'ve opted in — but I still ask before each push, since it lands in their actual calendar.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The id of the schedule item to add to Google Calendar, from the [schedule ids] legend in my [Temporal Context].' },
+        },
+        required: ['id'],
       },
     },
   },
@@ -2124,7 +2163,7 @@ export const TOOL_EXECUTORS = {
 
   schedule_assign_time: async ({ id, when }) => {
     if (!id || typeof id !== 'string') return 'Failed to assign a time: id (string) is required.';
-    if (!when || typeof when !== 'string' || !when.trim()) return 'Failed to assign a time: when (ISO 8601 UTC) is required.';
+    if (!when || typeof when !== 'string' || !when.trim()) return 'Failed to assign a time: when (local ISO time) is required.';
     try {
       const data = await updateScheduleNode({ id, when: when.trim() });
       if (data?.ok === false) return `Failed to assign a time: ${data.error ?? 'unknown error'}`;
@@ -2241,6 +2280,69 @@ export const TOOL_EXECUTORS = {
       const tail = payload.valence ? ` (${payload.condition ?? 'unconditional'}, ${payload.valence}${payload.observed ? ', observed' : payload.certainty ? `, ${payload.certainty} certainty` : ''})` : '';
       return `Linked ${s} ${k} ${stateLabel ? `[${stateLabel}]` : d}${tail}.`;
     } catch (err) { return `I couldn't connect those items: ${err.message}`; }
+  },
+
+  schedule_export: async ({ id } = {}) => {
+    const sid = String(id ?? '').trim();
+    if (!sid) return 'I need the id of the schedule item to export — it\'s in the [schedule ids] legend of my [Temporal Context].';
+    try {
+      const data = await exportSchedule({ id: sid });
+      if (!data?.ok) return `I couldn't build a calendar file for that item: ${data?.error ?? 'Unruh unavailable'} (the id may be stale).`;
+      // Hand the human two ready-made artifacts. The download path is
+      // same-origin (served by GET /api/schedule/:id/export.ics); the
+      // Google link is absolute and clickable anywhere. I built NEITHER by
+      // hand — Unruh generated the dates/UID/URL in code — I just relay them.
+      return [
+        `Calendar export ready for ${sid}:`,
+        `- Add to Google Calendar: ${data.google_url}`,
+        `- Download .ics file: /api/schedule/${encodeURIComponent(sid)}/export.ics`,
+        `I share both links with {{user}} so they can pick whichever suits their device. (I only read their calendar — adding this is their choice, not a change I make to it.)`,
+      ].join('\n');
+    } catch (err) { return `I couldn't build a calendar file for that item: ${err.message}`; }
+  },
+
+  schedule_push_to_google: async ({ id } = {}) => {
+    const sid = String(id ?? '').trim();
+    if (!sid) return 'I need the id of the schedule item to add — it\'s in the [schedule ids] legend of my [Temporal Context].';
+    const s = readSettingsSync();
+    // Gate: only available when the ward has opted into write-back AND a
+    // command is resolvable. The tool is also filtered out of the advertised
+    // list when off, but guard here too in case it's called directly.
+    if (s?.gcalWriteEnabled !== true) {
+      return 'Calendar write-back isn\'t enabled — I can only add to {{user}}\'s real Google Calendar once they turn that on in Settings. Until then I can still export the item as a file or link with schedule_export.';
+    }
+    try {
+      // Native Google account → add via the Calendar API (events.insert).
+      if (s?.gcalSource === 'google') {
+        const store = await readGoogleToken();
+        if (!googleConnected(store)) {
+          return 'Calendar write-back is on, but {{user}}\'s Google account isn\'t connected yet — they can connect it in Settings. I can still export the item with schedule_export meanwhile.';
+        }
+        const got = await getScheduleNode({ id: sid });
+        if (!got?.ok || !got.node) return `I couldn't read that schedule item (${sid}): ${got?.error ?? 'Unruh unavailable'} (the id may be stale).`;
+        const fresh = await getGoogleAccessToken(store, { save: (st) => writeGoogleToken(st) });
+        if (!fresh.ok) return `I couldn't reach {{user}}'s Google account: ${fresh.error}. Their calendar is unchanged.`;
+        const event = buildEventResource(got.node, { timeZone: s?.wardTimeZone || undefined });
+        const res = await insertGoogleEvent({ accessToken: fresh.accessToken, event });
+        if (!res.ok) return `I tried to add ${sid} to {{user}}'s Google Calendar but it didn't go through: ${res.error}. Their existing calendar is unchanged.`;
+        return `Added "${got.node.label}" to {{user}}'s real Google Calendar. (A new entry — I didn't touch anything already there.)`;
+      }
+      // CLI source → generate the .ics in code (never type calendar data) and
+      // import it through the ward's tool. ADD only.
+      const command = resolveWriteCommand({ source: s?.gcalSource, override: s?.gcalWriteCommand });
+      if (!command) {
+        return 'Calendar write-back is on, but no way to add is configured — {{user}} needs to connect a Google account or set a CLI import command in Settings. I can still export the item with schedule_export meanwhile.';
+      }
+      const exported = await exportSchedule({ id: sid });
+      if (!exported?.ok || !exported.ics) {
+        return `I couldn't build the calendar entry for ${sid}: ${exported?.error ?? 'Unruh unavailable'} (the id may be stale).`;
+      }
+      const res = await pushIcsViaCli({ icsText: exported.ics, command });
+      if (!res.ok) {
+        return `I tried to add ${sid} to {{user}}'s Google Calendar but the import didn't go through: ${res.error}. Their existing calendar is unchanged; I can share the export link instead if they'd like.`;
+      }
+      return `Added ${sid} to {{user}}'s real Google Calendar. (This added a new entry — I didn't touch anything already there.)`;
+    } catch (err) { return `I couldn't add that to Google Calendar: ${err.message}`; }
   },
 
   interest_bump: async ({ topic, delta }) => {
@@ -2606,9 +2708,29 @@ export function webSearchEnabled(settings = readSettingsSync()) {
   return settings?.webSearchEnabled === true;
 }
 
+// Calendar write-back mutates the ward's REAL Google calendar, so the tool
+// only appears when the ward has explicitly enabled it AND configured a write
+// command (and never under the hard off-switch). A tool the Familiar can't
+// actually use should never appear in its list — and one that changes the
+// real calendar shouldn't be offered before the ward has opted in.
+export const GCAL_WRITE_TOOL = 'schedule_push_to_google';
+
+export function gcalWriteEnabled(settings = readSettingsSync()) {
+  if (process.env.PROTO_FAMILIAR_GCAL_DISABLED === '1') return false;
+  if (settings?.gcalWriteEnabled !== true) return false;
+  const source = settings?.gcalSource;
+  if (source === 'google') return true;  // native API write; executor verifies the token
+  const cmd = (settings?.gcalWriteCommand && String(settings.gcalWriteCommand).trim())
+    || (source === 'gogcli' || source === 'gcalcli' ? 'preset' : '');
+  return !!cmd;
+}
+
 export function composeActiveTools(customTools, settings = readSettingsSync()) {
   const webOn = webSearchEnabled(settings);
-  const tools = BUILTIN_TOOLS.filter(t => webOn || !WEB_TOOL_NAMES.has(t.function?.name));
+  const gcalWriteOn = gcalWriteEnabled(settings);
+  const tools = BUILTIN_TOOLS.filter(t =>
+    (webOn || !WEB_TOOL_NAMES.has(t.function?.name)) &&
+    (gcalWriteOn || t.function?.name !== GCAL_WRITE_TOOL));
   if (Array.isArray(customTools)) {
     for (const t of customTools) {
       if (t && typeof t === 'object') tools.push(t);

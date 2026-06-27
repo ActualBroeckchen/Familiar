@@ -29,35 +29,35 @@ from . import schedule as sched
 SEED_PATH = Path(__file__).parent / "seed_routine.json"
 
 
-def _local_to_utc_today(hhmm: str, base_date: datetime | None = None) -> str:
-    """Convert 'HH:MM' (system local TZ) on the given base date
-    (default today) to an ISO-8601 UTC string. astimezone() reads
-    the system TZ — same source server.js uses, per Decision 6.
-
-    Wrap-around handling: an end-time HH:MM that's <= start-time
-    HH:MM is interpreted as 'next day' (so 'late night' 23:00→06:00
-    spans midnight)."""
-    today = (base_date or datetime.now()).astimezone()
+def _local_today(hhmm: str, base_date: datetime | None = None) -> str:
+    """'HH:MM' (system local) on the given base date (default today) as a
+    LOCAL-naive ISO string — the form Unruh stores and compares in. No UTC
+    conversion: the seed routine is the ward's local day."""
+    today = base_date or datetime.now()
+    if today.tzinfo is not None:
+        today = today.astimezone().replace(tzinfo=None)
     h, m = (int(x) for x in hhmm.split(":"))
     local = today.replace(hour=h, minute=m, second=0, microsecond=0)
-    return local.astimezone(timezone.utc).isoformat(timespec="seconds")
+    return local.isoformat(timespec="seconds")
 
 
 def _phase_end_today(start_hhmm: str, end_hhmm: str, base_date: datetime | None = None) -> str:
-    """End-time variant that rolls into 'next day' when the end is
-    not-later-than the start (the 'late night' 23:00→06:00 case).
+    """End-time variant (LOCAL-naive) that rolls into 'next day' when the end
+    is not-later-than the start (the 'late night' 23:00→06:00 case).
 
     Uses timedelta(days=1) for the roll-over — `dt.replace(day=day+1)`
     raises on month-end boundaries (May 31 → June 31 is invalid). The
     seed-routine command was broken on the 31st of any 30-day month and
     on Feb 28/29 before this fix landed."""
-    today = (base_date or datetime.now()).astimezone()
+    today = base_date or datetime.now()
+    if today.tzinfo is not None:
+        today = today.astimezone().replace(tzinfo=None)
     sh, sm = (int(x) for x in start_hhmm.split(":"))
     eh, em = (int(x) for x in end_hhmm.split(":"))
     local_end = today.replace(hour=eh, minute=em, second=0, microsecond=0)
     if (eh, em) <= (sh, sm):
         local_end = local_end + timedelta(days=1)
-    return local_end.astimezone(timezone.utc).isoformat(timespec="seconds")
+    return local_end.isoformat(timespec="seconds")
 
 
 def seed_today(*, replace: bool = False, seed_path: Path = SEED_PATH) -> dict:
@@ -70,7 +70,7 @@ def seed_today(*, replace: bool = False, seed_path: Path = SEED_PATH) -> dict:
     seeds. User-created events / tasks are never touched.
     """
     data = json.loads(seed_path.read_text(encoding="utf-8"))
-    now = datetime.now().astimezone()
+    now = datetime.now()  # local-naive — matches stored when_ts
 
     summary = {"phases_added": 0, "events_added": 0, "skipped": 0}
 
@@ -78,8 +78,8 @@ def seed_today(*, replace: bool = False, seed_path: Path = SEED_PATH) -> dict:
         # When replacing, drop today's phases + previously-seeded
         # anchor events (tagged via payload.seeded=True).
         if replace:
-            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).isoformat(timespec="seconds")
-            today_end   = now.replace(hour=23, minute=59, second=59, microsecond=0).astimezone(timezone.utc).isoformat(timespec="seconds")
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat(timespec="seconds")
+            today_end   = now.replace(hour=23, minute=59, second=59, microsecond=0).isoformat(timespec="seconds")
             conn.execute(
                 "DELETE FROM nodes WHERE layer='schedule' AND type='phase' AND when_ts BETWEEN ? AND ?",
                 (today_start, today_end),
@@ -102,15 +102,15 @@ def seed_today(*, replace: bool = False, seed_path: Path = SEED_PATH) -> dict:
                     LIMIT 1""",
                 (
                     p["label"],
-                    now.replace(hour=0, minute=0, second=0).astimezone(timezone.utc).isoformat(timespec="seconds"),
-                    now.replace(hour=23, minute=59, second=59).astimezone(timezone.utc).isoformat(timespec="seconds"),
+                    now.replace(hour=0, minute=0, second=0).isoformat(timespec="seconds"),
+                    now.replace(hour=23, minute=59, second=59).isoformat(timespec="seconds"),
                 ),
             ).fetchone()
             if existing:
                 phase_ids[p["label"]] = existing["id"]
                 summary["skipped"] += 1
                 continue
-            when_ts = _local_to_utc_today(p["time"], now)
+            when_ts = _local_today(p["time"], now)
             end_ts  = _phase_end_today(p["time"], p["end"], now)
             payload = {"seeded": True}
             if "texture" in p: payload["texture"] = p["texture"]
@@ -123,7 +123,7 @@ def seed_today(*, replace: bool = False, seed_path: Path = SEED_PATH) -> dict:
 
         # Anchor events — attach to their phase via 'during'.
         for e in data.get("anchor_events", []):
-            when_ts = _local_to_utc_today(e["time"], now)
+            when_ts = _local_today(e["time"], now)
             event_id = sched.add_node(
                 conn, type="event", label=e["label"],
                 when=when_ts, payload={"seeded": True},

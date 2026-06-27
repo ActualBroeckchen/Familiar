@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from unruh import schedule as sched
-from unruh.db import MIGRATIONS_DIR, run_migrations, now_iso
+from unruh.db import MIGRATIONS_DIR, run_migrations, now_iso, to_local_naive, migrate_timestamps_to_local
 
 
 @pytest.fixture
@@ -238,11 +238,13 @@ class TestUpdateNode:
         assert row["label"] == "new"
 
     def test_update_when_and_end(self, conn):
+        # Plain local-naive input round-trips verbatim (the canonical path — the
+        # Familiar writes local wall-clock; no offset to convert).
         t = sched.add_node(conn, type="task", label="x")
-        assert sched.update_node(conn, id=t, when="2030-01-01T12:00:00+00:00", end="2030-01-01T13:00:00+00:00")
+        assert sched.update_node(conn, id=t, when="2030-01-01T12:00:00", end="2030-01-01T13:00:00")
         row = conn.execute("SELECT when_ts, end_ts FROM nodes WHERE id=?", (t,)).fetchone()
-        assert row["when_ts"] == "2030-01-01T12:00:00+00:00"
-        assert row["end_ts"]  == "2030-01-01T13:00:00+00:00"
+        assert row["when_ts"] == "2030-01-01T12:00:00"
+        assert row["end_ts"]  == "2030-01-01T13:00:00"
 
     def test_update_clears_when_with_empty_string(self, conn):
         t = sched.add_node(conn, type="event", label="x", when="2030-01-01T12:00:00+00:00")
@@ -552,3 +554,59 @@ class TestPayload:
         result = sched.get_window(conn)
         node = next(n for n in result["nodes"] if n["id"] == nid)
         assert "payload" not in node
+
+
+# ── Local-time model (the timezone-bug fix) ───────────────────────────────────
+
+class TestLocalTime:
+    """Unruh stores and compares LOCAL-naive wall-clock. The Familiar writes
+    plain local time; a stray offset is normalised in code; and a reminder set
+    for a past local time actually comes due (the bug: a naive when_ts that the
+    old UTC string-comparison never matched)."""
+
+    def test_to_local_naive_passes_naive_through(self):
+        assert to_local_naive("2026-06-26T14:56:00") == "2026-06-26T14:56:00"
+        assert to_local_naive("2026-06-26T14:56") == "2026-06-26T14:56:00"  # seconds normalised
+        assert to_local_naive(None) is None
+
+    def test_to_local_naive_converts_offset_to_local_same_instant(self):
+        # An offset-bearing value loses its offset but keeps the instant: the
+        # naive result, re-read in local tz, equals the original instant.
+        out = to_local_naive("2026-06-26T12:00:00+00:00")
+        assert "+" not in out and "Z" not in out
+        expected = datetime.fromisoformat("2026-06-26T12:00:00+00:00").astimezone().replace(tzinfo=None)
+        assert out == expected.isoformat(timespec="seconds")
+
+    def test_add_node_stores_plain_local(self, conn):
+        nid = sched.add_node(conn, type="event", label="x", when="2030-01-01T09:00:00")
+        row = conn.execute("SELECT when_ts FROM nodes WHERE id=?", (nid,)).fetchone()
+        assert row["when_ts"] == "2030-01-01T09:00:00"  # verbatim, no offset added
+
+    def test_naive_past_reminder_is_due(self, conn):
+        # THE regression: a reminder set for a local time in the past must fire.
+        past = (datetime.now() - timedelta(minutes=10)).isoformat(timespec="seconds")
+        sched.add_node(conn, type="reminder", label="meds", when=past)
+        due = sched.get_due_reminders(conn)
+        assert len(due) == 1 and due[0]["label"] == "meds"
+
+    def test_naive_future_reminder_is_not_due(self, conn):
+        future = (datetime.now() + timedelta(hours=2)).isoformat(timespec="seconds")
+        sched.add_node(conn, type="reminder", label="later", when=future)
+        assert sched.get_due_reminders(conn) == []
+
+    def test_migration_normalises_offset_when_ts_to_local(self, conn):
+        # Simulate a pre-migration row written under the old UTC regime by
+        # inserting an offset-bearing when_ts directly (bypassing add_node).
+        conn.execute(
+            "INSERT INTO nodes (id, layer, type, label, payload_json, when_ts, created_at, updated_at) "
+            "VALUES ('old1', 'schedule', 'event', 'legacy', '{}', '2026-06-26T12:00:00+00:00', ?, ?)",
+            (now_iso(), now_iso()),
+        )
+        n = migrate_timestamps_to_local(conn)
+        assert n == 1
+        row = conn.execute("SELECT when_ts FROM nodes WHERE id='old1'").fetchone()
+        assert "+" not in row["when_ts"] and "Z" not in row["when_ts"]
+        expected = datetime.fromisoformat("2026-06-26T12:00:00+00:00").astimezone().replace(tzinfo=None)
+        assert row["when_ts"] == expected.isoformat(timespec="seconds")
+        # Idempotent: a second run touches nothing (flag is set).
+        assert migrate_timestamps_to_local(conn) == 0

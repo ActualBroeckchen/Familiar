@@ -32,8 +32,10 @@ import {
   getScheduleWindow, addScheduleNode, updateScheduleNode,
   resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
   addScheduleEdge, updateScheduleEdge, deleteScheduleEdge, listPhases, listRecurring,
+  exportSchedule,
   getHandoff, markHandoffConsumed,
   getDueReminders, getRemindersHealth,
+  ingestGcal,
   shutdownUnruh, shutdownPhylactery,
   reportSurfacingOutcomes, listBookmarks,
 } from './thalamus.js';
@@ -49,16 +51,25 @@ import {
 } from './surface-events.js';
 import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedIntents } from './recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
+import { startGcalSyncLoop, stopGcalSyncLoop } from './gcal-sync-loop.js';
+import { fetchIcal, fetchViaCli, cliPresetHint } from './gcal-source.js';
+import {
+  parseCredentials, buildAuthUrl, exchangeCode,
+  readToken as readGoogleToken, writeToken as writeGoogleToken,
+  clearToken as clearGoogleToken, publicStatus as googlePublicStatus,
+  getFreshAccessToken, listEvents as listGoogleEvents,
+  normalizeGoogleEvents, isConnected as googleConnected,
+} from './gcal-google.js';
 import { listOutbox, acknowledgeOutbox, clearAcknowledged } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
 import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';
-import { startMemorySweepLoop } from './memory-sweep-loop.js';
+import { startMemorySweepLoop, stopMemorySweepLoop } from './memory-sweep-loop.js';
 import { startTomeGraduationLoop, stopTomeGraduationLoop } from './tome-graduation-loop.js';
 import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './needs-tracking-loop.js';
 import { isNeedWindow } from './needs-tracking.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './reachout.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
-import { buildTimeAnchorBlock } from './relative-time.js';
+import { buildTimeAnchorBlock, wardLocalNowISO } from './relative-time.js';
 // Cerebellum is the motor module — the outbound counterpart to thalamus.
 // Triage deliberation, trusted-contact delivery, and escalation deadlines
 // live there; server.js keeps only route handling and loop boot.
@@ -389,6 +400,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     timeAnchor = buildTimeAnchorBlock({
       now: Date.now(),
       lastUserMessageAt: lastUserMessageAt ?? null,
+      // The ward's zone, not the server's — so the [Now] the Familiar reads is
+      // the ward's clock even when the server runs in a different timezone.
+      timeZone: readSettingsSync()?.wardTimeZone || null,
     }) || '';
     if (timeAnchor && !loopMode) {
       enrichedMessages = [...enrichedMessages, { role: 'system', content: timeAnchor }];
@@ -1503,6 +1517,9 @@ app.post('/api/memorize-day', async (req, res) => {
           sessionId, scope: 'day', topicId: date,
           messageRange: { start: seg.startIdx, end: seg.endIdx },
           messages: seg.messages, provider, apiKey, model, audienceTag,
+          // A forced re-memorize deliberately re-reads the whole day; otherwise
+          // ingest only the un-memorized tail (the default delta behaviour).
+          fullSegment: force === true,
         });
         if (r.deduped) deduped++; else enqueued++;
       } catch (err) { console.warn('[memorize-day] slice failed:', err?.message ?? err); }
@@ -2279,6 +2296,109 @@ app.post('/api/temporal/interests/set-standing', async (req, res) => {
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Calendar export (0.8 §2.2). Streams a schedule node as a downloadable
+// `.ics` so the Familiar's message can carry a real download link alongside
+// the "add to Google" URL. The artifact is built in Unruh's code from the
+// node's stored fields — the model never types a calendar value (§3).
+app.get('/api/schedule/:id/export.ics', async (req, res) => {
+  const id = String(req.params.id || '');
+  if (!/^[a-fA-F0-9]{32}$/.test(id)) return res.status(400).json({ error: 'invalid schedule id' });
+  try {
+    const data = await exportSchedule({ id });
+    if (!data?.ok || !data.ics) {
+      return res.status(404).json({ error: data?.error || 'no exportable schedule item with that id' });
+    }
+    res.set('Content-Type', 'text/calendar; charset=utf-8');
+    res.set('Content-Disposition', `attachment; filename="schedule-${id.slice(0, 8)}.ics"`);
+    res.send(data.ics);
+  } catch (err) {
+    res.status(500).json({ error: err?.message ?? String(err) });
+  }
+});
+
+// ── Native Google Calendar OAuth (0.8.1) ────────────────────────────
+// Two doors to the same token store, both UI-driven (no terminal):
+//   (1) upload credentials.json → Connect → Google's Allow screen →
+//       /oauth/callback captures the token (the loopback flow);
+//   (2) paste a refresh token minted on Google's own side.
+// Tokens live in the gitignored token store; the status surface is redacted.
+
+// The loopback redirect must be byte-identical in the auth URL and the
+// exchange. Derive it from the request host so it tracks whatever port/host
+// the ward reached the UI on (a Desktop OAuth client allows any loopback).
+function googleRedirectUri(req) {
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+  return `${proto}://${req.get('host')}/api/gcal/oauth/callback`;
+}
+
+app.get('/api/gcal/google/status', async (_req, res) => {
+  res.json(googlePublicStatus(await readGoogleToken()));
+});
+
+// Door 1, step A: store the Cloud-Console OAuth client.
+app.post('/api/gcal/google/credentials', async (req, res) => {
+  const creds = parseCredentials(req.body?.credentials);
+  if (!creds) return res.status(400).json({ error: 'that doesn\'t look like a Google credentials.json (no client_id found)' });
+  const store = (await readGoogleToken()) || {};
+  // New client → drop any stale token; the ward will re-Allow.
+  await writeGoogleToken({ client_id: creds.clientId, client_secret: creds.clientSecret });
+  res.json(googlePublicStatus(await readGoogleToken()));
+});
+
+// Door 1, step B: hand back the consent URL (the UI opens it in a new tab).
+app.get('/api/gcal/google/auth-url', async (req, res) => {
+  const store = await readGoogleToken();
+  if (!store?.client_id) return res.status(400).json({ error: 'upload your credentials.json first' });
+  const state = globalThis.crypto?.randomUUID?.() || String(Math.random()).slice(2);
+  const redirectUri = googleRedirectUri(req);
+  await writeGoogleToken({ ...store, oauth_state: state, oauth_redirect: redirectUri });
+  res.json({ url: buildAuthUrl({ clientId: store.client_id, redirectUri, state }) });
+});
+
+// Door 1, step C: Google redirects the browser here with code + state.
+app.get('/api/gcal/oauth/callback', async (req, res) => {
+  const page = (title, body) => `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font-family:system-ui;max-width:32rem;margin:4rem auto;text-align:center;color:#222"><h2>${title}</h2><p>${body}</p><p style="color:#888">You can close this tab.</p></body>`;
+  try {
+    const store = await readGoogleToken();
+    const { code, state, error } = req.query;
+    if (error) return res.status(400).send(page('Google sign-in cancelled', String(error)));
+    if (!code || !store?.oauth_state || state !== store.oauth_state) {
+      return res.status(400).send(page('Sign-in could not be verified', 'Please start the connection again from Settings.'));
+    }
+    const tok = await exchangeCode({
+      code: String(code), clientId: store.client_id, clientSecret: store.client_secret || '',
+      redirectUri: store.oauth_redirect,
+    });
+    if (!tok.refresh_token) {
+      return res.status(400).send(page('Almost there', 'Google didn\'t return a refresh token — remove this app\'s access in your Google account and try Connect again.'));
+    }
+    const { oauth_state, oauth_redirect, ...rest } = store;
+    await writeGoogleToken({ ...rest, refresh_token: tok.refresh_token, access_token: tok.access_token, expiry: tok.expiry, scope: tok.scope });
+    res.send(page('Connected ✓', 'Proto-Familiar can now read your Google Calendar.'));
+  } catch (err) {
+    res.status(500).send(page('Something went wrong', String(err?.message ?? err)));
+  }
+});
+
+// Door 2: paste a refresh token minted on Google's side (e.g. OAuth Playground).
+app.post('/api/gcal/google/token', async (req, res) => {
+  let pasted = req.body?.token;
+  if (typeof pasted === 'string') { try { pasted = JSON.parse(pasted); } catch { /* maybe a bare token */ } }
+  const refresh = (typeof pasted === 'object' ? pasted.refresh_token : null) || (typeof req.body?.token === 'string' && !req.body.token.trim().startsWith('{') ? req.body.token.trim() : null);
+  if (!refresh) return res.status(400).json({ error: 'no refresh_token found in what you pasted' });
+  const store = (await readGoogleToken()) || {};
+  const client_id = (pasted && pasted.client_id) || req.body?.client_id || store.client_id;
+  const client_secret = (pasted && pasted.client_secret) || req.body?.client_secret || store.client_secret || '';
+  if (!client_id) return res.status(400).json({ error: 'no client_id — paste it alongside the token, or upload credentials.json first' });
+  await writeGoogleToken({ client_id, client_secret, refresh_token: refresh, access_token: null, expiry: 0, scope: (pasted && pasted.scope) || null });
+  res.json(googlePublicStatus(await readGoogleToken()));
+});
+
+app.post('/api/gcal/google/disconnect', async (_req, res) => {
+  await clearGoogleToken();
+  res.json({ ok: true, connected: false });
+});
+
 // Schedule
 app.get('/api/temporal/schedule', async (req, res) => {
   const from_ts = req.query.from || undefined;
@@ -2773,6 +2893,7 @@ const httpServer = app.listen(PORT, HOST, async () => {
   startMemorizationWorker();
   startAutonomousPondering();
   startRemindersScheduler();
+  startGcalSync();
   startSilenceTriage();
   startReachout();
   startMemorySweep();
@@ -2920,6 +3041,7 @@ function startAutonomousPondering() {
         provider: conn.provider,
         apiKey:   conn.apiKey,
         model:    conn.model,
+        settings: s,
       });
       // Reflection follow-through: if the LLM proposed an
       // identity-layer update, write it. Mark the reflection so
@@ -3001,7 +3123,13 @@ function startRemindersScheduler() {
     // means a silently missed reminder.
     enqueueOutboxFn: enqueueAndDispatch,
     getDueReminders: async () => {
-      const r = await getDueReminders({ limit: 50 });
+      // Compare against the WARD's local now, not the server's clock — a
+      // reminder's when_ts is the ward's wall-clock, and the server may run in
+      // a different zone (a UTC container while the ward is in PDT). Passing a
+      // ward-local now here is what stops afternoon reminders firing in the
+      // morning. Falls back to server-local when no ward zone is known yet.
+      const now = wardLocalNowISO(readSettingsSync()?.wardTimeZone);
+      const r = await getDueReminders({ now, limit: 50 });
       return Array.isArray(r.reminders) ? r.reminders : [];
     },
     fireReminder: async ({ id }) => {
@@ -3016,6 +3144,119 @@ function startRemindersScheduler() {
     onError: (err) => console.error('[reminders]', err?.message ?? err),
   });
   console.log('[reminders] Scheduler ENABLED. Hard-disable with PROTO_FAMILIAR_REMINDERS_DISABLED=1.');
+}
+
+// ── Google Calendar sync loop (0.8) ─────────────────────────────
+// Inbound, mechanical, change-gated: fetch the ward's iCal feed →
+// Unruh's gcal_ingest parses + reconciles → only genuinely NEW items
+// get flagged for projection (the cue, Pass 3). Idles until the ward
+// pastes an iCal URL and enables the toggle; cadence is ward-configurable
+// (default hourly). A fetch/parse failure degrades silently and NEVER
+// reconciles deletions (so a blip can't look like "the calendar emptied").
+// Hard off-switch: PROTO_FAMILIAR_GCAL_DISABLED=1.
+
+function gcalSyncIntervalMs(s) {
+  // Settings stores minutes (ward-facing); the loop wants ms. A missing or
+  // nonsensical value falls back to the hourly default; the loop clamps.
+  const mins = Number(s?.gcalSyncIntervalMinutes);
+  return Number.isFinite(mins) && mins > 0 ? mins * 60_000 : 60 * 60_000;
+}
+
+// Resolve the configured calendar command for a CLI source ('gogcli' /
+// 'gcalcli'): the ward's explicit override if set, else the preset hint.
+function gcalCliCommandFor(s) {
+  const override = s?.gcalCliCommand && String(s.gcalCliCommand).trim();
+  return override || cliPresetHint(s?.gcalSource) || '';
+}
+
+// Forward window the native Google read materialises (and the CLI tiers
+// conceptually cover): 90 days ahead, matching the recurrence-expansion
+// horizon. A windowed read, so deletions are caught via showDeleted, not
+// reconcile.
+const GCAL_READ_HORIZON_DAYS = 90;
+
+// Sync (sources other than google are decided synchronously from settings;
+// google needs an async token-store read, handled in isEnabled/fetchSource).
+function gcalSourceConfigured(s) {
+  if (!s || s.gcalEnabled !== true) return false;
+  const src = s.gcalSource || 'link';
+  if (src === 'link') return !!(s.gcalIcalUrl && String(s.gcalIcalUrl).trim());
+  if (src === 'google') return true;  // real check (token present) is async, in isEnabled
+  return !!gcalCliCommandFor(s);  // gogcli / gcalcli
+}
+
+// Read the ward's Google Calendar through the native API (the §1.5 advanced
+// tier, reworked). Refreshes the access token as needed, lists a forward
+// window (cancellations included), and returns normalized events for the
+// same gcal_ingest. Windowed → reconcileDeletes:false. Never throws.
+async function fetchGoogleSource() {
+  const store = await readGoogleToken();
+  if (!googleConnected(store)) return { ok: false, error: 'Google account not connected' };
+  const fresh = await getFreshAccessToken(store, { save: (s) => writeGoogleToken(s) });
+  if (!fresh.ok) return { ok: false, error: fresh.error };
+  try {
+    const now = new Date();
+    const timeMin = now.toISOString();
+    const timeMax = new Date(now.getTime() + GCAL_READ_HORIZON_DAYS * 86_400_000).toISOString();
+    const items = await listGoogleEvents({ accessToken: fresh.accessToken, timeMin, timeMax });
+    return { ok: true, events: normalizeGoogleEvents(items), reconcileDeletes: false };
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+}
+
+function startGcalSync() {
+  if (process.env.PROTO_FAMILIAR_GCAL_DISABLED === '1') {
+    console.log('[gcal] PROTO_FAMILIAR_GCAL_DISABLED=1 — calendar sync is OFF');
+    return;
+  }
+  startGcalSyncLoop({
+    isEnabled: async () => {
+      const s = readSettingsSync();
+      if (s?.gcalEnabled !== true) return false;
+      if ((s.gcalSource || 'link') === 'google') return googleConnected(await readGoogleToken());
+      return gcalSourceConfigured(s);
+    },
+    getIntervalMs: async () => gcalSyncIntervalMs(readSettingsSync()),
+    // Source adapters, interchangeable behind the one seam (§1.5): the
+    // out-of-the-box link tier (full iCal feed, reconciles deletes); the
+    // native Google account (windowed API read); or an authenticated CLI
+    // (gogcli/gcalcli). All produce input for the same gcal_ingest.
+    fetchSource: async () => {
+      const s = readSettingsSync();
+      const src = s?.gcalSource || 'link';
+      if (src === 'google') return fetchGoogleSource();
+      if (src === 'gogcli' || src === 'gcalcli') {
+        const command = gcalCliCommandFor(s);
+        const format = s?.gcalCliFormat || (src === 'gcalcli' ? 'json' : 'ics');
+        return fetchViaCli({ command, format });  // ok:false includes reconcileDeletes-safe skip
+      }
+      const res = await fetchIcal(s?.gcalIcalUrl);
+      if (!res.ok) return res;
+      return { ok: true, icsText: res.icsText, reconcileDeletes: true };
+    },
+    ingest: async ({ icsText, events, reconcileDeletes }) =>
+      ingestGcal({ icsText, events, reconcileDeletes }),
+    // routeNew: the `new` ids are already flagged needs_projection at
+    // insert (the cue reads that flag, Pass 3). This stays a log hook so a
+    // first import is observable without coupling the loop to the cue.
+    routeNew: async (ids) => { if (ids.length) console.log(`[gcal] ${ids.length} new calendar item(s) flagged for projection`); },
+    onTick: (r) => {
+      if (r.synced) {
+        const parts = [];
+        if (r.new?.length)     parts.push(`${r.new.length} new`);
+        if (r.updated?.length) parts.push(`${r.updated.length} updated`);
+        if (r.removed?.length) parts.push(`${r.removed.length} removed`);
+        if (parts.length) console.log(`[gcal] synced — ${parts.join(', ')}`);
+        for (const uid of r.complex_series || []) console.log(`[gcal] RRULE for "${uid}" too complex to map as a series — materialised next 90 days as individual events`);
+      } else if (r.reason === 'fetch_failed' || r.reason === 'ingest_failed') {
+        console.warn(`[gcal] sync skipped (${r.reason}): ${r.error}`);
+      }
+      // 'disabled' / 'not_due' are silent.
+    },
+    onError: (err) => console.error('[gcal]', err?.message ?? err),
+  });
+  console.log('[gcal] Calendar sync loop ENABLED (idles until an iCal URL + toggle are set). Hard-disable with PROTO_FAMILIAR_GCAL_DISABLED=1.');
 }
 
 // ── Silence-triage loop (M12b) ──────────────────────────────────
@@ -3225,10 +3466,12 @@ async function handleSignal(signal) {
   try { await stopMemorizationWorker(); } catch { /* already stopped */ }
   try { await stopPonderingLoop(); } catch { /* already stopped */ }
   try { await stopRemindersLoop(); } catch { /* already stopped */ }
+  try { await stopGcalSyncLoop(); } catch { /* already stopped */ }
   try { await stopSilenceTriageLoop(); } catch { /* already stopped */ }
   try { await stopReachoutLoop(); } catch { /* already stopped */ }
   try { await stopTomeGraduationLoop(); } catch { /* already stopped */ }
   try { await stopNeedsTrackingLoop(); } catch { /* already stopped */ }
+  try { await stopMemorySweepLoop(); } catch { /* already stopped */ }
   try { stopDiscordGateway(); } catch { /* already stopped */ }
   try { shutdownPhylactery(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }

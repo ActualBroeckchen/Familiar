@@ -127,8 +127,8 @@ import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMa
 import { getRegistry, standingConsentActive } from './village.js';
 import { deriveMemoryAudience, deriveNodeAudience, mostRestrictiveAudience } from './audience.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC } from './graph-vocab.js';
-import { segmentByDay } from './day-segments.js';
-import { recordSegmentRun, isSegmentMemorized } from './memory-coverage.js';
+import { segmentByDay, dayDelta } from './day-segments.js';
+import { recordSegmentRun, isSegmentMemorized, segmentMemorizedThrough } from './memory-coverage.js';
 import { readSettingsSync } from './cerebellum.js';
 
 export function findOrCreateSessionMemoriesTome() {
@@ -695,7 +695,9 @@ async function processJob(job) {
     await recordSegmentRun({
       date:         job.topicId,
       sessionId:    job.sessionId,
-      throughCount: Array.isArray(job.messages) ? job.messages.length : 0,
+      // Cumulative: where this delta started (priorThrough) + how many it
+      // covered. So a tail-only run still advances coverage to the full day.
+      throughCount: (job.priorThrough ?? 0) + (Array.isArray(job.messages) ? job.messages.length : 0),
       facts:        created,
       flag:         (job.audienceTag && job.audienceTag !== 'ward-private') ? 'shared-room' : null,
     }).catch(() => {});
@@ -820,7 +822,7 @@ export async function stopMemorizationWorker() {
 // withLock(QUEUE_FILE, ...) from thalamus so the load + dedup +
 // push + persist run as one atomic unit.
 
-export async function enqueueMemorization({ sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model, audienceTag }) {
+export async function enqueueMemorization({ sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model, audienceTag, fullSegment = false }) {
   await loadQueue();
   if (!sessionId || typeof sessionId !== 'string') throw new Error('sessionId is required.');
   if (!Array.isArray(messages) || messages.length < 2) throw new Error('At least 2 messages are required.');
@@ -828,10 +830,27 @@ export async function enqueueMemorization({ sessionId, scope, topicId, topicLabe
   const normScope = scope === 'topic' ? 'topic' : scope === 'day' ? 'day' : 'session';
   const normLabel = typeof topicLabel === 'string' && topicLabel.trim() ? topicLabel.trim() : null;
 
-  // Idempotency: same session+scope+topicId+rangeKey collapses to the existing job
-  // unless that job is already in a terminal state.
+  // Day jobs ingest only the UN-memorized TAIL of the day. The segment passed in
+  // is the whole day's messages; when a session keeps growing on the same date,
+  // re-extracting the earlier messages just remints facts the system already
+  // holds and floods the consent queue with duplicates (the reported pile-up).
+  // So we slice from `priorThrough` (what coverage says is already done) and the
+  // processor records coverage cumulatively. `fullSegment` (the manual
+  // force-re-memorize path) opts out and deliberately re-reads the whole day.
+  let priorThrough = 0;
+  if (normScope === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(String(topicId ?? '')) && !fullSegment) {
+    const delta = dayDelta(messages, await segmentMemorizedThrough(sessionId, topicId));
+    if (delta.skip) return { jobId: null, deduped: true, upToDate: true };
+    messages = delta.messages;
+    priorThrough = delta.priorThrough;
+  }
+
+  // Idempotency: same session+scope+topicId+rangeKey+offset collapses to the
+  // existing job unless that job is already in a terminal state. The offset
+  // keeps successive day deltas distinct while deduping a re-enqueue at the
+  // same point.
   const rangeKey = messageRange ? `${messageRange.start}-${messageRange.end}` : '';
-  const dupKey   = `${sessionId}|${normScope}|${topicId ?? ''}|${rangeKey}`;
+  const dupKey   = `${sessionId}|${normScope}|${topicId ?? ''}|${rangeKey}|${priorThrough}`;
   const existing = _queue.find(j => j.dupKey === dupKey && (j.status === 'pending' || j.status === 'processing'));
   if (existing) return { jobId: existing.id, deduped: true };
 
@@ -844,6 +863,7 @@ export async function enqueueMemorization({ sessionId, scope, topicId, topicLabe
     topicLabel:    normLabel,
     messageRange:  messageRange ?? null,
     messages,
+    priorThrough,
     provider,
     apiKey,
     model,

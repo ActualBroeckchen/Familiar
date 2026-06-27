@@ -80,13 +80,22 @@ export async function recordSegmentRun({ date, sessionId, throughCount = 0, fact
   }
 }
 
-/** Has this (session, date) slice already been memorized to at least `count`? */
-export async function isSegmentMemorized(sessionId, date, count, { ledgerFile = DEFAULT_LEDGER_FILE } = {}) {
+/**
+ * How many messages of this (session, date) slice have been memorized — the
+ * `memorizedThrough` count, or 0 if never run. This is the offset the
+ * memorization pipeline slices from so it only ingests the un-memorized tail of
+ * a day instead of re-reading (and re-minting facts from) the whole thing.
+ */
+export async function segmentMemorizedThrough(sessionId, date, { ledgerFile = DEFAULT_LEDGER_FILE } = {}) {
   try {
     const ledger = await load(ledgerFile);
-    const seg = ledger.days?.[date]?.segments?.[sessionId];
-    return !!seg && (seg.memorizedThrough ?? 0) >= count;
-  } catch { return false; }
+    return ledger.days?.[date]?.segments?.[sessionId]?.memorizedThrough ?? 0;
+  } catch { return 0; }
+}
+
+/** Has this (session, date) slice already been memorized to at least `count`? */
+export async function isSegmentMemorized(sessionId, date, count, opts = {}) {
+  return (await segmentMemorizedThrough(sessionId, date, opts)) >= count;
 }
 
 export function deriveStatus(sessions) {

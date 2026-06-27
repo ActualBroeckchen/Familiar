@@ -354,7 +354,9 @@ test('selectSurfaceCandidates: a task an imminent node requires gets a consequen
   const out = await selectSurfaceCandidates({
     openTasks: [{ id: 'prep', label: 'interview prep', type: 'task' }],
     threat: calm, routinePhaseLabel: '', personModel: '', surfacingHistory: {}, now: NOW,
-    edges: [{ id: 'e', src: 'prep', dst: 'iv', kind: 'requires' }],
+    // "interview requires prep" → src=iv (dependent), dst=prep (prerequisite).
+    // Surfacing prep, the prerequisite an imminent interview needs first.
+    edges: [{ id: 'e', src: 'iv', dst: 'prep', kind: 'requires' }],
     scheduleNodes: [
       { id: 'prep', label: 'interview prep', type: 'task' },
       { id: 'iv', label: 'interview', type: 'event', when: imminent },

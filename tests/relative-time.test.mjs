@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { relativeTime, relativeDay, clockTime, dayAndDate, plainInterval, buildTimeAnchorBlock } from '../relative-time.js';
+import { relativeTime, relativeDay, clockTime, dayAndDate, plainInterval, buildTimeAnchorBlock, wardLocalNowISO } from '../relative-time.js';
 
 // All test fixtures use a fixed "now" so they're deterministic across
 // timezones and clock drift. The relativeTime/relativeDay helpers
@@ -158,10 +158,12 @@ test('dayAndDate: weekday + month + day, no year by default', () => {
 
 // ── buildTimeAnchorBlock ───────────────────────────────────────────
 
-test('buildTimeAnchorBlock: always includes the [Now] header + clock + UTC offset + weekday/date', () => {
+test('buildTimeAnchorBlock: always includes the [Now] header + local clock + weekday/date', () => {
   const block = buildTimeAnchorBlock({ now: NOW });
   assert.match(block, /^\[Now\]/);
-  assert.match(block, /Now: 2:30pm \(UTC[+-]\d{2}:\d{2}\) on Thursday, June 4\./);
+  // Plain local wall-clock, no UTC offset (Unruh stores local time; showing an
+  // offset only invited the timezone-math mistakes the local-time model removed).
+  assert.match(block, /Now: 2:30pm on Thursday, June 4 \(my human's local time\)\./);
 });
 
 test('buildTimeAnchorBlock: adds last-message line with absolute clock + interval', () => {
@@ -215,4 +217,33 @@ test('plainInterval: months and years (deep history)', () => {
 test('plainInterval: bad input → empty string', () => {
   assert.equal(plainInterval(null, NOW), '');
   assert.equal(plainInterval('not-a-date', NOW), '');
+});
+
+// ── Ward-timezone awareness (the cross-zone reminder fix) ───────────────────
+// A fixed UTC instant; assert it renders in the WARD's zone, not the server's.
+// 2026-06-26T17:27:00Z = 10:27 PDT (UTC-7) = 19:27 CEST (UTC+2).
+const UTC_INSTANT = Date.UTC(2026, 5, 26, 17, 27, 0);
+
+test('wardLocalNowISO: renders the instant in the ward zone as local-naive ISO', () => {
+  assert.equal(wardLocalNowISO('America/Los_Angeles', UTC_INSTANT), '2026-06-26T10:27:00');
+  assert.equal(wardLocalNowISO('Europe/Berlin',       UTC_INSTANT), '2026-06-26T19:27:00');
+  // A zone past midnight rolls the DATE too (Tokyo UTC+9 → next day 02:27).
+  assert.equal(wardLocalNowISO('Asia/Tokyo',          UTC_INSTANT), '2026-06-27T02:27:00');
+});
+
+test('wardLocalNowISO: no/invalid zone → server-local, shape only', () => {
+  assert.match(wardLocalNowISO(null, UTC_INSTANT), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/);
+  assert.match(wardLocalNowISO('Not/AZone', UTC_INSTANT), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/);
+});
+
+test('clockTime / dayAndDate honour an explicit zone', () => {
+  assert.equal(clockTime(UTC_INSTANT, 'America/Los_Angeles'), '10:27am');
+  assert.equal(clockTime(UTC_INSTANT, 'Europe/Berlin'),       '7:27pm');
+  assert.equal(dayAndDate(UTC_INSTANT, { timeZone: 'America/Los_Angeles' }), 'Friday, June 26');
+  assert.equal(dayAndDate(UTC_INSTANT, { timeZone: 'Asia/Tokyo' }),          'Saturday, June 27');
+});
+
+test('buildTimeAnchorBlock renders [Now] in the ward zone', () => {
+  const block = buildTimeAnchorBlock({ now: UTC_INSTANT, timeZone: 'America/Los_Angeles' });
+  assert.match(block, /Now: 10:27am on Friday, June 26 \(my human's local time\)\./);
 });

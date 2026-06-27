@@ -31,6 +31,31 @@ export function isReadableMessage(m) {
 }
 
 /**
+ * Day-delta: given a day-segment's full messages and how many were already
+ * memorized (`priorThrough`, from the coverage ledger), return the tail to
+ * ingest this run plus whether to skip it entirely.
+ *
+ *   { messages, priorThrough, skip }
+ *
+ * - priorThrough <= 0 → first run: ingest the whole segment (it already passed
+ *   the caller's ≥2 gate), no skip.
+ * - priorThrough >= length → nothing new on this date; skip.
+ * - otherwise → slice off the un-memorized tail; skip only if that tail is too
+ *   thin to extract from (< 2 readable), so it waits for more rather than
+ *   spawning a job that re-mints nothing.
+ *
+ * This is what stops a growing same-day session from re-reading its earlier
+ * messages and flooding the consent queue with duplicate facts. Pure.
+ */
+export function dayDelta(messages, priorThrough = 0) {
+  const all = Array.isArray(messages) ? messages : [];
+  if (!(priorThrough > 0)) return { messages: all, priorThrough: 0, skip: false };
+  if (priorThrough >= all.length) return { messages: [], priorThrough, skip: true };
+  const tail = all.slice(priorThrough);
+  return { messages: tail, priorThrough, skip: tail.filter(isReadableMessage).length < 2 };
+}
+
+/**
  * Group `messages` by local calendar date. Returns one segment per date, in
  * date order:
  *   { date, startIdx, endIdx, count, readableCount, messages }

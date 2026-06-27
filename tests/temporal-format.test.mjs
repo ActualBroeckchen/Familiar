@@ -256,7 +256,7 @@ test('drops an edge whose endpoint is not in the visible window (no dangling ren
   assert.doesNotMatch(out, /Consequence links/);
 });
 
-test('open tasks (no when_ts, no resolution) get a {{user}}-bonded header', () => {
+test('open tasks (no when_ts, no resolution) get a my-human-bonded header', () => {
   const out = formatTemporalContext({
     schedule: { phase: null, window: [
       { type: 'task', label: 'file taxes' },
@@ -266,7 +266,7 @@ test('open tasks (no when_ts, no resolution) get a {{user}}-bonded header', () =
   // Header that primes the Familiar to feel them as commitments their
   // bonded human is counting on them to ACT on — to remember AND to
   // raise — not background noise.
-  assert.match(out, /Open tasks I'm holding for \{\{user\}\} — mine to remember and to raise/);
+  assert.match(out, /Open tasks I'm holding for my human — mine to remember and to raise/);
   assert.match(out, /- file taxes/);
   assert.match(out, /- review the report/);
 });
@@ -413,4 +413,30 @@ test('block order is handoff → schedule → interests', () => {
   assert.ok(h !== -1 && s !== -1 && i !== -1, 'all markers should render');
   assert.ok(h < s, 'handoff should come before schedule');
   assert.ok(s < i, 'schedule should come before interests');
+});
+
+test('gcal-sourced items get a 📅 marker + a legend note (legibility §5)', () => {
+  const future = new Date(Date.now() + 3 * 3600_000).toISOString();
+  const out = formatTemporalContext({
+    schedule: {
+      phase: null,
+      window: [
+        { id: 'g1', type: 'event', when: future, label: 'Dentist', payload: { source: 'gcal' } },
+        { id: 'l1', type: 'event', when: future, label: 'Local thing' },
+      ],
+    },
+  });
+  // The Google item is marked; the local one is not.
+  assert.match(out, /Dentist 📅/);
+  assert.ok(!/Local thing 📅/.test(out), 'local item must not be marked');
+  // Legend explains the marker only when a gcal item is present.
+  assert.match(out, /from my human's Google Calendar/);
+});
+
+test('no gcal legend note when nothing is gcal-sourced', () => {
+  const future = new Date(Date.now() + 3 * 3600_000).toISOString();
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [{ id: 'l1', type: 'event', when: future, label: 'Local only' }] },
+  });
+  assert.ok(!/Google Calendar/.test(out));
 });

@@ -4,8 +4,8 @@ import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {
-  recordSegmentRun, isSegmentMemorized, computeCoverage, incompleteDates, deriveStatus,
-  collectDateSlices,
+  recordSegmentRun, isSegmentMemorized, segmentMemorizedThrough, computeCoverage,
+  incompleteDates, deriveStatus, collectDateSlices,
 } from '../memory-coverage.js';
 
 const at = (y, mo, d, h = 12) => new Date(y, mo - 1, d, h).toISOString();
@@ -85,6 +85,16 @@ test('isSegmentMemorized reflects recorded progress', async () => {
   await recordSegmentRun({ date: '2026-06-20', sessionId: 's1', throughCount: 2 }, opts);
   assert.equal(await isSegmentMemorized('s1', '2026-06-20', 2, opts), true);
   assert.equal(await isSegmentMemorized('s1', '2026-06-20', 3, opts), false); // grew past it
+});
+
+test('segmentMemorizedThrough returns the offset the pipeline slices from', async () => {
+  assert.equal(await segmentMemorizedThrough('s1', '2026-06-20', opts), 0); // never run
+  await recordSegmentRun({ date: '2026-06-20', sessionId: 's1', throughCount: 2 }, opts);
+  assert.equal(await segmentMemorizedThrough('s1', '2026-06-20', opts), 2);
+  // A delta run records cumulatively (priorThrough 2 + 3 new) → advances to 5.
+  await recordSegmentRun({ date: '2026-06-20', sessionId: 's1', throughCount: 5 }, opts);
+  assert.equal(await segmentMemorizedThrough('s1', '2026-06-20', opts), 5);
+  assert.equal(await isSegmentMemorized('s1', '2026-06-20', 5, opts), true);
 });
 
 test('collectDateSlices returns a date\'s un-memorized slices; force includes done ones', async () => {

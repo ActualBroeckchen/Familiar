@@ -22,6 +22,14 @@ Node shapes by type:
 
 Edge kinds (semantics in the design doc):
   'causes' | 'requires' | 'depends_on' | 'blocks' | 'during' | 'carries_forward'
+
+Time model — LOCAL-naive throughout. when_ts/end_ts (and every stored
+timestamp) are the ward's local wall-clock with NO timezone offset, compared
+against a local-naive `now`. The Familiar writes plain local time; an
+offset-bearing value (Z/+HH:MM, e.g. from an external calendar) is converted to
+local in code at the write boundary (db.to_local_naive). This deliberately
+removes the UTC<->local conversion the model used to do and kept getting wrong
+(dropping the offset, or double-applying it). See db.now_iso / docs/unruh-design.md.
 """
 
 from __future__ import annotations
@@ -31,7 +39,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .db import new_id, now_iso
+from .db import new_id, now_iso, to_local_naive
 
 # ── Allowed values. Surfaced as constants so tests + the MCP layer
 # can validate without re-typing the strings. Adding a new value
@@ -116,6 +124,12 @@ def add_node(
         raise ValueError(f"node type {type!r} requires a 'when' timestamp")
     if type == "phase" and not end:
         raise ValueError("phase nodes require an 'end' timestamp")
+
+    # Canonicalise to local-naive at the write boundary: the Familiar writes
+    # plain local wall-clock, and a stray offset (Z/+HH:MM) is converted in
+    # code — the model never does timezone math.
+    when = to_local_naive(when)
+    end = to_local_naive(end)
 
     node_id = new_id()
     ts = now_iso()
@@ -330,10 +344,10 @@ def update_node(
         args.append(label.strip())
     if when is not None:
         sets.append("when_ts = ?")
-        args.append(when or None)
+        args.append(to_local_naive(when) or None)
     if end is not None:
         sets.append("end_ts = ?")
-        args.append(end or None)
+        args.append(to_local_naive(end) or None)
     if payload is not None:
         sets.append("payload_json = ?")
         args.append(json.dumps(payload))
@@ -453,14 +467,22 @@ def reminders_health(conn: sqlite3.Connection) -> dict[str, Any]:
 
 
 def _parse_iso(s: str | None) -> datetime | None:
-    """Parse a stored ISO-8601 timestamp (which may end in 'Z' from JS
-    or '+00:00' from now_iso). Returns None on anything unparseable."""
+    """Parse a stored ISO-8601 timestamp to a LOCAL-naive datetime.
+
+    Stored values are local-naive now, but an offset-bearing value can still
+    appear (pre-migration rows, or external data not yet normalised) — those
+    are converted to local and the tzinfo dropped, so every datetime this
+    returns is naive and comparisons never raise naive-vs-aware. Returns None
+    on anything unparseable."""
     if not s:
         return None
     try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
     except (TypeError, ValueError):
         return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone().replace(tzinfo=None)
+    return dt
 
 
 def _window_fraction(when: str | None, end: str | None, acted: str) -> float | None:
@@ -508,6 +530,16 @@ def _edge_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return out
 
 
+def get_node(conn: sqlite3.Connection, *, id: str) -> dict[str, Any] | None:
+    """Return a single schedule-layer node as a wire dict, or None. Backs
+    schedule_export, which needs the node's stored fields to build the
+    `.ics`/URL in code."""
+    row = conn.execute(
+        "SELECT * FROM nodes WHERE id = ? AND layer = 'schedule'", (id,)
+    ).fetchone()
+    return _node_row_to_dict(row) if row else None
+
+
 def get_window(
     conn: sqlite3.Connection,
     *,
@@ -529,7 +561,7 @@ def get_window(
     to bound prompt-token risk before M5+ adds volume.
     """
     if not from_ts or not to_ts:
-        now = datetime.now(timezone.utc)
+        now = datetime.now()  # local-naive — matches stored when_ts
         if not from_ts: from_ts = (now - timedelta(hours=DEFAULT_WINDOW_HOURS / 2)).isoformat(timespec="seconds")
         if not to_ts:   to_ts   = (now + timedelta(hours=DEFAULT_WINDOW_HOURS / 2)).isoformat(timespec="seconds")
 

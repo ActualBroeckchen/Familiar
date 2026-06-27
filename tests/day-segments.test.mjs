@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { segmentByDay, localDateOf, isReadableMessage } from '../day-segments.js';
+import { segmentByDay, localDateOf, isReadableMessage, dayDelta } from '../day-segments.js';
 
 // Build a timestamp at a given LOCAL wall-clock time so the test is tz-safe:
 // localDateOf reads it back in the same local zone it was constructed in.
@@ -72,4 +72,41 @@ test('isReadableMessage matches the memorizer filter', () => {
 test('empty input → no segments', () => {
   assert.deepEqual(segmentByDay([]), []);
   assert.deepEqual(segmentByDay(null), []);
+});
+
+// ── dayDelta (the consent-queue dedup fix) ───────────────────────────────────
+
+test('dayDelta: first run (priorThrough 0) ingests the whole segment', () => {
+  const all = [msg('a', at(2026, 6, 20, 9)), msg('b', at(2026, 6, 20, 10), 'assistant')];
+  const d = dayDelta(all, 0);
+  assert.equal(d.skip, false);
+  assert.equal(d.priorThrough, 0);
+  assert.equal(d.messages.length, 2);
+});
+
+test('dayDelta: a grown day ingests only the un-memorized tail', () => {
+  const all = [
+    msg('a', at(2026, 6, 20, 9)), msg('b', at(2026, 6, 20, 10), 'assistant'),
+    msg('c', at(2026, 6, 20, 11)), msg('d', at(2026, 6, 20, 12), 'assistant'),
+  ];
+  const d = dayDelta(all, 2); // first 2 already memorized
+  assert.equal(d.skip, false);
+  assert.equal(d.priorThrough, 2);
+  assert.deepEqual(d.messages.map(m => m.content), ['c', 'd']);
+});
+
+test('dayDelta: a fully-memorized day skips (nothing new)', () => {
+  const all = [msg('a', at(2026, 6, 20, 9)), msg('b', at(2026, 6, 20, 10), 'assistant')];
+  assert.deepEqual(dayDelta(all, 2), { messages: [], priorThrough: 2, skip: true });
+  assert.equal(dayDelta(all, 5).skip, true); // recorded past the end → still skip
+});
+
+test('dayDelta: a tail too thin to extract from (<2 readable) skips and waits', () => {
+  const all = [
+    msg('a', at(2026, 6, 20, 9)), msg('b', at(2026, 6, 20, 10), 'assistant'),
+    msg('c', at(2026, 6, 20, 11)), // only one new readable message
+  ];
+  const d = dayDelta(all, 2);
+  assert.equal(d.skip, true);
+  assert.equal(d.messages.length, 1); // the tail is carried, just not worth a job yet
 });

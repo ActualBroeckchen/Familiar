@@ -26,7 +26,7 @@ const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
 export const PONDERINGS_TOME_NAME = "Familiar's Ponderings";
 export const PONDERINGS_TOME_DESC =
   "Quiet thoughts the Familiar had during free cycles. Not keyword-triggered " +
-  "into chat context; written here so the user can find and read them. Each " +
+  "into chat context; written here so my human can find and read them. Each " +
   "entry is a real, timestamped record of an actual moment of thinking.";
 
 // ── Tome helpers ─────────────────────────────────────────────────
@@ -40,6 +40,7 @@ export const PONDERINGS_TOME_DESC =
 // write rather than clobbering it.
 
 import { findOrCreateTomeByName, modifyTomeFile } from './thalamus.js';
+import { substituteMacros } from './macros.js';
 
 export async function findOrCreatePonderingsTome(tomesDir = DEFAULT_TOMES_DIR) {
   return findOrCreateTomeByName(tomesDir, PONDERINGS_TOME_NAME, {
@@ -322,6 +323,7 @@ export async function ponderOnce({
   model,
   callLLM  = defaultCallLLM,
   tomesDir = DEFAULT_TOMES_DIR,
+  settings = {},
 }) {
   // Topic is either a string (interest pondering) or an object
   // { mode: 'reflection', outcomes, existingNotes } (reflection mode).
@@ -334,7 +336,10 @@ export async function ponderOnce({
   }
   if (!provider || !apiKey || !model)      throw new Error('provider, apiKey, and model are required.');
 
-  const prompt = buildPonderPrompt(topic);
+  // Resolve {{user}}/{{char}} at this loop-prompt boundary — same as the
+  // sibling autonomous loops (reachout, tome-graduation). Without it the
+  // Familiar reads its own pondering prompt with literal "{{char}}".
+  const prompt = substituteMacros(buildPonderPrompt(topic), settings);
   const raw    = await callLLM({ provider, apiKey, model, prompt });
   const parsed = parsePondering(raw);
   const { title, content } = parsed;

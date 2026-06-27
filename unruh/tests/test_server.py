@@ -14,7 +14,9 @@ from unruh import __version__
 from unruh.server import health_check, temporal_context
 
 
-ISO_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[+-]\d{2}:\d{2}|Z)$")
+# Unruh stores LOCAL-naive timestamps (no offset); an offset is still accepted
+# on input and normalised away, so the offset suffix is optional here.
+ISO_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[+-]\d{2}:\d{2}|Z)?$")
 
 
 class TestHealthCheck:

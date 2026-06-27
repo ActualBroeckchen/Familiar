@@ -39,16 +39,19 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from unruh import __version__
-from unruh.db import get_conn
+from unruh.db import get_conn, now_iso
 from unruh import schedule as sched
 from unruh import interest as interests
 from unruh import handoff as handoffs
+from unruh import gcal as gcal_ingest_mod
+from unruh import icalwrite
 
 mcp = FastMCP("unruh")
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # Delegates to the canonical local-naive now (db.now_iso) — one source.
+    return now_iso()
 
 
 def _err(message: str, code: str = "bad_request") -> dict[str, Any]:
@@ -93,8 +96,10 @@ def schedule_add_node(
             requires `end`; task is the only type that may omit
             both (an open-ended 'to do' item).
         label: human-readable name. Required.
-        when: ISO-8601 UTC start time. Required for event/phase/state.
-        end: ISO-8601 UTC end time. Required for phase; optional for
+        when: local start time, format YYYY-MM-DDTHH:MM:SS (no offset; e.g.
+            "2026-06-18T09:00:00"). An offset-bearing value is normalised to
+            local in code (to_local_naive). Required for event/phase/state.
+        end: local end time, same format. Required for phase; optional for
             event/state (open-ended).
         payload: arbitrary extras stored as JSON (notes, source,
             categorisation that doesn't fit the four columns).
@@ -167,8 +172,8 @@ def schedule_get_window(
     coming up, what just passed, and what open tasks are pending.
 
     Args:
-        from_ts: ISO-8601 UTC inclusive lower bound. Default: now - 12h.
-        to_ts: ISO-8601 UTC inclusive upper bound. Default: now + 12h.
+        from_ts: ISO-8601 local-naive inclusive lower bound. Default: now - 12h.
+        to_ts: ISO-8601 local-naive inclusive upper bound. Default: now + 12h.
         limit: max nodes (and separately, max edges). Default 200 —
             generous for the design's "kilobytes-scale" graph.
         include_open_tasks: include tasks with no when_ts and no
@@ -250,8 +255,9 @@ def schedule_update_node(
     Args:
         id: node id to update.
         label: new label (non-empty). Omit / None to leave unchanged.
-        when: new ISO-8601 UTC start. Pass "" (empty string) to clear.
-        end: new ISO-8601 UTC end. Pass "" to clear.
+        when: new ISO-8601 local-naive start (offset normalised in code).
+            Pass "" (empty string) to clear.
+        end: new ISO-8601 local-naive end. Pass "" to clear.
         payload: new payload dict — REPLACES the existing payload.
 
     Returns: {ok: True, updated: <bool>}.
@@ -366,6 +372,86 @@ def schedule_list_phases(include_resolved: bool = False, limit: int = 200) -> di
     return {"ok": True, "phases": phases}
 
 
+# ── Google Calendar ingestion (0.8) ────────────────────────────────────
+
+
+@mcp.tool()
+def gcal_ingest(
+    ics_text: str | None = None,
+    events: list | None = None,
+    reconcile_deletes: bool = True,
+) -> dict[str, Any]:
+    """I use this to fold my human's Google Calendar into their schedule. The
+    Node sync loop hands me either a raw `.ics` feed (`ics_text`) or already-
+    normalised events (`events`, from the gogcli/gcalcli adapters); I parse,
+    map each entry to an `event` node keyed by its stable Google UID, and
+    reconcile the whole gcal-sourced set in one shot. This is mechanical —
+    the only Familiar-facing effect is that genuinely NEW items get flagged
+    for me to think two moves ahead about later.
+
+    Args:
+        ics_text: a complete `.ics` document (the link adapter's output).
+        events: a list of pre-normalised events (the authenticated adapters'
+            output). Pass exactly one of `ics_text` / `events`.
+        reconcile_deletes: True for a confirmed-good FULL snapshot (an event
+            that vanished from Google is cancelled here). A windowed/partial
+            read passes False so it can't cancel events outside its window.
+
+    Returns: {ok, new: [...ids], updated: [...], unchanged: [...],
+    removed: [...], complex_series: [...uids]}. Only `new` ever reaches me.
+    """
+    try:
+        with get_conn() as conn:
+            return gcal_ingest_mod.gcal_ingest(
+                conn, ics_text=ics_text, events=events,
+                reconcile_deletes=reconcile_deletes,
+            )
+    except Exception as e:  # parse/DB failure must degrade, never crash the loop
+        return _err(f"gcal_ingest failed: {e}", code="ingest_error")
+
+
+@mcp.tool()
+def schedule_get(id: str) -> dict[str, Any]:
+    """I use this to read one schedule node's full stored fields by id. I reach
+    for it when I need an item's exact label/time/payload to act on it — e.g. to
+    add it to my human's real calendar. Returns the node or a not-found error.
+
+    Returns: {ok: True, node: {...}} or the standard error shape.
+    """
+    with get_conn() as conn:
+        node = sched.get_node(conn, id=id)
+    if node is None:
+        return _err(f"no schedule node with id {id!r}", code="not_found")
+    return {"ok": True, "node": node}
+
+
+@mcp.tool()
+def schedule_export(id: str) -> dict[str, Any]:
+    """I use this to turn one of my human's scheduled items into something they
+    can drop into their own calendar — a downloadable `.ics` file and a
+    one-click "add to Google" link. I reach for it when an appointment or plan
+    lives in my sense of their schedule but not yet in the calendar app on their
+    phone. I pass the node `id` from the `[schedule ids]` legend I already read;
+    Unruh builds the exact dates, UID, and URL in code — I never type a calendar
+    artifact myself. Works on ANY schedule node, even one added by hand with no
+    Google setup at all.
+
+    Args:
+        id: the schedule node id to export.
+
+    Returns: {ok: True, ics: '<.ics text>', google_url: '<render URL>'} on
+    success, or the standard error shape if the id isn't found.
+    """
+    try:
+        with get_conn() as conn:
+            node = sched.get_node(conn, id=id)
+        if node is None:
+            return _err(f"no schedule node with id {id!r}", code="not_found")
+        return icalwrite.export_node(node)
+    except Exception as e:
+        return _err(f"schedule_export failed: {e}", code="export_error")
+
+
 # ── Reminders (M11) ────────────────────────────────────────────────────
 
 
@@ -377,7 +463,7 @@ def reminders_due(now: str | None = None, limit: int = 50) -> dict[str, Any]:
     schedule_resolve(id, 'fired') after delivery succeeds.
 
     Args:
-        now: ISO-8601 UTC timestamp. Default = current wall clock.
+        now: ISO-8601 local-naive timestamp. Default = current local wall clock.
         limit: max reminders to return. Default 50.
 
     Returns: {ok: True, reminders: [...]}
@@ -641,6 +727,10 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
         # it once (the renderer ignores `id`). NULL/[] when there's
         # nothing pending.
         handoff = handoffs.get_handoff(conn)
+        # gcal items still wanting projection (§4) — rides this existing
+        # per-turn call rather than spending a standalone request. Empty
+        # unless a Google sync has flagged genuinely-new appointments.
+        gcal_projection = gcal_ingest_mod.projection_candidates(conn, now=now)
     # Edges ride along so the Familiar sees the consequence graph, not just
     # a flat list (temporal-format renders a "Consequence links" block from
     # these; edges whose endpoints aren't in the visible window are dropped
@@ -663,6 +753,10 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
             "open_threads": handoff["open_threads"] if handoff else [],
             "id":           handoff["id"] if handoff else None,
         },
+        # New gcal appointments not yet thought-through (§4). The JS cue
+        # layer applies the per-turn cap + turn/time aging; an empty list
+        # renders nothing.
+        "gcal_projection": gcal_projection,
     }
 
 

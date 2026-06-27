@@ -239,6 +239,23 @@ const state = {
   memorySweepEnabled:      true,
   tomeGraduationEnabled:   false,   // opt-in: writes to the canonical self
   needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
+  notificationSounds:      true,    // in-app chime on new messages (default on)
+  wardTimeZone:            '',      // ward's IANA zone, auto-detected from the browser (see init overlay)
+  // Google Calendar sync (0.8). Opt-in: idles until an iCal URL is pasted
+  // and the toggle is on. Interval in minutes (hourly default; loop clamps
+  // to [5min, 24h]).
+  gcalEnabled:             false,
+  gcalIcalUrl:             '',
+  gcalSyncIntervalMinutes: 60,
+  // Source: 'link' (out-of-the-box iCal URL) or an authenticated CLI the
+  // ward already trusts ('gogcli' full Workspace / 'gcalcli' calendar-only).
+  gcalSource:              'link',
+  gcalCliCommand:          '',     // override; blank → the preset's default command
+  gcalCliFormat:           'ics',  // 'ics' (reuses the parser) | 'json'
+  // Write-back (the only path that mutates the real calendar). Opt-in;
+  // requires a CLI source. Blank command → the source preset's import command.
+  gcalWriteEnabled:        false,
+  gcalWriteCommand:        '',
   tomeGraduationTidy:      'pointer',
   warmthQuietHoursStart:   23,
   warmthQuietHoursEnd:     8,
@@ -300,7 +317,11 @@ const SERVER_SYNCED_KEYS = [
   'ponderingEnabled', 'ponderingIntervalScale',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
   'memorySweepEnabled',
-  'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled',
+  'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'notificationSounds',
+  'wardTimeZone',
+  'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes',
+  'gcalSource', 'gcalCliCommand', 'gcalCliFormat',
+  'gcalWriteEnabled', 'gcalWriteCommand',
   'trustedContacts', 'userDiscordWebhook',
   'discordEnabled', 'discordBotToken', 'discordWardUserId',
 ];
@@ -308,6 +329,12 @@ function extractServerSettings(s) {
   const out = {};
   for (const k of SERVER_SYNCED_KEYS) if (k in s) out[k] = s[k];
   return out;
+}
+// The ward's IANA timezone, straight from the browser — the ground truth for
+// where the ward actually is, which the server uses to compute ward-local "now".
+function detectWardTz() {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; }
+  catch { return ''; }
 }
 let _settingsPutTimer = null;
 function pushSettingsToServer() {
@@ -356,6 +383,18 @@ function closeWebSearchModal() {
   $('websearch-modal')?.classList.add('hidden');
 }
 
+// Google Calendar config lives in a modal (the out-of-the-box toggle stays in
+// the sidebar; everything else — source, sign-in, write-back, interval — opens
+// here, mirroring the web-search backend modal).
+function openGcalModal() {
+  writeSettingsToUI();       // reflect current state into the modal fields
+  syncGcalSourcePanels();    // show the right panel + refresh the Google status
+  $('gcal-modal')?.classList.remove('hidden');
+}
+function closeGcalModal() {
+  $('gcal-modal')?.classList.add('hidden');
+}
+
 // Show the API panel only for the API backend; the Google engine-id field only
 // for Google; the Marginalia "no key" hint only for Marginalia.
 function syncWebSearchPanels() {
@@ -364,6 +403,85 @@ function syncWebSearchPanels() {
   const provider = document.querySelector('input[name="web-search-api-provider"]:checked')?.value || 'marginalia';
   $('websearch-google-cse-field')?.classList.toggle('hidden', provider !== 'google');
   $('websearch-marginalia-hint')?.classList.toggle('hidden', provider !== 'marginalia');
+}
+
+// Show the panel matching the chosen source: iCal URL (link), native Google
+// sign-in (google), or the CLI command fields (gogcli/gcalcli). Write-back is
+// offered for the two authenticated sources; the import-command field is
+// CLI-only.
+function syncGcalSourcePanels() {
+  const source = $('gcal-source')?.value || state.gcalSource || 'link';
+  const isCli = source === 'gogcli' || source === 'gcalcli';
+  const isGoogle = source === 'google';
+  $('gcal-link-panel')?.classList.toggle('hidden', source !== 'link');
+  $('gcal-google-panel')?.classList.toggle('hidden', !isGoogle);
+  $('gcal-cli-panel')?.classList.toggle('hidden', !isCli);
+  $('gcal-write-panel')?.classList.toggle('hidden', !(isCli || isGoogle));
+  $('gcal-write-command-field')?.classList.toggle('hidden', !isCli);
+  if (isGoogle) refreshGoogleCalStatus();
+}
+
+// ── Native Google Calendar connection (no terminal) ──────────────
+async function refreshGoogleCalStatus() {
+  const el = $('gcal-google-status');
+  if (!el) return;
+  try {
+    const s = await (await fetch('/api/gcal/google/status')).json();
+    if (s.connected) {
+      el.textContent = '✓ Connected to Google' + (s.account ? ` (${s.account})` : '');
+      el.style.color = 'var(--accent, #3a7)';
+    } else if (s.hasCredentials) {
+      el.textContent = 'Credentials loaded — click Connect to finish signing in.';
+      el.style.color = '';
+    } else {
+      el.textContent = 'Not connected. Upload your credentials.json (or paste a token) to begin.';
+      el.style.color = '';
+    }
+  } catch {
+    el.textContent = 'Could not check connection status.';
+  }
+}
+
+async function gcalGoogleConnect() {
+  const fileEl = $('gcal-google-credfile');
+  const statusEl = $('gcal-google-status');
+  const file = fileEl?.files?.[0];
+  if (!file) { if (statusEl) statusEl.textContent = 'Choose your credentials.json first.'; return; }
+  try {
+    const text = await file.text();
+    const credRes = await fetch('/api/gcal/google/credentials', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credentials: text }),
+    });
+    if (!credRes.ok) { const e = await credRes.json().catch(() => ({})); if (statusEl) statusEl.textContent = 'Couldn\'t read that file: ' + (e.error || credRes.status); return; }
+    const { url, error } = await (await fetch('/api/gcal/google/auth-url')).json();
+    if (!url) { if (statusEl) statusEl.textContent = error || 'Could not start sign-in.'; return; }
+    if (statusEl) statusEl.textContent = 'Opening Google… approve in the new tab, then come back here.';
+    window.open(url, '_blank', 'noopener');
+    // Poll briefly so the status flips to Connected once they approve.
+    let tries = 0;
+    const poll = setInterval(async () => { tries++; await refreshGoogleCalStatus(); if (tries > 40) clearInterval(poll); }, 3000);
+  } catch (err) {
+    if (statusEl) statusEl.textContent = 'Something went wrong: ' + (err?.message || err);
+  }
+}
+
+async function gcalGoogleSaveToken() {
+  const statusEl = $('gcal-google-status');
+  const raw = $('gcal-google-tokenpaste')?.value?.trim();
+  if (!raw) { if (statusEl) statusEl.textContent = 'Paste a token first.'; return; }
+  const res = await fetch('/api/gcal/google/token', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: raw }),
+  });
+  if (!res.ok) { const e = await res.json().catch(() => ({})); if (statusEl) statusEl.textContent = 'Couldn\'t save token: ' + (e.error || res.status); return; }
+  if ($('gcal-google-tokenpaste')) $('gcal-google-tokenpaste').value = '';
+  await refreshGoogleCalStatus();
+}
+
+async function gcalGoogleDisconnect() {
+  await fetch('/api/gcal/google/disconnect', { method: 'POST' });
+  await refreshGoogleCalStatus();
 }
 
 // Apply just persists the chosen backend/provider/key (fields also auto-sync on
@@ -645,6 +763,19 @@ async function syncSettingsFromServer() {
   if (!Array.isArray(state.connections))           state.connections = [];
   if (!Array.isArray(state.fallbackConnectionIds)) state.fallbackConnectionIds = [];
   migrateLegacyConnection();
+
+  // Auto-capture the ward's live browser timezone. Unruh stores ward-local
+  // times, so the server — which may run in a DIFFERENT zone (a UTC container
+  // while the ward is in PDT) — needs this to compute "now" correctly, or
+  // reminders set for the ward's afternoon fire in their morning. Push whenever
+  // it changes (incl. the first load after this update), so a plain reload is
+  // enough for it to take effect; no setting for the ward to toggle.
+  const liveTz = detectWardTz();
+  if (liveTz && liveTz !== state.wardTimeZone) {
+    state.wardTimeZone = liveTz;
+    pushSettingsToServer();
+  }
+
   writeSettingsToUI();
   renderConnectionsList();
   refreshModelSuggestions(state.provider);
@@ -2108,6 +2239,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
       saveHistory();
       refreshTopicGutter();
       wireCopyButton(shell.copyBtn, () => content);
+      notifyNewMessage();   // reply: pings only if the tab isn't focused
       clearRetryStatus();
       return;
     }
@@ -2248,6 +2380,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
       saveHistory();
       refreshTopicGutter();
       wireCopyButton(copyBtn, () => content);
+      notifyNewMessage();   // reply: pings only if the tab isn't focused
       clearRetryStatus();
       return;
     }
@@ -2373,6 +2506,18 @@ function readSettingsFromUI() {
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('needs-tracking-toggle')) state.needsTrackingEnabled = $('needs-tracking-toggle').checked;
+  if ($('notif-sound-toggle')) state.notificationSounds = $('notif-sound-toggle').checked;
+  if ($('gcal-toggle')) state.gcalEnabled = $('gcal-toggle').checked;
+  if ($('gcal-ical-url')) state.gcalIcalUrl = $('gcal-ical-url').value.trim();
+  if ($('gcal-interval')) {
+    const n = parseInt($('gcal-interval').value, 10);
+    state.gcalSyncIntervalMinutes = Number.isInteger(n) && n >= 5 && n <= 1440 ? n : 60;
+  }
+  if ($('gcal-source')) state.gcalSource = ['link', 'google', 'gogcli', 'gcalcli'].includes($('gcal-source').value) ? $('gcal-source').value : 'link';
+  if ($('gcal-cli-command')) state.gcalCliCommand = $('gcal-cli-command').value.trim();
+  if ($('gcal-cli-format')) state.gcalCliFormat = $('gcal-cli-format').value === 'json' ? 'json' : 'ics';
+  if ($('gcal-write-toggle')) state.gcalWriteEnabled = $('gcal-write-toggle').checked;
+  if ($('gcal-write-command')) state.gcalWriteCommand = $('gcal-write-command').value.trim();
   if ($('tome-graduation-tidy')) state.tomeGraduationTidy = $('tome-graduation-tidy').value === 'delete' ? 'delete' : 'pointer';
   if ($('warmth-quiet-start')) {
     const n = parseInt($('warmth-quiet-start').value, 10);
@@ -2456,6 +2601,16 @@ function writeSettingsToUI() {
   if ($('memory-sweep-toggle')) setIfNotFocused($('memory-sweep-toggle'), 'checked', state.memorySweepEnabled !== false);
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
+  if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
+  if ($('gcal-toggle')) setIfNotFocused($('gcal-toggle'), 'checked', state.gcalEnabled === true);
+  if ($('gcal-ical-url')) setIfNotFocused($('gcal-ical-url'), 'value', state.gcalIcalUrl ?? '');
+  if ($('gcal-interval')) setIfNotFocused($('gcal-interval'), 'value', state.gcalSyncIntervalMinutes ?? 60);
+  if ($('gcal-source')) setIfNotFocused($('gcal-source'), 'value', state.gcalSource ?? 'link');
+  if ($('gcal-cli-command')) setIfNotFocused($('gcal-cli-command'), 'value', state.gcalCliCommand ?? '');
+  if ($('gcal-cli-format')) setIfNotFocused($('gcal-cli-format'), 'value', state.gcalCliFormat ?? 'ics');
+  if ($('gcal-write-toggle')) setIfNotFocused($('gcal-write-toggle'), 'checked', state.gcalWriteEnabled === true);
+  if ($('gcal-write-command')) setIfNotFocused($('gcal-write-command'), 'value', state.gcalWriteCommand ?? '');
+  if (typeof syncGcalSourcePanels === 'function') syncGcalSourcePanels();
   if ($('tome-graduation-tidy'))   setIfNotFocused($('tome-graduation-tidy'),   'value',   state.tomeGraduationTidy === 'delete' ? 'delete' : 'pointer');
   if ($('warmth-quiet-start')) setIfNotFocused($('warmth-quiet-start'), 'value',   state.warmthQuietHoursStart ?? 23);
   if ($('warmth-quiet-end'))   setIfNotFocused($('warmth-quiet-end'),   'value',   state.warmthQuietHoursEnd ?? 8);
@@ -3307,6 +3462,17 @@ function init() {
     el.addEventListener('change', () => { readSettingsFromUI(); syncWebSearchPanels(); });
   });
   $('websearch-apply-btn')?.addEventListener('click', applyWebSearchBackend);
+
+  // Google Calendar config modal (mirrors the web-search backend modal).
+  $('gcal-configure-btn')?.addEventListener('click', openGcalModal);
+  $('gcal-modal-close')?.addEventListener('click', closeGcalModal);
+  $('gcal-modal-cancel')?.addEventListener('click', closeGcalModal);
+  $('gcal-modal')?.addEventListener('click', e => { if (e.target === $('gcal-modal')) closeGcalModal(); });
+  // Source selector — toggle the source panels on change.
+  $('gcal-source')?.addEventListener('change', () => { readSettingsFromUI(); syncGcalSourcePanels(); });
+  $('gcal-google-connect')?.addEventListener('click', gcalGoogleConnect);
+  $('gcal-google-savetoken')?.addEventListener('click', gcalGoogleSaveToken);
+  $('gcal-google-disconnect')?.addEventListener('click', gcalGoogleDisconnect);
   $('guide-chat-send')?.addEventListener('click', sendGuideChat);
   $('guide-chat-input')?.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendGuideChat(); }
@@ -3319,7 +3485,11 @@ function init() {
     'pondering-toggle', 'pondering-scale',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
     'memory-sweep-toggle',
-    'tome-graduation-toggle', 'tome-graduation-tidy',
+    'tome-graduation-toggle', 'tome-graduation-tidy', 'needs-tracking-toggle',
+    'notif-sound-toggle',
+    'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
+    'gcal-source', 'gcal-cli-command', 'gcal-cli-format',
+    'gcal-write-toggle', 'gcal-write-command',
     'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'post-history-role', 'tools-enabled', 'custom-tools',
@@ -3435,6 +3605,10 @@ function init() {
   $('user-input').addEventListener('input', function() {
     autoResize(this);
   });
+
+  // Test chime — plays regardless of the toggle (it's an explicit request),
+  // and doubles as the gesture that unlocks the AudioContext.
+  $('notif-sound-test')?.addEventListener('click', () => playNotificationSound());
 
   // ── Clear history ────────────────────────────────────────────
   $('clear-chat-btn').addEventListener('click', () => {
@@ -6867,9 +7041,18 @@ async function saveLoreEditorEntry() {
 // Modal mirrors the Knowledge editor pattern (reuses .ke-* CSS).
 // Read-mostly: shows live + standing interests with decay metadata,
 // current threat state + audit history (with reset button), and the
-// Familiar's autonomous ponderings (with per-entry delete). CRUD on
-// interests beyond demote is deferred to a later pass — for now the
-// observable surface is enough for catching bugs.
+// Familiar's autonomous ponderings (with per-entry delete).
+//
+// The ward can *demote* an interest (a gentle down-weight / boundary) but
+// CANNOT bump it or promote it to a standing value from here — that is
+// DELIBERATE, not a missing feature. Interests are the FAMILIAR's own
+// texture: they're how it grows a distinct, independent shape over time
+// instead of becoming a smooth, frictionless mirror of the ward. Letting
+// the ward curate them would defeat the mission — part of which is keeping
+// the ward's social muscles working by giving them a companion that is
+// genuinely someone, not a tool they tune. So promote-to-standing lives
+// only with the Familiar (the `interest_set_standing` tool); don't add a
+// ward control for it.
 
 const TE_TABS = ['interests', 'threat', 'ponderings', 'schedule', 'routine', 'handoff'];
 
@@ -8139,6 +8322,54 @@ async function teConsumeHandoff(id) {
   }
 }
 
+// ── Notification sound (in-app chime for new messages) ────────────
+//
+// A short two-note chime synthesised with the Web Audio API — no asset to
+// ship, no network. Browsers suspend the AudioContext until a user gesture,
+// so we resume it on the first interaction; after that a proactive ping
+// (e.g. a reminder arriving with no recent gesture) can still sound.
+let _audioCtx = null;
+function _ensureAudioCtx() {
+  if (_audioCtx) return _audioCtx;
+  try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+  catch { _audioCtx = null; }
+  return _audioCtx;
+}
+window.addEventListener('pointerdown', () => _ensureAudioCtx()?.resume?.(), { once: true, capture: true });
+window.addEventListener('keydown',     () => _ensureAudioCtx()?.resume?.(), { once: true, capture: true });
+
+function playNotificationSound() {
+  const ctx = _ensureAudioCtx();
+  if (!ctx) return;
+  try {
+    if (ctx.state === 'suspended') ctx.resume();
+    const now = ctx.currentTime;
+    // Two soft sine notes, a gentle rising chime (E5 → B5).
+    for (const [freq, t0] of [[659.25, 0], [987.77, 0.12]]) {
+      const osc = ctx.createOscillator();
+      const g   = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const start = now + t0;
+      g.gain.setValueAtTime(0.0001, start);
+      g.gain.exponentialRampToValueAtTime(0.16, start + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, start + 0.22);
+      osc.connect(g); g.connect(ctx.destination);
+      osc.start(start); osc.stop(start + 0.24);
+    }
+  } catch { /* audio unavailable → silent */ }
+}
+
+// Ping for a newly arrived message. Default on; `notificationSounds === false`
+// disables. Proactive deliveries (reminders / reach-outs / triage) always
+// ping; a reply to your own turn pings only when the tab isn't focused, so
+// an active conversation you're watching stays quiet.
+function notifyNewMessage({ proactive = false } = {}) {
+  if (state.notificationSounds === false) return;
+  if (!proactive && document.hasFocus()) return;
+  playNotificationSound();
+}
+
 // ── Outbox delivery (M11/M12) → inject as chat messages ───────────
 //
 // Reminders + silence-triage reach-outs + outbound-alert receipts arrive
@@ -8184,7 +8415,11 @@ function formatOutboxAsMessageContent(item) {
 }
 
 async function injectOutboxAsChatMessage(item) {
-  const content = formatOutboxAsMessageContent(item);
+  // Defense-in-depth: the server strips LLM-hallucinated timestamps at mint
+  // time, but strip here too before this proactive body is rendered, STORED in
+  // state.messages, and copied — every other assistant-commit path strips, and
+  // a stored fabricated time would re-inject next turn and compound.
+  const content = stripDisplayTimestamps(formatOutboxAsMessageContent(item));
   if (!content) return;
 
   const timestamp = item.ts || new Date().toISOString();
@@ -8210,6 +8445,7 @@ async function injectOutboxAsChatMessage(item) {
   saveToServer();
   refreshTopicGutter?.();
   wireCopyButton(copyBtn, () => content);
+  notifyNewMessage({ proactive: true });   // reminders / reach-outs / triage always ping
 
   await acknowledgeOutboxItem(item.id);
 }
