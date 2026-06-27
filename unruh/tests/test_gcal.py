@@ -266,6 +266,22 @@ def test_projection_candidate_excludes_out_of_horizon_and_resolved(conn):
     assert gcal.projection_candidates(conn, now=NOW) == []
 
 
+def test_ingest_threads_now_into_fallback_horizon(conn):
+    # A complex (multi-BYDAY) series expands over a 90-day horizon. The horizon
+    # must anchor to the `now` passed to gcal_ingest — not the wall clock — so
+    # ingest stays consistent with a standalone parse at the same now (and is
+    # deterministic in tests). DTSTART is floating-local so no tz shift muddies
+    # the count.
+    text = _cal(_vevent("mwf2@g", "20260629T090000", extra="RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR\n"))
+    expected = len(ical.parse_ical(text, now=datetime.fromisoformat(NOW))["events"])
+    r = gcal.gcal_ingest(conn, ics_text=text, now=NOW)
+    inserted = conn.execute(
+        "SELECT COUNT(*) n FROM nodes WHERE json_extract(payload_json,'$.source')='gcal'"
+    ).fetchone()["n"]
+    assert inserted == expected == len(r["new"])
+    assert expected > 3  # the series really did expand (not a degenerate 1)
+
+
 def test_ingest_events_list_path(conn):
     # The authenticated-adapter path: pre-normalised events, not .ics text.
     ev = {
