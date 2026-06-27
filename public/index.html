@@ -181,10 +181,36 @@
             <label for="gcal-toggle">Google Calendar sync</label>
             <input type="checkbox" id="gcal-toggle">
           </div>
-          <div class="field-hint">Off by default. When on, your Familiar reads your Google Calendar (one-way) so your appointments show up in its sense of your day. Paste the calendar's <em>secret address in iCal format</em> below — in Google Calendar: Settings → your calendar → <em>Integrate calendar</em> → "Secret address in iCal format". Nothing is written back; it only reads, and a genuinely new appointment is the one thing it'll pause to think two moves ahead about. Keep that secret address private — anyone with it can read the calendar.</div>
+          <div class="field-hint">Off by default. When on, your Familiar reads your Google Calendar (one-way) so your appointments show up in its sense of your day. Nothing is written back; it only reads, and a genuinely new appointment is the one thing it'll pause to think two moves ahead about.</div>
           <div class="field">
-            <label for="gcal-ical-url">iCal URL (secret address)</label>
-            <input type="text" id="gcal-ical-url" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics" autocomplete="off" spellcheck="false">
+            <label for="gcal-source">How to read the calendar</label>
+            <select id="gcal-source">
+              <option value="link">iCal URL (out of the box)</option>
+              <option value="gogcli">gogcli (full Google Workspace CLI)</option>
+              <option value="gcalcli">gcalcli (calendar-only CLI)</option>
+            </select>
+            <div class="field-hint">The iCal URL works with no setup. The CLI options are for advanced users who already have <code>gogcli</code> or <code>gcalcli</code> installed and authenticated on this machine — pick whichever you use; they read the same way behind the scenes.</div>
+          </div>
+          <div id="gcal-link-panel">
+            <div class="field">
+              <label for="gcal-ical-url">iCal URL (secret address)</label>
+              <input type="text" id="gcal-ical-url" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics" autocomplete="off" spellcheck="false">
+              <div class="field-hint">In Google Calendar: Settings → your calendar → <em>Integrate calendar</em> → "Secret address in iCal format". Keep it private — anyone with it can read the calendar.</div>
+            </div>
+          </div>
+          <div id="gcal-cli-panel" class="hidden">
+            <div class="field">
+              <label for="gcal-cli-command">Command (override)</label>
+              <input type="text" id="gcal-cli-command" placeholder="leave blank to use the tool's default" autocomplete="off" spellcheck="false">
+              <div class="field-hint">A command that prints your calendar to stdout as an <code>.ics</code> feed or a JSON array of events. Leave blank to use the selected tool's default. The Familiar runs this on this machine to read your calendar — it's an authenticated, windowed read, so it never cancels events outside the window it fetched.</div>
+            </div>
+            <div class="field">
+              <label for="gcal-cli-format">Command output</label>
+              <select id="gcal-cli-format">
+                <option value="ics">iCalendar (.ics)</option>
+                <option value="json">JSON array of events</option>
+              </select>
+            </div>
           </div>
           <div class="field">
             <label for="gcal-interval">Sync every (minutes)</label>

@@ -47,3 +47,65 @@ test('fetchIcal: a thrown network error becomes ok:false', async () => {
   assert.equal(r.ok, false);
   assert.match(r.error, /ECONNREFUSED/);
 });
+
+import { fetchViaCli, normalizeCliEvents, detectCli, cliPresetHint } from '../gcal-source.js';
+
+const ok = (stdout) => async () => ({ code: 0, stdout, stderr: '', failed: false });
+const fail = (stderr, code = 1) => async () => ({ code, stdout: '', stderr, failed: true });
+
+test('fetchViaCli (ics): routes stdout as ics_text, windowed → reconcileDeletes:false', async () => {
+  const r = await fetchViaCli({ command: 'gogcli x', format: 'ics', runner: ok(ICS) });
+  assert.equal(r.ok, true);
+  assert.match(r.icsText, /BEGIN:VCALENDAR/);
+  assert.equal(r.reconcileDeletes, false);
+});
+
+test('fetchViaCli (json): normalizes events, never reconciles deletes', async () => {
+  const json = JSON.stringify([{ id: 'e1@g', summary: 'Meet', start: { dateTime: '2026-07-02T14:00:00Z' } }]);
+  const r = await fetchViaCli({ command: 'gcalcli x', format: 'json', runner: ok(json) });
+  assert.equal(r.ok, true);
+  assert.equal(r.events.length, 1);
+  assert.equal(r.events[0].uid, 'e1@g');
+  assert.equal(r.reconcileDeletes, false);
+});
+
+test('fetchViaCli: non-zero exit (auth failure / missing binary) → ok:false', async () => {
+  const r = await fetchViaCli({ command: 'gogcli x', format: 'ics', runner: fail('not authenticated', 1) });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /not authenticated|failed/);
+});
+
+test('fetchViaCli: ics output that is not iCal is rejected', async () => {
+  const r = await fetchViaCli({ command: 'x', format: 'ics', runner: ok('<html>login</html>') });
+  assert.equal(r.ok, false);
+});
+
+test('fetchViaCli: empty command → ok:false', async () => {
+  const r = await fetchViaCli({ command: '  ', runner: ok(ICS) });
+  assert.equal(r.ok, false);
+});
+
+test('normalizeCliEvents: maps loose field names, drops entries with no id', () => {
+  const evs = normalizeCliEvents([
+    { id: 'a', title: 'X', start: { date: '2026-07-02' }, end: { date: '2026-07-03' } },
+    { summary: 'no id' },  // dropped
+    { iCalUID: 'b', summary: 'Y', start: '2026-07-02T10:00:00Z', status: 'cancelled' },
+  ]);
+  assert.equal(evs.length, 2);
+  assert.equal(evs[0].uid, 'a');
+  assert.equal(evs[0].all_day, true);
+  assert.equal(evs[1].status, 'cancelled');
+});
+
+test('detectCli: present binary → available:true; missing → available:false', async () => {
+  const present = await detectCli({ command: 'gogcli calendar', runner: ok('gogcli 1.2.3') });
+  assert.equal(present.available, true);
+  const missing = await detectCli({ command: 'nope', runner: fail('command not found') });
+  assert.equal(missing.available, false);
+});
+
+test('cliPresetHint returns a default command for known presets', () => {
+  assert.match(cliPresetHint('gogcli'), /gogcli/);
+  assert.match(cliPresetHint('gcalcli'), /gcalcli/);
+  assert.equal(cliPresetHint('unknown'), '');
+});

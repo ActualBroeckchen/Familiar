@@ -247,6 +247,11 @@ const state = {
   gcalEnabled:             false,
   gcalIcalUrl:             '',
   gcalSyncIntervalMinutes: 60,
+  // Source: 'link' (out-of-the-box iCal URL) or an authenticated CLI the
+  // ward already trusts ('gogcli' full Workspace / 'gcalcli' calendar-only).
+  gcalSource:              'link',
+  gcalCliCommand:          '',     // override; blank → the preset's default command
+  gcalCliFormat:           'ics',  // 'ics' (reuses the parser) | 'json'
   tomeGraduationTidy:      'pointer',
   warmthQuietHoursStart:   23,
   warmthQuietHoursEnd:     8,
@@ -311,6 +316,7 @@ const SERVER_SYNCED_KEYS = [
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes',
+  'gcalSource', 'gcalCliCommand', 'gcalCliFormat',
   'trustedContacts', 'userDiscordWebhook',
   'discordEnabled', 'discordBotToken', 'discordWardUserId',
 ];
@@ -380,6 +386,15 @@ function syncWebSearchPanels() {
   const provider = document.querySelector('input[name="web-search-api-provider"]:checked')?.value || 'marginalia';
   $('websearch-google-cse-field')?.classList.toggle('hidden', provider !== 'google');
   $('websearch-marginalia-hint')?.classList.toggle('hidden', provider !== 'marginalia');
+}
+
+// Show the iCal-URL field for the link source, the CLI command/format fields
+// for an authenticated CLI source (gogcli / gcalcli).
+function syncGcalSourcePanels() {
+  const source = $('gcal-source')?.value || state.gcalSource || 'link';
+  const isCli = source === 'gogcli' || source === 'gcalcli';
+  $('gcal-link-panel')?.classList.toggle('hidden', isCli);
+  $('gcal-cli-panel')?.classList.toggle('hidden', !isCli);
 }
 
 // Apply just persists the chosen backend/provider/key (fields also auto-sync on
@@ -2411,6 +2426,9 @@ function readSettingsFromUI() {
     const n = parseInt($('gcal-interval').value, 10);
     state.gcalSyncIntervalMinutes = Number.isInteger(n) && n >= 5 && n <= 1440 ? n : 60;
   }
+  if ($('gcal-source')) state.gcalSource = ['link', 'gogcli', 'gcalcli'].includes($('gcal-source').value) ? $('gcal-source').value : 'link';
+  if ($('gcal-cli-command')) state.gcalCliCommand = $('gcal-cli-command').value.trim();
+  if ($('gcal-cli-format')) state.gcalCliFormat = $('gcal-cli-format').value === 'json' ? 'json' : 'ics';
   if ($('tome-graduation-tidy')) state.tomeGraduationTidy = $('tome-graduation-tidy').value === 'delete' ? 'delete' : 'pointer';
   if ($('warmth-quiet-start')) {
     const n = parseInt($('warmth-quiet-start').value, 10);
@@ -2498,6 +2516,10 @@ function writeSettingsToUI() {
   if ($('gcal-toggle')) setIfNotFocused($('gcal-toggle'), 'checked', state.gcalEnabled === true);
   if ($('gcal-ical-url')) setIfNotFocused($('gcal-ical-url'), 'value', state.gcalIcalUrl ?? '');
   if ($('gcal-interval')) setIfNotFocused($('gcal-interval'), 'value', state.gcalSyncIntervalMinutes ?? 60);
+  if ($('gcal-source')) setIfNotFocused($('gcal-source'), 'value', state.gcalSource ?? 'link');
+  if ($('gcal-cli-command')) setIfNotFocused($('gcal-cli-command'), 'value', state.gcalCliCommand ?? '');
+  if ($('gcal-cli-format')) setIfNotFocused($('gcal-cli-format'), 'value', state.gcalCliFormat ?? 'ics');
+  if (typeof syncGcalSourcePanels === 'function') syncGcalSourcePanels();
   if ($('tome-graduation-tidy'))   setIfNotFocused($('tome-graduation-tidy'),   'value',   state.tomeGraduationTidy === 'delete' ? 'delete' : 'pointer');
   if ($('warmth-quiet-start')) setIfNotFocused($('warmth-quiet-start'), 'value',   state.warmthQuietHoursStart ?? 23);
   if ($('warmth-quiet-end'))   setIfNotFocused($('warmth-quiet-end'),   'value',   state.warmthQuietHoursEnd ?? 8);
@@ -3349,6 +3371,9 @@ function init() {
     el.addEventListener('change', () => { readSettingsFromUI(); syncWebSearchPanels(); });
   });
   $('websearch-apply-btn')?.addEventListener('click', applyWebSearchBackend);
+
+  // Google Calendar source selector — toggle the link vs CLI panels on change.
+  $('gcal-source')?.addEventListener('change', () => { readSettingsFromUI(); syncGcalSourcePanels(); });
   $('guide-chat-send')?.addEventListener('click', sendGuideChat);
   $('guide-chat-input')?.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendGuideChat(); }
@@ -3364,6 +3389,7 @@ function init() {
     'tome-graduation-toggle', 'tome-graduation-tidy', 'needs-tracking-toggle',
     'notif-sound-toggle',
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
+    'gcal-source', 'gcal-cli-command', 'gcal-cli-format',
     'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'post-history-role', 'tools-enabled', 'custom-tools',

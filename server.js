@@ -52,7 +52,7 @@ import {
 import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedIntents } from './recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
 import { startGcalSyncLoop, stopGcalSyncLoop } from './gcal-sync-loop.js';
-import { fetchIcal } from './gcal-source.js';
+import { fetchIcal, fetchViaCli, cliPresetHint } from './gcal-source.js';
 import { listOutbox, acknowledgeOutbox, clearAcknowledged } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
 import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';
@@ -3072,22 +3072,41 @@ function gcalSyncIntervalMs(s) {
   return Number.isFinite(mins) && mins > 0 ? mins * 60_000 : 60 * 60_000;
 }
 
+// Resolve the configured calendar command for a CLI source ('gogcli' /
+// 'gcalcli'): the ward's explicit override if set, else the preset hint.
+function gcalCliCommandFor(s) {
+  const override = s?.gcalCliCommand && String(s.gcalCliCommand).trim();
+  return override || cliPresetHint(s?.gcalSource) || '';
+}
+
+function gcalSourceConfigured(s) {
+  if (!s || s.gcalEnabled !== true) return false;
+  const src = s.gcalSource || 'link';
+  if (src === 'link') return !!(s.gcalIcalUrl && String(s.gcalIcalUrl).trim());
+  return !!gcalCliCommandFor(s);  // gogcli / gcalcli
+}
+
 function startGcalSync() {
   if (process.env.PROTO_FAMILIAR_GCAL_DISABLED === '1') {
     console.log('[gcal] PROTO_FAMILIAR_GCAL_DISABLED=1 — calendar sync is OFF');
     return;
   }
   startGcalSyncLoop({
-    isEnabled: async () => {
-      const s = readSettingsSync();
-      return s?.gcalEnabled === true && !!(s?.gcalIcalUrl && String(s.gcalIcalUrl).trim());
-    },
+    isEnabled: async () => gcalSourceConfigured(readSettingsSync()),
     getIntervalMs: async () => gcalSyncIntervalMs(readSettingsSync()),
-    // The link adapter: fetch the configured iCal URL → raw .ics bytes.
-    // (gogcli/gcalcli adapters slot in here in Pass 4 behind the same seam.)
+    // Source adapters, interchangeable behind the one seam (§1.5): the
+    // out-of-the-box link tier (full iCal feed, reconciles deletes) or an
+    // authenticated CLI (gogcli/gcalcli — windowed read, never reconciles
+    // deletes). Both produce input for the same gcal_ingest.
     fetchSource: async () => {
-      const url = readSettingsSync()?.gcalIcalUrl;
-      const res = await fetchIcal(url);
+      const s = readSettingsSync();
+      const src = s?.gcalSource || 'link';
+      if (src === 'gogcli' || src === 'gcalcli') {
+        const command = gcalCliCommandFor(s);
+        const format = s?.gcalCliFormat || (src === 'gcalcli' ? 'json' : 'ics');
+        return fetchViaCli({ command, format });  // ok:false includes reconcileDeletes-safe skip
+      }
+      const res = await fetchIcal(s?.gcalIcalUrl);
       if (!res.ok) return res;
       return { ok: true, icsText: res.icsText, reconcileDeletes: true };
     },
