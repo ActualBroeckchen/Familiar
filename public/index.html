@@ -722,6 +722,21 @@
         </div>
 
         <div id="gcal-cli-panel" class="hidden" style="border-left:2px solid var(--border, #444);padding-left:12px;margin:8px 0">
+          <details class="field" style="margin-bottom:4px">
+            <summary style="cursor:pointer;font-weight:600">ⓘ How do I set this up? (one-time, in a terminal)</summary>
+            <div class="field-hint" style="margin-top:8px">
+              <p>These advanced options read your calendar by running a command-line tool that <strong>you</strong> install and sign into yourself, once, in a terminal. Proto-Familiar then just runs that command and reads what it prints — it never sees your Google password, and it only reads.</p>
+              <p style="margin-top:8px"><strong>No terminal? Use “Google account” above instead</strong> — it signs in right here in the browser and needs none of this.</p>
+              <p style="margin-top:8px">The usual tool is <strong>gcalcli</strong> (<a href="https://github.com/insanum/gcalcli" target="_blank" rel="noopener">github.com/insanum/gcalcli</a>):</p>
+              <ol style="margin:6px 0 0 1.2em;padding:0">
+                <li>Install it (its README covers your OS).</li>
+                <li>Run its one-time sign-in once — <code>gcalcli list</code> opens a browser to authorize.</li>
+                <li>Check it works: <code>gcalcli agenda</code> should print your events.</li>
+                <li>Back here: leave <em>Command</em> blank for the default, or paste your exact read command (e.g. <code>gcalcli agenda --details=all</code>), and set <em>Command output</em> to match what it prints (<code>.ics</code> or JSON).</li>
+              </ol>
+              <p style="margin-top:8px">Any other tool that can print your calendar as an <code>.ics</code> feed or a JSON array of events works too — point the <em>Command</em> field at it. (For <code>gogcli</code> specifically, follow that project's own setup; if you're not already using it, the gcalcli route or the Google-account option above are the well-trodden ones.)</p>
+            </div>
+          </details>
           <div class="field">
             <label for="gcal-cli-command">Command (override)</label>
             <input type="text" id="gcal-cli-command" placeholder="leave blank to use the tool's default" autocomplete="off" spellcheck="false">
