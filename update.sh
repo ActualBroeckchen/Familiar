@@ -24,14 +24,7 @@ DEST="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 # GitHub's archive endpoint accepts branch names with slashes verbatim;
 # the extracted top-level folder is still globbed by `Proto-Familiar-*`.
 BRANCH="${BRANCH:-main}"
-# Which repo to pull from: read package.json's `repository` field via node
-# when available (so a fork updates from ITSELF, same as the in-app updater),
-# falling back to the canonical repo. node exists on any installed system.
-REPO_SLUG="ScarletPrinceEury/Proto-Familiar"
-if command -v node >/dev/null 2>&1 && [ -f "$DEST/package.json" ]; then
-  DETECTED="$(cd "$DEST" && node -e "try{const r=require('./package.json').repository;const u=typeof r==='string'?r:(r&&r.url)||'';const m=u.match(/github\.com[:\/]+([^\/]+\/[^\/.]+)/);if(m)console.log(m[1])}catch{}" 2>/dev/null)"
-  [ -n "$DETECTED" ] && REPO_SLUG="$DETECTED"
-fi
+REPO_SLUG="ActualBroeckchen/Familiar"
 REPO_TARBALL="https://github.com/${REPO_SLUG}/archive/refs/heads/${BRANCH}.tar.gz"
 
 say() { printf '\033[1;36m==> %s\033[0m\n' "$*"; }

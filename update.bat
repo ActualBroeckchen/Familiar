@@ -24,13 +24,7 @@ REM   set BRANCH=my-feature-branch
 REM   update.bat
 REM GitHub's archive endpoint accepts branch names with slashes verbatim.
 if "%BRANCH%"=="" set "BRANCH=main"
-REM Which repo to pull from: read package.json's `repository` field via node
-REM when available (so a fork updates from ITSELF, same as the in-app updater),
-REM falling back to the canonical repo. node exists on any installed system.
-set "REPO_SLUG=ScarletPrinceEury/Proto-Familiar"
-where node >nul 2>nul && (
-  for /f "delims=" %%S in ('node -e "try{const r=require('./package.json').repository;const u=typeof r==='string'?r:(r&&r.url)||'';const m=u.match(/github\.com[:/]+([^/]+\/[^/.]+)/);if(m)console.log(m[1])}catch{}" 2^>nul') do set "REPO_SLUG=%%S"
-)
+set "REPO_SLUG=ActualBroeckchen/Familiar"
 set "REPO_ZIP=https://github.com/%REPO_SLUG%/archive/refs/heads/%BRANCH%.zip"
 
 REM A git checkout should update via install.bat's git pull, not an overlay.

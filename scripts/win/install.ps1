@@ -450,7 +450,7 @@ if ($updateMode -and (Test-Path (Join-Path $projectRoot ".git")) -and (Have "git
     Warn "This folder is NOT a git checkout - it looks like a downloaded ZIP."
     Warn "  This installer can't pull updates here. To update, double-click"
     Warn "  update.bat - it downloads the latest version and applies it, keeping your data."
-    Warn "  (Or reinstall with: git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git)"
+    Warn "  (Or reinstall with: git clone https://github.com/ActualBroeckchen/Familiar.git -b main)"
 }
 
 $haveWinget = Have "winget"

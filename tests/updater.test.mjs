@@ -13,7 +13,7 @@ afterEach(() => { delete process.env.PROTO_FAMILIAR_UPDATE_DISABLED; });
 function fakeGit(overrides = {}) {
   const calls = [];
   const base = {
-    'remote get-url origin': 'git@github.com:ScarletPrinceEury/Proto-Familiar.git',
+    'remote get-url origin': 'git@github.com:ActualBroeckchen/Familiar.git',
     'rev-parse --abbrev-ref HEAD': 'main',
     'rev-parse HEAD': 'aaaaaaa',
     'fetch --quiet origin main': '',
@@ -48,7 +48,7 @@ test('repoSlug: ssh + https + trailing slash', () => {
 
 test('getRepoInfo: reads origin/branch/commit + slug', async () => {
   const info = await getRepoInfo({ git: fakeGit() });
-  assert.equal(info.repo, 'ScarletPrinceEury/Proto-Familiar');
+  assert.equal(info.repo, 'ActualBroeckchen/Familiar');
   assert.equal(info.branch, 'main');
   assert.equal(info.commit, 'aaaaaaa');
 });
@@ -137,16 +137,16 @@ test('cmpVersions compares on the numeric core, ignoring the -alpha suffix', () 
 test('packageRepo reads the repository field baked into package.json', () => {
   const pr = packageRepo();
   assert.ok(pr, 'expected a repository in package.json');
-  assert.equal(pr.repo, 'ScarletPrinceEury/Proto-Familiar');
+  assert.equal(pr.repo, 'ActualBroeckchen/Familiar');
   assert.equal(pr.branch, 'main');
 });
 
 test('getRepoInfo: no git → download mode from package.json', async () => {
   const info = await getRepoInfo({ git: noGit });
   assert.equal(info.mode, 'download');
-  assert.equal(info.repo, 'ScarletPrinceEury/Proto-Familiar');
-  assert.equal(info.owner, 'ScarletPrinceEury');
-  assert.equal(info.name, 'Proto-Familiar');
+  assert.equal(info.repo, 'ActualBroeckchen/Familiar');
+  assert.equal(info.owner, 'ActualBroeckchen');
+  assert.equal(info.name, 'Familiar');
 });
 
 test('checkForUpdate download mode: remote newer → update available', async () => {

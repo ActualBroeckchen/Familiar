@@ -126,7 +126,7 @@ if "!MODE!"=="update" (
       echo        update.bat in this folder - it downloads the latest version and
       echo        applies it, keeping your settings and memories.
       echo        For git-based updates instead, reinstall with:
-      echo          git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git
+      echo          git clone https://github.com/ActualBroeckchen/Familiar.git -b main
     )
   )
 )

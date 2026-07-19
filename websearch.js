@@ -64,7 +64,7 @@ const MAX_REDIRECTS       = 4;
 
 // Mostly-honest identifier with the Mozilla/5.0 prefix many sites gate on.
 // Not a hard spoof — it names the project. Personal-tool tradeoff (see spec).
-const WEB_UA = 'Mozilla/5.0 (compatible; Proto-Familiar/0.7; +https://github.com/ScarletPrinceEury/Proto-Familiar)';
+const WEB_UA = 'Mozilla/5.0 (compatible; Proto-Familiar/0.7; +https://github.com/ActualBroeckchen/Familiar)';
 
 const LIBS_MISSING_MSG = 'My web tools aren\'t fully installed yet (the page-reading libraries are missing) — re-running the installer/updater should sort it. Until then I can\'t read web results.';
 
