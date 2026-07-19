@@ -8,7 +8,7 @@ sources: []
 
 This folder defines the repo-specific vocabulary and mental models the rest of the wiki assumes.
 These are not code-level terms — they are the design stances and named patterns the maintainer
-uses to talk about what Proto-Familiar is and why it is built the way it is.
+uses to talk about what Familiar is and why it is built the way it is.
 
 Start with the two foundational stances below. Then read the cluster that matches what you are
 trying to understand. The [Architecture](../architecture) pages depend on these concepts to

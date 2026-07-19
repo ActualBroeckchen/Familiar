@@ -1,5 +1,5 @@
 /* ================================================================
-   Proto-Familiar — stylesheet
+   Familiar — stylesheet
    Layout: sidebar (320px) + chat pane on desktop,
            full-screen overlay sidebar on mobile.
    Themes: dark (default) / light, toggled via [data-theme] on <html>.

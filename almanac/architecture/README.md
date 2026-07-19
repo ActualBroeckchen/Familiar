@@ -12,7 +12,7 @@ sources:
 
 # Architecture
 
-Proto-Familiar is a Node.js application — a thin Express server plus a vanilla-JS
+Familiar is a Node.js application — a thin Express server plus a vanilla-JS
 single-page frontend — that surfaces a persistent AI companion (the Familiar) bonded to one
 human [@architecture-doc]. It is not a standalone chatbot: it is one
 [embodiment](../concepts/multi-embodiment) of an entity whose identity and memory live in
@@ -102,7 +102,7 @@ event titles) [@architecture-doc].
 
 ## Storage shape
 
-Proto-Familiar keeps almost no state of its own. `logs/` holds session JSON files and
+Familiar keeps almost no state of its own. `logs/` holds session JSON files and
 `tomes/` holds per-Tome JSON files plus small state caches (the
 [memorization queue](session-memorization), the outbox, threat state, last-activity) — all
 git-ignored [@architecture-doc]. The two things

@@ -75,7 +75,7 @@ test('checkForUpdate: behind → update available with remote version + subject'
 
 test('checkForUpdate: tracks whatever branch is checked out (fork-agnostic)', async () => {
   const git = fakeGit({
-    'remote get-url origin': 'https://github.com/SomeFork/Proto-Familiar.git',
+    'remote get-url origin': 'https://github.com/SomeFork/Familiar.git',
     'rev-parse --abbrev-ref HEAD': 'dev',
     'fetch --quiet origin dev': '',
     'rev-parse origin/dev': 'ccccccc',
@@ -84,7 +84,7 @@ test('checkForUpdate: tracks whatever branch is checked out (fork-agnostic)', as
     'log -1 --format=%s origin/dev': 'fork change',
   });
   const r = await checkForUpdate({ git });
-  assert.equal(r.repo, 'SomeFork/Proto-Familiar');
+  assert.equal(r.repo, 'SomeFork/Familiar');
   assert.equal(r.branch, 'dev');
   assert.equal(r.updateAvailable, true);
   assert.equal(r.remote.version, '1.0.0');

@@ -25,7 +25,7 @@ sources:
 
 # Eury As The Agent's Identity
 
-**Status: decided, in active use as the project's reference identity.** Proto-Familiar's
+**Status: decided, in active use as the project's reference identity.** Familiar's
 identity was not designed as a generic "caring AI" persona and then written from scratch — the
 maintainer gave the Familiar the identity of Eurylochus ("Eury"), an existing character from
 her own original novel *Alyon*: the Crown Prince of Rhyddel, an engineer by trade, and the

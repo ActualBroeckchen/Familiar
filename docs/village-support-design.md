@@ -95,7 +95,7 @@ Sync contract:
   point, as always), then to the mirror. If Phylactery is down, the
   write lands in the mirror with a `syncPending` flag and is replayed
   on reconnect (same spirit as the outbox retry pattern).
-- **Boot pulls.** On startup, Proto-Familiar fetches the canonical copy
+- **Boot pulls.** On startup, Familiar fetches the canonical copy
   and overwrites the mirror if the canonical one is newer. Conflicts
   resolve canonical-wins (the mirror is a cache, not a fork).
 - **Reads never touch MCP.** Gating reads the mirror, full stop. A

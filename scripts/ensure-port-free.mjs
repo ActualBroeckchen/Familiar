@@ -1,13 +1,13 @@
 /**
  * Pre-start hook: make sure the port we're about to bind to isn't held
- * by a previous Proto-Familiar instance. The .bat / .sh launchers
+ * by a previous Familiar instance. The .bat / .sh launchers
  * already do this in their own dialects; this script gives `npm start`
  * and `npm run dev` the same behaviour so any way you launch
- * Proto-Familiar converges on a working server.
+ * Familiar converges on a working server.
  *
  * Rules:
  *   - Port free → exit 0 silently.
- *   - Port held by a recognisable previous Proto-Familiar (PID file
+ *   - Port held by a recognisable previous Familiar (PID file
  *     points at a live `node server.js` process rooted in THIS repo) →
  *     SIGTERM, wait up to 5s for release, SIGKILL if needed, then
  *     exit 0.
@@ -131,7 +131,7 @@ function describeProcess(pid) {
   return { name: cmdline?.split(/\s+/)[0]?.split('/').pop() ?? null, cmdline, cwd };
 }
 
-/** Decide whether `pid` looks like a Proto-Familiar `node server.js`
+/** Decide whether `pid` looks like a Familiar `node server.js`
  *  we should feel safe killing. On Unix we verify cwd against the
  *  repo root — strict and trustworthy. On Windows we can't get cwd
  *  reliably, so we accept "Name=node.exe + CommandLine contains
@@ -177,7 +177,7 @@ const pidFilePid = readPidFile();
 const inPidFile  = pidFilePid === portOwner;
 
 if (!inPidFile && !isOurServerProcess(portOwner, info)) {
-  warn(`Port ${PORT} is held by PID ${portOwner}, which doesn't look like a Proto-Familiar instance.`);
+  warn(`Port ${PORT} is held by PID ${portOwner}, which doesn't look like a Familiar instance.`);
   if (info.name)    warn(`  Process name: ${info.name}`);
   if (info.cmdline) warn(`  CommandLine:  ${info.cmdline}`);
   warn(`  Stop that process or set PORT=<other> and try again.`);
@@ -192,7 +192,7 @@ if (!inPidFile && !isOurServerProcess(portOwner, info)) {
 // Print what we're about to kill so the user can intervene if the
 // match was a false positive (Ctrl-C the npm start, then investigate).
 const source = inPidFile ? 'from PID file' : 'identified by process inspection';
-say(`Recycling stale Proto-Familiar (PID ${portOwner}, ${source}) holding port ${PORT}…`);
+say(`Recycling stale Familiar (PID ${portOwner}, ${source}) holding port ${PORT}…`);
 if (info.cmdline) say(`  CommandLine: ${info.cmdline}`);
 
 // Kill the process AND its children. On Linux/macOS, process.kill

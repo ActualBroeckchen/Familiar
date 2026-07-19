@@ -246,7 +246,7 @@ The same messages array with Phylactery enrichment prepended to the system messa
 
 ## Central settings
 
-User preferences (prompts, names, saved connections including API keys, tomes settings) are stored centrally on the server so opening Proto-Familiar on a second device pulls the same configuration. The browser's `localStorage` is used as a fast offline cache; the server is the source of truth.
+User preferences (prompts, names, saved connections including API keys, tomes settings) are stored centrally on the server so opening Familiar on a second device pulls the same configuration. The browser's `localStorage` is used as a fast offline cache; the server is the source of truth.
 
 ### `GET /api/settings`
 

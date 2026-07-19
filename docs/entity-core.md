@@ -9,7 +9,7 @@
 
 ## What Is Entity-Core?
 
-[entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.4.0) is a Deno-based MCP (Model Context Protocol) server that manages persistent identity files, RAG memories, and a knowledge graph for a named AI entity. Proto-Familiar connects to it through `thalamus.js` to ground every LLM request in stable, long-term context that survives session boundaries.
+[entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.4.0) is a Deno-based MCP (Model Context Protocol) server that manages persistent identity files, RAG memories, and a knowledge graph for a named AI entity. Familiar connects to it through `thalamus.js` to ground every LLM request in stable, long-term context that survives session boundaries.
 
 This integration is **optional** — the app runs fully without it. When entity-core is unavailable, `thalamus.js` logs the error and returns an empty string, and every chat request proceeds without enrichment.
 
@@ -150,13 +150,13 @@ To see exactly what was sent to the LLM on the previous turn — including the f
 
 Entity-core's background **consolidator** (weekly / monthly / yearly memory summaries) makes its own outbound LLM calls — independent of whatever the chat path uses. It reads three env vars from the spawn environment: `ENTITY_CORE_LLM_API_KEY`, `ENTITY_CORE_LLM_BASE_URL`, and `ENTITY_CORE_LLM_MODEL`, falling back to `ZAI_API_KEY` / `ZAI_BASE_URL` / `ZAI_MODEL`. Missing any of the three causes the consolidator to error with `No LLM API key configured (ENTITY_CORE_LLM_API_KEY or ZAI_API_KEY)` — the message names the key but fires for any of the three.
 
-Proto-Familiar wires this for you. In the sidebar's **Connections** section, click **+ entity-core** on any saved connection to designate it as the source. The badge **entity-core** appears next to the row.
+Familiar wires this for you. In the sidebar's **Connections** section, click **+ entity-core** on any saved connection to designate it as the source. The badge **entity-core** appears next to the row.
 
-When the designation changes, server.js diffs the entity-core creds (id + apiKey + provider + model) before and after the settings save. If anything material changed, it fires `reconnectEntityCore()` on `thalamus.js` — which tears down the entity-core child and respawns it with the new env. The next chat or scheduled consolidation picks up the new key automatically; no Proto-Familiar restart needed.
+When the designation changes, server.js diffs the entity-core creds (id + apiKey + provider + model) before and after the settings save. If anything material changed, it fires `reconnectEntityCore()` on `thalamus.js` — which tears down the entity-core child and respawns it with the new env. The next chat or scheduled consolidation picks up the new key automatically; no Familiar restart needed.
 
 The connection you designate is independent of the chat path. It doesn't have to be your primary or any fallback. Click the **+ entity-core** button a second time on the same row to clear the designation; click on a different row to move it.
 
-### Env vars Proto-Familiar sets
+### Env vars Familiar sets
 
 When you designate a connection, `thalamus.js` resolves the env block via `loadEntityCoreEnv()` (reads `settings.json` directly) and passes it to `StdioClientTransport({ env: ... })`. The MCP SDK merges this with `DEFAULT_INHERITED_ENV_VARS` (PATH, HOME, etc.) so PATH is preserved.
 
@@ -178,9 +178,9 @@ If you don't designate anything, the env block is empty and entity-core spawns w
 
 ## Setup
 
-The one-click installers handle the clone for you (`Proto-Familiar.vbs` on Windows, `Proto-Familiar.command` on macOS, `./install.sh` on Linux). They also pre-cache the Deno module graph so the first server start doesn't stall on downloads. If you'd rather do it by hand:
+The one-click installers handle the clone for you (`Familiar.vbs` on Windows, `Familiar.command` on macOS, `./install.sh` on Linux). They also pre-cache the Deno module graph so the first server start doesn't stall on downloads. If you'd rather do it by hand:
 
-1. Clone entity-core as a sibling directory next to Proto-Familiar:
+1. Clone entity-core as a sibling directory next to Familiar:
    ```bash
    git clone --depth 1 --branch entity-core-v0.4.0 https://github.com/PsycherosAI/Psycheros.git ../entity-core
    ```
@@ -194,9 +194,9 @@ The one-click installers handle the clone for you (`Proto-Familiar.vbs` on Windo
    deno cache src/mod.ts
    ```
 
-4. Start Proto-Familiar normally. `thalamus.js` spawns entity-core automatically on startup. Make sure `deno` is on `PATH` for the process that runs `node server.js`; `start.sh` adds `~/.deno/bin` to `PATH` automatically when the official installer was used and the user's shell config hasn't been reloaded.
+4. Start Familiar normally. `thalamus.js` spawns entity-core automatically on startup. Make sure `deno` is on `PATH` for the process that runs `node server.js`; `start.sh` adds `~/.deno/bin` to `PATH` automatically when the official installer was used and the user's shell config hasn't been reloaded.
 
-If entity-core is missing or fails to start, `thalamus.js` logs the error and `enrich()` returns an empty string — Proto-Familiar runs normally without enrichment.
+If entity-core is missing or fails to start, `thalamus.js` logs the error and `enrich()` returns an empty string — Familiar runs normally without enrichment.
 
 To use a custom install path, set `ENTITY_CORE_PATH` to the absolute path of entity-core's `src/mod.ts` before starting the server:
 

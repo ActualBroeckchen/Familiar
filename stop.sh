@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Proto-Familiar shutdown (macOS / Linux)
+# Familiar shutdown (macOS / Linux)
 # Stops every `node server.js` whose cwd is this project dir — covers both
 # the launcher-tracked PID and any stray instances started outside the
 # launcher (e.g. `npm start` from an editor, or a leftover from before a
@@ -39,12 +39,12 @@ fi
 
 PIDS="$(echo "$PIDS" | xargs)"  # trim
 if [ -z "$PIDS" ]; then
-  say "No Proto-Familiar process found in $SCRIPT_DIR."
+  say "No Familiar process found in $SCRIPT_DIR."
   rm -f "$PID_FILE"
   exit 0
 fi
 
-say "Stopping Proto-Familiar (PIDs: $PIDS)..."
+say "Stopping Familiar (PIDs: $PIDS)..."
 # shellcheck disable=SC2086
 kill $PIDS 2>/dev/null || true
 for _ in $(seq 1 10); do

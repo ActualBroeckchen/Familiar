@@ -115,6 +115,6 @@ before a fact is written [@memorization-js]. Both reuse the same queue and retry
 decision established; neither changes the dedicated-tome target, the trigger set, or the
 API-key-on-disk posture recorded here.
 
-The API-key-on-disk posture is a standing item to revisit if Proto-Familiar's server is ever
+The API-key-on-disk posture is a standing item to revisit if Familiar's server is ever
 exposed beyond localhost — the decision explicitly does not hold if the trust boundary that
 justified it changes [@debug-session].

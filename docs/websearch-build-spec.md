@@ -128,7 +128,7 @@ as configuration.
    bare `formats` block without `secret_key` won't boot.
 
 3. The base URL is a **setting** (`webSearchBaseUrl`, default `http://localhost:8080`), never a
-   literal in code. SearXNG's container port (8080) is unrelated to Proto-Familiar's own
+   literal in code. SearXNG's container port (8080) is unrelated to Familiar's own
    default (8742) — no clash, but don't hardcode either.
 
 ---

@@ -6,8 +6,8 @@
        by the 16px font-size on coarse pointers in style.css, not by locking
        the viewport. -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
-  <meta name="description" content="Proto-Familiar — lightweight LLM chat frontend">
-  <title>Proto-Familiar</title>
+  <meta name="description" content="Familiar — lightweight LLM chat frontend">
+  <title>Familiar</title>
   <!-- Ese ne Tekrema — "the teeth and the tongue" — Adinkra symbol of
        friendship and interdependence. The bond at the heart of what
        this software is. -->
@@ -27,7 +27,7 @@
         <button id="sidebar-toggle" class="icon-btn" aria-label="Toggle settings panel" title="Settings">
           <span data-ms-icon="menu" data-ms-size="20"></span>
         </button>
-        <h1 class="app-title">Proto-Familiar</h1>
+        <h1 class="app-title">Familiar</h1>
       </div>
       <div class="topbar-right">
         <span id="status-badge" class="status-badge" title="Connection status">●</span>
@@ -301,7 +301,7 @@
         </div>
 
         <div class="sidebar-footer">
-          <span id="version-badge" class="version-badge" title="Server version (from package.json)">Proto-Familiar …</span>
+          <span id="version-badge" class="version-badge" title="Server version (from package.json)">Familiar …</span>
         </div>
 
       </aside><!-- /sidebar -->
@@ -626,7 +626,7 @@
         <button class="icon-btn modal-close" id="diagnostics-modal-close" aria-label="Close" data-ms-icon="close"></button>
       </div>
       <div class="modal-body">
-        <p class="field-hint">A snapshot of system info, Proto-Familiar state, and the recent in-app event log. Nothing is sent anywhere — copy or download to share.</p>
+        <p class="field-hint">A snapshot of system info, Familiar state, and the recent in-app event log. Nothing is sent anywhere — copy or download to share.</p>
         <pre id="diagnostics-output" class="pi-pre" style="max-height: 65vh;"></pre>
       </div>
       <div class="modal-footer">
@@ -720,7 +720,7 @@
             </div>
           </div>
           <div class="ke-inline-form hidden" id="ke-cov-import-form">
-            <div class="field-hint">Bring in past conversation logs from elsewhere. Supported: Proto-Familiar JSON, SillyTavern &amp; OpenClaw (.jsonl), <strong>ChatGPT copy/share export</strong> (the <code>**You:** / **ChatGPT:**</code> markdown), and timestamped text lines like <code>[2026-06-20 14:35] Name: message</code>. Choose <strong>one file</strong> to paste/preview it, or <strong>several at once</strong> to batch-import — each file lands on its own date. Logs are placed by date; you'll see a count before anything is memorized.</div>
+            <div class="field-hint">Bring in past conversation logs from elsewhere. Supported: Familiar JSON, SillyTavern &amp; OpenClaw (.jsonl), <strong>ChatGPT copy/share export</strong> (the <code>**You:** / **ChatGPT:**</code> markdown), and timestamped text lines like <code>[2026-06-20 14:35] Name: message</code>. Choose <strong>one file</strong> to paste/preview it, or <strong>several at once</strong> to batch-import — each file lands on its own date. Logs are placed by date; you'll see a count before anything is memorized.</div>
             <input type="file" id="ke-cov-import-file" accept=".json,.jsonl,.txt,.md,.log" multiple>
             <textarea id="ke-cov-import-text" rows="6" placeholder="…or paste the log content here"></textarea>
             <div class="ke-inline-form-row">
@@ -1575,7 +1575,7 @@
             <details class="field" style="margin-bottom:4px">
               <summary style="cursor:pointer;font-weight:600">ⓘ How do I set this up? (one-time, in a terminal)</summary>
               <div class="field-hint" style="margin-top:8px">
-                <p>These advanced options read your calendar by running a command-line tool that <strong>you</strong> install and sign into yourself, once, in a terminal. Proto-Familiar then just runs that command and reads what it prints — it never sees your Google password, and it only reads.</p>
+                <p>These advanced options read your calendar by running a command-line tool that <strong>you</strong> install and sign into yourself, once, in a terminal. Familiar then just runs that command and reads what it prints — it never sees your Google password, and it only reads.</p>
                 <p style="margin-top:8px"><strong>No terminal? Use “Google account” above instead</strong> — it signs in right here in the browser and needs none of this.</p>
                 <p style="margin-top:8px">The usual tool is <strong>gcalcli</strong> (<a href="https://github.com/insanum/gcalcli" target="_blank" rel="noopener">github.com/insanum/gcalcli</a>):</p>
                 <ol style="margin:6px 0 0 1.2em;padding:0">

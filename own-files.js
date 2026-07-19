@@ -1,6 +1,6 @@
 // own-files.js
 //
-// Sandboxed read access to my own folder — the Proto-Familiar checkout.
+// Sandboxed read access to my own folder — the Familiar checkout.
 // This is how I (the Familiar) can look things up on purpose: re-read a
 // Tome, scan a session log, check a doc. It is READ-ONLY and fenced:
 //

@@ -1,6 +1,6 @@
-# Proto-Familiar - Windows system-tray app
+# Familiar - Windows system-tray app
 # Left-click the tray icon to open the browser. Right-click for Start/Stop/Restart/Logs/Quit.
-# Quit gracefully stops Proto-Familiar and its MCP children (Phylactery + Unruh).
+# Quit gracefully stops Familiar and its MCP children (Phylactery + Unruh).
 
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Windows.Forms
@@ -10,8 +10,8 @@ Add-Type -AssemblyName System.Drawing
 $mutex = New-Object System.Threading.Mutex($false, "Global\ProtoFamiliarTrayMutex_v1")
 if (-not $mutex.WaitOne(0, $false)) {
     [System.Windows.Forms.MessageBox]::Show(
-        "Proto-Familiar is already running. Look for the green dot in the system tray (bottom-right of the taskbar, you may need to click the ^ to reveal hidden icons).",
-        "Proto-Familiar",
+        "Familiar is already running. Look for the green dot in the system tray (bottom-right of the taskbar, you may need to click the ^ to reveal hidden icons).",
+        "Familiar",
         [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Information
     ) | Out-Null
@@ -49,7 +49,7 @@ $iconStopped  = New-DotIcon ([System.Drawing.Color]::Crimson)
 # --- Tray icon + menu (declared before functions so handlers can capture them) ---
 $tray = New-Object System.Windows.Forms.NotifyIcon
 $tray.Icon = $iconStopped
-$tray.Text = "Proto-Familiar (stopped)"
+$tray.Text = "Familiar (stopped)"
 $tray.Visible = $true
 
 $menu       = New-Object System.Windows.Forms.ContextMenuStrip
@@ -68,10 +68,10 @@ $tray.ContextMenuStrip = $menu
 
 function Set-Status([string]$state) {
     switch ($state) {
-        "running"  { $tray.Icon = $iconRunning;  $tray.Text = "Proto-Familiar - running on $($script:url)"; $miStatus.Text = "Status: running ($($script:url))" }
-        "starting" { $tray.Icon = $iconStarting; $tray.Text = "Proto-Familiar - starting...";              $miStatus.Text = "Status: starting..." }
-        "stopped"  { $tray.Icon = $iconStopped;  $tray.Text = "Proto-Familiar - stopped";                  $miStatus.Text = "Status: stopped" }
-        "failed"   { $tray.Icon = $iconStopped;  $tray.Text = "Proto-Familiar - failed to start";          $miStatus.Text = "Status: failed (see logs)" }
+        "running"  { $tray.Icon = $iconRunning;  $tray.Text = "Familiar - running on $($script:url)"; $miStatus.Text = "Status: running ($($script:url))" }
+        "starting" { $tray.Icon = $iconStarting; $tray.Text = "Familiar - starting...";              $miStatus.Text = "Status: starting..." }
+        "stopped"  { $tray.Icon = $iconStopped;  $tray.Text = "Familiar - stopped";                  $miStatus.Text = "Status: stopped" }
+        "failed"   { $tray.Icon = $iconStopped;  $tray.Text = "Familiar - failed to start";          $miStatus.Text = "Status: failed (see logs)" }
     }
     $miStart.Enabled   = ($state -eq "stopped" -or $state -eq "failed")
     $miStop.Enabled    = ($state -eq "running" -or $state -eq "starting")
@@ -209,8 +209,8 @@ function Start-Server {
     }
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
         [System.Windows.Forms.MessageBox]::Show(
-            "Node.js is not on PATH. Run the installer (double-click Proto-Familiar.vbs while node_modules is missing, or run scripts\win\install.ps1).",
-            "Proto-Familiar", "OK", "Error") | Out-Null
+            "Node.js is not on PATH. Run the installer (double-click Familiar.vbs while node_modules is missing, or run scripts\win\install.ps1).",
+            "Familiar", "OK", "Error") | Out-Null
         return
     }
     Set-Status "starting"
@@ -236,7 +236,7 @@ function Start-Server {
         Set-Content -Path $script:pidFile -Value $script:serverProc.Id -Encoding ASCII
     } catch {
         Set-Status "failed"
-        [System.Windows.Forms.MessageBox]::Show("Failed to start: $_", "Proto-Familiar", "OK", "Error") | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("Failed to start: $_", "Familiar", "OK", "Error") | Out-Null
         return
     }
     for ($i = 0; $i -lt 40; $i++) {
@@ -246,7 +246,7 @@ function Start-Server {
     }
     if (Test-Port) {
         Set-Status "running"
-        $tray.BalloonTipTitle = "Proto-Familiar"
+        $tray.BalloonTipTitle = "Familiar"
         $tray.BalloonTipText  = "Running at $($script:url) - left-click the tray icon to open."
         $tray.ShowBalloonTip(2500)
     } else {
@@ -256,7 +256,7 @@ function Start-Server {
 
 function Stop-Server {
     Set-Status "starting"  # transient
-    $tray.Text = "Proto-Familiar - stopping..."
+    $tray.Text = "Familiar - stopping..."
     Stop-StrayServerProcesses
     $script:serverProc = $null
     Set-Status "stopped"
@@ -268,7 +268,7 @@ function Open-Logs {
     if (Test-Path $script:logFile) {
         Start-Process notepad.exe $script:logFile
     } else {
-        [System.Windows.Forms.MessageBox]::Show("No log file yet.", "Proto-Familiar") | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("No log file yet.", "Familiar") | Out-Null
     }
 }
 

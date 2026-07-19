@@ -1,6 +1,6 @@
-# Proto-Familiar Documentation
+# Familiar Documentation
 
-Proto-Familiar is the current working prototype of **Familiar** — a lightweight, self-hosted LLM chat frontend that serves as the development platform for a larger agentic caretaker system.
+Familiar is the current working prototype of **Familiar** — a lightweight, self-hosted LLM chat frontend that serves as the development platform for a larger agentic caretaker system.
 
 ---
 
@@ -49,7 +49,7 @@ Deeper design rationale and the implementation specs features were built from
 
 ## About This Project
 
-Proto-Familiar exists to validate the building blocks of **Familiar**: a personal, agentic caretaker AI designed to support users with conditions like ADHD, depression, and agoraphobia through proactive monitoring, long-term memory, and intentional parasocial bonding with an animal-character identity.
+Familiar exists to validate the building blocks of **Familiar**: a personal, agentic caretaker AI designed to support users with conditions like ADHD, depression, and agoraphobia through proactive monitoring, long-term memory, and intentional parasocial bonding with an animal-character identity.
 
 The prototype focuses on the chat layer — provider proxying, Tome injection, Phylactery enrichment, session management, and tool calling — while the [Project Vision](project-vision.md) describes the full planned system.
 

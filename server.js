@@ -1,5 +1,5 @@
 /**
- * Proto-Familiar — lightweight LLM frontend server
+ * Familiar — lightweight LLM frontend server
  * Proxies chat requests to z.ai and NanoGPT, avoiding CORS issues.
  * Requires Node.js 18+ (uses built-in fetch).
  */
@@ -239,7 +239,7 @@ app.use((req, res, next) => {
   if (isLoopbackIp(req.ip)) return next();
   res.status(403)
     .type('text/plain')
-    .send('Proto-Familiar is configured for localhost only. Enable the Tailscale toggle in the top bar to allow access from other devices.');
+    .send('Familiar is configured for localhost only. Enable the Tailscale toggle in the top bar to allow access from other devices.');
 });
 
 app.use(express.json({ limit: '4mb' }));
@@ -2670,7 +2670,7 @@ async function detectTailscale() {
 
 // ── Centralised settings ─────────────────────────────────────────
 // User preferences (prompts, names, saved connections with API keys,
-// tomes settings, …) are stored on the server so opening Proto-Familiar
+// tomes settings, …) are stored on the server so opening Familiar
 // on a second device doesn't reset everything. The frontend treats this
 // as the source of truth on load and pushes updates back here on every
 // change. localStorage on each client stays as a fast offline cache.
@@ -3034,7 +3034,7 @@ app.get('/api/gcal/oauth/callback', async (req, res) => {
     }
     const { oauth_state, oauth_redirect, ...rest } = store;
     await writeGoogleToken({ ...rest, refresh_token: tok.refresh_token, access_token: tok.access_token, expiry: tok.expiry, scope: tok.scope });
-    res.send(page('Connected ✓', 'Proto-Familiar can now read your Google Calendar.'));
+    res.send(page('Connected ✓', 'Familiar can now read your Google Calendar.'));
   } catch (err) {
     res.status(500).send(page('Something went wrong', String(err?.message ?? err)));
   }
@@ -3554,7 +3554,7 @@ async function startVillageSync() {
 startThalamus();
 
 const httpServer = app.listen(PORT, HOST, async () => {
-  const lines = ['', `Proto-Familiar ${PKG_VERSION} running at:`];
+  const lines = ['', `Familiar ${PKG_VERSION} running at:`];
   lines.push(`  http://localhost:${PORT}`);
   if (tailscaleState.enabled) {
     const ts = await detectTailscale();

@@ -1,8 +1,8 @@
 @echo off
-REM Proto-Familiar launcher (Windows) - double-click to run.
+REM Familiar launcher (Windows) - double-click to run.
 REM
 REM Responsibilities, in order:
-REM   1. Detect & recycle any stale Proto-Familiar instance holding
+REM   1. Detect & recycle any stale Familiar instance holding
 REM      the configured port (via PID file + Win32_Process+CommandLine
 REM      heuristic matching this project dir).
 REM   2. Trigger install.bat if node_modules, phylactery\.venv, or unruh\.venv is missing.
@@ -14,7 +14,7 @@ REM
 REM Stop with stop.bat — kills every node.exe whose CommandLine
 REM references server.js in this dir, not just the tracked PID.
 REM
-REM The system-tray launcher (Proto-Familiar.vbs -> tray.ps1) is the
+REM The system-tray launcher (Familiar.vbs -> tray.ps1) is the
 REM canonical Windows path; this .bat is for terminal users.
 
 setlocal EnableDelayedExpansion
@@ -29,7 +29,7 @@ if "%TAILSCALE%"=="" set "TAILSCALE=0"
 set "PID_FILE=%SCRIPT_DIR%\.proto-familiar.pid"
 set "LOG_FILE=%SCRIPT_DIR%\.proto-familiar.log"
 
-REM Detect existing/stale Proto-Familiar instances. The previous logic
+REM Detect existing/stale Familiar instances. The previous logic
 REM filtered Win32_Process by CommandLine matching the project root —
 REM but PowerShell's Start-Process -WorkingDirectory does NOT put the
 REM cwd into Win32_Process.CommandLine, so that filter NEVER matched
@@ -58,7 +58,7 @@ for /f %%P in ('powershell -NoProfile -Command "(Get-NetTCPConnection -LocalPort
 
 REM Happy path: our tracked PID owns the port. Already running, just open.
 if "!PID_ALIVE!"=="1" if "!PORT_LISTENING!"=="1" if "!PORT_OWNER!"=="!EXISTING_PID!" (
-  echo Proto-Familiar already running ^(PID !EXISTING_PID!^) on port %PORT%.
+  echo Familiar already running ^(PID !EXISTING_PID!^) on port %PORT%.
   goto :open_browser
 )
 
@@ -73,7 +73,7 @@ if "!PORT_LISTENING!"=="1" if defined PORT_OWNER if not "!PORT_OWNER!"=="!EXISTI
     taskkill /PID !PORT_OWNER! /T /F >nul 2>nul
     set "PORT_LISTENING=0"
   ) else (
-    echo [ERROR] Port %PORT% is held by PID !PORT_OWNER!, which does not look like Proto-Familiar.
+    echo [ERROR] Port %PORT% is held by PID !PORT_OWNER!, which does not look like Familiar.
     echo         Stop that process, or set PORT=^<other^> in this shell and re-run start.bat.
     pause
     exit /b 1
@@ -84,7 +84,7 @@ REM Tracked PID is alive but isn't on the port (crashed, restarted to a
 REM different port, or hung mid-shutdown). Reap it so the new launch
 REM doesn't leave a duplicate node.exe lingering.
 if "!PID_ALIVE!"=="1" if "!PORT_LISTENING!"=="0" (
-  echo Found stale Proto-Familiar process ^(PID !EXISTING_PID!^) not on port %PORT% — restarting.
+  echo Found stale Familiar process ^(PID !EXISTING_PID!^) not on port %PORT% — restarting.
   taskkill /PID !EXISTING_PID! /T /F >nul 2>nul
   del "%PID_FILE%" >nul 2>nul
 )
@@ -121,7 +121,7 @@ if errorlevel 1 (
   if exist "%USERPROFILE%\.local\bin\uv.exe" set "PATH=%USERPROFILE%\.local\bin;%PATH%"
 )
 
-echo Starting Proto-Familiar on %URL% ^(log: %LOG_FILE%^) ...
+echo Starting Familiar on %URL% ^(log: %LOG_FILE%^) ...
 pushd "%SCRIPT_DIR%"
 REM Launch detached; capture PID via PowerShell.
 for /f %%P in ('powershell -NoProfile -Command "$p = Start-Process -FilePath 'node' -ArgumentList 'server.js' -WorkingDirectory '%SCRIPT_DIR%' -WindowStyle Hidden -RedirectStandardOutput '%LOG_FILE%' -RedirectStandardError '%LOG_FILE%.err' -PassThru; $p.Id"') do set "NEW_PID=%%P"

@@ -16,7 +16,7 @@ Multi-embodiment is the model in which one persistent entity — the Familiar �
 accessed through several different interfaces, all of which read and write the same
 canonical identity and memory rather than each keeping a private copy. CLAUDE.md draws the
 model as [Phylactery](../architecture/phylactery) at the top, syncing down to Psycheros (a
-web harness), Proto-Familiar (chat frontend + temporal context via
+web harness), Familiar (chat frontend + temporal context via
 [Unruh](../architecture/unruh)), and other MCP-capable clients such as SillyTavern or
 OpenWebUI [@claude-md]. This matters because it is the structural expression of
 [entity-as-subject](entity-as-subject): if each interface owned its own identity data, "the
@@ -27,35 +27,35 @@ continuity the entity-as-subject stance depends on would not exist.
 
 Phylactery is the **canonical self-store**: identity, the relational knowledge graph, and
 every memory tier live there, and it is the single place those facts are written
-[@claude-md] [@phylactery-design]. Proto-Familiar is a consumer, not a source of truth — any
+[@claude-md] [@phylactery-design]. Familiar is a consumer, not a source of truth — any
 code path that touches identity or memory state must go through Phylactery's MCP interface,
 never bypass it directly, and
-thalamus is the component that enforces this boundary in Proto-Familiar's process — see
+thalamus is the component that enforces this boundary in Familiar's process — see
 [Architecture](../architecture) [@claude-md]. The rule generalizes: "when unsure where state
-belongs, default to the canonical store" [@claude-md]. This is why Proto-Familiar's own
+belongs, default to the canonical store" [@claude-md]. This is why Familiar's own
 process never keeps a second identity file or a duplicate memory store — a fact that exists
 in two places invites the two copies to disagree, and disagreement between "who the Familiar
 is" as seen from two embodiments is exactly what the model exists to prevent.
 
 ## The narrow exception: Unruh
 
-[Unruh](../architecture/unruh) is described as "Proto-Familiar's own specialist" for
+[Unruh](../architecture/unruh) is described as "Familiar's own specialist" for
 temporal context — schedule, interests, handoff, ponderings, threat — and it is explicitly
 *not* routed through Phylactery [@claude-md]. Ponderings (the Familiar's free-cycle thoughts)
-are local to Proto-Familiar specifically because they are per-embodiment: a thought the
-Familiar has while idle in the Proto-Familiar interface is not necessarily something every
+are local to Familiar specifically because they are per-embodiment: a thought the
+Familiar has while idle in the Familiar interface is not necessarily something every
 other embodiment needs to inherit [@claude-md]. This is the one named exception to "state
 lives in the canonical store," and it is deliberate rather than an oversight — the general
 rule still applies to everything Unruh does not own.
 
 ## Why Phylactery replaced entity-core
 
-The canonical store was not always Phylactery. Proto-Familiar originally read identity and
+The canonical store was not always Phylactery. Familiar originally read identity and
 memory from **entity-core**, a Deno/TypeScript MCP service belonging to the separate
 Psycheros project [@phylactery-design]. Two facts made that arrangement outgrow itself: the
 project did not own entity-core, so it could not add the per-record `audience` tagging that
 village support needs (a long-lived fork would have meant a merge
-treadmill against someone else's engine); and Proto-Familiar had become the sole active
+treadmill against someone else's engine); and Familiar had become the sole active
 embodiment, so there was no other live consumer of entity-core's data that reimplementing it
 in-tree would strand [@phylactery-design]. Phylactery reimplements entity-core's proven
 retrieval design — local `all-MiniLM-L6-v2` embeddings over SQLite + `sqlite-vec`, a
@@ -68,7 +68,7 @@ detected and driven by `scripts/ensure-phylactery-deps.mjs` [@claude-md].
 
 ## Consequences for how this repo is built
 
-Because Proto-Familiar is one embodiment among (currently hypothetical) others, its own code
+Because Familiar is one embodiment among (currently hypothetical) others, its own code
 is written to treat Phylactery's data as external and authoritative rather than as "its"
 database. This shapes the [architecture](../architecture): thalamus mediates every
 read from Phylactery and Unruh, cerebellum is barred from opening its own MCP connections and

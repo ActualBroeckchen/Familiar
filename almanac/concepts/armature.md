@@ -14,7 +14,7 @@ sources:
   - id: founding-conversation
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/e6e73df7-Finding_a_better_mental_health_tool.txt
-    note: "Founding design conversation between the maintainer and Claude that named and worked out the armature framing, predating the Proto-Familiar codebase."
+    note: "Founding design conversation between the maintainer and Claude that named and worked out the armature framing, predating the Familiar codebase."
   - id: engagement-conversation
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/9736413b-Temporal_core_engagementweighted_k.txt
@@ -36,7 +36,7 @@ also lacks the ability to distinguish between different cases" [@user-tenets]. `
 keeps the same name for the same idea: "Standard LLM training creates an assistant framework —
 a disposition to wait, agree, and comply. Familiar must fight this at every level"
 [@project-vision]. The word predates the current codebase; it comes from the founding design
-conversation that shaped Proto-Familiar before any of it was implemented
+conversation that shaped Familiar before any of it was implemented
 [@founding-conversation].
 
 ## Why the project needs a name for this

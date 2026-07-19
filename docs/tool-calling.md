@@ -2,7 +2,7 @@
 
 ## Overview
 
-Tool calling lets the LLM invoke the Familiar's tools and receive their results before producing a final response. Proto-Familiar implements the OpenAI function-calling protocol. Since **0.4.0-alpha** the registry, the executors, and the multi-round execution loop all live **server-side** (in `cerebellum.js`, the motor module — see [`architecture.md`](architecture.md)): the loop runs inside a single `POST /api/chat` request, and the browser only *renders* what happened. This is what lets future non-browser channels (e.g. Discord) get tool execution for free.
+Tool calling lets the LLM invoke the Familiar's tools and receive their results before producing a final response. Familiar implements the OpenAI function-calling protocol. Since **0.4.0-alpha** the registry, the executors, and the multi-round execution loop all live **server-side** (in `cerebellum.js`, the motor module — see [`architecture.md`](architecture.md)): the loop runs inside a single `POST /api/chat` request, and the browser only *renders* what happened. This is what lets future non-browser channels (e.g. Discord) get tool execution for free.
 
 ---
 

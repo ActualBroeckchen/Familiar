@@ -1160,7 +1160,7 @@ async function handleUpdateCommand(gw, msg, content) {
   try { res = await applyUpdate(); }
   catch (e) { await send(`Update failed: ${e?.message ?? e}`); return; }
   if (res?.ok) {
-    await send(`Updated to v${res.version}${where ? ` on ${where}` : ''}. The new code is on disk — restart Proto-Familiar to run it.`);
+    await send(`Updated to v${res.version}${where ? ` on ${where}` : ''}. The new code is on disk — restart Familiar to run it.`);
   } else {
     await send(`I couldn't apply the update: ${res?.error ?? 'unknown error'}`);
   }

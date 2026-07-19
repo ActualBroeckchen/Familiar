@@ -1,7 +1,7 @@
 /**
  * Foreign-log import (day-anchoring Phase 4).
  *
- * Parses logs from elsewhere into Proto-Familiar's normalized message shape so
+ * Parses logs from elsewhere into Familiar's normalized message shape so
  * they can be placed by date (segmentByDay) and ingested through the normal
  * memorization pipeline. Parsers are tried in order; each returns
  * { messages, format } or null. Unknown input → a loud, structured error (no
@@ -48,7 +48,7 @@ export function applyFallbackDate(messages, date) {
   return messages.map(m => (m.timestamp ? m : { ...m, timestamp: iso }));
 }
 
-// ── Parser: Proto-Familiar session-log JSON (single, bundle, or raw array) ────
+// ── Parser: Familiar session-log JSON (single, bundle, or raw array) ────
 function parsePfJson(raw) {
   let data;
   try { data = JSON.parse(raw); } catch { return null; }
@@ -67,7 +67,7 @@ function parsePfJson(raw) {
   const out = msgs
     .filter(m => typeof m?.content === 'string' && m.content.trim())
     .map(m => ({ role: normRole(m.role), content: m.content, timestamp: toIso(m.timestamp) }));
-  return out.length ? { messages: out, format: 'Proto-Familiar JSON' } : null;
+  return out.length ? { messages: out, format: 'Familiar JSON' } : null;
 }
 
 // ── Parser: timestamped text/markdown ────────────────────────────────────────
@@ -232,7 +232,7 @@ const PARSERS = [
   parseTimestampedText,
 ];
 
-const SUPPORTED_FORMATS = ['Proto-Familiar JSON', 'SillyTavern (.jsonl)', 'OpenClaw (.jsonl)', 'ChatGPT (copy/share export)', 'timestamped text'];
+const SUPPORTED_FORMATS = ['Familiar JSON', 'SillyTavern (.jsonl)', 'OpenClaw (.jsonl)', 'ChatGPT (copy/share export)', 'timestamped text'];
 
 /**
  * Parse `raw` into normalized messages. Returns { ok, messages, format } or

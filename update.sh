@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Proto-Familiar one-click updater (macOS / Linux).
+# Familiar one-click updater (macOS / Linux).
 #
 # For installs made by downloading the ZIP rather than `git clone`: the
 # installer can't `git pull` those, so this fetches the latest code from
@@ -44,7 +44,7 @@ if [ "$BRANCH" != "main" ]; then
   say "Updating from branch '$BRANCH' (non-default — pass BRANCH=main to switch back)."
 fi
 
-say "Downloading the latest Proto-Familiar…"
+say "Downloading the latest Familiar…"
 if command -v curl >/dev/null 2>&1; then
   curl -fsSL "$REPO_TARBALL" -o "$TMP/pf.tar.gz" || die "Download failed — check your internet connection."
 elif command -v wget >/dev/null 2>&1; then
@@ -104,13 +104,13 @@ PF_FROM_UPDATER=1 bash "$DEST/install.sh"
 # launches a fresh detached server and reopens the browser on the new version.
 # Guarded so a hiccup here still reaches a clear final message.
 if [ "$WAS_RUNNING" = "1" ]; then
-  say "Restarting Proto-Familiar so the new version takes effect…"
+  say "Restarting Familiar so the new version takes effect…"
   bash "$DEST/stop.sh" || true
   if PORT="$PORT" bash "$DEST/start.sh"; then
-    say "Update complete — Proto-Familiar restarted on the new version. Reload the browser tab if it doesn't refresh on its own."
+    say "Update complete — Familiar restarted on the new version. Reload the browser tab if it doesn't refresh on its own."
   else
     say "Update applied, but the automatic restart hit a snag. Run ./stop.sh then ./start.sh (or your usual launcher) to finish."
   fi
 else
-  say "Update complete. Start Proto-Familiar (./start.sh, or your usual launcher) to use the new version."
+  say "Update complete. Start Familiar (./start.sh, or your usual launcher) to use the new version."
 fi

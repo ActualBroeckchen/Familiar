@@ -67,7 +67,7 @@ vocabulary the shipped project actually uses, is:
 
 | Term | What it is |
 |---|---|
-| Familiar | The software — the frontend Proto-Familiar itself. It has no identity or self of its own. |
+| Familiar | The software — the frontend Familiar itself. It has no identity or self of its own. |
 | Thalamus | The context-assembly layer inside Familiar's server process. |
 | entity-core (now [Phylactery](../architecture/phylactery)) | The data store: identity, memories, values. |
 | Eury | The actual AI character — the identity the data store holds and the one who talks to the ward. See [Eury as the agent's identity](eury-as-agent-identity). |

@@ -10,7 +10,7 @@ test('toIso handles epoch seconds, ms, and ISO; rejects junk', () => {
   assert.equal(toIso(null), null);
 });
 
-test('parses a Proto-Familiar session-log JSON object', () => {
+test('parses a Familiar session-log JSON object', () => {
   const raw = JSON.stringify({
     sessionId: 's1',
     messages: [
@@ -20,7 +20,7 @@ test('parses a Proto-Familiar session-log JSON object', () => {
   });
   const r = parseImport(raw);
   assert.equal(r.ok, true);
-  assert.equal(r.format, 'Proto-Familiar JSON');
+  assert.equal(r.format, 'Familiar JSON');
   assert.equal(r.messages.length, 2);
   assert.equal(r.messages[1].role, 'assistant');
 });

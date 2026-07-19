@@ -1,6 +1,6 @@
 # Unruh
 
-Temporal-context cognitive module for Proto-Familiar. Sibling
+Temporal-context cognitive module for Familiar. Sibling
 specialist to entity-core, mediated by `thalamus.js`.
 
 For the design rationale read [`../docs/unruh-design.md`](../docs/unruh-design.md).
@@ -67,9 +67,9 @@ uv run python -m unruh seed-routine        # seed the default daily routine
 uv run python -m unruh seed-routine --replace  # rewrite today's phases
 ```
 
-You won't normally run it by hand — Proto-Familiar's `thalamus.js`
+You won't normally run it by hand — Familiar's `thalamus.js`
 spawns it as a stdio child on startup. The launchers (`start.sh`,
-`start.bat`, `Proto-Familiar.command`) detect a missing `.venv/` and
+`start.bat`, `Familiar.command`) detect a missing `.venv/` and
 run the installer automatically.
 
 ## Layout

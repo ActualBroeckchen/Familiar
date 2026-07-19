@@ -12,7 +12,7 @@ sources:
 
 # Autonomous Loops
 
-Autonomous loops are background workers that run alongside Proto-Familiar's HTTP server and
+Autonomous loops are background workers that run alongside Familiar's HTTP server and
 act without a human request — checking in during silence, firing a reminder, drifting off to
 ponder an interest, syncing a calendar. CLAUDE.md counts eleven of them, each booted in
 `server.js`'s `app.listen()` callback and each stopped from the SIGTERM/SIGINT/SIGHUP handler

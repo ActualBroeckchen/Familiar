@@ -117,7 +117,7 @@ def schedule_add_node(
             event/state (open-ended).
         payload: arbitrary extras stored as JSON (notes, source,
             categorisation that doesn't fit the four columns).
-            Conventional keys used by Proto-Familiar's surface pipeline:
+            Conventional keys used by Familiar's surface pipeline:
               - stakes_tier: 'external_obligation' | 'personal_wellbeing'
                 | 'purely_optional' — what kind of cost lapsing carries.
                 Drives surface-pressure: external bypasses quiet-hours
@@ -461,7 +461,7 @@ def unruh_ids_to_slugs() -> dict[str, Any]:
     interest nodes + edges) into a readable slug, updating all internal
     references in one transaction. Mechanical and idempotent — running it
     twice changes nothing more. Returns counts and the old→new mapping so
-    Proto-Familiar can update its own references.
+    Familiar can update its own references.
     """
     try:
         with get_conn() as conn:

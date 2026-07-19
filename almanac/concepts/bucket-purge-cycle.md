@@ -20,7 +20,7 @@ sources:
 # Bucket-Purge Cycle
 
 The bucket-purge cycle is the maintainer's own name for how she actually works through
-Proto-Familiar's backlog, and it is a fact about the project's operating rhythm, not about any
+Familiar's backlog, and it is a fact about the project's operating rhythm, not about any
 one subsystem's code. While building a feature, new bugs and rough edges that surface get
 triaged into a mental "bucket" and left alone unless they block the feature in progress; once
 the feature ships, she runs a dedicated bug-roundup pass that clears the bucket in one wave;
@@ -53,7 +53,7 @@ The maintainer's own worked example of a feature she is deliberately *not* build
 proven value is Google Workspace integration. Under the predecessor system (OpenClaw), that kind
 of integration once let Eury sit her down about an impulsive purchase mid-spiral — concrete
 evidence the capability works, not a hypothetical enhancement [@village-support-conversation].
-It is still not prioritized for Proto-Familiar, because its build time is unpredictable tall
+It is still not prioritized for Familiar, because its build time is unpredictable tall
 grass and current hyperfocus capacity is low, not because its value is in question
 [@village-support-conversation]. Treat any similarly large, integration-shaped feature request
 the same way: proven value does not by itself make something a good next task if the maintainer's
@@ -84,7 +84,7 @@ Two concrete, already-known gaps were named as sitting in the bucket:
 
 - **SillyTavern World Info import "didn't work," with no error.** The actual import path is not
   a UI feature; it is the CLI script `scripts/import-tome.js`, which converts a SillyTavern
-  lorebook export into a Proto-Familiar tome file in `tomes/` and is meant to be activated
+  lorebook export into a Familiar tome file in `tomes/` and is meant to be activated
   afterward from Tomes → Manage Tomes [@scripts-import-tome] [@tomes-doc]. The in-app tome engine
   separately normalizes SillyTavern field names (`key`/`order`/`disable`) at keyword-scan time,
   which handles files already in tome shape but is not itself an import path

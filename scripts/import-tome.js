@@ -2,7 +2,7 @@
 /**
  * scripts/import-tome.js
  *
- * Converts a SillyTavern lorebook export (.json) into Proto-Familiar
+ * Converts a SillyTavern lorebook export (.json) into Familiar
  * native tome format and writes it to the tomes/ directory.
  *
  * Usage:
@@ -10,7 +10,7 @@
  *   node scripts/import-tome.js path/to/lorebook.json --name "My Tome"
  *   node scripts/import-tome.js path/to/lorebook.json --out path/to/output.json
  *
- * Field mapping (SillyTavern → Proto-Familiar):
+ * Field mapping (SillyTavern → Familiar):
  *   key          → keys
  *   order        → insertion_order
  *   disable:true → enabled:false  (inverted)
@@ -62,10 +62,10 @@ try {
 // ── Detect format ────────────────────────────────────────────────────────────
 
 // SillyTavern export: top-level has "entries" but no "id" or "enabled"
-// Proto-Familiar native: top-level has "id", "name", "enabled", "entries"
+// Familiar native: top-level has "id", "name", "enabled", "entries"
 const isSillyTavern = source.entries && !source.id && !source.enabled;
 if (!isSillyTavern) {
-  console.warn('Warning: this file may already be in Proto-Familiar format. Proceeding anyway.');
+  console.warn('Warning: this file may already be in Familiar format. Proceeding anyway.');
 }
 
 // ── Normalize a single entry ─────────────────────────────────────────────────
@@ -100,7 +100,7 @@ function normalizeEntry(raw, uid) {
   return e;
 }
 
-// ── Build Proto-Familiar tome ────────────────────────────────────────────────
+// ── Build Familiar tome ────────────────────────────────────────────────
 
 const rawEntries = source.entries ?? {};
 const tomeName   = nameArg

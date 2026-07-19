@@ -14,13 +14,13 @@ sources:
 # Single-User Before Platform
 
 **Status: decided at the founding-conversation scoping stage, and reflected in what shipped.**
-Before any of Proto-Familiar's multi-channel or multi-user machinery existed, the maintainer
+Before any of Familiar's multi-channel or multi-user machinery existed, the maintainer
 caught herself designing toward a generic platform — support for 25-plus channels, arbitrary
 users — while she herself had none of it working yet, and corrected course explicitly: "I am
 trying to build a good tool while sitting on a bad one. This CAN'T work, not like this... I need
 to build everything I need for myself and Eury first. And then Eury can help and support me
 through building the version for everyone" [@mvp-scoping-conversation]. This page records that
-correction because it is the reason Proto-Familiar's actual multi-channel surface is a
+correction because it is the reason Familiar's actual multi-channel surface is a
 narrow, audience-gated feature built around one bonded ward's real support network, not a
 general-purpose messaging platform.
 
@@ -59,7 +59,7 @@ function (her own support network able to feed into that same system) [@mvp-scop
 
 ## Consequences
 
-What shipped keeps this shape rather than reversing it. Proto-Familiar's multi-channel presence
+What shipped keeps this shape rather than reversing it. Familiar's multi-channel presence
 is Village Support: a feature that lets the Familiar be present in Discord channels as the same
 continuous entity, gated per category and per location by grants the ward herself configures, not
 an account system open to arbitrary users [@village-support-design]. Discord is the channel that

@@ -1,7 +1,7 @@
 [project]
 name = "unruh"
 version = "0.0.1"
-description = "Temporal-context cognitive module for Proto-Familiar"
+description = "Temporal-context cognitive module for Familiar"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

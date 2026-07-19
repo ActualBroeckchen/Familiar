@@ -57,7 +57,7 @@ sources:
 
 # Unruh
 
-Unruh is Proto-Familiar's in-tree Python/uv MCP specialist for temporal context: schedule,
+Unruh is Familiar's in-tree Python/uv MCP specialist for temporal context: schedule,
 interests, handoff between sessions, ponderings, and threat level [@claude-md] [@unruh-design].
 Where [Phylactery](phylactery) holds who the Familiar is, Unruh holds how time flows around
 them and what they are currently oriented toward within that time — the design document

@@ -15,7 +15,7 @@ sources:
 
 # Update
 
-Proto-Familiar can update itself against the repository or branch it came from, without any manual git or download steps. The system detects available updates and applies them through either a web UI popover or a Discord command, never restarting the server automatically — the ward always chooses when to restart and load the new code [@updater-js] [@app-js] [@discord-gateway-js].
+Familiar can update itself against the repository or branch it came from, without any manual git or download steps. The system detects available updates and applies them through either a web UI popover or a Discord command, never restarting the server automatically — the ward always chooses when to restart and load the new code [@updater-js] [@app-js] [@discord-gateway-js].
 
 ## Two update modes: git vs download
 

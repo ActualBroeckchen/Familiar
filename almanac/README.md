@@ -6,17 +6,17 @@ sources: []
 
 # CodeAlmanac Wiki
 
-This is the living wiki for Proto-Familiar. It records the durable knowledge the code cannot
+This is the living wiki for Familiar. It records the durable knowledge the code cannot
 say: decisions, flows, invariants, incidents, gotchas, and project context that future agents
 should not rediscover from scratch.
 
 > This folder is internal development documentation maintained by AI coding agents (see
-> `CLAUDE.md`). It's not required to install or run Proto-Familiar — skip it if you're just
+> `CLAUDE.md`). It's not required to install or run Familiar — skip it if you're just
 > here to use the Familiar.
 
 ## Start here
 
-Proto-Familiar surfaces a persistent AI companion (the Familiar) as one embodiment of an
+Familiar surfaces a persistent AI companion (the Familiar) as one embodiment of an
 entity whose identity and memory live in a separate canonical store. Start with:
 
 - [Architecture](architecture) — the system map: the server, the thalamus/cerebellum split,

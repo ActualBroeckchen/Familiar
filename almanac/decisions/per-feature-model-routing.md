@@ -16,7 +16,7 @@ sources:
 
 # Per-Feature Model Routing
 
-**Status: decided, implemented.** Proto-Familiar lets the ward bind each background LLM job to
+**Status: decided, implemented.** Familiar lets the ward bind each background LLM job to
 its own saved connection instead of forcing every job through whichever provider the ward
 chats on. `public/app.js` defines `FEATURE_CONNECTIONS`, the fixed list of jobs that call a
 model outside the live chat turn — autonomous pondering, memorization and the coverage sweep,
@@ -49,7 +49,7 @@ background should not need to spend frontier-model tokens to do it) [@founding-c
 
 ## Decision
 
-Proto-Familiar's shipped implementation realizes this principle directly, though the concrete
+Familiar's shipped implementation realizes this principle directly, though the concrete
 job list differs from the sifter/main-agent/retrieval split first sketched — the jobs that
 actually exist in the shipped system are the ones with their own autonomous loops (see
 [Autonomous loops](../architecture/autonomous-loops)) plus memorization's queue (see

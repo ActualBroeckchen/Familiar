@@ -92,7 +92,7 @@ if (!existsSync(sourceDataDir)) {
 // ── Resolve Phylactery root ───────────────────────────────────────────────────
 
 // The Phylactery package lives two levels up from scripts/ (i.e. at the
-// Proto-Familiar repo root) and then into phylactery/.
+// Familiar repo root) and then into phylactery/.
 const phylacteryRoot = resolve(__dirname, '..', 'phylactery');
 if (!existsSync(phylacteryRoot)) {
   console.error(`Phylactery root not found at: ${phylacteryRoot}`);

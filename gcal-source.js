@@ -219,7 +219,7 @@ export async function fetchViaCli({ command, format = 'ics', timeMin, timeMax, l
 
 // ── Write-back (the only path that mutates the real calendar, §6/§7-5) ──
 //
-// The Familiar pushes a Proto-Familiar schedule node TO Google by importing
+// The Familiar pushes a Familiar schedule node TO Google by importing
 // its generated `.ics` through the same authenticated CLI. We reuse the
 // export `.ics` (icalwrite) rather than constructing per-field CLI args —
 // code generates the calendar artifact, never the model (§3) — and we only
@@ -244,7 +244,7 @@ export function resolveWriteCommand({ source, override } = {}) {
  * Import an `.ics` into the real calendar via the ward's configured command.
  * Writes the bytes to a temp file, substitutes {file} (or appends the path),
  * runs the command, and always cleans up the temp file. Never throws —
- * returns { ok } / { ok:false, error }. This is the one place Proto-Familiar
+ * returns { ok } / { ok:false, error }. This is the one place Familiar
  * changes the ward's actual Google calendar.
  *
  * @param {object} p

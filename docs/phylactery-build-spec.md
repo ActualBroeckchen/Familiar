@@ -14,7 +14,7 @@ The full rationale and design decisions live in
 > followed. References to entity-core describe the system it replaced, not current wiring.
 
 **Phylactery** is an in-tree Python/`uv` MCP service that is now
-Proto-Familiar's single canonical store for its whole self — identity, ward-identity, the
+Familiar's single canonical store for its whole self — identity, ward-identity, the
 relational graph, and every memory tier — replacing the external `entity-core` service.
 
 This document is the build instruction it followed. It is the **what and the in-what-order**. For the
@@ -396,7 +396,7 @@ A half-migrated install that spawns both engines is the failure mode. **These mo
   must preserve it.
 - **Deno removal:** retiring entity-core removes Deno entirely — installer clone/tag/`deno cache`
   (`install.{sh,bat}`) and `~/.deno/bin` PATH priming (`start.sh`, `start.bat`,
-  `Proto-Familiar.command`) drop or become `uv`/Phylactery setup. `scripts/import-entity.js` +
+  `Familiar.command`) drop or become `uv`/Phylactery setup. `scripts/import-entity.js` +
   the `import-entity` npm script become the Phylactery conversion tooling (Phase 1).
 - **Prompt Inspector** (`public/app.js` ~:2520, ~:2575; `index.html` ~:28): relabel
   entity-core → Phylactery; also the natural surface to expose the audience tag + thin-projection

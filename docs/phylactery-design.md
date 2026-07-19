@@ -1,4 +1,4 @@
-# Proto-Familiar canonical-self store — design (milestone: "Phylactery")
+# Familiar canonical-self store — design (milestone: "Phylactery")
 
 Status: **SHIPPED — milestone complete (0.6.x).** Phylactery is the live canonical self-store;
 entity-core is retired and thalamus no longer spawns it. This doc is retained as the design
@@ -16,7 +16,7 @@ not a literal brain region) and fits the entity-as-subject stance. Module at
 
 **Attribution:** Phylactery is an original design by **Zari Lewis**, developed within the
 [Psycheros](https://github.com/PsycherosAI/Psycheros) project and implemented here in
-Proto-Familiar. The entity-as-subject philosophy this milestone expresses originates with
+Familiar. The entity-as-subject philosophy this milestone expresses originates with
 Psycheros — see
 [Psycheros PHILOSOPHY.md](https://github.com/PsycherosAI/Psycheros/blob/main/PHILOSOPHY.md).
 
@@ -41,7 +41,7 @@ entity-core with permission tags and timestamps built in?"* — with an unhedged
 1. **We don't own entity-core.** Another person owns and controls the Psycheros repo; we
    can't add an `audience` field to its records, and a long-lived fork is a merge treadmill
    on someone else's engine. Our canonical self should not live in an engine we can't shape.
-2. **Proto-Familiar is the main embodiment and its effective sole author.** Other
+2. **Familiar is the main embodiment and its effective sole author.** Other
    embodiments (SillyTavern-style plugins, etc.) are future and would plug *into* PF's
    world. There's no other live drinker to fragment, and PF's own store becomes the spine
    future embodiments read through.
@@ -670,7 +670,7 @@ composite-key contract treatment — list them so none is discovered in the fiel
   floor under them.)
 - **Deno removal seam set.** Retiring entity-core's Deno child removes Deno entirely: the
   installer clone/tag/`deno cache` steps (`install.{sh,bat}`) **and** the `~/.deno/bin` PATH
-  priming in the launchers (`start.sh`, `start.bat`, `Proto-Familiar.command`) all drop or become
+  priming in the launchers (`start.sh`, `start.bat`, `Familiar.command`) all drop or become
   Phylactery/`uv` setup. `scripts/import-entity.js` + the `import-entity` npm script become the
   Phylactery conversion tooling (Phase 1).
 - **Prompt Inspector relabel + opportunity.** The inspector color-codes the prompt "by source

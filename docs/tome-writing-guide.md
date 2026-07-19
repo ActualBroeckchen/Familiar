@@ -1,6 +1,6 @@
 # How to Write a Good Tome
 
-This guide is written for LLMs tasked with creating Tome entries for Proto-Familiar. It focuses on the craft decisions — keyword design, content wording, trigger types, and common mistakes — rather than the technical schema (see `docs/tomes.md` for that).
+This guide is written for LLMs tasked with creating Tome entries for Familiar. It focuses on the craft decisions — keyword design, content wording, trigger types, and common mistakes — rather than the technical schema (see `docs/tomes.md` for that).
 
 ---
 

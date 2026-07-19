@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Install a Proto-Familiar entry into the user's application menu (Linux).
-# After running this once, Proto-Familiar appears in your app launcher / activities overview.
+# Install a Familiar entry into the user's application menu (Linux).
+# After running this once, Familiar appears in your app launcher / activities overview.
 
 set -e
 
@@ -14,7 +14,7 @@ mkdir -p "$APPS_DIR"
 cat >"$DESKTOP_FILE" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Proto-Familiar
+Name=Familiar
 Comment=Lightweight LLM frontend
 Exec=bash -c "cd '$PROJECT_ROOT' && ./start.sh"
 Icon=utilities-terminal
@@ -30,5 +30,5 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 fi
 
 echo "Installed: $DESKTOP_FILE"
-echo "Proto-Familiar should now appear in your application menu."
+echo "Familiar should now appear in your application menu."
 echo "(You may need to log out / back in on some desktops for it to show up.)"

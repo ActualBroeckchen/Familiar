@@ -28,24 +28,24 @@ sources:
 
 # Phylactery
 
-Phylactery is the in-tree Python/uv FastMCP service that owns Proto-Familiar's canonical
+Phylactery is the in-tree Python/uv FastMCP service that owns Familiar's canonical
 self: identity, ward-identity, the relational knowledge graph, and every memory tier
 [@claude-md] [@phylactery-dir]. It is the concrete implementation of the
 [multi-embodiment](../concepts/multi-embodiment) model's canonical store — every other
-component in this repo, including Proto-Familiar's own chat path, is a consumer of
+component in this repo, including Familiar's own chat path, is a consumer of
 Phylactery's data, never a second source of truth for it. The name is deliberate: a
 phylactery is the vessel that holds a soul, and Phylactery holds the Familiar's whole
 canonical self, not just a cache of it [@phylactery-design]. The design is an original
-contribution by Zari Lewis within the Psycheros project, implemented here in Proto-Familiar
+contribution by Zari Lewis within the Psycheros project, implemented here in Familiar
 [@phylactery-design].
 
 ## What it replaced, and why
 
 Phylactery's milestone (0.6.x, "shipped") replaced **entity-core**, a Deno/TypeScript MCP
 service belonging to the separate Psycheros project [@claude-md] [@phylactery-design]. Two
-constraints made continuing on entity-core untenable: Proto-Familiar did not own it, so it
+constraints made continuing on entity-core untenable: Familiar did not own it, so it
 could not add the per-record `audience` tagging that gated village presence needs without
-maintaining a permanent fork; and Proto-Familiar had become the sole live embodiment reading
+maintaining a permanent fork; and Familiar had become the sole live embodiment reading
 entity-core's data, so reimplementing its behavior in-tree stranded no other consumer
 [@phylactery-design]. Phylactery reimplements entity-core's proven retrieval design rather
 than forking its code: local `all-MiniLM-L6-v2` sentence embeddings (384-dim) over SQLite +

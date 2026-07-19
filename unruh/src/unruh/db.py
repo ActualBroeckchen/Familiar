@@ -191,7 +191,7 @@ def ids_to_slugs(conn: sqlite3.Connection) -> dict:
     schema has no ON UPDATE CASCADE; the updates themselves keep every
     reference consistent. Idempotent: slugged rows don't match the legacy
     pattern and are skipped. Returns {nodes, edges, mapping} — the caller
-    (Proto-Familiar) applies `mapping` to its own JSON stores that
+    (Familiar) applies `mapping` to its own JSON stores that
     reference node ids (outbox originIds, projection-cue state, surface
     events)."""
     mapping: dict[str, str] = {}

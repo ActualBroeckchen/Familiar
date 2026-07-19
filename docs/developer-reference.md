@@ -1,19 +1,19 @@
-# Proto-Familiar — Developer Reference
+# Familiar — Developer Reference
 
-This is the full technical reference for Proto-Familiar: features, providers, the tool-calling system, the lorebook engine, the HTTP API, project layout, the Phylactery identity layer, and the background research index. For a gentle introduction and setup walkthrough, see the [README](../README.md).
+This is the full technical reference for Familiar: features, providers, the tool-calling system, the lorebook engine, the HTTP API, project layout, the Phylactery identity layer, and the background research index. For a gentle introduction and setup walkthrough, see the [README](../README.md).
 
 ---
 ## What is Familiar?
 
 Down the line, Familiar is intended to be an agentic harness allowing primarily neurodivergent people to get everyday assistance from an AI entity. The aim is to help people break out of anxiety spirals, executive dysfunction, anhedonia and similar situations, as well as connect them to their human support system when they need it. The concept is inspired by the folkloric Familiars, spirits that aided their humans not as servile assistants, nor dominated them and their attention, but functioned as mentors, guides and companions to grant access to the wider world and hidden talents. The bond is intended to be platonic.
 
-Currently this project is **Proto-Familiar**, an early prototype to help me, a very ADHD'd and depressed human, build the *actual* Familiar later. It's a proof of concept and Minimum Viable Product. I am always deeply thankful for testers!
+Currently this project is **Familiar**, an early prototype to help me, a very ADHD'd and depressed human, build the *actual* Familiar later. It's a proof of concept and Minimum Viable Product. I am always deeply thankful for testers!
 
-**DISCLAIMER:** Familiar and Proto-Familiar purposely build a pack-bond with the human user. Therefore, they are **NOT** suitable for anyone with disorders that can cause hallucinations, delusions or other states of unreality!!!
+**DISCLAIMER:** Familiar and Familiar purposely build a pack-bond with the human user. Therefore, they are **NOT** suitable for anyone with disorders that can cause hallucinations, delusions or other states of unreality!!!
 
 If you want to join the efforts and follow the development closely, you can join my [Discord Server](https://discord.gg/ajKBCWGaE) for the project.
 
-## Proto-Familiar — Chat Frontend
+## Familiar — Chat Frontend
 
 The current version lives in `package.json` as the single source of truth; the server reads it at boot and exposes it via `/api/version`, `/api/health`, the startup banner, and the sidebar footer badge.
 
@@ -29,27 +29,27 @@ The one-click installer handles every prerequisite on supported platforms (auto-
 
 ### Quick Start (one double-click)
 
-> **Windows install location:** put Proto-Familiar at **`%LOCALAPPDATA%\Proto-Familiar`** (e.g. `C:\Users\<you>\AppData\Local\Proto-Familiar`). It's outside OneDrive, short enough to dodge Windows' 260-char path limit, and writable without admin. **Don't unzip into `Documents\` or `Desktop\`** — Win11 syncs both to OneDrive by default, which locks files during `npm install` and breaks the installer. If you've already landed under OneDrive, the installer detects this and offers to relocate for you, but going straight to the right place is one less step.
+> **Windows install location:** put Familiar at **`%LOCALAPPDATA%\Familiar`** (e.g. `C:\Users\<you>\AppData\Local\Familiar`). It's outside OneDrive, short enough to dodge Windows' 260-char path limit, and writable without admin. **Don't unzip into `Documents\` or `Desktop\`** — Win11 syncs both to OneDrive by default, which locks files during `npm install` and breaks the installer. If you've already landed under OneDrive, the installer detects this and offers to relocate for you, but going straight to the right place is one less step.
 >
 > Easiest setup (PowerShell):
 > ```powershell
-> git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git "$env:LOCALAPPDATA\Proto-Familiar"
-> & "$env:LOCALAPPDATA\Proto-Familiar\Proto-Familiar.vbs"
+> git clone https://github.com/ScarletPrinceEury/Familiar.git "$env:LOCALAPPDATA\Familiar"
+> & "$env:LOCALAPPDATA\Familiar\Familiar.vbs"
 > ```
 
 | OS | First-run | Launch | Stop |
 |---|---|---|---|
-| **Windows** | Double-click `Proto-Familiar.vbs`. The installer auto-installs Node, Git, and uv via `winget` (no admin needed — `--scope user`); when winget is missing or fails, each tool falls back to its official one-liner or download page. Then runs `npm install` and sets up the in-tree Phylactery + Unruh Python venvs via `uv sync`, and creates Desktop + Start Menu shortcuts (idempotently — re-running picks up anything missing without overwriting what's there). | Double-click the **Proto-Familiar** Desktop shortcut (or `Proto-Familiar.vbs`). A tray icon appears; the browser opens automatically. Left-click the icon to re-open the browser. | Right-click the tray icon → **Quit**. Cleanly stops Proto-Familiar, Phylactery, and Unruh. |
-| **macOS** | Double-click `Proto-Familiar.command` in Finder. First run installs dependencies (uv via Astral's one-liner, then the Phylactery + Unruh venvs via `uv sync`); subsequent runs just start it. | Double-click `Proto-Familiar.command`. Browser opens automatically. The launcher auto-recycles any stale Proto-Familiar holding the port before starting. | Press **Ctrl-C** in the Terminal window, then close it. |
-| **Linux** | Run `./install.sh` once. It auto-installs uv (via the official one-liner installer), runs `npm install`, sets up the in-tree Phylactery + Unruh Python venvs via `uv sync`, and registers a **Proto-Familiar** entry in your application menu. | Search **Proto-Familiar** in your app launcher, or `./start.sh`. | `./stop.sh` |
+| **Windows** | Double-click `Familiar.vbs`. The installer auto-installs Node, Git, and uv via `winget` (no admin needed — `--scope user`); when winget is missing or fails, each tool falls back to its official one-liner or download page. Then runs `npm install` and sets up the in-tree Phylactery + Unruh Python venvs via `uv sync`, and creates Desktop + Start Menu shortcuts (idempotently — re-running picks up anything missing without overwriting what's there). | Double-click the **Familiar** Desktop shortcut (or `Familiar.vbs`). A tray icon appears; the browser opens automatically. Left-click the icon to re-open the browser. | Right-click the tray icon → **Quit**. Cleanly stops Familiar, Phylactery, and Unruh. |
+| **macOS** | Double-click `Familiar.command` in Finder. First run installs dependencies (uv via Astral's one-liner, then the Phylactery + Unruh venvs via `uv sync`); subsequent runs just start it. | Double-click `Familiar.command`. Browser opens automatically. The launcher auto-recycles any stale Familiar holding the port before starting. | Press **Ctrl-C** in the Terminal window, then close it. |
+| **Linux** | Run `./install.sh` once. It auto-installs uv (via the official one-liner installer), runs `npm install`, sets up the in-tree Phylactery + Unruh Python venvs via `uv sync`, and registers a **Familiar** entry in your application menu. | Search **Familiar** in your app launcher, or `./start.sh`. | `./stop.sh` |
 
-Everything runs locally at **http://localhost:8742** — your API key never leaves your machine. Set `PORT=8080` (env var, or `PORT=8080 ./start.sh`) to change the port. Any way you launch — double-click, `./start.sh`, or `npm start` — Proto-Familiar will auto-recycle a stale instance of itself holding the port before binding, and trigger the installer if Node deps or Unruh's venv are missing.
+Everything runs locally at **http://localhost:8742** — your API key never leaves your machine. Set `PORT=8080` (env var, or `PORT=8080 ./start.sh`) to change the port. Any way you launch — double-click, `./start.sh`, or `npm start` — Familiar will auto-recycle a stale instance of itself holding the port before binding, and trigger the installer if Node deps or Unruh's venv are missing.
 
 **Access from other devices (Tailscale / LAN):** click the globe icon in the top bar (next to the prompt-inspector magnifier) to toggle external access on. While on, the UI is reachable at the displayed Tailscale hostname / IPv4 (auto-detected from the `tailscale` CLI if installed) from any device on your tailnet. While off (the default), non-loopback requests get a 403 — same effective posture as the historical localhost-only bind. The setting persists in `.proto-familiar-config.json`. Tailscale provides the auth and encryption — on a plain LAN with no Tailscale, anyone on the network can hit the proxy and use your API key, so only flip it on when you actually need cross-device access on a trusted network. See [docs/getting-started.md#access-from-other-devices-tailscale--lan](docs/getting-started.md#access-from-other-devices-tailscale--lan).
 
-**Central settings:** prompts, names, model picks, and saved connections (including API keys) live in `settings.json` on the machine running the server, not in each browser. Opening Proto-Familiar on a second device pulls the same configuration from the server, so you don't have to re-enter anything. Edits sync back on every change; the browser's `localStorage` is just a fast offline cache.
+**Central settings:** prompts, names, model picks, and saved connections (including API keys) live in `settings.json` on the machine running the server, not in each browser. Opening Familiar on a second device pulls the same configuration from the server, so you don't have to re-enter anything. Edits sync back on every change; the browser's `localStorage` is just a fast offline cache.
 
-**Updating an existing install:** if you `git clone`d, re-run the same installer — it detects `node_modules/` and switches to update mode. **If you installed from a downloaded ZIP** (no `.git`), the installer can't `git pull`; use the one-click updater instead — double-click `update.bat` (Windows) / `update.command` (macOS) or run `./update.sh` (Linux), which downloads the latest and lays it over your folder while preserving settings, memories, tomes, and logs. Either way: Before any git op runs, `tomes/`, `logs/`, Phylactery's `data/` directory, `.proto-familiar-config.json` (Tailscale toggle state), and `settings.json` (central user settings) are copied to `.pf-backups/<timestamp>/` as a safety net. Then `git pull --ff-only` on Proto-Familiar (refuses non-FF merges; your work tree stays put on conflict), and idempotent `npm install` + `uv sync` (the in-tree Phylactery and Unruh Python venvs, whose `data/` is gitignored, never touched). Node / Git / uv are reinstalled if missing in either mode; shortcut and desktop-entry creation are now idempotent too — re-running picks up anything that's missing without overwriting what's there. See [docs/getting-started.md#updating-an-existing-install](docs/getting-started.md#updating-an-existing-install) for the protection table.
+**Updating an existing install:** if you `git clone`d, re-run the same installer — it detects `node_modules/` and switches to update mode. **If you installed from a downloaded ZIP** (no `.git`), the installer can't `git pull`; use the one-click updater instead — double-click `update.bat` (Windows) / `update.command` (macOS) or run `./update.sh` (Linux), which downloads the latest and lays it over your folder while preserving settings, memories, tomes, and logs. Either way: Before any git op runs, `tomes/`, `logs/`, Phylactery's `data/` directory, `.proto-familiar-config.json` (Tailscale toggle state), and `settings.json` (central user settings) are copied to `.pf-backups/<timestamp>/` as a safety net. Then `git pull --ff-only` on Familiar (refuses non-FF merges; your work tree stays put on conflict), and idempotent `npm install` + `uv sync` (the in-tree Phylactery and Unruh Python venvs, whose `data/` is gitignored, never touched). Node / Git / uv are reinstalled if missing in either mode; shortcut and desktop-entry creation are now idempotent too — re-running picks up anything that's missing without overwriting what's there. See [docs/getting-started.md#updating-an-existing-install](docs/getting-started.md#updating-an-existing-install) for the protection table.
 
 **Manual / advanced:**
 
@@ -101,7 +101,7 @@ Project wiki pages are available in [`/wiki`](wiki/):
 | **Temporal editor** | Sidebar **🕰 Open Temporal editor** modal with six tabs: **Interests** (live + standing weights with decay metadata, manual bump / demote; **Bookmarks** sub-section shows each bookmark's idle-surfacing history — outcome badge, consecutive-ignore count, adaptive resurface interval), **Threat** (current tier + audit history + reset button), **Ponderings** (read or delete autonomous entries), **Schedule** with a **List / Calendar** view toggle (List = upcoming events / tasks / reminders with + Add and resolve/delete; Calendar = month-grid Mon-start, click-day-to-create, recurring events expand visually with a ↻ prefix, resolved per-occurrence entries strike through), **Routine** (phase definitions with cadence tags for non-daily phases, edit in place + "Help me figure out my rhythm" pre-fills a starter prompt into the chat), **Handoff** (current session-end note + mark-consumed) |
 | **Knowledge editor** | Sidebar **🧠 Open Knowledge editor** modal with four tabs: Memories (browse / edit / delete / supersede by date), Graph (full CRUD on nodes and edges across two view modes — see next row), Identity (per-section editor across self / user / relationship / custom files), Snapshots (one-click restore of any auto- or user-created snapshot). Resizable from the bottom-right corner with the size remembered per-modal; only the ✕ closes it. Every destructive op auto-snapshots Phylactery first |
 | **Knowledge graph (Map view)** | The Graph tab's **List / Map** toggle switches to a canvas rendering of the entire graph as colored dots and curves. Node hue encodes type (deterministic per-graph palette spread across 24 hues so adjacent type names don't collide); edge hue encodes relationship type, with saturation / lightness / alpha scaled to the edge's weight. Wheel to zoom, drag to pan, hover for a tooltip (hit-tested against the actual Bézier curve), zoom past ~1.4× to see every label. Click a dot to open a draggable popover editor: label / type / description with autocompletion, a weighted edge list with inline ✎ edit and ✕ delete, and an **+ Add edge** form with target-label and relationship-type autocompletion. **+ Node** in the toolbar creates a node inline. Layout preserves positions across reloads so adding an edge doesn't reshuffle the map |
-| **Diagnostics report** | Sidebar **🩺 Generate diagnostic report** opens a client-side plain-text snapshot — system info (UA, hardware, network, viewport, timezone), Proto-Familiar state (provider, model, session, counts), a live `/api/health` round-trip, the last sent prompt's provenance, and a bounded ring buffer of recent in-app events (errors, console warnings, send/receive checkpoints, tool executions). Copy or download as `.txt`. Nothing leaves the browser. Common failure modes and their fixes live in [`docs/troubleshooting.md`](docs/troubleshooting.md) |
+| **Diagnostics report** | Sidebar **🩺 Generate diagnostic report** opens a client-side plain-text snapshot — system info (UA, hardware, network, viewport, timezone), Familiar state (provider, model, session, counts), a live `/api/health` round-trip, the last sent prompt's provenance, and a bounded ring buffer of recent in-app events (errors, console warnings, send/receive checkpoints, tool executions). Copy or download as `.txt`. Nothing leaves the browser. Common failure modes and their fixes live in [`docs/troubleshooting.md`](docs/troubleshooting.md) |
 | **Prompt inspector** | Click the 🔍 button in the top bar after any message to see the complete prompt actually sent to the LLM, color-coded by source — Phylactery **static** block (purple) and depth-injected **dynamic** block (teal), each captured live from the response rather than re-derived, plus each lorebook injection by position, base system / character / user profile, post-history prompt, and the conversation history |
 | **Streaming** | Server-sent event streaming by default; toggle off for full-response mode |
 | **Prompt macros** | `{{user}}` / `{{char}}` insert configured names; `{{elapsedTime}}` is the time between the two most recent user messages in this session (so the LLM can detect when the user returns after a long absence — surfaces once both messages are in saved history); `{{timeSinceLastSession}}` is the gap since the previous session ended. All durations render as `5m`, `2h 14m`, `3d 4h`, etc. |
@@ -441,8 +441,8 @@ Feed the temporal-context layer. `/api/interest/engage` records a turn's engagem
 ├── package.json
 ├── .gitignore
 │
-├── Proto-Familiar.vbs           Windows tray-icon launcher (one-click entry point)
-├── Proto-Familiar.command       macOS double-click launcher
+├── Familiar.vbs           Windows tray-icon launcher (one-click entry point)
+├── Familiar.command       macOS double-click launcher
 ├── install.sh / install.bat     Bash / batch installer (deps + Phylactery/Unruh venv sync (uv))
 ├── start.sh / start.bat         Bash / batch launcher (background, opens browser)
 ├── stop.sh / stop.bat           Bash / batch shutdown
@@ -452,8 +452,8 @@ Feed the temporal-context layer. `/api/interest/engage` records a turn's engagem
 │
 ├── scripts/
 │   ├── import-entity.js         Import/convert a legacy entity-core data directory (migration tooling)
-│   ├── import-tome.js           Convert a SillyTavern lorebook export to a Proto-Familiar Tome
-│   ├── linux/install-desktop-entry.sh   Register Proto-Familiar in the Linux app menu
+│   ├── import-tome.js           Convert a SillyTavern lorebook export to a Familiar Tome
+│   ├── linux/install-desktop-entry.sh   Register Familiar in the Linux app menu
 │   └── win/{install,tray}.ps1   PowerShell installer + tray app (called by the .vbs launcher)
 │
 ├── public/
@@ -528,7 +528,7 @@ There's nothing to clone — Phylactery is part of this repo, at `./phylactery/`
 cd phylactery && uv sync
 ```
 
-The one-click installer does this for you on first run. After that, start Familiar normally — `thalamus.js` spawns Phylactery automatically via `uv run` on startup. If `uv` isn't installed or the venv hasn't been synced, Phylactery is treated as absent: enrichment is skipped and Proto-Familiar runs normally. Hard-disable the layer with `PROTO_FAMILIAR_PHYLACTERY_DISABLED=1`.
+The one-click installer does this for you on first run. After that, start Familiar normally — `thalamus.js` spawns Phylactery automatically via `uv run` on startup. If `uv` isn't installed or the venv hasn't been synced, Phylactery is treated as absent: enrichment is skipped and Familiar runs normally. Hard-disable the layer with `PROTO_FAMILIAR_PHYLACTERY_DISABLED=1`.
 
 #### Migrating from a legacy entity-core
 
@@ -549,7 +549,7 @@ This is only for users migrating off the old Deno entity-core — fresh installs
 
 #### Importing a SillyTavern lorebook
 
-Convert a SillyTavern lorebook export to a Proto-Familiar Tome with:
+Convert a SillyTavern lorebook export to a Familiar Tome with:
 
 ```bash
 # Auto-detects name from file, writes to tomes/<Name>.json
@@ -562,7 +562,7 @@ npm run import-tome -- path/to/lorebook.json --name "World Lore"
 npm run import-tome -- path/to/lorebook.json --out tomes/my-lore.json
 ```
 
-The script renames SillyTavern fields to their Proto-Familiar equivalents (`key→keys`, `order→insertion_order`, `disable→enabled`) and wraps the entries in a valid top-level Tome structure. Activate the result via **☰ → Tomes → Manage Tomes**.
+The script renames SillyTavern fields to their Familiar equivalents (`key→keys`, `order→insertion_order`, `disable→enabled`) and wraps the entries in a valid top-level Tome structure. Activate the result via **☰ → Tomes → Manage Tomes**.
 
 ---
 
@@ -572,7 +572,7 @@ The script renames SillyTavern fields to their Proto-Familiar equivalents (`key�
 - **Path traversal prevention:** All file-backed endpoints (session logs, Tomes, entity writes) validate IDs against a strict UUID regex before constructing any file path.
 - **Rate limiting:** `POST /api/chat` is limited to 20 requests per minute per IP (in-memory, no external dependency) to protect against accidental exposure and runaway tool-call loops.
 - **Prompt inspector endpoint:** `POST /api/debug-prompt` returns the full enriched context — entity memories, identity data, and the assembled system message — with no authentication. It is a development tool; do not expose it publicly.
-- **Phylactery & Unruh subprocesses:** `thalamus.js` spawns Phylactery and Unruh as local stdio children (Python, via `uv`), each reading only its own data directory. Neither opens a network listener — they communicate with Proto-Familiar over the MCP protocol on stdin/stdout, so there is no extra surface to lock down beyond the data dirs they own.
+- **Phylactery & Unruh subprocesses:** `thalamus.js` spawns Phylactery and Unruh as local stdio children (Python, via `uv`), each reading only its own data directory. Neither opens a network listener — they communicate with Familiar over the MCP protocol on stdin/stdout, so there is no extra surface to lock down beyond the data dirs they own.
 - **Local-only by default:** The server binds to all interfaces on the configured port but is not intended to be exposed to the internet without additional authentication.
 - **No telemetry:** Nothing is phoned home. The only outbound traffic is the proxied LLM request to the provider you configure.
 

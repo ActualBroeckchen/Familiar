@@ -6,7 +6,7 @@ sources: []
 
 # Decisions
 
-This folder records the architecturally meaningful choices behind Proto-Familiar — not what the
+This folder records the architecturally meaningful choices behind Familiar — not what the
 code currently does (the [Architecture](../architecture) pages cover that), but why it is shaped
 this way, what alternatives were rejected, and what a future change has to respect or
 deliberately reverse. Each page states a status: **decided and shipped**, **decided but not yet
@@ -31,7 +31,7 @@ allowed to do:
 
 ## Safety and proactivity
 
-The safety cluster records both the incidents that shaped Proto-Familiar's approach to crisis
+The safety cluster records both the incidents that shaped Familiar's approach to crisis
 intervention, and the structural defenses built to prevent those failure modes from
 reoccurring.
 

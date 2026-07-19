@@ -1,8 +1,8 @@
 @echo off
-REM Proto-Familiar installer (Windows .bat fallback)
+REM Familiar installer (Windows .bat fallback)
 REM
 REM The canonical Windows installer is scripts\win\install.ps1 (invoked
-REM by Proto-Familiar.vbs). This .bat exists for users whose PowerShell
+REM by Familiar.vbs). This .bat exists for users whose PowerShell
 REM execution is locked down and who run .bat scripts manually instead.
 REM Keeps feature parity with install.ps1 on the essentials: Node, Git,
 REM uv, npm install, Phylactery uv sync, Unruh uv sync, and
@@ -17,7 +17,7 @@ REM   and creates Desktop + Start Menu shortcuts.
 REM Update mode: triggered when node_modules\ already exists. Takes a
 REM   defensive backup of tomes\, logs\, phylactery\data\, and the
 REM   Tailscale toggle config into .pf-backups\<timestamp>\ BEFORE any
-REM   git op, then pulls latest Proto-Familiar via `git pull --ff-only`,
+REM   git op, then pulls latest Familiar via `git pull --ff-only`,
 REM   re-runs idempotent npm install / uv sync. Auto-install checks
 REM   rerun in both modes so the system catches up to new requirements.
 REM
@@ -39,7 +39,7 @@ if not "%PF_INSTALL_TEED%"=="1" (
   echo. >> "!PF_INSTALL_LOG!" 2>nul
   echo ========== Install run %date% %time% ========== >> "!PF_INSTALL_LOG!" 2>nul
   echo.
-  echo Running Proto-Familiar installer. Output is being captured to:
+  echo Running Familiar installer. Output is being captured to:
   echo   !PF_INSTALL_LOG!
   echo.
   echo This may take 30 to 60 seconds. To watch live, open the log
@@ -65,11 +65,11 @@ REM batch's path-prefix matching is too fragile for case-insensitive
 REM compare against three possible env vars.
 for /f "delims=" %%R in ('powershell -NoProfile -Command "$od = @($env:OneDrive, $env:OneDriveCommercial, $env:OneDriveConsumer) ^| Where-Object { $_ }; if ($od ^| Where-Object { '%SCRIPT_DIR%'.StartsWith($_, [System.StringComparison]::OrdinalIgnoreCase) }) { 'fail' } else { 'ok' }" 2^>nul') do set "ONEDRIVE_CHECK=%%R"
 if "%ONEDRIVE_CHECK%"=="fail" (
-  echo [ERROR] Proto-Familiar is installed under OneDrive:
+  echo [ERROR] Familiar is installed under OneDrive:
   echo         %SCRIPT_DIR%
   echo         OneDrive locks files during sync, which prevents npm install
-  echo         from completing here. Move Proto-Familiar out of OneDrive
-  echo         ^(for example to C:\Proto-Familiar^) and re-run install.bat.
+  echo         from completing here. Move Familiar out of OneDrive
+  echo         ^(for example to C:\Familiar^) and re-run install.bat.
   exit /b 1
 )
 set "BACKUP_ROOT=%SCRIPT_DIR%\.pf-backups"
@@ -77,10 +77,10 @@ set "BACKUP_ROOT=%SCRIPT_DIR%\.pf-backups"
 REM --- Detect mode ---
 if exist "%SCRIPT_DIR%\node_modules" (
   set "MODE=update"
-  echo === Proto-Familiar updater ^(existing install detected^) ===
+  echo === Familiar updater ^(existing install detected^) ===
 ) else (
   set "MODE=install"
-  echo === Proto-Familiar installer ===
+  echo === Familiar installer ===
 )
 echo Working dir: %SCRIPT_DIR%
 echo.
@@ -107,12 +107,12 @@ if "!MODE!"=="update" (
   )
 )
 
-REM --- Pull latest Proto-Familiar (update mode only) ---
+REM --- Pull latest Familiar (update mode only) ---
 if "!MODE!"=="update" (
   if exist "%SCRIPT_DIR%\.git" (
     where git >nul 2>nul
     if not errorlevel 1 (
-      echo Pulling latest Proto-Familiar ^(git pull --ff-only^)...
+      echo Pulling latest Familiar ^(git pull --ff-only^)...
       pushd "%SCRIPT_DIR%"
       git pull --ff-only
       if errorlevel 1 echo [WARN] git pull --ff-only failed. Work tree is unchanged.
@@ -301,10 +301,10 @@ REM one-shot call; install.bat itself stays pure batch otherwise.
 echo Checking Desktop and Start Menu shortcuts...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$proj = '%SCRIPT_DIR%';" ^
-  "$launcher = Join-Path $proj 'Proto-Familiar.vbs';" ^
+  "$launcher = Join-Path $proj 'Familiar.vbs';" ^
   "$wsh = New-Object -ComObject WScript.Shell;" ^
-  "foreach ($linkPath in @((Join-Path ([Environment]::GetFolderPath('Desktop'))   'Proto-Familiar.lnk')," ^
-  "                       (Join-Path ([Environment]::GetFolderPath('Programs'))   'Proto-Familiar.lnk'))) {" ^
+  "foreach ($linkPath in @((Join-Path ([Environment]::GetFolderPath('Desktop'))   'Familiar.lnk')," ^
+  "                       (Join-Path ([Environment]::GetFolderPath('Programs'))   'Familiar.lnk'))) {" ^
   "  if (Test-Path $linkPath) { Write-Host \"    exists: $linkPath\"; continue }" ^
   "  $parent = Split-Path -Parent $linkPath;" ^
   "  if (-not $parent -or -not (Test-Path $parent)) { Write-Host \"    parent missing for $linkPath - skipped\"; continue }" ^
@@ -313,13 +313,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "  $sc.Arguments = '\"' + $launcher + '\"';" ^
   "  $sc.WorkingDirectory = $proj;" ^
   "  $sc.IconLocation = 'shell32.dll,13';" ^
-  "  $sc.Description = 'Proto-Familiar';" ^
+  "  $sc.Description = 'Familiar';" ^
   "  $sc.WindowStyle = 7;" ^
   "  $sc.Save();" ^
   "  Write-Host \"    created: $linkPath\"" ^
   "}" 2>nul
 if errorlevel 1 (
-  echo [WARN] Shortcut creation failed - launch via Proto-Familiar.vbs in this folder.
+  echo [WARN] Shortcut creation failed - launch via Familiar.vbs in this folder.
 )
 
 REM Completion marker. Only reached after npm install succeeded (we
@@ -343,7 +343,7 @@ if "!MODE!"=="update" (
 ) else (
   echo === Install complete ===
 )
-echo   Version:   Proto-Familiar v!PF_VERSION!
+echo   Version:   Familiar v!PF_VERSION!
 REM Show the branch so a wrong-branch checkout (e.g. a ZIP of main that's
 REM missing newer work) is obvious right here, not a mystery later.
 if exist "%SCRIPT_DIR%\.git" (
@@ -385,11 +385,11 @@ REM     install run returns. Args: %1=exit code, %2=log file path.
 set "RC=%~1"
 set "WLOG=%~2"
 if "%RC%"=="0" (
-  set "WMSG=Proto-Familiar install completed successfully."
+  set "WMSG=Familiar install completed successfully."
   set "WICN=Information"
 ) else (
-  set "WMSG=Proto-Familiar install FAILED with exit code %RC%."
+  set "WMSG=Familiar install FAILED with exit code %RC%."
   set "WICN=Error"
 )
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop; [System.Windows.Forms.MessageBox]::Show('%WMSG%' + [Environment]::NewLine + [Environment]::NewLine + 'Log: %WLOG%', 'Proto-Familiar install', 'OK', '%WICN%') | Out-Null } catch {}" >nul 2>nul
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop; [System.Windows.Forms.MessageBox]::Show('%WMSG%' + [Environment]::NewLine + [Environment]::NewLine + 'Log: %WLOG%', 'Familiar install', 'OK', '%WICN%') | Out-Null } catch {}" >nul 2>nul
 goto :eof

@@ -19,7 +19,7 @@ sources:
     path: scripts/win/tray.ps1
   - id: vbs-launcher
     type: file
-    path: Proto-Familiar.vbs
+    path: Familiar.vbs
   - id: ensure-port-free
     type: file
     path: scripts/ensure-port-free.mjs
@@ -30,13 +30,13 @@ sources:
 
 # Installer And Launcher
 
-Proto-Familiar ships a one-click installer and launcher for each platform, so
+Familiar ships a one-click installer and launcher for each platform, so
 "clone, `npm install`, `npm start`" is no longer the primary onboarding path —
 it still works as an explicit advanced-user fallback, but the double-click
 path is what `docs/getting-started.md` leads with [@getting-started]. On
-Windows, `Proto-Familiar.vbs` runs `scripts/win/install.ps1` on first launch
+Windows, `Familiar.vbs` runs `scripts/win/install.ps1` on first launch
 and then `scripts/win/tray.ps1`, a PowerShell + WinForms system-tray app
-[@vbs-launcher] [@win-tray-ps1]. On macOS, `Proto-Familiar.command` is a
+[@vbs-launcher] [@win-tray-ps1]. On macOS, `Familiar.command` is a
 double-clickable Finder entry point that runs `install.sh` and then
 `node server.js` in the foreground. On Linux, `install.sh` registers a
 `.desktop` entry under `~/.local/share/applications/`, and `start.sh` /
@@ -124,7 +124,7 @@ this fix existed [@win-tray-ps1].
 ## Stale-instance recycling is shared, not copy-pasted per platform
 
 Both the macOS/Linux launchers and the Windows tray app detect and kill a
-previous Proto-Familiar instance still holding the port before starting a new
+previous Familiar instance still holding the port before starting a new
 one, covering the case where a prior run was not shut down cleanly (window
 force-closed, crash, kernel-panic recovery). This logic lives once in
 `scripts/ensure-port-free.mjs` on the Node side, and `start.sh`, the macOS
@@ -134,7 +134,7 @@ reimplementing the check [@ensure-port-free]. This follows the repo's
 [Engineering conventions](../reference/engineering-conventions)
 [@engineering-conventions]. `ensure-port-free.mjs` reads
 `.proto-familiar.pid`, and only kills the process it identifies as a
-previous Proto-Familiar rooted in this repo; it deliberately refuses to kill
+previous Familiar rooted in this repo; it deliberately refuses to kill
 an unrecognized process holding the port, surfacing a clear error instead,
 because guessing at that layer is the wrong tradeoff [@ensure-port-free].
 
@@ -146,7 +146,7 @@ debugging) and an equivalent step on macOS/Linux — instead of relying on
 `node_modules/` existing to decide whether the installer has actually run
 [@install-sh] [@win-install-ps1] [@vbs-launcher]. A manual `npm install` can
 leave `node_modules/` present without Phylactery/Unruh ever being set up or
-shortcuts ever being created; the marker is what `Proto-Familiar.vbs` checks
+shortcuts ever being created; the marker is what `Familiar.vbs` checks
 before deciding whether to re-run the installer [@vbs-launcher]. Every install
 run also appends to `.proto-familiar-install.log`, and on Windows a final
 MessageBox reports the outcome and log path even if the console window is
@@ -158,7 +158,7 @@ closed immediately, so a closed console never means lost diagnostics
 Windows 11 backs up both `Documents\` and `Desktop\` to OneDrive by default.
 OneDrive locks files mid-write while syncing them, which reliably breaks
 `npm install`'s burst of small file writes. `docs/getting-started.md`
-recommends installing to `%LOCALAPPDATA%\Proto-Familiar` instead, and the
+recommends installing to `%LOCALAPPDATA%\Familiar` instead, and the
 installer detects an OneDrive-scoped install location and offers to relocate
 it automatically [@win-install-ps1] [@getting-started].
 
@@ -177,7 +177,7 @@ stale rather than authoritative.
 
 ## After installation: updates
 
-Once Proto-Familiar is installed, the ward can update to the latest version without re-running
+Once Familiar is installed, the ward can update to the latest version without re-running
 the installer. See [Update](update) for how the self-update subsystem works, including the two
 update modes (git vs download-and-replace), web UI and Discord command interfaces, and the
 design principle that updates are manual ceremonies, never automatic.

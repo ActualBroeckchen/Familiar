@@ -1,5 +1,5 @@
 @echo off
-REM Proto-Familiar one-click updater (Windows) - double-click to run.
+REM Familiar one-click updater (Windows) - double-click to run.
 REM
 REM For installs made by downloading the ZIP rather than `git clone`: the
 REM installer can't `git pull` those, so this fetches the latest code from
@@ -34,7 +34,7 @@ if exist "%DEST%\.git" (
   exit /b 0
 )
 
-REM Refuse to overlay files while Proto-Familiar is still running. robocopy
+REM Refuse to overlay files while Familiar is still running. robocopy
 REM can't overwrite source files that node.exe has open (server.js, loaded
 REM modules), so the update would partially-succeed and the running process
 REM would keep serving the old code — exactly the "previous version in the
@@ -49,12 +49,12 @@ for /f %%R in ('powershell -NoProfile -Command "try { $c = New-Object Net.Socket
 set "WAS_RUNNING=0"
 if "%PORT_STATE%"=="busy" (
   set "WAS_RUNNING=1"
-  echo Proto-Familiar is still running on port %PF_PORT% — stopping it
+  echo Familiar is still running on port %PF_PORT% — stopping it
   echo before applying the update so file replacements can land...
   call "%DEST%\stop.bat" >nul 2>nul
   for /f %%R in ('powershell -NoProfile -Command "try { $c = New-Object Net.Sockets.TcpClient('127.0.0.1', [int]'%PF_PORT%'); $c.Close(); 'busy' } catch { 'free' }" 2^>nul') do set "PORT_STATE=%%R"
   if "!PORT_STATE!"=="busy" (
-    echo [ERROR] Could not stop Proto-Familiar — something is still on port %PF_PORT%.
+    echo [ERROR] Could not stop Familiar — something is still on port %PF_PORT%.
     echo         Right-click the tray icon and choose Quit, or open Task Manager,
     echo         find node.exe, end task, then re-run update.bat.
     pause
@@ -69,7 +69,7 @@ if not "%BRANCH%"=="main" (
   echo Updating from branch "%BRANCH%" ^(non-default - set BRANCH=main to switch back^).
 )
 
-echo Downloading the latest Proto-Familiar...
+echo Downloading the latest Familiar...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Invoke-WebRequest -UseBasicParsing -Uri '%REPO_ZIP%' -OutFile '%TMP%\pf.zip' } catch { exit 1 }"
 if errorlevel 1 (
   echo [ERROR] Download failed - check your internet connection.
@@ -145,14 +145,14 @@ REM staring at an app that never comes back, or an old process if they relaunch
 REM the wrong way). start.bat launches a fresh server and reopens the browser.
 if "%WAS_RUNNING%"=="1" (
   echo.
-  echo Restarting Proto-Familiar so the new version takes effect...
+  echo Restarting Familiar so the new version takes effect...
   call "%DEST%\start.bat"
   echo.
-  echo === Update complete - Proto-Familiar restarted on the new version. ===
+  echo === Update complete - Familiar restarted on the new version. ===
   echo     Reload the browser tab if it doesn't refresh on its own.
 ) else (
   echo.
-  echo === Update complete. Start Proto-Familiar to use the new version. ===
+  echo === Update complete. Start Familiar to use the new version. ===
 )
 echo.
 pause

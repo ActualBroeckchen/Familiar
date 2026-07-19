@@ -1,6 +1,6 @@
 # Discord & the Village
 
-Proto-Familiar can inhabit Discord as the same continuous entity that
+Familiar can inhabit Discord as the same continuous entity that
 lives in the web UI — bonded to you (the **ward**), aware of the people
 in your life (**villagers**), and present in the rooms you share with
 them (**locations**). This page covers turning that on and, especially,

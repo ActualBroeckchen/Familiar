@@ -1,6 +1,6 @@
 # Tomes
 
-Tomes are persistent knowledge bases that automatically inject context into every LLM prompt when relevant keywords appear in the conversation. Proto-Familiar implements a full SillyTavern-compatible World Info engine across an unlimited number of independent Tome files.
+Tomes are persistent knowledge bases that automatically inject context into every LLM prompt when relevant keywords appear in the conversation. Familiar implements a full SillyTavern-compatible World Info engine across an unlimited number of independent Tome files.
 
 Tomes are stored as individual JSON files inside the `tomes/` directory (auto-created, git-ignored). Each Tome is a standalone file — `tomes/<uuid>.json` — and can be independently enabled or disabled. Manage them via **☰ → Tomes → Manage Tomes** in the sidebar.
 
@@ -12,7 +12,7 @@ One Tome is special: **Session Memories**. It is identified by name, auto-create
 
 ## Multiple Tomes
 
-Unlike a single monolithic world-info file, Proto-Familiar stores each Tome separately so they can be:
+Unlike a single monolithic world-info file, Familiar stores each Tome separately so they can be:
 
 - **Toggled individually** — enable or disable a whole Tome without deleting its entries
 - **Named and described** — give each Tome a clear purpose (e.g. *"World Lore"*, *"Character Notes"*, *"Session Memories"*)
@@ -107,7 +107,7 @@ By default, the scan corpus contains only recent conversation messages. These pe
 | Flag | Appends to scan corpus |
 |---|---|
 | `matchCharacterDescription` | The Familiar's character profile (`[Character Profile]` field) |
-| `matchCharacterPersonality` | Same as above (personality is part of the character profile in Proto-Familiar) |
+| `matchCharacterPersonality` | Same as above (personality is part of the character profile in Familiar) |
 | `matchPersonaDescription` | The user profile (`[User Profile]` field) |
 | `matchScenario` | The main system prompt text |
 
@@ -233,7 +233,7 @@ never appears in the Tome Manager.
 
 The tome engine automatically normalizes SillyTavern-format field names at scan time, so lorebook files exported from SillyTavern work without manual editing:
 
-| SillyTavern field | Proto-Familiar field |
+| SillyTavern field | Familiar field |
 |---|---|
 | `key` | `keys` |
 | `order` | `insertion_order` |
@@ -245,7 +245,7 @@ The top-level Tome wrapper (`id`, `name`, `description`, `enabled`) is not prese
 
 ## Importing a SillyTavern Lorebook
 
-Convert any SillyTavern lorebook export to Proto-Familiar format with the import script:
+Convert any SillyTavern lorebook export to Familiar format with the import script:
 
 ```bash
 # Auto-detects name from file, writes to tomes/<Name>.json

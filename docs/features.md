@@ -1,6 +1,6 @@
 # Features
 
-A complete reference for all user-facing features in Proto-Familiar.
+A complete reference for all user-facing features in Familiar.
 
 ---
 
@@ -50,7 +50,7 @@ The **Connections** sidebar section keeps multiple named provider / key / model 
 |---|---|
 | **Primary** (radio, mutually exclusive) | The connection used for the chat path. Selecting it copies its fields into the active Provider / API Key / Model inputs. |
 | **+ fallback** | Adds this connection to the ordered fallback list. When the primary returns an empty response or fails, the client retries in fallback order. Arrows let you reorder. |
-| **+ Phylactery** (single-select across all rows) | Designates this connection's API key + model for Phylactery's background consolidator. Triggers a server-side respawn of the Phylactery child with the new env on save — no Proto-Familiar restart needed. See [Phylactery → design](phylactery-design.md). |
+| **+ Phylactery** (single-select across all rows) | Designates this connection's API key + model for Phylactery's background consolidator. Triggers a server-side respawn of the Phylactery child with the new env on save — no Familiar restart needed. See [Phylactery → design](phylactery-design.md). |
 
 The list syncs across devices via `settings.json` along with the rest of your settings (Tailscale-mediated).
 
@@ -251,7 +251,7 @@ Each colored segment shows a chip with its source label and a left rule in the m
 Sidebar **🩺 Generate diagnostic report** (under "Diagnostics") opens a plain-text snapshot the user can paste into a bug report or download as a `.txt`. The report bundles:
 
 - **System** — userAgent, platform, language, hardware concurrency, device memory, network connection (effective type / downlink / RTT when available), online status, screen + viewport size, dpr, color scheme, timezone.
-- **Proto-Familiar** — provider / model / streaming / tool-enabled settings, current session id and start time, message / topic / tome counts, custom-tools size, last thalamus injection size, localStorage usage estimate.
+- **Familiar** — provider / model / streaming / tool-enabled settings, current session id and start time, message / topic / tome counts, custom-tools size, last thalamus injection size, localStorage usage estimate.
 - **Server probe** — a live `GET /api/health` round-trip with status and timing (catches "server died" symptoms immediately).
 - **Last sent prompt summary** — message count, role sequence, system-segment sources, at-depth lore splice count, and thalamus injection size for the previous turn (uses the same provenance the [Prompt Inspector](#prompt-inspector) renders).
 - **Recent events** — a bounded ring buffer (cap 200) capturing `window.error`, unhandled rejections, every `console.error` / `console.warn`, plus explicit checkpoints at message send / receive (with elapsed ms) and every built-in tool execution (name + success/fail). Each line is ISO-stamped.

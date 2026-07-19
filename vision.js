@@ -167,7 +167,7 @@ export async function materializeAttachments(apiMessages, {
   }
 
   // The outgoing provider message never carries `attachments` — it's a
-  // Proto-Familiar-internal sibling field, consumed into content parts (or a
+  // Familiar-internal sibling field, consumed into content parts (or a
   // stand-in) here. Some strict providers reject unknown message fields.
   const stripAtt = (m) => { if (!m || !('attachments' in m)) return m; const { attachments, ...rest } = m; return rest; };
 

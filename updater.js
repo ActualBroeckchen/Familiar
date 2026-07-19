@@ -236,7 +236,7 @@ export async function applyDownloadUpdate(info, {
     // Sanity: a real checkout has package.json at its root. If it's missing the
     // archive was junk — refuse rather than smear a broken tree over the install.
     try { await fsp.access(path.join(extractDir, 'package.json')); }
-    catch { return { ok: false, error: 'the downloaded archive did not look like a Proto-Familiar checkout — aborting' }; }
+    catch { return { ok: false, error: 'the downloaded archive did not look like a Familiar checkout — aborting' }; }
 
     // Copy source → install. force overwrites tracked files that exist in both;
     // files only in the install (gitignored user data — settings, tomes, logs,

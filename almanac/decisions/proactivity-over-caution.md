@@ -18,7 +18,7 @@ reproduce the exact failure this decision closes off.
 
 ## Context
 
-Proto-Familiar's Familiar is built to be a bonded companion and caretaker whose purpose
+Familiar's Familiar is built to be a bonded companion and caretaker whose purpose
 includes re-anchoring a person in life, up to and including breaking through to someone in
 crisis — not a passive, wait-to-be-summoned assistant [@claude-md]. That purpose only works
 if the model actually acts when the context calls for it. But LLMs already carry a strong,

@@ -1,4 +1,4 @@
-# Proto-Familiar Windows installer
+# Familiar Windows installer
 #
 # Fresh install: auto-installs Node, Git, and uv. winget is the
 #   preferred path (silent, per-user, no admin) but each tool has a
@@ -12,7 +12,7 @@
 # Update mode: triggered automatically when node_modules\ already exists.
 #   Takes a defensive backup of tomes\, logs\, phylactery\data\, and
 #   .proto-familiar-config.json into .pf-backups\<timestamp>\ BEFORE
-#   any git op runs, then pulls latest Proto-Familiar
+#   any git op runs, then pulls latest Familiar
 #   (`git pull --ff-only`), and re-runs the idempotent npm install +
 #   uv sync (Phylactery + Unruh).
 #   Node / Git / uv auto-install still runs if any is missing.
@@ -88,20 +88,20 @@ function Warn($msg)  { Write-Host "!!  $msg" -ForegroundColor Yellow }
 # console window immediately still sees the outcome + the log path.
 # Falls back to a console-only summary if System.Windows.Forms can't
 # be loaded (e.g. PowerShell Core on a headless server — uncommon for
-# Proto-Familiar's Windows audience but worth not crashing on).
+# Familiar's Windows audience but worth not crashing on).
 function Show-InstallSummary {
     $lines = @()
     if ($script:installStatus -eq 'success') {
-        $lines += "Proto-Familiar v$($script:pfVersion) installed successfully."
+        $lines += "Familiar v$($script:pfVersion) installed successfully."
     } elseif ($script:installStatus -eq 'failed') {
-        $lines += "Proto-Familiar install FAILED."
+        $lines += "Familiar install FAILED."
         if ($script:installFailureReason) {
             $lines += ""
             $lines += "Reason:"
             $lines += $script:installFailureReason
         }
     } else {
-        $lines += "Proto-Familiar install ended unexpectedly."
+        $lines += "Familiar install ended unexpectedly."
     }
     if ($script:installWarnings.Count -gt 0) {
         $lines += ""
@@ -127,7 +127,7 @@ function Show-InstallSummary {
             [System.Windows.Forms.MessageBoxIcon]::Information
         }
         [System.Windows.Forms.MessageBox]::Show(
-            $body, "Proto-Familiar install",
+            $body, "Familiar install",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             $icon
         ) | Out-Null
@@ -177,7 +177,7 @@ function Test-PreFlight {
     #    and Desktop to OneDrive by default, so users land here by
     #    accident, not on purpose — the installer can't prevent it but
     #    CAN offer to move them out. The safe target is
-    #    %LOCALAPPDATA%\Proto-Familiar: outside OneDrive's sync scope,
+    #    %LOCALAPPDATA%\Familiar: outside OneDrive's sync scope,
     #    short path (no MAX_PATH risk), user-writable without admin,
     #    persists across logouts.
     $onedriveRoots = @($env:OneDrive, $env:OneDriveCommercial, $env:OneDriveConsumer) | Where-Object { $_ -and $_.Trim() }
@@ -189,13 +189,13 @@ function Test-PreFlight {
         }
     }
     if ($underOneDrive) {
-        $preferredRoot = Join-Path $env:LOCALAPPDATA "Proto-Familiar"
+        $preferredRoot = Join-Path $env:LOCALAPPDATA "Familiar"
         $canAutoRelocate = -not (Test-Path $preferredRoot)
         $relocated = $false
 
         if ($canAutoRelocate) {
             $promptBody = @"
-Proto-Familiar is currently installed under OneDrive:
+Familiar is currently installed under OneDrive:
   $projectRoot
 
 OneDrive locks files during sync, which breaks npm install. This is
@@ -213,7 +213,7 @@ it manually once the new install is working.
                 Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
                 $answer = [System.Windows.Forms.MessageBox]::Show(
                     $promptBody,
-                    "Proto-Familiar — relocate out of OneDrive?",
+                    "Familiar — relocate out of OneDrive?",
                     [System.Windows.Forms.MessageBoxButtons]::YesNo,
                     [System.Windows.Forms.MessageBoxIcon]::Question
                 )
@@ -238,7 +238,7 @@ it manually once the new install is working.
                 & robocopy @rcArgs | Out-Null
                 # robocopy returns 0-7 for "completed with copy"; 8+ is failure.
                 if ($LASTEXITCODE -ge 8) {
-                    Fail "Could not copy Proto-Familiar to $preferredRoot (robocopy exit $LASTEXITCODE). See $($script:installLog) for the full output, then move the folder manually."
+                    Fail "Could not copy Familiar to $preferredRoot (robocopy exit $LASTEXITCODE). See $($script:installLog) for the full output, then move the folder manually."
                 }
                 Ok "Copied to $preferredRoot."
 
@@ -248,26 +248,26 @@ it manually once the new install is working.
                 $marker = Join-Path $projectRoot "RELOCATED_TO.txt"
                 try {
                     @(
-                        "Proto-Familiar was relocated out of OneDrive on $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss').",
+                        "Familiar was relocated out of OneDrive on $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss').",
                         "",
                         "New location:",
                         "  $preferredRoot",
                         "",
                         "Once you've confirmed the new install works (Desktop shortcut launches,",
-                        "Proto-Familiar opens in your browser), it's safe to delete this folder."
+                        "Familiar opens in your browser), it's safe to delete this folder."
                     ) | Set-Content -Path $marker -Encoding UTF8 -Force
                 } catch {}
 
                 # Re-launch the installer in the new location and exit
                 # cleanly. wscript suppresses the second PowerShell
                 # console flash; the new install.ps1 will pop its own.
-                $newLauncher = Join-Path $preferredRoot "Proto-Familiar.vbs"
+                $newLauncher = Join-Path $preferredRoot "Familiar.vbs"
                 if (Test-Path $newLauncher) {
                     Start-Process "wscript.exe" -ArgumentList "`"$newLauncher`""
                     try {
                         [System.Windows.Forms.MessageBox]::Show(
-                            "Proto-Familiar has been moved to:`r`n  $preferredRoot`r`n`r`nThe installer is now running there. Once Proto-Familiar is working, you can safely delete the OneDrive copy at:`r`n  $projectRoot",
-                            "Proto-Familiar — relocated",
+                            "Familiar has been moved to:`r`n  $preferredRoot`r`n`r`nThe installer is now running there. Once Familiar is working, you can safely delete the OneDrive copy at:`r`n  $projectRoot",
+                            "Familiar — relocated",
                             [System.Windows.Forms.MessageBoxButtons]::OK,
                             [System.Windows.Forms.MessageBoxIcon]::Information
                         ) | Out-Null
@@ -276,7 +276,7 @@ it manually once the new install is working.
                     try { Stop-Transcript -ErrorAction Stop | Out-Null } catch {}
                     exit 0
                 } else {
-                    Fail "Copied to $preferredRoot but Proto-Familiar.vbs is missing there. Open the new folder in Explorer and run install.bat manually."
+                    Fail "Copied to $preferredRoot but Familiar.vbs is missing there. Open the new folder in Explorer and run install.bat manually."
                 }
             }
             # Fall through to the standard hard-fail if the user declines.
@@ -289,11 +289,11 @@ it manually once the new install is working.
             "`r`n`r`nNote: $preferredRoot already exists. Either move/delete it first, or pick a different safe path."
         } else { "" }
         Fail @"
-Proto-Familiar is installed under OneDrive:
+Familiar is installed under OneDrive:
   $projectRoot
 
 OneDrive locks files during sync, which prevents npm install from completing.
-Move Proto-Familiar out of OneDrive (for example to $preferredRoot or C:\Proto-Familiar) and re-run the installer.$existsNote
+Move Familiar out of OneDrive (for example to $preferredRoot or C:\Familiar) and re-run the installer.$existsNote
 "@
     }
 
@@ -301,7 +301,7 @@ Move Proto-Familiar out of OneDrive (for example to $preferredRoot or C:\Proto-F
     #    Deep node_modules trees easily add 170+ chars on top of the
     #    install root, so a long base path puts us in failure territory.
     if ($projectRoot.Length -gt 90) {
-        $msg = "Install path is $($projectRoot.Length) characters long: $projectRoot. Windows 260-char limit may cause npm install to fail on deeply nested deps. If install fails, move Proto-Familiar to a shorter path like C:\Proto-Familiar."
+        $msg = "Install path is $($projectRoot.Length) characters long: $projectRoot. Windows 260-char limit may cause npm install to fail on deeply nested deps. If install fails, move Familiar to a shorter path like C:\Familiar."
         Warn $msg
         $script:installWarnings += $msg
     }
@@ -321,7 +321,7 @@ PowerShell is restricted on this machine — most likely by AppLocker, WDAC, or 
 
 The installer cannot create shortcuts or call .NET COM objects under these restrictions, which is common on work-issued laptops or corporate-managed devices.
 
-If this is a work machine, ask IT to allow PowerShell scripts in the Proto-Familiar folder. If it's a personal machine, check Group Policy or antivirus settings.
+If this is a work machine, ask IT to allow PowerShell scripts in the Familiar folder. If it's a personal machine, check Group Policy or antivirus settings.
 
 Details: $($_.Exception.Message)
 "@
@@ -380,20 +380,20 @@ $updateMode = Test-Path (Join-Path $projectRoot "node_modules")
 
 Clear-Host
 if ($updateMode) {
-    Write-Host "Proto-Familiar updater (existing install detected)" -ForegroundColor Magenta
+    Write-Host "Familiar updater (existing install detected)" -ForegroundColor Magenta
 } else {
-    Write-Host "Proto-Familiar installer" -ForegroundColor Magenta
+    Write-Host "Familiar installer" -ForegroundColor Magenta
 }
 Write-Host "Project: $projectRoot"
 Write-Host "Install log: $($script:installLog)"
 
 # Surface the recommended location once in the banner if the user is
-# somewhere other than %LOCALAPPDATA%\Proto-Familiar. We don't push the
+# somewhere other than %LOCALAPPDATA%\Familiar. We don't push the
 # OneDrive auto-relocate offer outside its specific case — moving a
 # folder a user deliberately chose to put somewhere is overreach — but
 # we do want new users to see the recommended path at least once
 # without having to dig through docs.
-$recommendedRoot = Join-Path $env:LOCALAPPDATA "Proto-Familiar"
+$recommendedRoot = Join-Path $env:LOCALAPPDATA "Familiar"
 if (-not $projectRoot.Equals($recommendedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
     Write-Host ""
     Write-Host "Tip: recommended Windows install path is $recommendedRoot" -ForegroundColor DarkGray
@@ -436,9 +436,9 @@ if ($updateMode) {
     }
 }
 
-# --- Pull latest Proto-Familiar (update mode only) ---
+# --- Pull latest Familiar (update mode only) ---
 if ($updateMode -and (Test-Path (Join-Path $projectRoot ".git")) -and (Have "git")) {
-    Step "Pulling latest Proto-Familiar (git pull --ff-only)..."
+    Step "Pulling latest Familiar (git pull --ff-only)..."
     Push-Location $projectRoot
     try {
         & git pull --ff-only
@@ -474,7 +474,7 @@ function Install-Via-Browser($name, $url, $probeCmd) {
         Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
         [System.Windows.Forms.MessageBox]::Show(
             "$name is not installed. The download page just opened in your browser.`r`n`r`nInstall it using the default options, then click OK here to continue.",
-            "Proto-Familiar installer — install $name",
+            "Familiar installer — install $name",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Information
         ) | Out-Null
@@ -526,7 +526,7 @@ if ($nodeMajor -lt 22) {
         $nodeMajor = if ($nodeVersion -match '^\d') { [int]($nodeVersion.Split('.')[0]) } else { 0 }
     }
     if ($nodeMajor -lt 22) {
-        Fail "Node.js $nodeVersion installed; Proto-Familiar needs 22+. Install Node 22+ from https://nodejs.org/ and re-run."
+        Fail "Node.js $nodeVersion installed; Familiar needs 22+. Install Node 22+ from https://nodejs.org/ and re-run."
     }
 }
 Ok "Node.js v$nodeVersion"
@@ -592,7 +592,7 @@ if (-not (Have "uv")) {
         } catch { Warn "uv auto-install failed - Unruh (temporal context) will be disabled until you install uv from https://docs.astral.sh/uv/." }
     }
 }
-if (Have "uv") { Ok "uv present" } else { Warn "uv missing (Proto-Familiar will still run without Unruh)" }
+if (Have "uv") { Ok "uv present" } else { Warn "uv missing (Familiar will still run without Unruh)" }
 
 # --- Phylactery dependency sync (idempotent; fast when nothing changed) ---
 $phylacteryDir = Join-Path $projectRoot "phylactery"
@@ -643,14 +643,14 @@ if ((Have "uv") -and (Test-Path (Join-Path $unruhDir "pyproject.toml"))) {
 # now create each shortcut if and only if the .lnk file doesn't
 # already exist — safe to re-run, no surprise overwrites.
 Step "Checking Desktop and Start Menu shortcuts..."
-$launcher  = Join-Path $projectRoot "Proto-Familiar.vbs"
+$launcher  = Join-Path $projectRoot "Familiar.vbs"
 $desktop   = [Environment]::GetFolderPath("Desktop")
 $startMenu = [Environment]::GetFolderPath("Programs")
 try {
     $wsh = New-Object -ComObject WScript.Shell
     foreach ($linkPath in @(
-        (Join-Path $desktop   "Proto-Familiar.lnk"),
-        (Join-Path $startMenu "Proto-Familiar.lnk")
+        (Join-Path $desktop   "Familiar.lnk"),
+        (Join-Path $startMenu "Familiar.lnk")
     )) {
         if (Test-Path $linkPath) {
             Ok "  exists: $linkPath"
@@ -668,14 +668,14 @@ try {
         $sc.Arguments        = """$launcher"""
         $sc.WorkingDirectory = $projectRoot
         $sc.IconLocation     = "shell32.dll,13"
-        $sc.Description      = "Proto-Familiar"
+        $sc.Description      = "Familiar"
         $sc.WindowStyle      = 7  # minimized; doesn't actually show because wscript is windowless
         $sc.Save()
         Ok "  created: $linkPath"
     }
 } catch {
     Warn "Shortcut creation failed: $($_.Exception.Message)"
-    Warn "  You can still launch via Proto-Familiar.vbs in this folder."
+    Warn "  You can still launch via Familiar.vbs in this folder."
 }
 
 # Completion marker. Only reached after npm install succeeded (Fail
@@ -698,7 +698,7 @@ if ($updateMode) {
 }
 # Show version + branch so it's verifiable here, and a wrong-branch
 # checkout (e.g. a ZIP of main missing newer work) is obvious.
-Write-Host "Version: Proto-Familiar v$pfVersion" -ForegroundColor Green
+Write-Host "Version: Familiar v$pfVersion" -ForegroundColor Green
 if ((Test-Path (Join-Path $projectRoot ".git")) -and (Have "git")) {
     $pfBranch = (& git -C $projectRoot rev-parse --abbrev-ref HEAD 2>$null)
     if ($pfBranch) { Write-Host "Branch:  $pfBranch" -ForegroundColor Green }
@@ -706,9 +706,9 @@ if ((Test-Path (Join-Path $projectRoot ".git")) -and (Have "git")) {
     Write-Host "Branch:  (not a git checkout - downloaded ZIP; update with update.bat)" -ForegroundColor Yellow
 }
 Write-Host "Launch any time via:"
-Write-Host "  - Desktop shortcut: Proto-Familiar"
-Write-Host "  - Start Menu:       Proto-Familiar"
-Write-Host "  - Or double-click:  Proto-Familiar.vbs"
+Write-Host "  - Desktop shortcut: Familiar"
+Write-Host "  - Start Menu:       Familiar"
+Write-Host "  - Or double-click:  Familiar.vbs"
 Write-Host ""
 Write-Host "Trouble? See docs\troubleshooting.md"
 Write-Host ""

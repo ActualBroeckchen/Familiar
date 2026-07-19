@@ -1,4 +1,4 @@
-' Proto-Familiar - double-click launcher (Windows)
+' Familiar - double-click launcher (Windows)
 ' Runs install on first launch, then starts the system-tray app with no console window.
 Option Explicit
 
@@ -41,7 +41,7 @@ If needInstall Then
   If Not fso.FileExists(installMarker) Then
     Dim errMsg, installLogPath
     installLogPath = scriptDir & "\.proto-familiar-install.log"
-    errMsg = "Proto-Familiar setup did not complete." & vbCrLf & vbCrLf
+    errMsg = "Familiar setup did not complete." & vbCrLf & vbCrLf
     If fso.FileExists(installLogPath) Then
       errMsg = errMsg & "See the install log for details:" & vbCrLf & _
                         installLogPath & vbCrLf & vbCrLf & _
@@ -56,7 +56,7 @@ If needInstall Then
                         "  - Ask IT to allow PowerShell in this folder" & vbCrLf & _
                         "  - Install on a personal machine"
     End If
-    MsgBox errMsg, vbCritical + vbOKOnly, "Proto-Familiar"
+    MsgBox errMsg, vbCritical + vbOKOnly, "Familiar"
     WScript.Quit 1
   End If
 End If

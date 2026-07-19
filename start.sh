@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Proto-Familiar launcher (macOS / Linux).
+# Familiar launcher (macOS / Linux).
 #
 # Responsibilities, in order:
 #   1. Prime PATH so spawned MCP children find uv even when the shell
 #      hasn't reloaded after install.
-#   2. Detect & recycle any stale Proto-Familiar instance holding the
+#   2. Detect & recycle any stale Familiar instance holding the
 #      configured port (via PID file + pgrep+cwd-match heuristic).
 #   3. Trigger install.sh if node_modules or phylactery/.venv is missing.
 #   4. Launch `node server.js` detached, write PID file, open browser.
@@ -66,11 +66,11 @@ find_stray_pf_pids() {
 STRAY_PIDS="$(find_stray_pf_pids | tr '\n' ' ')"
 
 if [ "$PID_ALIVE" = "1" ] && [ "$PORT_LISTENING" = "1" ] && [ -z "${STRAY_PIDS// /}" ]; then
-  say "Proto-Familiar already running (PID $EXISTING_PID) on port $PORT."
+  say "Familiar already running (PID $EXISTING_PID) on port $PORT."
   say "Opening $URL ..."
 else
   if [ -n "${STRAY_PIDS// /}" ]; then
-    say "Killing stray Proto-Familiar processes:${STRAY_PIDS}(leftovers / other ports)"
+    say "Killing stray Familiar processes:${STRAY_PIDS}(leftovers / other ports)"
     # shellcheck disable=SC2086
     kill $STRAY_PIDS 2>/dev/null || true
     sleep 1
@@ -81,7 +81,7 @@ else
     # Tracked PID is alive but not serving the configured port — e.g. left
     # over from a different PORT value or an older build. Recycle it so the
     # new config actually takes effect.
-    say "Found stale Proto-Familiar process (PID $EXISTING_PID) not on port $PORT — restarting."
+    say "Found stale Familiar process (PID $EXISTING_PID) not on port $PORT — restarting."
     kill "$EXISTING_PID" 2>/dev/null || true
     for _ in $(seq 1 20); do
       kill -0 "$EXISTING_PID" 2>/dev/null || break
@@ -116,7 +116,7 @@ else
     say "Phylactery dependencies missing. Running installer to set them up..."
     bash "$SCRIPT_DIR/install.sh"
   fi
-  say "Starting Proto-Familiar on $URL (logs: $LOG_FILE) ..."
+  say "Starting Familiar on $URL (logs: $LOG_FILE) ..."
   ( cd "$SCRIPT_DIR" && PORT="$PORT" TAILSCALE="$TAILSCALE" nohup node server.js >"$LOG_FILE" 2>&1 & echo $! >"$PID_FILE" )
 
   # Wait up to ~15s for the port to come up

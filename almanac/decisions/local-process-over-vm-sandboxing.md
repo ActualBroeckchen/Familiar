@@ -11,7 +11,7 @@ sources:
   - id: founding-conversation
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/e6e73df7-Finding_a_better_mental_health_tool.txt
-    note: "Founding design conversation that scoped v0.1 and worked through VM/Docker/OS-sandbox tradeoffs before any of Proto-Familiar existed."
+    note: "Founding design conversation that scoped v0.1 and worked through VM/Docker/OS-sandbox tradeoffs before any of Familiar existed."
   - id: mvp-scoping-conversation
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/ec43aed6-Visualizing_a_vague_yet_specific_vi.txt
@@ -30,11 +30,11 @@ sources:
 
 # Local Process Over VM/Docker Sandboxing
 
-**Status: decided, at the v0.1 scoping stage that produced Proto-Familiar.** Before any code
+**Status: decided, at the v0.1 scoping stage that produced Familiar.** Before any code
 existed, the maintainer considered having the Familiar spin up its own isolated VM or Docker
 container to protect its data from the host and the host from it, and decided against
 self-provisioned isolation in favor of relying on the isolation a normal local application
-already gets for free. Proto-Familiar's actual shape — a local Node.js/Express server plus a
+already gets for free. Familiar's actual shape — a local Node.js/Express server plus a
 browser-rendered frontend, installed and run directly on the ward's machine (see
 [Installer and launcher](../architecture/installer-and-launcher)) — is the outcome of that
 decision, not an accident of "just start simple."
@@ -91,7 +91,7 @@ data" [@founding-conversation] — direct provider calls only, no third-party an
 telemetry, no plaintext credential storage in a form that would block adding encryption later,
 and a provider tier that does not train on submitted content.
 
-What Proto-Familiar shipped is a variant of this outcome, not a byte-for-byte match: a local
+What Familiar shipped is a variant of this outcome, not a byte-for-byte match: a local
 Node/Express server (not a browser-only app) that a browser frontend connects to, installed and
 launched per-platform rather than served purely as a static web app
 [@architecture-doc] [@installer-getting-started]. This keeps the OS-level isolation argument the
@@ -106,7 +106,7 @@ into an MVP — the maintainer described a running prototype: "Very simple. Main
 Post-History. So far it's only a local front end with no memory past context, yet. Messages are
 already getting dated and timestamped though and chatlogs get saved"
 [@mvp-scoping-conversation]. The repository's `ff15714` ("Skeleton") commit is titled
-Proto-Familiar from its first line and ships exactly that four-field layout — System Prompt,
+Familiar from its first line and ships exactly that four-field layout — System Prompt,
 Character Profile, User Profile, and Post-History Prompt — still present in `public/index.html`
 today under the same field ids [@index-html]. This places the barebones-prompt-testing session
 described in that conversation at the project's actual starting point, not a discarded separate
@@ -126,10 +126,10 @@ independent-failure and hard-off-switch guarantees the founding conversation wan
 in the shipped design, but achieved by process-internal isolation between loops rather than by
 physically separating an always-on layer from an on-demand one.
 
-Because isolation is never self-provisioned, Proto-Familiar's own trust model is the same one
+Because isolation is never self-provisioned, Familiar's own trust model is the same one
 [Session memorization: durable queue](session-memorization-queue) already names for the
 memorization queue's on-disk API key: local files are protected by the OS's own user-account
-boundary, not by anything Proto-Familiar builds itself, and that posture is explicitly
+boundary, not by anything Familiar builds itself, and that posture is explicitly
 understood to need revisiting if the server is ever exposed beyond localhost.
 
 That revisit is distinct from the isolation question this decision covers — it is about

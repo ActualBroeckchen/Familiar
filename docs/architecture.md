@@ -7,7 +7,7 @@
 
 ## Overview
 
-Proto-Familiar is a Node.js application — a thin Express server +
+Familiar is a Node.js application — a thin Express server +
 vanilla-JS single-page frontend — that surfaces a persistent AI
 companion (the Familiar) bonded to one human. It is an **embodiment**
 of the same entity held in **Phylactery** — the in-tree
@@ -195,9 +195,9 @@ ponderings injection, care-check framing) and as background loops
 │
 ├── scripts/
 │   ├── import-entity.js     Import an entity-core data directory
-│   ├── import-tome.js       Convert SillyTavern lorebook export → Proto-Familiar tome
+│   ├── import-tome.js       Convert SillyTavern lorebook export → Familiar tome
 │   ├── ensure-unruh-deps.mjs npm prestart hook: materialise unruh/.venv if missing
-│   ├── ensure-port-free.mjs  npm prestart hook: auto-recycle stale Proto-Familiar
+│   ├── ensure-port-free.mjs  npm prestart hook: auto-recycle stale Familiar
 │   ├── ponder-once.mjs       CLI: one-shot ponder via TEMP_KEY
 │   ├── ponder-from-interests.mjs CLI: live demo of the pondering loop
 │   ├── pondering-loop-demo.mjs   CLI: autonomous loop demo (fast-forward cadence)
@@ -285,7 +285,7 @@ resolves its own date from a per-file `fallbackDate` or its filename; preview
 returns a per-file breakdown; commit ingests every file that resolved and SKIPS —
 never fails the whole batch on — any that need a date or didn't parse). Both share
 `resolveImportSegs` (parse→date→segment) + `commitImportSegs` (write+enqueue) so
-the rules can't drift. Parsers in `log-import.js` (Proto-Familiar JSON,
+the rules can't drift. Parsers in `log-import.js` (Familiar JSON,
 SillyTavern & OpenClaw `.jsonl`, **ChatGPT copy/share export** — `**You:**` /
 `**ChatGPT:**` markdown with `* * *` separators, standalone-header-only so an
 inline `**Reminder:**` stays content — and timestamped text; rejects unknown loudly).
@@ -1293,7 +1293,7 @@ Settings "Memory coverage sweep" / `PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1`.
 **Phase 4 (foreign-log import):** `POST /api/import-logs` (preview → commit) +
 `log-import.js` parsers place foreign logs by date (one imported session per
 date) and enqueue them for immediate ingestion (confirm-gated in the Coverage-tab
-import form). Parsers: Proto-Familiar JSON, SillyTavern `.jsonl` (`is_user`→role, ISO
+import form). Parsers: Familiar JSON, SillyTavern `.jsonl` (`is_user`→role, ISO
 `send_date`), OpenClaw `.jsonl` (event stream — `type:'message'` events, content
 blocks), timestamped text. Undated logs are dated by an explicit `fallbackDate`
 or one read from the filename (`dateFromFilename`); if neither exists the preview
@@ -1650,7 +1650,7 @@ All `/api/entity/*` HTTP routes now delegate entirely to Phylactery via thalamus
 - **Settings field rename**: `entityCoreConnectionId` → `phylacteryConnectionId` (legacy name
   still accepted as fallback in `loadPhylacteryEnv()` and `phylacteryCredsSnapshot()`).
 - **Prompt Inspector labels**: "Entity-Core (static/dynamic)" → "Phylactery (static/dynamic)".
-- **Deno/entity-core retirement**: `start.sh`, `start.bat`, `Proto-Familiar.command` no longer
+- **Deno/entity-core retirement**: `start.sh`, `start.bat`, `Familiar.command` no longer
   prime `~/.deno/bin` on PATH; comments updated to reflect Phylactery+Unruh as the only MCP children.
 
 ## Data flow — single chat request
@@ -1995,7 +1995,7 @@ Once tagged, an event's `outcome` is immutable — the LLM later reasons about a
 
 **`schedule_delete(id)` (0.7.x).** Permanently removes a schedule node — event, task, reminder, or routine **phase** — via `deleteScheduleNode` → Unruh `schedule_delete_node` (which returns `{ok, deleted}`; `deleted:false` means no such id). Distinct from `schedule_resolve`, which marks a node `done`/`cancelled` while *keeping the record*: delete *erases* it, and is the only way to remove a phase or clean up a duplicate/mistaken entry. The plumbing (`deleteScheduleNode` thalamus helper + the Unruh MCP tool) already existed end-to-end; it simply had no Familiar-facing tool until now — the classic "capability not reachable BY the Familiar" gap.
 
-**Storage decision:** event records and reflection metadata live in `tomes/.surface-events.json` (per-embodiment, like ponderings). Identity-layer *insights* derived from them ("Eury crashes within 4h of skipping meals") get lifted to Phylactery's `custom/what_lapses_cost.md` only after the reflection LLM judges the pattern strong enough. The raw event stream belongs to Proto-Familiar; the durable knowledge belongs to the entity.
+**Storage decision:** event records and reflection metadata live in `tomes/.surface-events.json` (per-embodiment, like ponderings). Identity-layer *insights* derived from them ("Eury crashes within 4h of skipping meals") get lifted to Phylactery's `custom/what_lapses_cost.md` only after the reflection LLM judges the pattern strong enough. The raw event stream belongs to Familiar; the durable knowledge belongs to the entity.
 
 **`what_lapses_cost.md`** lives in Phylactery's `custom` category as `what_lapses_cost.md`. The Familiar writes via the reflection loop when patterns emerge. May not exist initially; surface-context assembly is null-tolerant.
 

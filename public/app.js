@@ -1,7 +1,7 @@
 'use strict';
 
 /* ================================================================
-   Proto-Familiar — frontend application
+   Familiar — frontend application
    Handles state, API communication, UI rendering.
    ================================================================ */
 
@@ -375,7 +375,7 @@ const state = {
 
 // ── Persistence ──────────────────────────────────────────────────
 //
-// Settings live centrally on the server (so opening Proto-Familiar on a
+// Settings live centrally on the server (so opening Familiar on a
 // second device doesn't reset prompts, names, and saved connections).
 // localStorage is a fast offline cache that gets refreshed from the
 // server on every page load.
@@ -3029,7 +3029,7 @@ function exportChat() {
     return;
   }
 
-  let md = `# Proto-Familiar — Chat Export\n\n`;
+  let md = `# Familiar — Chat Export\n\n`;
   md += `**Date:** ${new Date().toLocaleString()}  \n`;
   md += `**Provider:** ${state.provider}  \n`;
   md += `**Model:** ${state.model}  \n\n`;
@@ -3766,7 +3766,7 @@ function renderDiscordNodeWarning(status) {
     el.innerHTML =
       `⚠️ Discord presence needs <strong>Node 22 or newer</strong>${ver}. ` +
       `The gateway can't open its WebSocket on this runtime and will stay offline ` +
-      `even with the toggle on. Re-run the installer to upgrade Node, then restart Proto-Familiar.`;
+      `even with the toggle on. Re-run the installer to upgrade Node, then restart Familiar.`;
     el.style.display = '';
   } else {
     el.style.display = 'none';
@@ -3996,7 +3996,7 @@ function renderTailscaleState(state) {
       statusEl.textContent = 'Open one of these on any device on your tailnet:';
     }
   } else {
-    statusEl.textContent = 'Off — only this machine can reach Proto-Familiar.';
+    statusEl.textContent = 'Off — only this machine can reach Familiar.';
   }
 }
 function initTailscaleToggle() {
@@ -4156,7 +4156,7 @@ function initUpdateChecker() {
       const r = await fetch('/api/update-apply', { method: 'POST' });
       const res = await r.json();
       if (res?.ok) {
-        statusEl.textContent = `Updated to v${res.version} — restart Proto-Familiar to run the new version.`;
+        statusEl.textContent = `Updated to v${res.version} — restart Familiar to run the new version.`;
         $('update-headline').textContent = 'Update applied';
         $('update-detail').textContent = 'The new code is on disk. Restart the server (or use your launcher) to load it.';
         $('update-dot').classList.add('hidden');
@@ -5027,7 +5027,7 @@ function init() {
     .then(r => r.ok ? r.json() : null)
     .then(data => {
       const badge = $('version-badge');
-      if (badge && data?.version) badge.textContent = `Proto-Familiar v${data.version}`;
+      if (badge && data?.version) badge.textContent = `Familiar v${data.version}`;
     })
     .catch(() => {});
 
@@ -5569,7 +5569,7 @@ function normEntryPos(pos) {
   return MAP[pos] ?? 0;
 }
 
-/** Normalize SillyTavern-format entry field names to Proto-Familiar native names in-place. */
+/** Normalize SillyTavern-format entry field names to Familiar native names in-place. */
 function normalizeEntry(entry) {
   if ('key' in entry && !('keys' in entry))              entry.keys            = entry.key;
   if ('order' in entry && !('insertion_order' in entry)) entry.insertion_order = entry.order;
@@ -6689,7 +6689,7 @@ async function getDefaultTomeForSaving() {
 // ── Diagnostics ─────────────────────────────────────────────────────────
 //
 // On demand, gather a plain-text snapshot the user can paste into a bug
-// report. Combines navigator-derived system info, current Proto-Familiar
+// report. Combines navigator-derived system info, current Familiar
 // state, a live /api/health probe (so server-side timeouts / unreachable
 // servers show up immediately), and the recent in-app event log.
 
@@ -6701,7 +6701,7 @@ async function buildDiagnosticReport() {
   const add = (k, v) => lines.push(`${k.padEnd(22)} ${v}`);
   const section = title => { lines.push('', `── ${title} ${'─'.repeat(Math.max(0, 56 - title.length))}`); };
 
-  lines.push(`Proto-Familiar diagnostic report`);
+  lines.push(`Familiar diagnostic report`);
   lines.push(`generated: ${now.toISOString()} (${now.toString()})`);
 
   section('System');
@@ -6720,7 +6720,7 @@ async function buildDiagnosticReport() {
   try { add('timezone',      Intl.DateTimeFormat().resolvedOptions().timeZone ?? '?'); }
   catch { add('timezone',    '?'); }
 
-  section('Proto-Familiar');
+  section('Familiar');
   // The running server version — the first thing to check when a fix "isn't
   // working": an install that can't self-update is often simply on old code.
   try {

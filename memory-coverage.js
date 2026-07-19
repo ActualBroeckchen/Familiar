@@ -12,7 +12,7 @@
  * is derived by comparing the two, so the active day shows "partial" the moment
  * new messages land, and a past day reads "complete" once its slice is done.
  *
- * Proto-Familiar-local (sessions are per-embodiment, like ponderings). Degrades
+ * Familiar-local (sessions are per-embodiment, like ponderings). Degrades
  * like every tome file: unreadable/missing → treated as empty, never throws.
  *
  * Path params (logsDir/ledgerFile) default to the real dirs; tests override them.

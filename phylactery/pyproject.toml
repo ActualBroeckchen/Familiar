@@ -1,7 +1,7 @@
 [project]
 name = "phylactery"
 version = "0.1.0"
-description = "Canonical self-store for Proto-Familiar: identity, memory, graph — original design by Zari Lewis (Psycheros)"
+description = "Canonical self-store for Familiar: identity, memory, graph — original design by Zari Lewis (Psycheros)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

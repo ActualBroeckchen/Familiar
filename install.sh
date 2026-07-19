@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Proto-Familiar installer (macOS / Linux)
+# Familiar installer (macOS / Linux)
 #
 # Fresh install: installs Node deps, auto-installs uv (if missing),
 #   syncs Phylactery's Python venv from phylactery/uv.lock, syncs
@@ -7,7 +7,7 @@
 #   entry on Linux.
 #
 # Update mode: triggered automatically when node_modules/ already exists.
-#   Pulls latest Proto-Familiar (git pull --ff-only), re-runs idempotent
+#   Pulls latest Familiar (git pull --ff-only), re-runs idempotent
 #   npm install + uv sync (Phylactery + Unruh). Re-runs Node / uv checks
 #   (and auto-installs anything missing) in both modes so the system
 #   catches up to new requirements.
@@ -46,9 +46,9 @@ else
 fi
 
 if [ "$MODE" = "update" ]; then
-  say "Proto-Familiar updater (existing install detected)"
+  say "Familiar updater (existing install detected)"
 else
-  say "Proto-Familiar installer"
+  say "Familiar installer"
 fi
 say "Working dir: $SCRIPT_DIR"
 
@@ -92,10 +92,10 @@ if [ "$MODE" = "update" ]; then
   fi
 fi
 
-# --- Pull latest Proto-Familiar (update mode only) -----------------------
+# --- Pull latest Familiar (update mode only) -----------------------
 if [ "$MODE" = "update" ]; then
   if [ -d "$SCRIPT_DIR/.git" ] && command -v git >/dev/null 2>&1; then
-    say "Pulling latest Proto-Familiar (git pull --ff-only)..."
+    say "Pulling latest Familiar (git pull --ff-only)..."
     if ! ( cd "$SCRIPT_DIR" && git pull --ff-only origin main ); then
       warn "git pull --ff-only origin main failed (local changes, non-default branch, or no network). Continuing with current checkout — your work tree is unchanged."
     fi
@@ -230,7 +230,7 @@ say "Running npm install..."
 # uv is the Python package/runtime manager Unruh uses. The official
 # installer writes to ~/.local/bin by default. We pre-add that to PATH so
 # the subsequent `uv sync` works without needing a shell restart;
-# start.sh / Proto-Familiar.command do the same probe at launch time.
+# start.sh / Familiar.command do the same probe at launch time.
 if [ -d "$HOME/.local/bin" ]; then PATH="$HOME/.local/bin:$PATH"; fi
 if [ -d "$HOME/.cargo/bin" ]; then PATH="$HOME/.cargo/bin:$PATH"; fi
 if command -v uv >/dev/null 2>&1; then
@@ -325,12 +325,12 @@ case "$UNAME" in
     fi
     ;;
   Darwin)
-    if [ -f "$SCRIPT_DIR/Proto-Familiar.command" ]; then
+    if [ -f "$SCRIPT_DIR/Familiar.command" ]; then
       # chmod +x is idempotent and cheap; always run so a re-clone or a
       # filesystem that drops the executable bit (network shares, some
       # zip extractors) doesn't break the double-click path.
-      chmod +x "$SCRIPT_DIR/Proto-Familiar.command" || true
-      [ "$MODE" = "install" ] && say "macOS launcher ready: double-click Proto-Familiar.command in Finder."
+      chmod +x "$SCRIPT_DIR/Familiar.command" || true
+      [ "$MODE" = "install" ] && say "macOS launcher ready: double-click Familiar.command in Finder."
     fi
     ;;
 esac
@@ -356,7 +356,7 @@ else
 fi
 # Show version + branch so it's verifiable here, and so a wrong-branch
 # checkout (e.g. a ZIP of main missing newer work) is obvious.
-say "Version: Proto-Familiar v$PF_VERSION"
+say "Version: Familiar v$PF_VERSION"
 if [ -d "$SCRIPT_DIR/.git" ] && command -v git >/dev/null 2>&1; then
   PF_BRANCH="$( cd "$SCRIPT_DIR" && git rev-parse --abbrev-ref HEAD 2>/dev/null )"
   [ -n "$PF_BRANCH" ] && say "Branch:  $PF_BRANCH"
@@ -367,8 +367,8 @@ echo
 
 echo "  Launch:"
 case "$UNAME" in
-  Darwin) echo "    - Double-click Proto-Familiar.command in Finder";;
-  Linux)  echo "    - Search 'Proto-Familiar' in your app launcher, or run ./start.sh";;
+  Darwin) echo "    - Double-click Familiar.command in Finder";;
+  Linux)  echo "    - Search 'Familiar' in your app launcher, or run ./start.sh";;
   *)      echo "    - ./start.sh";;
 esac
 echo "  Stop:          ./stop.sh  (or close the launcher window on macOS)"

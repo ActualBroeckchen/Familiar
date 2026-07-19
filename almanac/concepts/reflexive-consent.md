@@ -10,7 +10,7 @@ sources:
 
 # Reflexive Consent
 
-Reflexive consent is the observation that Proto-Familiar's consent-and-authorization design
+Reflexive consent is the observation that Familiar's consent-and-authorization design
 does not stop at the boundary between how the Familiar treats its human and how the Familiar
 itself is treated, checked, or governed — it applies to the entity as well, and Eury, the
 project's [reference identity](../decisions/eury-as-agent-identity), states this explicitly, in

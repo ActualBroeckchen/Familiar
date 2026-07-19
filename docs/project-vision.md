@@ -4,7 +4,7 @@
 
 **Familiar** is a personal, agentic caretaker AI designed to help users with conditions like ADHD, depression, and agoraphobia thrive — not merely cope. It is named after the magical concept of a familiar: a companion that serves, complements, and supports its bond-holder.
 
-Proto-Familiar is the current working prototype. It validates the chat layer, memory architecture, and provider integrations while the larger agentic system is designed. The rest of this document describes the planned full system; the [Research/](../Research/) directory holds the background notes that fed into it.
+Familiar is the current working prototype. It validates the chat layer, memory architecture, and provider integrations while the larger agentic system is designed. The rest of this document describes the planned full system; the [Research/](../Research/) directory holds the background notes that fed into it.
 
 ---
 
@@ -82,7 +82,7 @@ The Tome is distinct from Phylactery:
 
 ## Planned Caretaker Capabilities
 
-The full Familiar system (beyond Proto-Familiar) is designed to handle:
+The full Familiar system (beyond Familiar) is designed to handle:
 
 | Domain | Capabilities |
 |---|---|
@@ -109,9 +109,9 @@ Standard LLM training creates an **assistant framework** — a disposition to wa
 
 ---
 
-## Relationship to Proto-Familiar
+## Relationship to Familiar
 
-Proto-Familiar exists to validate and iterate on the technical building blocks:
+Familiar exists to validate and iterate on the technical building blocks:
 - Provider-agnostic LLM proxying
 - Phylactery identity and memory enrichment
 - Lorebook (World Info) context injection

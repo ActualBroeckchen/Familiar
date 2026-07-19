@@ -74,7 +74,7 @@ export async function fetchOpenMeteo(lat, lon, { fetchFn, days = DEFAULT_DAYS } 
 // ── MET Norway / Yr (fallback; keyless, needs an honest User-Agent) ──
 // MET returns UTC times and symbol_codes; we map symbols → WMO codes and
 // convert times to the location's local-naive using its IANA `timezone`.
-const MET_UA = 'Proto-Familiar/1.0 weather-sense (open-source companion app)';
+const MET_UA = 'Familiar/1.0 weather-sense (open-source companion app)';
 const SYMBOL_TO_WMO = [
   [/thunder/, 95], [/sleet/, 67], [/snow/, 73], [/heavyrain/, 65],
   [/lightrain|drizzle/, 61], [/rain/, 63], [/fog/, 45],

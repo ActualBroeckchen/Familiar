@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Proto-Familiar - macOS double-click launcher.
+# Familiar - macOS double-click launcher.
 # Finder runs .command files in Terminal. Closing the window with Cmd-W (or Ctrl-C, then Cmd-W)
 # cleanly shuts everything down because we exec node in the foreground.
 #
 # Before exec'ing the server we (1) run the installer if deps are
-# missing, (2) recycle any stale Proto-Familiar instance holding the
+# missing, (2) recycle any stale Familiar instance holding the
 # port so a second double-click doesn't die with EADDRINUSE, and
 # (3) prime PATH for uv so spawned MCP children can find it.
 
@@ -45,7 +45,7 @@ if ! command -v uv >/dev/null 2>&1 && [ -x "$HOME/.local/bin/uv" ]; then
   export PATH="$HOME/.local/bin:$PATH"
 fi
 
-# Recycle any stale Proto-Familiar holding the port — a previous
+# Recycle any stale Familiar holding the port — a previous
 # double-click that wasn't cleanly closed (Cmd-Q the Terminal window
 # without Ctrl-C first, kernel panic recovery, etc) leaves node still
 # bound. Same heuristic as start.sh: node server.js rooted at our cwd.
@@ -74,7 +74,7 @@ fi
 clear
 cat <<EOF
 ========================================
-  Proto-Familiar
+  Familiar
 ========================================
 
   URL:    $URL
@@ -82,7 +82,7 @@ cat <<EOF
   Help:   docs/troubleshooting.md
 
   Logs print below. Closing this window
-  will shut down Proto-Familiar and its MCP children.
+  will shut down Familiar and its MCP children.
 
 ========================================
 

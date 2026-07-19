@@ -1,5 +1,5 @@
 /**
- * thalamus.js — Phylactery bridge for Proto-Familiar
+ * thalamus.js — Phylactery bridge for Familiar
  *
  * Mirrors Psycheros's context-building approach (src/entity/context.ts +
  * src/rag/context-builder.ts):
@@ -26,7 +26,7 @@ import { wardLocalNowISO } from './relative-time.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Match server.js: read the version from package.json so the MCP
-// client handshake identifies which Proto-Familiar version connected.
+// client handshake identifies which Familiar version connected.
 const PKG_VERSION = (() => {
   try { return JSON.parse(readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version || 'unknown'; }
   catch { return 'unknown'; }
@@ -64,7 +64,7 @@ const UNRUH_CALL_TIMEOUT_MS = 2000;
 // docs/features.md.
 const IDLE_THRESHOLD_MS = 30 * 60 * 1000;
 
-// Resolve `uv` to an absolute path. GUI launchers (Proto-Familiar.command,
+// Resolve `uv` to an absolute path. GUI launchers (Familiar.command,
 // the .vbs / tray.ps1) inherit a minimal PATH that often misses ~/.local/bin
 // or %LOCALAPPDATA%\uv\bin, so a bare `command: 'uv'` to StdioClientTransport
 // silently fails with ENOENT. Probe the known install locations first and
@@ -391,7 +391,7 @@ function schedulePhylacteryReconnect() {
   if (phylacteryShuttingDown) return;
   if (phylacteryReconnectInFlight) return;
   if (phylacteryReconnectAttempts >= PHYLACTERY_RECONNECT_MAX_ATTEMPTS) {
-    console.error(`[thalamus] Phylactery reconnect gave up after ${PHYLACTERY_RECONNECT_MAX_ATTEMPTS} attempts — restart Proto-Familiar to retry`);
+    console.error(`[thalamus] Phylactery reconnect gave up after ${PHYLACTERY_RECONNECT_MAX_ATTEMPTS} attempts — restart Familiar to retry`);
     return;
   }
   const delay = PHYLACTERY_RECONNECT_BACKOFF_MS[Math.min(phylacteryReconnectAttempts, PHYLACTERY_RECONNECT_BACKOFF_MS.length - 1)];
@@ -505,7 +505,7 @@ async function connectUnruh() {
 function scheduleUnruhReconnect() {
   if (unruhShuttingDown) return;
   if (unruhReconnectAttempts >= UNRUH_RECONNECT_MAX_ATTEMPTS) {
-    console.error(`[thalamus] Unruh reconnect gave up after ${UNRUH_RECONNECT_MAX_ATTEMPTS} attempts — restart Proto-Familiar to retry`);
+    console.error(`[thalamus] Unruh reconnect gave up after ${UNRUH_RECONNECT_MAX_ATTEMPTS} attempts — restart Familiar to retry`);
     return;
   }
   const delay = UNRUH_RECONNECT_BACKOFF_MS[Math.min(unruhReconnectAttempts, UNRUH_RECONNECT_BACKOFF_MS.length - 1)];
@@ -1126,7 +1126,7 @@ export async function exportSchedule({ id }) {
 
 /** Mechanical id re-key in Unruh: legacy hex ids → readable slugs.
  *  Returns {ok, nodes, edges, mapping} — mapping is applied by the caller
- *  to Proto-Familiar's own JSON stores that reference node ids. */
+ *  to Familiar's own JSON stores that reference node ids. */
 export async function convertUnruhIds() {
   await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };

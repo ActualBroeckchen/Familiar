@@ -4,9 +4,9 @@
 
 | OS | Entry point | What happens |
 |---|---|---|
-| **Windows** | Double-click `Proto-Familiar.vbs` | First run: auto-installs Node/Git/uv via winget, runs `npm install`, sets up Phylactery (Python venv via uv) and the Unruh Python venv, creates Desktop + Start Menu shortcuts. Every run: tray icon appears, browser opens. Right-click the tray icon → **Quit** to stop. |
-| **macOS** | Double-click `Proto-Familiar.command` | First run installs, then opens browser. Ctrl-C in the Terminal window stops everything. |
-| **Linux** | Run `./install.sh` once, then launch **Proto-Familiar** from your app menu | The installer registers a `.desktop` entry under `~/.local/share/applications/`. Stop with `./stop.sh`. |
+| **Windows** | Double-click `Familiar.vbs` | First run: auto-installs Node/Git/uv via winget, runs `npm install`, sets up Phylactery (Python venv via uv) and the Unruh Python venv, creates Desktop + Start Menu shortcuts. Every run: tray icon appears, browser opens. Right-click the tray icon → **Quit** to stop. |
+| **macOS** | Double-click `Familiar.command` | First run installs, then opens browser. Ctrl-C in the Terminal window stops everything. |
+| **Linux** | Run `./install.sh` once, then launch **Familiar** from your app menu | The installer registers a `.desktop` entry under `~/.local/share/applications/`. Stop with `./stop.sh`. |
 
 Open `http://localhost:8742` in your browser (this happens automatically on launch).
 
@@ -16,7 +16,7 @@ Open `http://localhost:8742` in your browser (this happens automatically on laun
 - uv (optional, for the Phylactery identity layer and the Unruh temporal-context module; ships its own Python)
 - Git (optional)
 
-On Windows the installer pulls these via `winget --scope user`; on macOS/Linux it installs uv via its official one-liner. The Python layers are optional — Proto-Familiar runs as a plain chat UI without them, just without the identity (Phylactery) and temporal-context (Unruh) layers.
+On Windows the installer pulls these via `winget --scope user`; on macOS/Linux it installs uv via its official one-liner. The Python layers are optional — Familiar runs as a plain chat UI without them, just without the identity (Phylactery) and temporal-context (Unruh) layers.
 
 ## Manual install
 

@@ -1,6 +1,6 @@
 # UI / UX guidelines — designing for overwhelm
 
-Proto-Familiar's primary users include people dealing with executive
+Familiar's primary users include people dealing with executive
 dysfunction, ADHD, anxiety, and depression. The UI is not a neutral surface
 for them — a cluttered screen is a real barrier to using the Familiar at
 all. These guidelines are binding for every UI change; they distill the

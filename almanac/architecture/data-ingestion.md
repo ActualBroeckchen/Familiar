@@ -15,7 +15,7 @@ sources:
 
 # Data Ingestion
 
-Proto-Familiar can import conversation logs from other platforms and formats into its session storage. The ingestion system (`log-import.js`) detects the format automatically, normalizes messages to a canonical shape, anchors them by date, and feeds them through the memorization pipeline as if they were native sessions [@log-import-js]. This lets wards bring chat history from ChatGPT, Claude, SillyTavern, OpenClaw, or plain timestamped text into the Familiar's memory.
+Familiar can import conversation logs from other platforms and formats into its session storage. The ingestion system (`log-import.js`) detects the format automatically, normalizes messages to a canonical shape, anchors them by date, and feeds them through the memorization pipeline as if they were native sessions [@log-import-js]. This lets wards bring chat history from ChatGPT, Claude, SillyTavern, OpenClaw, or plain timestamped text into the Familiar's memory.
 
 ## Supported formats
 
@@ -23,7 +23,7 @@ Proto-Familiar can import conversation logs from other platforms and formats int
 
 | Format | Source | Detection | Timestamps |
 |---|---|---|---|
-| Proto-Familiar JSON | Native exports | Array of sessions or messages with `messages` array | Per-message ISO |
+| Familiar JSON | Native exports | Array of sessions or messages with `messages` array | Per-message ISO |
 | SillyTavern JSONL | .jsonl chat exports | One JSON object per line with `is_user`, `mes`, `send_date` | Per-message ISO (`send_date`) |
 | OpenClaw JSONL | Event stream exports | Line-by-line events, `type:'message'` contains `role`, `content`, `timestamp` | Per-message ISO |
 | ChatGPT copy/share | Web UI clipboard export | STANDALONE headers `**ChatGPT:**` or `ChatGPT said:` (current format), separated by `* * *` | None (date-supplied) |

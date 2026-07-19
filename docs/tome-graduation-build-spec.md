@@ -58,7 +58,7 @@ so a fact stranded there is never semantically recalled, never cross-embodiment,
 canonical self. Phase 3 stops *new* mis-filing; Phase 4 drains the *backlog*.
 
 ```
-  slow background pass (Proto-Familiar side; self-cooled, off-switchable)
+  slow background pass (Familiar side; self-cooled, off-switchable)
         │
    1. CODE GATE: pick candidate tome entries
         - eligible tomes only (user knowledge tomes; skip Ponderings,
@@ -117,7 +117,7 @@ canonical self. Phase 3 stops *new* mis-filing; Phase 4 drains the *backlog*.
 
 ## 4. Decisions (settled)
 
-1. **Where it rides — its own slow Proto-Familiar-side loop** with a self-set cool-down (mirrors
+1. **Where it rides — its own slow Familiar-side loop** with a self-set cool-down (mirrors
    the reminders / silence-triage loop pattern). Independent, off the chat path; tomes are
    PF-local so it stays PF-side.
 2. **Tome tidy — configurable via `tomeGraduationTidy`:**

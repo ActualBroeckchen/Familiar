@@ -55,7 +55,7 @@ information when memorizing — only for recall if pertinent."*
   memorization/archive time.
 - Re-architecting Phylactery. Extracted facts still flow to Phylactery exactly as
   today (daily-standalone, consent-gated, graph-routed). The ledger is a
-  **Proto-Familiar-local** concern (sessions are per-embodiment, like ponderings).
+  **Familiar-local** concern (sessions are per-embodiment, like ponderings).
 - A general "import any format" parser. We support a small, documented set of
   shapes and degrade loudly on the rest (see §7).
 
@@ -215,7 +215,7 @@ code.)
 - `POST /api/import-logs` (+ an upload/paste UI in the calendar tab).
 - **Parsers** (`log-import.js`), tried in order, each returning a normalized
   `Message[]` (`{ role, content, timestamp, speaker? }`) or `null`:
-  1. Proto-Familiar's own session-log JSON (and an export bundle of many).
+  1. Familiar's own session-log JSON (and an export bundle of many).
   2. A generic **timestamped-markdown / text** shape: lines like
      `[2026-06-20 14:35] Name: text` (configurable-ish, documented).
   3. OpenAI-style `{ messages:[{role,content}] }` arrays **with** a sidecar or

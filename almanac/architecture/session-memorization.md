@@ -33,7 +33,7 @@ durable lorebook entries the Familiar can be reminded of later. It is a server-s
 queue owned by `memorization.js`, not a synchronous save: the browser enqueues a job, and a
 single in-process worker calls the configured LLM, parses the response, and writes the
 resulting entries into a dedicated Tome [@memorization-js] [@sessions-doc]. This subsystem is
-one of the two places long-running memory lives in Proto-Familiar — the other is
+one of the two places long-running memory lives in Familiar — the other is
 [Phylactery](phylactery), which owns the Familiar's canonical, autonomously-retrieved memory.
 Tomes are explicitly the other kind: human-editable, keyword-triggered lorebook entries, and
 memorization is the automated writer that populates one particular Tome with that shape of

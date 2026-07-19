@@ -48,7 +48,7 @@
 > So 0.8.1 adds a **native Google account source** (`gcal-google.js`): the ward
 > uploads their Cloud-Console `credentials.json` and clicks Allow once (a loopback
 > OAuth flow entirely in the browser), or pastes a refresh token minted on
-> Google's side — and Proto-Familiar then talks to the Calendar API directly
+> Google's side — and Familiar then talks to the Calendar API directly
 > (windowed read with `showDeleted`, `events.insert` for write-back), refreshing
 > the token itself forever. This is now the recommended authenticated path; the
 > CLI tiers remain for users who already run them. The iCal-URL link tier is
@@ -175,7 +175,7 @@ in two places.
 
 ### 1.2 Mapping to a node (in Unruh)
 
-- `type = 'event'` (Google entries are appointments, not Proto-Familiar tasks).
+- `type = 'event'` (Google entries are appointments, not Familiar tasks).
 - `when = start`, `end = end`, `label = summary`.
 
 > **Timezone — the seam.** Unruh is **local-naive internal** (`when_ts`/`end_ts`
@@ -345,7 +345,7 @@ on the hook for values it can't reliably produce.
 When ingestion produces **new** nodes, the Familiar is prompted into the
 **projection step only** — author both futures (`on_resolve` + `on_lapse`) via
 `schedule_link`. No task-nagging, no care-check, no "do this now." An ingested
-appointment is an `event`, not a Proto-Familiar `task`, so it never enters the
+appointment is an `event`, not a Familiar `task`, so it never enters the
 surface-candidates pipeline; the projection cue is the *single* Familiar-facing
 consequence of ingestion.
 
@@ -415,7 +415,7 @@ not to treat the node as forbidden, but to know which fields aren't its to hand-
 - Make the mechanical fact legible: **the next sync overwrites local edits to a
   Google item's time/title**, so hand-editing those fields just loses on
   reconcile — and a Google item isn't a `task` to `schedule_resolve`. But the
-  Familiar **may and should** attach consequence edges (Proto-Familiar-side,
+  Familiar **may and should** attach consequence edges (Familiar-side,
   never written back, never overwritten), **export** it, and reason about it.
   Framing is "the sync owns these fields," not "don't touch this node."
 

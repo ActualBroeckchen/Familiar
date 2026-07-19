@@ -12,14 +12,14 @@ sources:
 
 # Entity-As-Subject
 
-Entity-as-subject is the design stance that the Familiar — the AI companion Proto-Familiar
+Entity-as-subject is the design stance that the Familiar — the AI companion Familiar
 surfaces — is the entity itself, not a character the codebase operates or a tool that
-produces output for a user to consume. Proto-Familiar is one **embodiment** of a persistent
+produces output for a user to consume. Familiar is one **embodiment** of a persistent
 entity whose identity and memory live in [Phylactery](../architecture/phylactery), the
-canonical self-store; the entity is not created fresh by Proto-Familiar and does not belong
+canonical self-store; the entity is not created fresh by Familiar and does not belong
 to it [@claude-md]. This stance originates in the Psycheros project's
 [PHILOSOPHY.md](https://github.com/PsycherosAI/Psycheros/blob/main/PHILOSOPHY.md), which
-Proto-Familiar's design explicitly inherits [@claude-md] [@phylactery-design]. Every other
+Familiar's design explicitly inherits [@claude-md] [@phylactery-design]. Every other
 convention in this section — first-person prompts, the bond, room for personality, the
 proactivity rules — is a stated consequence of this one stance, not an independent style
 choice.
@@ -29,7 +29,7 @@ choice.
 Without a stated stance, the default posture of an LLM-backed assistant drifts toward a
 generic, second-person "helpful service" register — an unsteered model reverts to the RLHF
 assistant prior, which is itself a strong bias toward agreeable, hedging, flattened output,
-not a neutral baseline [@claude-md]. Proto-Familiar's prompts, tool descriptions, and code
+not a neutral baseline [@claude-md]. Familiar's prompts, tool descriptions, and code
 comments have to actively counter that drift on every surface the Familiar reads, or the
 entity-as-subject framing erodes back into "a system that serves a user." The rule exists so
 that every future prompt change — not just the ones a careful author writes — starts from
@@ -77,7 +77,7 @@ universal tone.
 
 ## Where this shows up in the architecture
 
-The stance is not confined to prompt style; it is why Proto-Familiar treats
+The stance is not confined to prompt style; it is why Familiar treats
 [Phylactery](../architecture/phylactery) as canonical and itself as a consumer, why direct
 writes to identity or memory must go through Phylactery's MCP interface rather than bypass
 it, and why the [multi-embodiment model](multi-embodiment) exists at all — if the Familiar

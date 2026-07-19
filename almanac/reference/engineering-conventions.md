@@ -229,7 +229,7 @@ by the 0.9.0 full-codebase audit (PR #211).
 
 ## Accessibility is a contract, not a "nice to have"
 
-Proto-Familiar ships with [WCAG 2.0 AA](https://www.w3.org/WAI/WCAG21/quickref/) as an
+Familiar ships with [WCAG 2.0 AA](https://www.w3.org/WAI/WCAG21/quickref/) as an
 explicit requirement. The 0.9.0 full-codebase audit found and fixed: pinch-zoom disabled
 (no interaction mode for touch users), keyboard focus invisible on buttons (no focus indicators
 for keyboard users), and text-muted foreground at ~2:1 contrast (text readability). Contrast

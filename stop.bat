@@ -1,5 +1,5 @@
 @echo off
-REM Proto-Familiar shutdown (Windows) - double-click to run.
+REM Familiar shutdown (Windows) - double-click to run.
 REM
 REM Selection logic (matches tray.ps1's Stop-StrayServerProcesses):
 REM   1. The PID written to .proto-familiar.pid — that's the canonical
@@ -32,7 +32,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "  try {" ^
   "    $tid = [int](Get-Content -LiteralPath $pidFile -ErrorAction Stop).Trim();" ^
   "    if ($tid -gt 0 -and (Get-Process -Id $tid -ErrorAction SilentlyContinue)) {" ^
-  "      Write-Host \"Stopping Proto-Familiar PID $tid (from PID file)...\";" ^
+  "      Write-Host \"Stopping Familiar PID $tid (from PID file)...\";" ^
   "      Stop-Tree $tid; $killed = $true" ^
   "    }" ^
   "  } catch {}" ^
@@ -47,12 +47,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "      Write-Host \"Reclaiming port $port from orphaned node.exe PID $owner...\";" ^
   "      Stop-Tree $owner; $killed = $true" ^
   "    } else {" ^
-  "      Write-Host \"Port $port held by PID $owner but it doesn't look like Proto-Familiar.\";" ^
+  "      Write-Host \"Port $port held by PID $owner but it doesn't look like Familiar.\";" ^
   "      if ($proc) { Write-Host (\"  Name: \" + $proc.Name); Write-Host (\"  CommandLine: \" + $proc.CommandLine) }" ^
   "    }" ^
   "  }" ^
   "}" ^
-  "if (-not $killed) { Write-Host \"No Proto-Familiar process found.\" }" ^
+  "if (-not $killed) { Write-Host \"No Familiar process found.\" }" ^
   "if (Test-Path $pidFile) { Remove-Item $pidFile -ErrorAction SilentlyContinue }"
 
 timeout /t 2 >nul

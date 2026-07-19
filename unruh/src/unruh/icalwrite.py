@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
-_PRODID = "-//Proto-Familiar//Unruh//EN"
+_PRODID = "-//Familiar//Unruh//EN"
 
 
 def _parse_local(s: str | None) -> datetime | None:

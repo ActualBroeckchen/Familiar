@@ -2131,7 +2131,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'list_files',
-      description: "I list what's in my own folder — the Proto-Familiar files that make me up. I use this to find my way around when I want to look something up on purpose: which Tomes exist, what session logs are there, where a doc lives. I pass a folder path relative to my root (e.g. \"tomes\" or \"logs\"), or nothing for the top level. It's read-only and fenced to my own folder; my human's secrets (settings, keys) are never shown. I only do this in a private moment with {{user}} — my files hold our history, not for other rooms.",
+      description: "I list what's in my own folder — the Familiar files that make me up. I use this to find my way around when I want to look something up on purpose: which Tomes exist, what session logs are there, where a doc lives. I pass a folder path relative to my root (e.g. \"tomes\" or \"logs\"), or nothing for the top level. It's read-only and fenced to my own folder; my human's secrets (settings, keys) are never shown. I only do this in a private moment with {{user}} — my files hold our history, not for other rooms.",
       parameters: {
         type: 'object',
         properties: {
@@ -3371,7 +3371,7 @@ export const TOOL_EXECUTORS = {
     const report = [];
     try {
       // 1. Unruh (schedule + interests) — returns the node-id mapping that
-      //    Proto-Familiar's own JSON stores need to follow.
+      //    Familiar's own JSON stores need to follow.
       const unruh = await convertUnruhIds();
       if (unruh?.ok) {
         report.push(`temporal store: ${unruh.nodes ?? 0} node(s) + ${unruh.edges ?? 0} link(s) renamed`);

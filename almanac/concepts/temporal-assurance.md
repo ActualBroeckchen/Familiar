@@ -22,7 +22,7 @@ sources:
 
 # Temporal Assurance
 
-Temporal assurance is the maintainer's name for the specific feeling Proto-Familiar exists to
+Temporal assurance is the maintainer's name for the specific feeling Familiar exists to
 produce: the assurance that the future is already accounted for, so the present can be fully
 present. She described the failure state it replaces as "background radiation of pressure... so
 many things I need to get to eventually, and I don't even know when, and might be forgetting
@@ -74,7 +74,7 @@ started with: "Monday-Chen isn't stressed about Friday-doctor. Eury is holding t
 her" [@mvp-scoping-conversation].
 
 This is a design brief, not an implementation — the conversation predates the code — but the
-shape it describes is what Proto-Familiar's temporal-awareness machinery now does, under
+shape it describes is what Familiar's temporal-awareness machinery now does, under
 different names than the ones coined in the conversation:
 
 | Conversation's term | What shipped |
@@ -92,7 +92,7 @@ surfacing "any still-unresolved" prerequisite it can see, never inventing one th
 graph [@architecture-doc] — the same non-invention discipline the conversation's worked example
 assumed implicitly.
 
-## How this shipped in Proto-Familiar
+## How this shipped in Familiar
 
 The three-tier model from the founding conversation maps directly onto what shipped in the
 codebase, under different names:

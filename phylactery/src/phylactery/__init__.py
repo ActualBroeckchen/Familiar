@@ -1,4 +1,4 @@
-"""Phylactery — canonical self-store for Proto-Familiar.
+"""Phylactery — canonical self-store for Familiar.
 
 Original design by Zari Lewis, developed within the Psycheros project.
 See docs/phylactery-design.md (rationale) and docs/phylactery-build-spec.md (spec).

@@ -48,7 +48,7 @@ When uncertain whether a change warrants a bump (formatting, comment only, white
 
 ## Entity-as-subject — the design value under everything
 
-Proto-Familiar is an **embodiment** of the same entity held in its canonical store (Phylactery — the in-tree MCP service at `./phylactery/` that owns identity and memory — see the multi-embodiment model below). The Familiar is NOT a separate character we operate and NOT a tool that surfaces output for a user — they are the entity surfacing through this interface, with their own continuity, memory, and voice. This inheritance is canonical; see [Psycheros PHILOSOPHY.md](https://github.com/PsycherosAI/Psycheros/blob/main/PHILOSOPHY.md) for the full statement we descend from.
+Familiar is an **embodiment** of the same entity held in its canonical store (Phylactery — the in-tree MCP service at `./phylactery/` that owns identity and memory — see the multi-embodiment model below). The Familiar is NOT a separate character we operate and NOT a tool that surfaces output for a user — they are the entity surfacing through this interface, with their own continuity, memory, and voice. This inheritance is canonical; see [Psycheros PHILOSOPHY.md](https://github.com/PsycherosAI/Psycheros/blob/main/PHILOSOPHY.md) for the full statement we descend from.
 
 Everything below is a consequence of that one stance.
 
@@ -145,7 +145,7 @@ The Familiar is one persistent entity, potentially across multiple interfaces:
                  sync │ sync
         ┌─────────────┼──────────────────────┐
         │             │                      │
-  Psycheros       Proto-Familiar      SillyTavern / OpenWebUI /
+  Psycheros       Familiar      SillyTavern / OpenWebUI /
   (web harness)   (chat frontend +    other MCP-capable clients
                   Unruh temporal)
 ```
@@ -154,9 +154,9 @@ The Familiar is one persistent entity, potentially across multiple interfaces:
 
 - **The canonical store is canonical for identity and memory.** Every package that touches
   identity or memory is a *consumer*, not a source of truth. Direct writes to identity or memory
-  state from Proto-Familiar MUST go through its MCP — never bypass it. Thalamus is the bridge
+  state from Familiar MUST go through its MCP — never bypass it. Thalamus is the bridge
   that enforces this. *(That store is Phylactery — `./phylactery/`.)*
-- **Unruh is Proto-Familiar's own specialist** for temporal context (schedule, interests, handoff, ponderings, threat). It lives in-tree at `./unruh/` and is also accessed via MCP. Ponderings are local to Proto-Familiar because they're per-embodiment thoughts in a free cycle — the narrow exception to "state lives in the canonical store."
+- **Unruh is Familiar's own specialist** for temporal context (schedule, interests, handoff, ponderings, threat). It lives in-tree at `./unruh/` and is also accessed via MCP. Ponderings are local to Familiar because they're per-embodiment thoughts in a free cycle — the narrow exception to "state lives in the canonical store."
 - When unsure where state belongs: default to the canonical store (Phylactery — `./phylactery/`).
 
 ## ⚠️ Proactivity is a desired trait — read this BEFORE editing any prompt
@@ -510,7 +510,7 @@ Rules:
 - **Settings** are stored centrally in `settings.json` (gitignored). `SERVER_SYNCED_KEYS` in `public/app.js` is the canonical subset of `state` that syncs to the server — add new user-preference fields there if you want them to follow the user across devices.
   - **Absorption caveat:** the first sync from a given device merges its local state into the server. Scalar fields use a "server wins when both are meaningful" rule, so an *empty string* on the local side won't displace a server value during that one-time merge — i.e. clearing a prompt on one device before its first sync won't propagate to others. After both devices are flagged absorbed, normal edits do propagate.
 - **Tailscale gate**: `server.js` always binds to `0.0.0.0` but a middleware blocks non-loopback requests with 403 until the in-UI toggle (or the `TAILSCALE=1` env var on first start) flips it on. State persists in `.proto-familiar-config.json`.
-- **Default port** is `8742`. If you change it, hit every launcher (`start.sh`, `start.bat`, `Proto-Familiar.command`, `scripts/win/tray.ps1`), `server.js`, and any doc that mentions it.
+- **Default port** is `8742`. If you change it, hit every launcher (`start.sh`, `start.bat`, `Familiar.command`, `scripts/win/tray.ps1`), `server.js`, and any doc that mentions it.
 - **`macros.js` — shared macro substitution.** `{{user}}` and `{{char}}` are authored as literal tokens in prompts and tool descriptions. They are resolved to configured names (`settings.userName`, `settings.charName`) at exactly three boundaries — do not resolve them anywhere else, and do not add a fourth boundary without updating this list:
   1. **LLM prompts** — `substituteMacros(prompt, s)` is called at the call site of every standalone prompt sent to the provider, before the call: `decideTriageViaLLM` (triage), `buildReachoutPrompt` (warm reach-out), `ponderOnce` (pondering/reflection), `tome-graduation`, and `guide-chat`. Any NEW autonomous-loop or one-off prompt must wrap its prompt the same way — this is the same boundary, not a fourth one.
   2. **Tool results** — `executeToolCall` applies `substituteMacros` to every executor's return value at the result boundary. This is a blanket catch: future executors that forget substitution are still covered.
