@@ -22,7 +22,7 @@ DEST="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 # it lands on main — e.g.:
 #   BRANCH=my-feature-branch bash update.sh
 # GitHub's archive endpoint accepts branch names with slashes verbatim;
-# the extracted top-level folder is still globbed by `Proto-Familiar-*`.
+# the extracted top-level folder name may vary, so we locate it by searching for package.json below.
 BRANCH="${BRANCH:-main}"
 REPO_SLUG="ActualBroeckchen/Familiar"
 REPO_TARBALL="https://github.com/${REPO_SLUG}/archive/refs/heads/${BRANCH}.tar.gz"
