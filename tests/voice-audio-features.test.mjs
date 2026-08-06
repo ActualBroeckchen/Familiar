@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseWav, measureVoiceClip, frameF0, describeMeasurement,
-  F0_MIN_HZ, F0_MAX_HZ,
+  F0_MIN_HZ, F0_MAX_HZ, chunkIsSilent, createSilenceTracker
 } from '../voice-audio-features.js';
 
 /**
@@ -215,4 +215,31 @@ test('a clip whose bytes do not match the catalogue is refused, not measured', a
     assert.equal(r.reason, 'checksum', 'the pitch shown must describe the clip that would install');
     _resetCatalogue();
   } finally { await fsp.rm(root, { recursive: true, force: true }); }
+});
+
+// ── Silence inside a render (the 22-second hole my human heard) ──────────
+
+test('a silent chunk is recognised and speech is not', () => {
+  const silent = new Float32Array(2048);
+  const speech = Float32Array.from({ length: 2048 }, (_, i) => Math.sin(i / 8) * 0.4);
+  assert.equal(chunkIsSilent(silent), true);
+  assert.equal(chunkIsSilent(speech), false);
+  assert.equal(chunkIsSilent(new Float32Array(0)), true, 'nothing is silence');
+});
+
+test('the tracker reports the LONGEST unbroken silence, not the total', () => {
+  const t = createSilenceTracker(24000);
+  const silent = new Float32Array(24000);            // 1s
+  const speech = Float32Array.from({ length: 24000 }, (_, i) => Math.sin(i / 8) * 0.4);
+  t.push(silent); t.push(silent); t.push(silent);    // a 3s run
+  t.push(speech);                                    // broken
+  t.push(silent); t.push(silent);                    // a 2s run
+  assert.equal(t.longestSeconds(), 3, 'the worst stretch, not 5s of total quiet');
+});
+
+test('an all-speech render reports no silence', () => {
+  const t = createSilenceTracker(24000);
+  const speech = Float32Array.from({ length: 12000 }, (_, i) => Math.sin(i / 8) * 0.4);
+  for (let i = 0; i < 10; i++) t.push(speech);
+  assert.equal(t.longestSeconds(), 0);
 });

@@ -176,6 +176,54 @@ EOS at step 0 means the loop never breaks and runs the full frame budget. Keep
 `max_char_in_sentence` well clear of real sentence lengths, and keep
 `runawaySampleLimit` clamped **below** the frame ceiling or it cannot fire.
 
+### ⚠️ `Generate`'s loop drops words in two silent ways
+
+Read from `sherpa-onnx/csrc/offline-tts-pocket-impl.h` (`Generate`), not recalled:
+
+```cpp
+bool should_continue = true;
+for (int32_t i = 0; i < total && should_continue; ++i) {
+  GeneratedAudio cur = GenerateSingleSentence(sentences[i], gen_config,
+                                              View(&voice_embedding),
+                                              should_continue, wrapped_cb);
+  if (cur.samples.empty()) {
+    continue;                     // (2)
+  }
+  result.samples.insert(...);
+}
+```
+
+and inside `GenerateSingleSentence`:
+
+```cpp
+if (callback) {
+  should_continue = callback(out.GetTensorData<float>(), n, ...);   // (1)
+}
+```
+
+1. **A progress callback that returns false abandons the ENTIRE REST of the
+   message**, not just the sentence it was called from — `should_continue` is
+   the loop's own condition. Our worker returns `0` on a runaway trip and on a
+   dead pipe, so a runaway anywhere silences everything after it.
+2. **A sentence that renders no samples is skipped in silence** — no error, no
+   flag, the loop simply moves on.
+
+Neither surfaces as a failure, so the only signal is audio that is far shorter
+than the text predicts (`expectedSpeechSeconds`, warned about in the read-aloud
+loop). Keeping the sentence count at ONE (see `wholeUtteranceMin`) is also what
+keeps both of these to a single possible occurrence.
+
+### The voice-embedding cache is NOT a source of voice swapping
+
+Checked while hunting exactly that. `GetVoiceEmbedding` hashes the reference
+audio **after** resampling and after the `max_reference_audio_len` truncation,
+then `cache_.Get(hash)`; the hit path allocates from the stored shape and copies
+the stored floats, so a hit returns the same embedding the miss would have
+computed. Different clips hash differently. The embedding is also fetched ONCE
+per `Generate` and shared by every sentence via `View(&voice_embedding)` — so
+within one call the speaker cannot change. Drift within a message comes from the
+LM reset, not from this cache.
+
 ### ⚠️ `maxNumSentences` is inert
 
 PocketTTS's `Generate` never reads it — it does its own `SplitByPunctuation`
@@ -190,6 +238,59 @@ auto lm_main_state = model_->GetLmMainInitState();
 Every utterance is a fresh trajectory. `min_char_in_sentence` (via
 `MergeShortSentences`) makes resets *rarer* by merging more text into one
 utterance — it cannot remove them. Upstream's 30 merges nothing.
+
+**⚠️ Do NOT set it from the text length.** I tried exactly that — merge the
+whole message into one utterance, get one trajectory and one voice — and it
+loses words. PocketTTS generates per sentence and was trained on
+sentence-length audio, so an over-long "sentence" reaches EOS early and stops.
+Measured on the real engine, one 899-character message, same seed and voice:
+
+| `min_char_in_sentence` | duration | chars/sec | |
+|---|---|---|---|
+| 300 | 42.96 s | 20.9 | full |
+| 500 | 38.32 s | 23.5 | ok |
+| 899 (one utterance) | 24.80 s | **36.3** | **half the text gone** |
+
+Speech is ~18–25 chars/second; 36 is not fast speech, it is missing words. So
+this is a genuine trade with no winning setting — small values drift the voice
+(a reset per utterance), large values swallow content. **400 is where the text
+still renders in full.** Wanting both is what the sidecar is for: it carries a
+KV-cache state and needs no resets at all.
+
+### The voice-embedding cache is NOT a source of voice swapping
+
+Checked while hunting exactly that. `GetVoiceEmbedding` hashes the reference
+audio **after** resampling and after the `max_reference_audio_len` truncation,
+then `cache_.Get(hash)`; the hit path allocates from the stored shape and copies
+the stored floats, so a hit returns the same embedding the miss would have
+computed. Different clips hash differently. The embedding is also fetched ONCE
+per `Generate` and shared by every sentence via `View(&voice_embedding)` — so
+within one call the speaker cannot change. Drift within a message comes from the
+LM reset, not from this cache.
+
+### ⚠️ `maxNumSentences` is inert
+
+PocketTTS's `Generate` never reads it — it does its own `SplitByPunctuation`
+unconditionally. Not a consistency lever. The seed is.
+
+### ⚠️ LM state resets per utterance
+
+```cpp
+auto lm_main_state = model_->GetLmMainInitState();
+```
+
+Every utterance is a fresh trajectory. `min_char_in_sentence` (via
+`MergeShortSentences`) makes resets *rarer* by merging more text into one
+utterance — it cannot remove them. Upstream's 30 merges nothing.
+
+**Set it from the TEXT, not to a constant.** A fixed floor (we shipped 400)
+makes an ordinary message one trajectory and leaves a long one as several —
+which my human heard as the voice changing partway through a reply, on this
+engine only. `wholeUtteranceMin(text)` in `voice-generation.js` covers the whole
+part instead, capped by what the frame budget can hold. Verified on the real
+engine: 782 chars → 37.0 s across several utterances at 400, 31.1 s as one.
+`generationExtras` already clamps `max_char_in_sentence` to `min + 200`, so
+raising the floor cannot re-open the runt-fragment split above.
 
 ---
 

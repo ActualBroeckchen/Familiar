@@ -854,6 +854,19 @@ button { cursor: pointer; font-family: var(--font); }
   font-size: 0.75rem;
   line-height: 1.4;
 }
+.tailscale-sep {
+  border: none;
+  border-top: 1px solid var(--border, #333);
+  margin: 12px 0 8px;
+}
+#tailscale-https-btn { white-space: nowrap; }
+
+/* Push-to-talk, actively recording: unmistakable feedback that the hold took. */
+#voice-call-talk.is-talking {
+  background: #c0392b;
+  color: #fff;
+  border-color: #c0392b;
+}
 
 /* ── Self-update button + popover ────────────────────────────── */
 .update-wrap {
@@ -2628,6 +2641,21 @@ button { cursor: pointer; font-family: var(--font); }
   touch-action: none;
 }
 .ke-graph-map canvas:active { cursor: grabbing; }
+
+/*
+ * Push-to-talk: the browser must not treat a held button as a pan/scroll
+ * gesture or a long-press callout — both fire pointercancel and end the hold
+ * instantly, so a hold degrades into a tap and no speech is captured. The JS
+ * captures the pointer; this keeps the gesture from being claimed in the first
+ * place.
+ */
+#voice-call-talk,
+#voice-call-btn {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
 .ke-graph-status {
   position: absolute;
   top: 50%; left: 50%;
@@ -4000,6 +4028,27 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+/* Correcting a mis-heard transcript needs the room the clamp above denies —
+   an edit box you cannot see all of is worse than no edit box. */
+.attach-chip-transcript.is-editing {
+  max-height: none;
+  overflow: visible;
+}
+.attach-chip-transcript-edit {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  /* 16px on coarse pointers so iOS does not zoom the whole page on focus —
+     the same rule the rest of the inputs follow (WCAG/mobile section). */
+  color: var(--text);
+  background: var(--surface-1, transparent);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  resize: vertical;
+}
+@media (pointer: coarse) { .attach-chip-transcript-edit { font-size: 16px; } }
 /* Anything the chip says that is a problem-and-fix gets the room to say it. */
 .attach-chip-transcript.is-quiet {
   color: var(--text-dim);

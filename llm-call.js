@@ -41,6 +41,22 @@ export function extractContent(message = {}) {
 }
 
 /**
+ * Normalise a completion's `message` in place so `content` carries the answer a
+ * non-stream caller reads. A thinking model leaves `content` empty with the
+ * answer in `reasoning_content`; without this, a raw passthrough hands the
+ * caller an empty string and the reply silently vanishes (RULE A — the voice
+ * turn, guide-chat, the handoff summariser all read `.content`). A response
+ * carrying `tool_calls` is left untouched: empty content beside a tool call is
+ * legitimate, and reasoning is not an answer there. Returns the same message.
+ */
+export function foldReasoningIntoContent(message) {
+  if (!message || message.content || message.tool_calls?.length) return message;
+  const recovered = extractContent(message);
+  if (recovered) message.content = recovered;
+  return message;
+}
+
+/**
  * Call the provider's chat-completions endpoint and return the assistant text.
  * Throws on a transport/HTTP/parse error or a genuinely empty completion (with
  * a diagnostic message). `fetchFn` is injectable for tests.

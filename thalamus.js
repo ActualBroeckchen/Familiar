@@ -20,6 +20,7 @@ import path from 'path';
 import os from 'os';
 import { existsSync, readFileSync, mkdirSync, promises as fsp } from 'fs';
 import { fileURLToPath } from 'url';
+import { recentReachOuts, formatReachOutBlock } from './reach-out-log.js';
 import { randomUUID } from 'crypto';
 import { wardLocalNowISO } from './relative-time.js';
 
@@ -2062,6 +2063,24 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       }
     }
 
+    // ── What I said when I knocked ────────────────────────────────────────
+    // My human answers a between-sessions reach-out hours later, in here. The
+    // outbox delivered it and then nothing put it back in front of me, so their
+    // reply arrived as a non-sequitur and I asked them what they were talking
+    // about — about a question I had asked. This is the other half of that:
+    // what I said, which thing I meant, and why. markSurfaced ages it out in
+    // code after a few turns rather than waiting on me to decide I'm done.
+    // Ward-private live turns only; best-effort, silent on failure.
+    let reachOutBlock = '';
+    if (liveTurn && !staticOnly && !gated) {
+      try {
+        const knocks = await recentReachOuts({ markSurfaced: true });
+        reachOutBlock = formatReachOutBlock(knocks);
+      } catch (err) {
+        console.error('[thalamus] recentReachOuts failed:', err?.message ?? err);
+      }
+    }
+
     // ── Recent memories (today + yesterday) — the proactivity cross-check ──
     // Gives a warm reach-out AND the "did that follow?" hindsight questions
     // something to check against, so I don't ask what my human already told me
@@ -2389,6 +2408,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (graphLines)             dynamicSections.push(`Relevant Knowledge from Graph:\n${graphLines}`);
     if (ponderingsBlock)        dynamicSections.push(ponderingsBlock);
     if (deferredIntentsBlock)   dynamicSections.push(deferredIntentsBlock);
+    if (reachOutBlock)          dynamicSections.push(reachOutBlock);
     if (recentMemBlock)         dynamicSections.push(recentMemBlock);
     if (gcalCueBlock)           dynamicSections.push(gcalCueBlock);
     if (consentPendingBlock)    dynamicSections.push(consentPendingBlock);

@@ -121,6 +121,13 @@ if errorlevel 1 (
   if exist "%USERPROFILE%\.local\bin\uv.exe" set "PATH=%USERPROFILE%\.local\bin;%PATH%"
 )
 
+REM Make sure the Node dependencies match package.json before boot. The
+REM installer above only runs when node_modules is entirely absent; this also
+REM catches the STALE case — an update (in-app, git pull) that added a package
+REM like `tar` leaves node_modules present but incomplete, and voice then fails
+REM with "Cannot find package 'tar'". Cheap when nothing changed; never blocks.
+node "%SCRIPT_DIR%\scripts\ensure-node-deps.mjs"
+
 echo Starting Proto-Familiar on %URL% ^(log: %LOG_FILE%^) ...
 pushd "%SCRIPT_DIR%"
 REM Launch detached; capture PID via PowerShell.

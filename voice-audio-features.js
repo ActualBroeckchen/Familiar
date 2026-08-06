@@ -53,6 +53,25 @@ export function floatToPcm16(samples) {
 }
 
 /**
+ * The inverse: s16le PCM bytes back to Float32 in [-1, 1].
+ *
+ * The streaming ASR path (Pass 2) needs this — capture crosses the worker pipe
+ * as 16 kHz mono s16le (`audio-frame.js` KIND_PCM), and sherpa's
+ * `acceptWaveform` wants Float32. Dividing by 32768 (not 32767) is the standard
+ * decode: it maps the full int16 range [-32768, 32767] into [-1, 1) without a
+ * value ever exceeding 1. `bytes` is a Buffer (the frame payload) or any
+ * byte view; an odd length drops the trailing half-sample rather than reading
+ * past the end.
+ */
+export function pcm16ToFloat(bytes) {
+  const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes?.buffer ?? bytes ?? []);
+  const n = buf.length >> 1;
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) out[i] = buf.readInt16LE(i * 2) / 32768;
+  return out;
+}
+
+/**
  * A wav header on its own.
  *
  * Separate from the samples because a STREAMED wav has to declare its size
@@ -310,4 +329,54 @@ export function describeMeasurement(f) {
   const movement = spread == null ? '' : spread < 40 ? ', fairly steady' : spread > 110 ? ', moves around a lot' : '';
   const weak = f.pitchSamples < 10 ? ' (measured from very little speech — worth a listen)' : '';
   return `${band} pitch, around ${p} Hz${movement}${weak}.`;
+}
+
+/**
+ * Is this chunk of audio essentially silence?
+ *
+ * Cheap on purpose — it runs inside the TTS progress callback, which fires for
+ * every decoded chunk while my human is waiting to hear me. A coarse stride is
+ * plenty: real speech is nowhere near this threshold anywhere in a chunk, and
+ * digital silence is flat.
+ */
+export function chunkIsSilent(samples, { threshold = 0.005, stride = 16 } = {}) {
+  const n = samples?.length ?? 0;
+  if (n === 0) return true;
+  let peak = 0;
+  for (let i = 0; i < n; i += stride) {
+    const v = Math.abs(samples[i] ?? 0);
+    if (v > peak) peak = v;
+    if (peak > threshold) return false;
+  }
+  return true;
+}
+
+/**
+ * Track the longest unbroken run of silence across a stream of chunks.
+ *
+ * Why this exists: my human heard twenty-two seconds of nothing in the middle
+ * of a read-aloud, then my voice came back changed and a sentence had gone
+ * missing. Nothing anywhere recorded that it happened — not an error, not a
+ * flag, not a log line — so all we had was their ear. The engine can decode a
+ * normal-length generation into silence, and if it does I would rather say so
+ * than let it pass as a reply I actually spoke.
+ */
+export function createSilenceTracker(sampleRate = 24000) {
+  let runSamples = 0;
+  let longest = 0;
+  return {
+    /** Feed one decoded chunk. */
+    push(samples, silent = chunkIsSilent(samples)) {
+      if (silent) {
+        runSamples += samples?.length ?? 0;
+        if (runSamples > longest) longest = runSamples;
+      } else {
+        runSamples = 0;
+      }
+    },
+    /** Longest silent stretch seen so far, in seconds. */
+    longestSeconds() {
+      return Number((longest / (sampleRate || 24000)).toFixed(2));
+    },
+  };
 }

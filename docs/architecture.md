@@ -1852,6 +1852,27 @@ Within `dynamic`, the order is deliberate:
 3. **Graph excerpt** — entity-relationship context
 4. **Recent ponderings** — the Familiar's own quiet thoughts (honesty loop). Each entry's `created_at` is rendered via `relativeTime()`.
 5. **Deferred intents** — only on live turns. Up to 5 `wants_to_save` entries the Familiar flagged during free cycles but hasn't acted on yet, PLUS any `followup` entries memorization caught (things the Familiar said it would do but didn't). Shows the kind (tome/memory/identity/followup), the summary, the routing tool (or, for a followup, "the right tool" — no single one is named), and the (uid, index) pair for `acknowledge_deferred_intent`. See "Deferred-action pattern" below.
+5b. **What I said when I knocked** (`reach-out-log.js`) — only on live
+   ward-private turns. A between-sessions reach-out ("a thought from me") is
+   delivered through the outbox and, until this existed, nothing put it back in
+   front of the Familiar: my human answered hours later in chat and the reply
+   arrived as a non-sequitur — *"I don't remember asking about anything?"* about
+   a question the Familiar itself had asked. Worse, the message alone never said
+   WHICH occurrence was meant, so even once reminded it could not answer
+   *"last week's or the week before?"*.
+
+   So a knock is recorded with three things: what was **said**, what it was
+   **about** (the specific occurrence, named), and **why**. Both delivery paths
+   record — the warm reach-out loop (`about`/`why` ride the decision JSON it
+   already returns, no extra LLM call) and noticing's `reach_out_to_ward` (same
+   two fields on the tool, so the Familiar can say what it meant). The
+   `[I reached out first — this is what I said]` block renders the last few for
+   48 h, and `markSurfaced` ages each out in code after `MAX_SHOWN` turns —
+   the surfaced-tell discipline, so nothing depends on an acknowledge call the
+   model would forget. Deliberately NOT the outbox: that is a delivery queue
+   whose items are acknowledged and gone, while this is the Familiar's own
+   memory of having spoken and must outlive delivery.
+
 6. **Projection cue** (0.8 §4, generalized 0.8.107) — only on live turns. Appointments not yet thought-through, capped per turn and aged out after a few turns / a short window (code-driven, no acknowledgement call), with a one-shot last-chance re-surface within 48h of the event. Candidates are gathered in code (`gatherProjectionCandidates`): Unruh's `temporal_context.gcal_projection` flags (fresh sync arrivals) unioned with any bare upcoming event in the briefing window — unresolved, untouched by consequence edges, ≥6h runway — so hand-added and chat-created events get the cue too, not just synced ones. Auto-clears the moment the Familiar links one. Invites authoring both futures via `schedule_link`; never nags. See `gcal-projection.js`.
 7. **`[CARE CHECK]`** — only present when threat tier ≠ calm; carries identity-anchored guidance per tier
 8. **`[My stewardship]`** (0.8.18, `stewardship.js`) — the executive layer: a tiny conditional agenda (opening brief / aging floaters / anchor-drift), cap 3 items, ABSENT most turns. Stands down at moderate+ threat (so it never overlaps the CARE CHECK above). Code selects what qualifies; the Familiar owns how it raises each. See "File Structure" and docs/stewardship-build-spec.md.
@@ -2308,12 +2329,26 @@ paid for separately:
 | endpoint | cost | what it does |
 |---|---|---|
 | `POST /api/voice/speech-plan` | none | markdown → speakable text, returns a short-lived `say-xxxxxx` id |
-| `GET /api/voice/tts/:id` | a model + generation | streams a wav from ONE generation |
+| `GET /api/voice/tts/:id` | a model + generation | streams a wav — engine-branched (see below) |
 
 The browser gets the whole shape of a message immediately, then points an
-`<audio>` at the streaming URL. Responsiveness comes from **streaming out of a
-single generation**, never from splitting the message up — that distinction is
-the entire Pass 1 story.
+`<audio>` at the streaming URL. `GET /api/voice/tts/:id` takes **one of two
+paths, by engine** (`resolved.backend`):
+
+- **`pocket` (sidecar, default):** streams out of ONE generation per
+  `splitForGeneration` part (ordinary messages are a single part). The KV cache
+  carries the whole message, so there is nothing to drift and no tail to drop —
+  responsiveness from streaming, completeness for free. Never pre-split into
+  small utterances; that would force a clone per piece and reintroduce seams.
+- **`sherpa` (built-in fallback):** **buffered self-healing**
+  (`speakUnitsSelfHealing`, `voice-generation.js`). The message is split into
+  small units (`SMALL_UTTERANCE_CHARS`), each generated to a full clip and
+  checked against `renderDroppedWords` *before* any of its audio is written. A
+  short one is re-spoken with a bumped seed (which breaks sherpa's deterministic
+  early-EOS); if it stays short it drops to sentence granularity, each verified
+  and emitted once. Costs a small delay before the first words; buys the
+  guarantee that no sentence silently vanishes. Any still-short sentence is
+  counted and logged — never dressed up as success.
 
 ### The four bugs, in the order they were found
 
@@ -2343,10 +2378,29 @@ Each looked like the previous one's fix had failed. They were different.
    high-frequency energy. The bundled clip is now the enhanced one.
 
 4. **LM state resets per utterance.** `GenerateSingleSentence` opens with
-   `GetLmMainInitState()`. Merging (`min_char_in_sentence` 30 → 400) makes
-   resets rarer — drift moved from per-sentence to per-paragraph — but the port
-   offers no way to continue a trajectory across a call. That is what the
-   sidecar exists for.
+   `GetLmMainInitState()`. Merging (`min_char_in_sentence` 30 → 400) made resets
+   rarer — drift moved from per-sentence to per-paragraph — but the port offers
+   no way to continue a trajectory across a call. That is what the sidecar
+   exists for.
+
+   **A fixed 400 was not enough, and my human heard it** ("it swaps through
+   different voices at different points of the message" — within one message,
+   built-in engine only, never the sidecar). 400 makes an *ordinary* message one
+   trajectory but leaves a long one as several, and every extra utterance is
+   another voice.
+
+   **The one-utterance "fix" was reverted — it dropped words.** Sizing the whole
+   message as one utterance (`wholeUtteranceMin`, briefly shipped) does give one
+   voice, but PocketTTS was trained on sentence-length audio and reaches EOS
+   early on a very long "sentence", swallowing the tail: measured, an 899-char
+   message rendered in half the duration (36 chars/s — impossible for real
+   speech). So there is **no single built-in setting that wins both** — small
+   drifts the voice, large drops content. That is the whole reason `pocket` is
+   the default now (its KV cache needs no resets), and the reason the built-in
+   read-aloud path *verifies and re-speaks* instead of trusting one big
+   generation (see "read-aloud", above). `MIN_CHAR_IN_SENTENCE` stays 400 for
+   the hand-it-one-trajectory paths; the self-healing path deliberately uses the
+   much smaller `SMALL_UTTERANCE_CHARS` so a dropped sentence is detectable.
 
 ### Two backends, one protocol
 
@@ -2354,23 +2408,33 @@ Each looked like the previous one's fix had failed. They were different.
 protocol in `audio-frame.js`, so `audio-worker-host.js` supervises them
 identically — parking, backoff and idle unload were written once.
 
-| | `sherpa` (default) | `pocket` (opt-in) |
+| | `pocket` (default) | `sherpa` (built-in fallback) |
 |---|---|---|
-| worker | `audio-worker.mjs` | `voicebox/` (Python) |
-| cost | ships; ~216 MB | ~600 MB installed |
-| model | `2026-01` (only ONNX export) | `english_2026-04` |
-| continuity | resets per utterance | `copy_state=False` carries the KV cache |
+| worker | `voicebox/` (Python) | `audio-worker.mjs` |
+| cost | ~600 MB installed | ships; ~216 MB |
+| model | `english_2026-04` | `2026-01` (only ONNX export) |
+| continuity | `copy_state=False` carries the KV cache | resets per utterance |
 
-`sherpa` stays the default because 600 MB is real money on the hardware this
-project exists for. Choosing `pocket` without it installed **falls back and
-says so** — in the log and on `/api/voice/status` — carrying the command that
-fixes it. The worker is built on first use, not at boot, because the engine is
-a setting; the old one is stopped before the new one starts so two engines
-never hold models in RAM at once.
+`pocket` is the **default** because it does not drop the tail of a long message
+the way sherpa's per-utterance reset does. But nothing downloads at boot: a
+machine with no venv still speaks immediately, because `resolveBackend` **falls
+back to sherpa and says so** (`fellBackFrom: 'pocket'`, in the log and on
+`/api/voice/status`). The ~600 MB is fetched **on first use** —
+`autoInstallSidecarIfDefault` fires from the read-aloud path (never from status
+polling, so opening Settings pulls nothing), with visible, cancellable progress;
+selecting `pocket` in Settings starts the same download (the selection is the
+consent). The worker is built on first use; the old one is stopped before the
+new starts so two engines never hold models in RAM at once.
 
-Install with `node scripts/ensure-voicebox.mjs --install`. Deliberately **not**
-in the prestart hook: unlike Phylactery, this is optional, and downloading
-600 MB because someone typed `npm start` would be hostile on a full laptop.
+**Listening is not governed by this default.** `listeningWorker()` resolves
+sherpa **by name** (not via the default, which is now `pocket`) — the recogniser
+is always a sherpa model, and routing a voice note to the Python speaker would
+make it fail. Flipping the speaking default must never move the listener.
+
+Install can still be run by hand with `node scripts/ensure-voicebox.mjs
+--install`. Deliberately **not** in the prestart hook: downloading 600 MB
+because someone typed `npm start` would be hostile on a full laptop — hence
+first-*use*, not first-*boot*.
 
 ### Text preparation (`voice-speech.js`)
 
@@ -2395,9 +2459,24 @@ three minutes.
 ### Voice notes (Pass 1) — shipped 0.10.x
 
 New HTTP surface: `POST /api/media` (now `image/*` **and** `audio/*`),
-`POST /api/media/:id/transcribe`, `POST /api/voice/ward-voice`,
-`GET /api/voice/local`, and `POST /api/voice/install-models` taking
-`{what:'speak'|'listen'}`.
+`POST /api/media/:id/transcribe`, `POST /api/media/:id/transcript` (the ward's
+correction), `POST /api/voice/ward-voice`, `GET /api/voice/local`, and
+`POST /api/voice/install-models` taking `{what:'speak'|'listen'|'call'}`.
+
+- **A transcript my human can correct** (`correctTranscript` in
+  `voice-transcribe.js`). A recogniser mishears names and anyone whose speech it
+  wasn't trained on — "wish me luck" came back as "Wish May Look" — and the
+  transcript is not decoration: it is what the Familiar reads in the turn, what
+  memorisation folds, and what the asset's slug was minted from, so a
+  mis-hearing is wrong everywhere at once. The correction keeps what the
+  recogniser actually heard as `description.auto` (never overwritten by a second
+  correction) and marks `corrected:true`, so nothing downstream mistakes it for
+  the Familiar's own hearing. It also **re-graduates the slug** from the
+  corrected words (`setAssetDescription(..., {regraduate:true})`) — a note
+  findable only as `wish-may-look-x7` becomes findable by what was said — while
+  every old slug keeps resolving forever (ids are opaque; nothing may break).
+  The composer chip carries the edit affordance, so the fix happens before the
+  note is ever sent.
 
 The listen-once-keep-forever path, deliberately shaped as vision's twin.
 
@@ -2460,6 +2539,60 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   model, punctuation + inverse text normalisation built in). Decoded offline,
   once, with nobody waiting — so accuracy is the only axis and the streaming
   models stay unfetched until live calls in Pass 2.
+- **Streaming ASR is the Pass 2 worker spine (2a, landed).** Alongside the
+  offline recogniser the worker now loads an `asr-streaming` role (an online
+  zipformer transducer) and a `vad` role (Silero). `asrStream` opens a
+  per-`streamId` session; inbound `KIND_PCM` frames route straight to
+  `feedDecoder`, which runs sherpa's online contract (accept → decode-while-
+  ready → `getResult`) and emits unsolicited `asr-partial` / `asr-final` frames
+  as text forms and endpoints fire; `asrStreamStop` flushes the tail and drops
+  the session. Endpoint rules live in one named constant (`ASR_ENDPOINT`),
+  tunable against the §6.1 latency budget on the ward's hardware. Verified on
+  the real engine — chunked decoding is byte-identical to a whole-file decode,
+  and a spawned-child pipeline test (guarded by `PF_ASR_STREAMING_MODEL_DIR`,
+  skipped in CI) streams a wav through the actual worker and asserts partials +
+  a final. The `call-engine.js` that drives these (and fetches the model) is 2b.
+- **`call-engine.js` is the platform-neutral call spine (2b).** It owns
+  everything that is not transport — the `CallAdapter` registry, the one-call
+  lifecycle, `tomes/.call-state.json` (`{active, callId, since}`; the compute
+  governor's gate, read fail-safe via `isCallActiveFromFile`, cleared at boot by
+  `clearStaleCallState`), speaker→stream routing to the streaming worker,
+  endpoint→turn assembly, and `endUtterance` (push-to-talk's explicit boundary,
+  finalising via the 2a stop→reopen). An adapter provides transport only
+  (`joinCall`/`leaveCall`/`playAudio`/`stopPlayback`, pushing inbound audio
+  through engine hooks) so the next platform is a transport-only job; the turn
+  runner is an injected `onTurn` seam server.js wires to the chat path. Hard
+  off-switch `PROTO_FAMILIAR_VOICE_CALL_DISABLED=1`. The web adapter + the real
+  `onTurn` wiring are the next 2b slice.
+- **`voice-discord-adapter.js` is the Discord transport (Pass 3).** A second
+  `CallAdapter` behind the same contract, so `call-engine.js` is untouched. Its
+  only real work is the two format seams: inbound Opus (48 kHz stereo, decoded
+  by `opusscript`) → 16 kHz mono for the ASR, and the engine's 24 kHz mono reply
+  → 48 kHz stereo for `createAudioResource(Raw)`. Discord's own SPEAKING
+  start/end events are the utterance boundary (no push-to-talk, no VAD):
+  speaking-start opens a per-speaker subscription+decoder, speaking-end calls
+  `endUtterance` and tears them down. The `@discordjs/voice` functions + the
+  Opus decoder are injected, so the whole adapter is unit-tested against a fake
+  connection (`tests/voice-discord-adapter.test.mjs`); the resample helpers are
+  pure and exported. The gateway voice bridge lives in `discord-gateway.js`
+  (`GUILD_VOICE_STATES` intent bit 7; `discordVoiceAdapterCreator(guildId)` whose
+  `sendPayload` is `wsSend`, so the library sends op 4 itself; `VOICE_STATE_UPDATE`
+  + `VOICE_SERVER_UPDATE` dispatch forwarding; a `setVoiceRosterListener` seam for
+  who-is-in-the-channel). `voice-discord-server.js` (`attachDiscordVoice`) wires
+  it to a `call-engine`, shares the web path's ASR/TTS workers (the streamed
+  synthesizer is now `voice-synthesize.js`, used by both transports — extracted,
+  not copy-pasted), guards one-call-at-a-time across both transports via
+  `isCallActiveFromFile`, and exposes `joinVoiceCall`/`leaveVoiceCall`.
+  `server.js` attaches it at boot and registers it as the gateway's voice
+  controller (`setDiscordVoiceController`), so a ward-only `!call`/`!join` (join
+  the ward's current VC, found from tracked voice states) and `!leave` drive it.
+  Off-switch `PROTO_FAMILIAR_DISCORD_VOICE_DISABLED=1`. The Pass 3a turn is a
+  canned spoken acknowledgement (audio-OUT proof); the real multi-speaker Discord
+  turn path through the audience gate (3b — a ward-sign-off privacy path), the
+  per-location call-mode dropdown, and the `join_voice_call`/`leave_voice_call`
+  Familiar tools (3c) are the following slices — ward-verified live (no
+  gateway/UDP/Opus in CI). Deps are pure-JS/WASM (`@discordjs/voice`,
+  `opusscript`, `libsodium-wrappers`) so no native compiler is needed.
 
 ## Security design
 

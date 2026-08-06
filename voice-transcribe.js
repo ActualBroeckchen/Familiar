@@ -168,6 +168,61 @@ async function remember(id, description) {
 }
 
 /**
+ * My human fixes what I misheard.
+ *
+ * A recogniser mishears names, jargon, and anyone whose speech it wasn't
+ * trained on — "wish me luck" came back as "Wish May Look". That transcript is
+ * not a display detail: it IS the content of the note. It's what I read in the
+ * turn, what memorisation folds into a memory, and what the asset's slug was
+ * minted from. So a wrong one is wrong everywhere, and the person who knows
+ * what they said should be able to say so.
+ *
+ * What this keeps:
+ *   · `text`      — my human's words, now the transcript everything reads.
+ *   · `auto`      — what I actually heard, kept rather than overwritten. I
+ *                   should be able to tell the difference between what was said
+ *                   and what I made of it, and it's the only way to see whether
+ *                   my hearing is getting better or worse.
+ *   · `corrected` — so nothing downstream mistakes a correction for my own
+ *                   transcription, and I never claim I heard it correctly.
+ *
+ * The slug re-graduates from the corrected words (old ones keep resolving), so
+ * a note I could only find as `wish-may-look-x7` becomes findable by what my
+ * human actually said.
+ */
+export async function correctTranscript(idOrSlug, text, { getMeta = getAssetMeta, save = setAssetDescription } = {}) {
+  const corrected = typeof text === 'string' ? text.trim() : '';
+  if (!corrected) return { ok: false, reason: 'empty', detail: 'a correction needs words' };
+  if (corrected.length > 20000) return { ok: false, reason: 'too-long', detail: 'that is longer than any voice note transcript' };
+
+  const meta = await getMeta(idOrSlug);
+  if (!meta) return { ok: false, reason: 'not-found' };
+  if (meta.kind !== 'audio') return { ok: false, reason: 'not-audio' };
+
+  const prior = meta.description ?? null;
+  // Keep the FIRST machine transcript as `auto`, not the previous correction —
+  // correcting twice must not overwrite what I originally heard with my human's
+  // own earlier wording.
+  const auto = typeof prior?.auto === 'string' ? prior.auto : (typeof prior?.text === 'string' ? prior.text : '');
+
+  const next = {
+    ...(prior && typeof prior === 'object' ? prior : {}),
+    text: corrected,
+    auto,
+    corrected: true,
+    correctedAt: new Date().toISOString(),
+  };
+  // A note that was silence or unreadable and now has words is no longer a
+  // failure — drop the reason so nothing keeps rendering it as one.
+  delete next.reason;
+
+  const saved = await save(meta.id, next, { regraduate: true });
+
+  if (saved?.ok === false) return { ok: false, reason: 'write-failed', detail: saved.error };
+  return { ok: true, id: meta.id, slug: saved?.slugs?.[0] ?? meta.slugs?.[0] ?? null, text: corrected, auto };
+}
+
+/**
  * Transcribe every voice note in a turn's messages that has not been heard
  * yet, BEFORE the prompt is assembled.
  *

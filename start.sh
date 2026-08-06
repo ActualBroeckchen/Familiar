@@ -116,6 +116,13 @@ else
     say "Phylactery dependencies missing. Running installer to set them up..."
     bash "$SCRIPT_DIR/install.sh"
   fi
+  # Make sure the Node dependencies match package.json before boot. The
+  # installer above only runs when node_modules is entirely absent; this also
+  # catches the STALE case — an update (in-app, git pull) that added a package
+  # like `tar` leaves node_modules present but incomplete, and voice then fails
+  # with "Cannot find package 'tar'". Cheap when nothing changed; installs only
+  # what drifted. Never blocks boot (exits 0 even on failure).
+  node "$SCRIPT_DIR/scripts/ensure-node-deps.mjs" || true
   say "Starting Proto-Familiar on $URL (logs: $LOG_FILE) ..."
   ( cd "$SCRIPT_DIR" && PORT="$PORT" TAILSCALE="$TAILSCALE" nohup node server.js >"$LOG_FILE" 2>&1 & echo $! >"$PID_FILE" )
 

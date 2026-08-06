@@ -64,7 +64,14 @@ export async function currentAudioWorker({ rootDir, readSettings } = {}) {
   const resolved = await resolveBackend({ rootDir, settings: s });
 
   if (worker && backend?.backend === resolved.backend && backend?.workerScript === resolved.workerScript) {
-    return { worker, resolved: backend };
+    // The WORKER can be reused (same engine + script), but the RESOLUTION
+    // METADATA must not be stale: choosing the sidecar when it isn't installed
+    // still resolves to sherpa, yet now carries fellBackFrom:'pocket'. Returning
+    // the cached `backend` (fellBackFrom:null) is what made the engine picker
+    // snap back to the default with no "chosen but not installed" prompt — the
+    // status endpoint reads fellBackFrom from here. Refresh it, keep the worker.
+    backend = resolved;
+    return { worker, resolved };
   }
 
   if (worker) { try { worker.stop(); } catch { /* already gone */ } }
@@ -98,10 +105,13 @@ export async function listeningWorker({ rootDir } = {}) {
   if (VOICE_HARD_DISABLED) return { worker: null, reason: 'voice-disabled' };
   if (listener) return { worker: listener };
 
-  // Pinned: `settings: {}` resolves the default backend, which is sherpa. Not
-  // read from my human's voiceTts choice, because that choice is about the
-  // voice they hear and has nothing to do with the recogniser.
-  const resolved = await resolveBackend({ rootDir, settings: {} });
+  // Pinned to sherpa EXPLICITLY, not via the default. The speaking default is
+  // pocket now, and `settings: {}` would resolve to it — routing every voice
+  // note to a Python process that cannot listen the moment the sidecar is
+  // installed. The recogniser is a sherpa model regardless of what speaks, so
+  // ask for it by name. Not read from my human's voiceTts choice either: that
+  // choice is about the voice they hear and has nothing to do with listening.
+  const resolved = await resolveBackend({ rootDir, settings: { voiceTts: { backend: BACKENDS.SHERPA } } });
   if (resolved.backend !== BACKENDS.SHERPA) {
     return { worker: null, reason: 'no-listening-engine', detail: resolved.reason ?? null };
   }

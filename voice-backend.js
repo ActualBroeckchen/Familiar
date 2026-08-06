@@ -14,12 +14,24 @@
  *            english_2026-04; the only sherpa export is the older 2026-01.
  *            Costs ~600 MB installed.
  *
- * ── Why sherpa stays the default ────────────────────────────────────────
- * 600 MB is a real amount of disk on the machines this project exists for. A
- * Familiar that speaks slightly unevenly is worth having; one that will not
- * install because the laptop is full is not. So the better engine is opt-in,
- * its cost is stated before anything downloads, and choosing it never breaks
- * the machine that cannot afford it.
+ * ── Why pocket is the default, without a hostile download ───────────────
+ * pocket is the better engine — it does not drop the tail of a long message
+ * the way sherpa's per-utterance reset does — so it is the DEFAULT choice.
+ * But 600 MB is a real amount of disk, and pulling it the moment someone
+ * types `npm start` would be a hostile surprise on a nearly-full laptop.
+ *
+ * The reconciliation: the default is pocket, but nothing downloads at boot.
+ * A machine with no venv still SPEAKS immediately — the resolver falls back
+ * to sherpa (always present) with `fellBackFrom: 'pocket'` attached — and the
+ * ~600 MB is fetched the first time voice is actually USED, with visible,
+ * cancellable progress. So the good engine is what you get, the built-in one
+ * carries you until it arrives, and no one eats the download unasked at boot.
+ *
+ * ── Listening is NOT governed by this default ───────────────────────────
+ * Only SPEAKING honours `voiceTts.backend`. The recogniser is a sherpa model
+ * always, resolved explicitly (`listeningWorker`), never through this default
+ * — flipping the speaking default to pocket must never route a voice note to
+ * a Python process that cannot listen.
  *
  * ── Availability is checked, never assumed ──────────────────────────────
  * Selecting `pocket` on a machine with no venv must not mean silence. The
@@ -35,7 +47,7 @@ export const BACKENDS = Object.freeze({
   POCKET: 'pocket',
 });
 
-export const DEFAULT_BACKEND = BACKENDS.SHERPA;
+export const DEFAULT_BACKEND = BACKENDS.POCKET;
 
 /** Where the Python peer lives, mirroring phylactery/ and unruh/. */
 export const VOICEBOX_SUBDIR = 'voicebox';

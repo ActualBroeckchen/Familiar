@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { speakableText, splitForSpeech, prepareForSpeech, capSentenceLength } from '../voice-speech.js';
+import { speakableText, splitForSpeech, prepareForSpeech, capSentenceLength, splitForUtterances
+} from '../voice-speech.js';
 import { MAX_CHAR_IN_SENTENCE, MIN_CHAR_IN_SENTENCE } from '../voice-generation.js';
 import { encodeWav, parseWav, wavHeader, floatToPcm16, WAV_STREAMING_LENGTH } from '../voice-audio-features.js';
 
@@ -313,4 +314,34 @@ test('a streamed wav parses as audio once the bytes have arrived', () => {
   const parsed = parseWav(Buffer.concat([wavHeader(WAV_STREAMING_LENGTH, 24000), body]));
   assert.equal(parsed.samples.length, 4);
   assert.ok(Math.abs(parsed.samples[1] - 0.5) < 0.001);
+});
+
+// ── Utterance-sized pieces (so a swallowed one can be SEEN) ──────────────
+
+test('pieces come out utterance-sized rather than one lump', () => {
+  const text = 'One two three four. Five six seven eight. '.repeat(30);
+  const pieces = splitForUtterances(text);
+  assert.ok(pieces.length > 1, 'a long message is more than one utterance');
+  for (const p of pieces) assert.ok(p.length <= 900, `no piece is a whole message: ${p.length}`);
+});
+
+test('a trailing runt is folded back, never handed over alone', () => {
+  // MergeShortSentences pushes its leftover however short, and a lone "Great."
+  // is the documented EOS-at-step-0 trigger. Ours merges it back.
+  const pieces = splitForUtterances('A. '.repeat(150) + 'Great.');
+  assert.ok(pieces[pieces.length - 1].length > 20, 'the tail is not a fragment');
+  assert.match(pieces[pieces.length - 1], /Great\.$/, 'and the words are still there');
+});
+
+test('every word survives the split', () => {
+  const text = 'First sentence here. Second one follows. Third arrives now. ' .repeat(12);
+  const joined = splitForUtterances(text).join(' ');
+  for (const w of ['First', 'Second', 'Third']) assert.ok(joined.includes(w));
+  assert.ok(Math.abs(joined.length - text.trim().length) < 20, 'nothing meaningful lost');
+});
+
+test('a short message stays a single piece, and junk yields none', () => {
+  assert.equal(splitForUtterances('Just a quick line.').length, 1);
+  assert.deepEqual(splitForUtterances(''), []);
+  assert.deepEqual(splitForUtterances(null), []);
 });

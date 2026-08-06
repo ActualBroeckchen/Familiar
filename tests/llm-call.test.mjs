@@ -1,7 +1,7 @@
 // llm-call.js — the shared background-loop chat call + thinking-model handling.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { callProviderChat, extractContent } from '../llm-call.js';
+import { callProviderChat, extractContent, foldReasoningIntoContent } from '../llm-call.js';
 
 const okFetch = (body) => async () => ({ ok: true, status: 200, text: async () => JSON.stringify(body) });
 
@@ -11,6 +11,32 @@ test('extractContent: content wins, else reasoning_content, else reasoning, else
   assert.equal(extractContent({ reasoning: 'r' }), 'r');
   assert.equal(extractContent({}), '');
   assert.equal(extractContent(), '');
+});
+
+test('foldReasoningIntoContent: recovers a thinking model reply into content', () => {
+  // The non-stream passthrough bug: content empty, answer in reasoning_content.
+  const m = { content: '', reasoning_content: 'Hey?' };
+  foldReasoningIntoContent(m);
+  assert.equal(m.content, 'Hey?');
+});
+
+test('foldReasoningIntoContent: leaves a real content untouched', () => {
+  const m = { content: 'already here', reasoning_content: 'scratch work' };
+  foldReasoningIntoContent(m);
+  assert.equal(m.content, 'already here');
+});
+
+test('foldReasoningIntoContent: never clobbers a tool_calls response', () => {
+  // Empty content beside tool_calls is legitimate — reasoning is NOT the answer.
+  const m = { content: '', reasoning_content: 'deciding…', tool_calls: [{ id: 't1' }] };
+  foldReasoningIntoContent(m);
+  assert.equal(m.content, '');
+});
+
+test('foldReasoningIntoContent: nothing to recover leaves content empty', () => {
+  const m = { content: '' };
+  foldReasoningIntoContent(m);
+  assert.equal(m.content, '');
 });
 
 test('callProviderChat: returns assistant content', async () => {

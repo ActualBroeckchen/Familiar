@@ -71,6 +71,15 @@ fi
   done
 ) &
 
+# Make sure the Node dependencies match package.json before boot. The install
+# check above only fires when node_modules is entirely absent; this also
+# catches the STALE case — an update (in-app, git pull) that added a package
+# like `tar` leaves node_modules present but incomplete, and voice then fails
+# with "Cannot find package 'tar'". Cheap when nothing changed; never blocks.
+if command -v node >/dev/null 2>&1; then
+  node scripts/ensure-node-deps.mjs || true
+fi
+
 clear
 cat <<EOF
 ========================================

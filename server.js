@@ -49,6 +49,7 @@ import {
   setIntention, roundsForWard, listIntentions, getDueIntentions,
 } from './thalamus.js';
 import { scoreMessage } from './crisis-signals.js';
+import { foldReasoningIntoContent } from './llm-call.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
 import { ponderOnce } from './pondering.js';
 import { startPonderingLoop, stopPonderingLoop } from './pondering-loop.js';
@@ -101,6 +102,7 @@ import { startContentRegateLoop, stopContentRegateLoop } from './content-regate-
 import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './needs-tracking-loop.js';
 import { isNeedWindow } from './needs-tracking.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './reachout.js';
+import { recordReachOut } from './reach-out-log.js';
 import { appendReflectionEvent, readReflectionEvents } from './reflection-events.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
 import { buildTimeAnchorBlock, wardLocalNowISO, plainInterval } from './relative-time.js';
@@ -262,13 +264,24 @@ import { consentSummary, inspectInstalled, fetchPlan, MODELS_SUBDIR } from './vo
 import { measureFootprint } from './voice-footprint.js';
 import { listClips, measureClip, cachedFeatures, catalogueSummary } from './voice-clips.js';
 import { currentAudioWorker as currentAudioWorkerShared, listeningWorker, stopAudioWorker, VOICE_HARD_DISABLED } from './audio-worker-current.js';
-import { hearVoiceNotes, transcribeAsset, transcriptionAllowed } from './voice-transcribe.js';
+import { hearVoiceNotes, transcribeAsset, transcriptionAllowed, correctTranscript } from './voice-transcribe.js';
 import { DEFAULT_VOICE } from './voice-catalogue.js';
 import { resolveVoice, installVoice, saveWardVoice, listLocalVoices } from './voices.js';
 import { mergeSettings } from './settings-merge.js';
-import { prepareForSpeech } from './voice-speech.js';
+import { prepareForSpeech, splitForUtterances, splitForSpeech } from './voice-speech.js';
+import {
+  speakUnitsSelfHealing,
+  SMALL_UTTERANCE_CHARS, DEFAULT_TTS_SEED, MAX_CHAR_IN_SENTENCE,
+} from './voice-generation.js';
+
+/**
+ * Failures where nothing further can be spoken, so the read-aloud loop stops
+ * rather than retrying every remaining part against a dead worker. Anything
+ * else is a per-part problem and must NOT silence the parts that still work.
+ */
+const FATAL_TTS_REASONS = new Set(['no-worker', 'no-engine', 'not-loaded', 'stopped', 'worker-died', 'worker-stopped', 'parked', 'spawn-failed']);
 import { resolveBackend, inspectBackends, BACKENDS } from './voice-backend.js';
-import { wavHeader, WAV_STREAMING_LENGTH, measureVoiceClip } from './voice-audio-features.js';
+import { wavHeader, WAV_STREAMING_LENGTH, measureVoiceClip, floatToPcm16 } from './voice-audio-features.js';
 import { KIND_PCM } from './audio-frame.js';
 import { shortSlug } from './slug-ids.js';
 // Tome / state-file coordination is owned by thalamus — every writer
@@ -309,7 +322,7 @@ function chatRateLimit(req, res, next) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience } = req.body;
+  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode } = req.body;
   // runToolLoop: the app sends true when the user has tools enabled.
   // The server then composes the tool list (built-ins + custom) and runs
   // the multi-round tool-call loop HERE — executing via cerebellum —
@@ -432,6 +445,17 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // into the dynamic block so the Familiar knows it reached out while
   // the user was away — and doesn't act confused about having done so.
   let enrichedResult = enriched;
+
+  // A live voice call is spoken, not typed. Tell the Familiar so — its reply is
+  // read aloud, so markdown, bullets, and length that reads fine on screen come
+  // out wrong in the ear. Injected as a dynamic block (literal "my human", the
+  // server-injected-block convention — no macros), only on a real call turn. The
+  // deferred-intents surface it should weave in rides the normal enrich() blocks.
+  if (voiceMode && enrichMode === 'full') {
+    const block = `\n\n[VOICE CALL — I'm speaking, not typing]\nI'm on a live voice call with my human right now, so my reply gets read aloud. I keep it the way I'd actually talk: plain spoken sentences, no markdown, no bullet points or headings, no asterisks or emoji — spoken aloud those are either read out literally or stripped, and either way they don't belong in speech. I say as much as the moment actually wants — sometimes that's a quick line, but I don't clip myself to a one-liner when there's something real to get into; I talk like I'm in the room with them, and let it run as long as it naturally would out loud, leading with the part that matters. If something's been waiting for me to bring up — a thought I meant to share, a check-in — I just work it into what I'm saying, the way it would come up in a real conversation, not as a separate announcement.`;
+    enrichedResult = { ...enrichedResult, dynamic: (enrichedResult.dynamic || '') + block };
+  }
+
   if (enrichMode === 'full') {
     try {
       const pending = await listOutbox({ pendingOnly: true, limit: 20 });
@@ -442,7 +466,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
           .map(i => `  - At ${i.ts}: "${i.body}" ${formatDeliveryNote(i, { hasPushChannel: pushConfigured })}`)
           .join('\n');
         const block = `\n\n[PENDING CHECK-IN NOTICES]\nWhile my human was away, I reached out to them with the following (they have not yet acknowledged):\n${notices}\n\nI am aware I did this. If their first message back opens a door to it, I may acknowledge having reached out — but I should not lead with it or press.`;
-        enrichedResult = { ...enriched, dynamic: (enriched.dynamic || '') + block };
+        // Build on enrichedResult, not `enriched` — a prior block (e.g. voice mode)
+        // may already have appended to `dynamic`, and spreading the base would drop it.
+        enrichedResult = { ...enrichedResult, dynamic: (enrichedResult.dynamic || '') + block };
       }
     } catch { /* non-critical */ }
   }
@@ -1073,23 +1099,37 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     const text = await upstream.text();
     res.status(upstream.status);
     res.setHeader('Content-Type', 'application/json');
-    if (thalamusEnvelope && upstream.ok) {
-      try {
-        const parsed = JSON.parse(text);
-        parsed._thalamus = thalamusEnvelope;
-        // M8 idle-mode outcome reporting: fire-and-forget after response sent.
-        const responseText = parsed.choices?.[0]?.message?.content ?? '';
-        if (enriched.surfacedBookmarks?.length > 0) {
-          reportSurfacingOutcomes({ responseText, bookmarks: enriched.surfacedBookmarks })
-            .catch(err => console.error('[server] reportSurfacingOutcomes failed:', err?.message ?? err));
-        }
-        if (enriched.surfacedTasks?.length > 0 && responseText) {
-          tagRaisedOutcomes({ responseText, tasks: enriched.surfacedTasks })
-            .catch(err => console.error('[server] tagRaisedOutcomes failed:', err?.message ?? err));
-        }
-        return res.send(JSON.stringify(parsed));
-      } catch { /* upstream returned non-JSON — pass through unchanged */ }
+    // RULE A at the one seam every non-stream reply crosses. A thinking model
+    // (GLM/DeepSeek) parks its answer in `reasoning_content` when `content` is
+    // empty. A raw passthrough of `.content` hands every non-stream caller —
+    // the voice turn, guide-chat, the handoff summariser — an empty string, so
+    // the reply silently vanishes. Fold the recovered text into
+    // choices[0].message.content HERE, so no caller has to remember. A response
+    // carrying tool_calls is left untouched: an empty content beside tool_calls
+    // is legitimate, and reasoning is not an answer there.
+    let parsed = null;
+    if (upstream.ok) {
+      try { parsed = JSON.parse(text); } catch { parsed = null; }
+      if (parsed?.choices?.[0]?.message) foldReasoningIntoContent(parsed.choices[0].message);
     }
+    if (thalamusEnvelope && parsed) {
+      parsed._thalamus = thalamusEnvelope;
+      // M8 idle-mode outcome reporting: fire-and-forget after response sent.
+      const responseText = parsed.choices?.[0]?.message?.content ?? '';
+      if (enriched.surfacedBookmarks?.length > 0) {
+        reportSurfacingOutcomes({ responseText, bookmarks: enriched.surfacedBookmarks })
+          .catch(err => console.error('[server] reportSurfacingOutcomes failed:', err?.message ?? err));
+      }
+      if (enriched.surfacedTasks?.length > 0 && responseText) {
+        tagRaisedOutcomes({ responseText, tasks: enriched.surfacedTasks })
+          .catch(err => console.error('[server] tagRaisedOutcomes failed:', err?.message ?? err));
+      }
+      return res.send(JSON.stringify(parsed));
+    }
+    // Successful JSON without an envelope: re-serialise so the recovered
+    // content rides out. A non-JSON body or an upstream error passes through
+    // byte-for-byte unchanged.
+    if (parsed) return res.send(JSON.stringify(parsed));
     return res.send(text);
   }
 
@@ -1424,6 +1464,10 @@ app.get('/api/voice/status', async (req, res) => {
     // apply — a ward reading this should not have to work out which gate bit.
     hardDisabled: VOICE_HARD_DISABLED,
     listeningEnabled: voiceListeningEnabled(),
+    // The streaming-ASR languages actually installed (pinned), so the call
+    // language picker can only offer what can be heard — a menu that named a
+    // language with no model would be listening in silence.
+    asrLanguages: availableAsrLangs(),
     // Read-aloud needs a reference clip as much as it needs the engine:
     // PocketTTS clones zero-shot and has no built-in voice to fall back on.
     readAloudAvailable: !VOICE_HARD_DISABLED && voice.ok,
@@ -1517,6 +1561,12 @@ app.get('/api/voice/models', async (req, res) => {
  */
 function voicePlanFor(what) {
   const speak = composePlan({ capabilityTier: 'read-aloud', voiceEngine: 'pocket' });
+  if (what === 'call') {
+    // A live voice call (Pass 2b) needs the STREAMING recogniser + VAD (the
+    // 'listening' tier) AND a speaking voice — I both listen and talk in a
+    // call, unlike a voice note (offline, listen-only) or read-aloud (speak-only).
+    return composePlan({ capabilityTier: 'listening', voiceEngine: 'pocket' });
+  }
   if (what !== 'listen') return speak;
 
   // Voice notes are decoded offline, once, with nobody waiting — so listening
@@ -1557,9 +1607,18 @@ app.post('/api/voice/install-models', async (req, res) => {
         }
       },
     });
-    console.log(result?.ok === false
-      ? `[voice] ${what} model download failed: ${result.message ?? result.reason}`
-      : `[voice] ${what} model(s) ready`);
+    if (result?.ok === false) {
+      // Surface the underlying cause, not just the friendly message. The one
+      // line that says WHY an unpack failed (a decode error, a missing codec,
+      // a locked file) lives in `result.failed[].detail`; dropping it here is
+      // what made this class of failure undiagnosable from the terminal.
+      const cause = Array.isArray(result.failed)
+        ? result.failed.map((f) => f?.detail).filter(Boolean).join('; ')
+        : '';
+      console.log(`[voice] ${what} model download failed: ${result.message ?? result.reason}${cause ? ` — ${cause}` : ''}`);
+    } else {
+      console.log(`[voice] ${what} model(s) ready`);
+    }
     res.json({ ok: Boolean(result?.ok ?? true), ...result });
   } catch (err) {
     res.json({ ok: false, error: String(err?.message ?? err) });
@@ -1615,48 +1674,92 @@ app.post('/api/media/:id/transcribe', async (req, res) => {
  * answers immediately with `started` and the UI polls /api/voice/status. A
  * request that hangs for four minutes looks broken however well it is going.
  */
-let voiceboxInstall = null;   // { startedAt, done, ok, detail }
+let voiceboxInstall = null;   // { startedAt, done, ok, detail, cancelled }
+let voiceboxInstallChild = null;
 
-app.post('/api/voice/install-sidecar', async (_req, res) => {
+/**
+ * Kick off the sidecar download, or report that one is already running / done.
+ *
+ * The same work `scripts/ensure-voicebox.mjs --install` does, reachable from two
+ * places: the Settings button (an explicit ask), and the first time voice is
+ * actually USED while the default (pocket) is not yet installed — which is the
+ * "download on first use" the pocket default is built around.
+ *
+ * Idempotent: a second caller while one is running joins the one in flight, so a
+ * read-aloud click and a settings click cannot spawn two ~600 MB downloads.
+ *
+ * Long-running by nature (torch is ~122 MB before anything unpacks), so callers
+ * get `started` immediately and poll GET /api/voice/install-sidecar.
+ */
+async function startVoiceboxInstall() {
   if (voiceboxInstall && !voiceboxInstall.done) {
-    return res.json({ ok: true, started: true, already: true, startedAt: voiceboxInstall.startedAt });
+    return { started: true, already: true, startedAt: voiceboxInstall.startedAt };
   }
-  const found = await inspectBackends(__dirname);
-  if (found[BACKENDS.POCKET].available) {
-    return res.json({ ok: true, already: true, done: true, detail: 'already installed' });
+  const found = await inspectBackends(__dirname).catch(() => null);
+  if (found?.[BACKENDS.POCKET]?.available) {
+    return { already: true, done: true, detail: 'already installed' };
   }
 
-  voiceboxInstall = { startedAt: new Date().toISOString(), done: false, ok: false, detail: null };
+  voiceboxInstall = { startedAt: new Date().toISOString(), done: false, ok: false, detail: null, cancelled: false };
   const script = path.join(__dirname, 'scripts', 'ensure-voicebox.mjs');
   const child = spawn(process.execPath, [script, '--install'], {
     cwd: __dirname,
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
+  voiceboxInstallChild = child;
   let tail = '';
   const keep = (buf) => { tail = (tail + buf.toString()).slice(-2000); };
   child.stdout.on('data', keep);
   child.stderr.on('data', keep);
   child.on('error', (err) => {
     voiceboxInstall = { ...voiceboxInstall, done: true, ok: false, detail: String(err?.message ?? err) };
+    voiceboxInstallChild = null;
   });
   child.on('close', async (code) => {
     const after = await inspectBackends(__dirname).catch(() => null);
-    const ok = code === 0 && Boolean(after?.[BACKENDS.POCKET]?.available);
+    const cancelled = voiceboxInstall?.cancelled === true;
+    const ok = !cancelled && code === 0 && Boolean(after?.[BACKENDS.POCKET]?.available);
     voiceboxInstall = {
       ...voiceboxInstall, done: true, ok,
       // The tail of the log, because "it failed" with no reason is the thing
       // that sends someone to a terminal anyway.
-      detail: ok ? null : (tail.trim().split('\n').slice(-4).join(' ') || `exited ${code}`),
+      detail: ok ? null : cancelled ? 'cancelled' : (tail.trim().split('\n').slice(-4).join(' ') || `exited ${code}`),
     };
-    if (ok) console.log('[voice] voicebox installed — switch the engine in Settings to use it');
+    voiceboxInstallChild = null;
+    if (ok) console.log('[voice] voicebox installed — the sidecar speaks from now on');
   });
 
-  res.json({ ok: true, started: true, startedAt: voiceboxInstall.startedAt });
+  return { started: true, startedAt: voiceboxInstall.startedAt };
+}
+
+/**
+ * If the resolved worker fell back from pocket to sherpa — the default is
+ * chosen but not downloaded — start the download in the background. Fire and
+ * forget: the caller keeps speaking on sherpa this turn, and the sidecar takes
+ * over once it lands. Called only from real speak paths, never from status
+ * polling, so opening Settings does not pull 600 MB.
+ */
+function autoInstallSidecarIfDefault(resolved) {
+  if (resolved?.fellBackFrom !== BACKENDS.POCKET) return;
+  if (voiceboxInstall && (!voiceboxInstall.done || voiceboxInstall.ok || voiceboxInstall.cancelled)) return;
+  startVoiceboxInstall().catch(() => { /* the fallback is already speaking; a failed start is not fatal */ });
+}
+
+app.post('/api/voice/install-sidecar', async (_req, res) => {
+  res.json({ ok: true, ...(await startVoiceboxInstall()) });
 });
 
 app.get('/api/voice/install-sidecar', (_req, res) => {
   res.json({ ok: true, install: voiceboxInstall });
+});
+
+/** Cancel an in-flight download — the ward changed their mind, or the disk is tight. */
+app.delete('/api/voice/install-sidecar', (_req, res) => {
+  if (!voiceboxInstall || voiceboxInstall.done) return res.json({ ok: true, running: false });
+  voiceboxInstall.cancelled = true;
+  try { voiceboxInstallChild?.kill('SIGTERM'); } catch { /* already gone */ }
+  res.json({ ok: true, cancelled: true });
 });
 
 // Clearing a park is deliberate — the ward has presumably fixed something.
@@ -1701,7 +1804,12 @@ function keepUtterance(parts) {
 
 /** Stream ids are 16-bit on the wire, so they wrap rather than grow. */
 let nextStreamId = 1;
-const takeStreamId = () => (nextStreamId = (nextStreamId % 65535) + 1);
+// Bounded BELOW the band `voice-call-server.js` uses for a live call's TTS
+// (40000+). Both share one worker, and a listener filters frames by streamId —
+// so if the two bands ever met, one stream's audio would be written into the
+// other's wav, which is heard as the voice changing mid-sentence.
+const READ_ALOUD_STREAM_ID_MAX = 39999;
+const takeStreamId = () => (nextStreamId = (nextStreamId % READ_ALOUD_STREAM_ID_MAX) + 1);
 
 // What would be said, and how. No engine, no model, no cost.
 app.post('/api/voice/speech-plan', (req, res) => {
@@ -1727,8 +1835,13 @@ app.post('/api/voice/speech-plan', (req, res) => {
  * very long one seams, at a paragraph, and the plan says how many times.
  */
 app.get('/api/voice/tts/:id', async (req, res) => {
-  const { worker } = await currentAudioWorker();
+  const { worker, resolved } = await currentAudioWorker();
   if (!worker) return res.status(503).json({ ok: false, reason: 'voice-disabled' });
+
+  // First real use of voice while pocket (the default) is chosen but not yet
+  // downloaded: start the ~600 MB fetch in the background. This turn still
+  // speaks — on the sherpa fallback — and the sidecar takes over once it lands.
+  autoInstallSidecarIfDefault(resolved);
 
   const held = utterances.get(req.params.id);
   if (!held) return res.status(404).json({ ok: false, reason: 'expired', detail: 'ask for a fresh plan' });
@@ -1761,33 +1874,86 @@ app.get('/api/voice/tts/:id', async (req, res) => {
   let aborted = false;
   res.on('close', () => { aborted = true; });
 
+  const captureUnsupported = (r) => {
+    // A backend that cannot honour a setting must say so. pocket-tts has no
+    // speed control, so a ward who slowed playback would otherwise hear no
+    // difference and no reason.
+    if (Array.isArray(r?.unsupported) && r.unsupported.length && !res.headersSent) {
+      res.set('X-Voice-Unsupported', r.unsupported.join(','));
+    }
+  };
+
+  // The sidecar carries a KV cache across a whole call, so it does NOT drop the
+  // tail of a long message the way the built-in engine does. It also must not be
+  // pre-split into small utterances — that would force a fresh clone per piece
+  // and reintroduce the seams it exists to avoid. So the two engines take
+  // different paths: the sidecar streams whole generation units; the built-in
+  // buffers and verifies small ones.
+  const isSidecar = resolved?.backend === BACKENDS.POCKET;
+
   try {
-    for (const part of held.parts) {
-      if (aborted) break;
-      const streamId = takeStreamId();
-      // Subscribe BEFORE asking, or the first frames arrive with nobody
-      // listening and the start of the sentence is simply missing.
-      const unsubscribe = worker.on((frame) => {
-        if (frame.kind === KIND_PCM && frame.streamId === streamId && !aborted) {
-          res.write(Buffer.from(frame.pcm));
-        }
+    if (isSidecar) {
+      // Stream whole-message units live. held.parts only seams at paragraphs on
+      // a very long message; ordinary ones are a single part, one trajectory.
+      for (const part of held.parts) {
+        if (aborted) break;
+        const streamId = takeStreamId();
+        // Subscribe BEFORE asking, or the first frames arrive with nobody
+        // listening and the start of the sentence is simply missing.
+        const unsubscribe = worker.on((frame) => {
+          if (frame.kind === KIND_PCM && frame.streamId === streamId && !aborted) {
+            res.write(Buffer.from(frame.pcm));
+          }
+        });
+        try {
+          const r = await worker.request(
+            { op: 'ttsStream', streamId, text: part, referenceWav: voice.path, speed, numSteps, seed, temperature },
+            { timeoutMs: 300_000 },
+          );
+          if (!r.ok) {
+            console.warn(`[voice] read-aloud failed: ${r.reason} ${r.detail ?? ''}`);
+            if (FATAL_TTS_REASONS.has(r.reason)) break;
+            continue;
+          }
+          if (r.runaway) console.warn(`[voice] read-aloud truncated part (runaway cap) after ${r.durationSec ?? '?'}s — the tail was cut`);
+          if (Number(r.longestSilenceSec) >= 3) {
+            console.warn(`[voice] read-aloud went silent for ${r.longestSilenceSec}s inside a ${r.durationSec}s render (${part.length} chars). Re-run with PF_TTS_DEBUG=1 to log which sentence.`);
+          }
+          captureUnsupported(r);
+        } finally { unsubscribe(); }
+      }
+    } else {
+      // ── Built-in engine: buffered self-healing ──────────────────────────
+      // Small units, so an early-EOS drop is a large, detectable fraction of
+      // the unit. Each is generated to a full clip, checked, and re-spoken (a
+      // perturbed seed breaks the deterministic early stop) before any of its
+      // audio is written — so no sentence vanishes and nothing is heard twice.
+      // Costs a small delay before the first words; buys completeness. The loop
+      // itself lives in voice-generation.js so it can be tested without an
+      // engine; here we just wire it to the worker.
+      const baseSeed = Number.isFinite(Number(seed)) ? Number(seed) : DEFAULT_TTS_SEED;
+      const units = held.parts.flatMap((p) => splitForUtterances(p, { targetChars: SMALL_UTTERANCE_CHARS }));
+
+      const summary = await speakUnitsSelfHealing(units, {
+        speed, baseSeed,
+        isAborted: () => aborted,
+        isFatal: (reason) => FATAL_TTS_REASONS.has(reason),
+        splitToSentences: (t) => splitForSpeech(t, { maxChars: MAX_CHAR_IN_SENTENCE - 20, minChars: 1 }),
+        generate: async (text, useSeed) => {
+          const r = await worker.request(
+            { op: 'tts', text, referenceWav: voice.path, speed, numSteps, seed: useSeed, temperature, minChars: text.length },
+            { timeoutMs: 300_000 },
+          );
+          if (!r.ok) { console.warn(`[voice] read-aloud failed: ${r.reason} ${r.detail ?? ''}`); return r; }
+          captureUnsupported(r);
+          return r;
+        },
+        emit: (samples) => { if (samples?.length && !aborted) res.write(floatToPcm16(samples)); },
       });
-      try {
-        const r = await worker.request(
-          { op: 'ttsStream', streamId, text: part, referenceWav: voice.path, speed, numSteps, seed, temperature },
-          { timeoutMs: 300_000 },
-        );
-        // A failure mid-message cannot be reported in the body — the browser
-        // is already playing a wav. Ending the stream is the only honest
-        // signal available; the log is where the reason lives.
-        if (!r.ok) { console.warn(`[voice] read-aloud failed: ${r.reason} ${r.detail ?? ''}`); break; }
-        // A backend that cannot honour a setting must say so. pocket-tts has
-        // no speed control at all, so a ward who slowed playback for
-        // comprehension would otherwise just hear no difference and no reason.
-        if (Array.isArray(r.unsupported) && r.unsupported.length && !res.headersSent) {
-          res.set('X-Voice-Unsupported', r.unsupported.join(','));
-        }
-      } finally { unsubscribe(); }
+
+      if (summary.droppedSentences > 0) {
+        console.warn(`[voice] read-aloud: ${summary.droppedSentences} sentence(s) stayed short after retries (of ${units.length} units, ${summary.reSpoken} re-spoken). Re-run with PF_TTS_DEBUG=1 to see which.`);
+      }
     }
   } catch (err) {
     console.warn(`[voice] read-aloud stream error: ${String(err?.message ?? err)}`);
@@ -2324,6 +2490,19 @@ app.post('/api/media/:id/link', async (req, res) => {
 app.delete('/api/media/:id/link/:nodeId', async (req, res) => {
   const r = await removeAssetLink(req.params.id, req.params.nodeId);
   if (r?.ok === false) return res.status(400).json(r);
+  res.json(r);
+});
+
+/**
+ * My human corrects a transcript I misheard.
+ *
+ * The transcript IS the content of a voice note — what I read in the turn, what
+ * memorisation folds, what the slug was minted from — so a mis-hearing is wrong
+ * everywhere until the person who said it can fix it.
+ */
+app.post('/api/media/:id/transcript', async (req, res) => {
+  const r = await correctTranscript(req.params.id, req.body?.text);
+  if (r?.ok === false) return res.status(r.reason === 'not-found' ? 404 : 400).json(r);
   res.json(r);
 });
 
@@ -3850,6 +4029,92 @@ app.post('/api/tailscale', async (req, res) => {
   });
 });
 
+/**
+ * `tailscale serve` — the OTHER half of remote access, and the one the phone
+ * needs for a voice call.
+ *
+ * The toggle above only opens the access GATE (who may reach the plain-http
+ * server). It does nothing about TLS. But a browser will not hand over the
+ * microphone on a plain-http origin, so a phone on the tailnet can load the UI
+ * and still be unable to call. `tailscale serve --bg <port>` fixes exactly that:
+ * Tailscale terminates HTTPS with its own cert and proxies to our local port,
+ * giving `https://<machine>.<tailnet>.ts.net/` — a secure context the mic works
+ * on. This is deliberately its OWN control, not a side effect of the gate: it
+ * changes outward exposure and can fail on preconditions the app cannot set.
+ *
+ * The one precondition the app cannot fix: HTTPS must be enabled for the tailnet
+ * in the admin console. When it is not, `serve` says so and we pass that along
+ * rather than pretending it worked.
+ */
+async function runTailscaleServe(args) {
+  try {
+    const { stdout, stderr } = await execFileP('tailscale', ['serve', ...args], { timeout: 8000 });
+    return { ok: true, stdout: String(stdout || ''), stderr: String(stderr || '') };
+  } catch (err) {
+    // A non-zero exit lands here; the reason my human needs is in stderr.
+    const detail = String(err?.stderr || err?.message || err).trim();
+    return { ok: false, detail, code: err?.code ?? null };
+  }
+}
+
+// Turn `serve`'s terse failure into a next step. The app cannot enable tailnet
+// HTTPS or grant operator rights, so when those are the blocker it must say so.
+function tailscaleServeHint(detail) {
+  const d = (detail || '').toLowerCase();
+  if (/https|cert|not enabled|feature/.test(d)) {
+    return 'HTTPS is not enabled for this tailnet. Turn it on once in the Tailscale admin console (DNS → HTTPS Certificates), then try again.';
+  }
+  if (/operator|permission|denied|access|sudo|root/.test(d)) {
+    return 'Tailscale would not let this account run serve. Run `tailscale set --operator=$USER` once (or start the app with the right privileges), then try again.';
+  }
+  if (/not found|enoent|command/.test(d)) {
+    return 'The Tailscale CLI was not found. Install Tailscale and sign in, then try again.';
+  }
+  return detail || 'tailscale serve failed.';
+}
+
+// Is our port already served over HTTPS? Parsed from `serve status --json`, best
+// effort — a shape we do not recognise reads as "not serving" rather than a lie.
+async function tailscaleHttpsStatus() {
+  const ts = await detectTailscale();
+  const url = ts?.hostname ? `https://${ts.hostname}/` : null;
+  const r = await runTailscaleServe(['status', '--json']);
+  if (!r.ok) return { serving: false, url: null, hostname: ts?.hostname || null, available: ts !== null };
+  let serving = false;
+  try {
+    const j = JSON.parse(r.stdout || '{}');
+    // Web config is keyed by "<host>:443"; a handler proxying to our local port
+    // means we are the one being served.
+    const web = j?.Web || {};
+    serving = Object.values(web).some((entry) => {
+      const handlers = entry?.Handlers || {};
+      return Object.values(handlers).some((h) => String(h?.Proxy || '').includes(`:${PORT}`));
+    });
+  } catch { /* unrecognised → not serving */ }
+  return { serving, url: serving ? url : null, hostname: ts?.hostname || null, available: ts !== null };
+}
+
+app.get('/api/tailscale/https', async (_req, res) => {
+  res.json({ ok: true, ...(await tailscaleHttpsStatus()) });
+});
+
+app.post('/api/tailscale/https', async (_req, res) => {
+  const r = await runTailscaleServe(['--bg', String(PORT)]);
+  if (!r.ok) {
+    return res.json({ ok: false, reason: 'serve-failed', detail: r.detail, hint: tailscaleServeHint(r.detail) });
+  }
+  const status = await tailscaleHttpsStatus();
+  res.json({ ok: true, ...status });
+});
+
+app.delete('/api/tailscale/https', async (_req, res) => {
+  // `reset` clears serve config for this node. We only ever set the one proxy,
+  // so this is the honest off switch; named plainly in the UI copy.
+  const r = await runTailscaleServe(['reset']);
+  if (!r.ok) return res.json({ ok: false, reason: 'reset-failed', detail: r.detail, hint: tailscaleServeHint(r.detail) });
+  res.json({ ok: true, serving: false, url: null });
+});
+
 // ── Threat / care-check endpoints (step 4b) ─────────────────────────
 // GET    /api/threat          current effective state
 // GET    /api/threat/history  recent audit entries (newest first)
@@ -4669,6 +4934,42 @@ const httpServer = app.listen(PORT, HOST, async () => {
   startNoticing();
   startMemorySweep();
   startVillageSync();
+  // Live voice calls (Pass 2b): attach the WebSocket call endpoint. Dynamic
+  // import + try/catch so a missing `ws` dep (before the auto-install runs) or
+  // any wiring failure degrades to "no live calls" rather than taking the
+  // server down — chat, read-aloud, and voice notes keep working regardless
+  // (the no-module-may-break-the-chat-path rule).
+  try {
+    const { attachVoiceCall } = await import('./voice-call-server.js');
+    const sharedVoiceWorkers = {
+      getListeningWorker: async () => (await listeningWorker({ rootDir: __dirname })).worker,
+      getTtsWorker: async () => (await currentAudioWorker()).worker,
+      resolveVoiceForSettings: (s) => resolveVoice({ rootDir: __dirname, settings: s }),
+      ensureTtsLoaded,
+    };
+    attachVoiceCall({
+      httpServer, rootDir: __dirname, port: PORT,
+      readSettings: readSettingsSync,
+      ...sharedVoiceWorkers,
+      connectionForFeature,
+    });
+    // Discord voice (Pass 3) shares the SAME ASR/TTS workers — one call at a
+    // time across both transports. Failure here never blocks web calls or chat.
+    try {
+      const { attachDiscordVoice } = await import('./voice-discord-server.js');
+      const { setDiscordVoiceController } = await import('./discord-gateway.js');
+      const discordVoice = attachDiscordVoice({
+        rootDir: __dirname,
+        readSettings: readSettingsSync,
+        ...sharedVoiceWorkers,
+      });
+      setDiscordVoiceController(discordVoice);
+    } catch (err) {
+      console.warn(`[discord-voice] not attached (${err?.message ?? err}) — Discord voice unavailable; everything else works`);
+    }
+  } catch (err) {
+    console.warn(`[voice-call] not attached (${err?.message ?? err}) — live calls unavailable; everything else works`);
+  }
   // Weather sense (W-A): prime the read-mirror at boot so the [Now] line is
   // fresh before the first 30s reminders tick. Self-gated + fire-and-forget;
   // inert until the ward has added a location.
@@ -5606,7 +5907,7 @@ function startReachout() {
     decideReachout: decideReachoutViaLLM,
     // Ward knock → gentle banner + push. Dedup bucket so a hiccup can't
     // double-banner. If this knock finally says a flagged "tell", mark it.
-    deliverWardKnock: async ({ message, tell }) => {
+    deliverWardKnock: async ({ message, tell, about, why }) => {
       const enq = await enqueueAndDispatch({
         kind:     'reachout',
         originId: reachoutBucketOriginId(),
@@ -5614,6 +5915,12 @@ function startReachout() {
         body:     message,
         ts:       new Date().toISOString(),
       });
+      // Remember that I knocked, and what I meant by it — my human answers hours
+      // later and I otherwise meet the reply with no idea I ever spoke.
+      if (enq?.id && !enq?.deduped) {
+        recordReachOut({ message, about, why, channel: 'ward-banner' })
+          .catch(err => console.error('[reachout] recordReachOut failed:', err?.message ?? err));
+      }
       if (enq?.id && !enq?.deduped && tell?.uid && Number.isInteger(tell.index)) {
         markIntentActedOn({ uid: tell.uid, index: tell.index })
           .catch(err => console.error('[reachout] markIntentActedOn failed:', err?.message ?? err));
@@ -5825,7 +6132,15 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours }) {
         kind: 'reachout', originId: `noticing-${Date.now()}`,
         title: 'a thought from me', body: msg, ts: new Date().toISOString(),
       }).catch(() => null);
-      if (enq?.id && !enq?.deduped) { effectiveNames.push(name); return 'Sent — my human will see it.'; }
+      if (enq?.id && !enq?.deduped) {
+        recordReachOut({
+          message: msg,
+          about: String(a.about ?? '').trim(),
+          why: String(a.why ?? '').trim(),
+          channel: 'noticing',
+        }).catch(err => console.error('[noticing] recordReachOut failed:', err?.message ?? err));
+        effectiveNames.push(name); return 'Sent — my human will see it.';
+      }
       return enq?.deduped ? 'I just reached out very recently, so I hold this rather than double-knock.' : 'I couldn\'t send that right now.';
     }
     // Registry tools: count the effective name, then dispatch normally.

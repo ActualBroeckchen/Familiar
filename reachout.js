@@ -117,7 +117,7 @@ I also choose when I should be asked to consider this again — my call. I retur
 
 I return ONLY a JSON object, no prose. Valid shapes:
   {"action": "wait", "nextCheckInMs": <number>}
-  {"action": "reach_out", "target": "ward", "message": "first person, genuine, in my own voice — what I'd actually say to my human right now", "tellUid": "<uid if this is a flagged tell, else omit>", "tellIndex": <number if tellUid given>, "nextCheckInMs": <number>}
+  {"action": "reach_out", "target": "ward", "message": "first person, genuine, in my own voice — what I'd actually say to my human right now", "about": "the specific thing I'm bringing up, named so I'd still know which one I meant hours later — e.g. 'their D&D night this Tuesday', not 'their game'", "why": "what made me want to say it, in a few words", "tellUid": "<uid if this is a flagged tell, else omit>", "tellIndex": <number if tellUid given>, "nextCheckInMs": <number>}
   {"action": "reach_out", "target": "villager", "villagerId": "<exact villagerId from the warm list above>", "message": "what I'd say to that person, in my own voice — they have none of this context, so it stands on its own", "nextCheckInMs": <number>}`;
 }
 
@@ -145,6 +145,11 @@ export function parseReachoutDecision(raw) {
 
   // Default target is the ward.
   const out = { action: 'reach_out', target: 'ward', message, nextCheckInMs };
+  // What I'm bringing up and what prompted it. My human answers hours later,
+  // and the message alone doesn't say WHICH occurrence I meant — so these ride
+  // along and come back to me with the reply (reach-out-log.js).
+  if (typeof parsed.about === 'string' && parsed.about.trim()) out.about = parsed.about.trim().slice(0, 200);
+  if (typeof parsed.why === 'string' && parsed.why.trim()) out.why = parsed.why.trim().slice(0, 200);
   if (typeof parsed.tellUid === 'string' && parsed.tellUid.trim() && Number.isInteger(parsed.tellIndex)) {
     out.tellUid   = parsed.tellUid.trim();
     out.tellIndex = parsed.tellIndex;

@@ -28,7 +28,6 @@
 
 import { promises as fs, createReadStream } from 'node:fs';
 import path from 'node:path';
-import { pipeline } from 'node:stream/promises';
 
 /** Archive kinds we understand, by extension. Anything else is a plain file. */
 export function archiveKind(name) {
@@ -89,17 +88,40 @@ export async function extractArchive({ archivePath, destDir, strip = 1, onProgre
   const written = [];
   let rejected = 0;
 
+  // Load the two pure-JS codecs by hand, so a MISSING dependency is reported as
+  // exactly that rather than folded into a generic "extract-failed". `npm
+  // install` places both, but a partial or production-pruned install can leave
+  // them out — and "I couldn't unpack it" with no reason is undiagnosable from
+  // a boot log, which is precisely how this failure first reached my human.
+  let tar, makeBz2;
   try {
-    const tar = await import('tar');
-    const stages = [createReadStream(archivePath)];
+    tar = await import('tar');
+    if (kind === 'tar.bz2') makeBz2 = (await import('unbzip2-stream')).default;
+  } catch (err) {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    return {
+      ok: false,
+      reason: 'missing-dependency',
+      detail: `a decompression dependency could not be loaded (${String(err?.message ?? err)}); reinstall with \`npm install\``,
+      files: [], bytes: 0,
+    };
+  }
 
-    if (kind === 'tar.bz2') {
-      const bz2 = (await import('unbzip2-stream')).default;
-      stages.push(bz2());
-    }
-    // tar handles gzip itself; a plain tar needs no decompression stage.
-
-    stages.push(tar.x({
+  try {
+    // ── Why not `stream/promises.pipeline` here ──────────────────────────
+    // `unbzip2-stream` is a legacy `through`-based stream. Driven through
+    // `pipeline`, tar finishing before the source's trailing record-padding
+    // drains gets reported to pipeline as ERR_STREAM_PREMATURE_CLOSE — an
+    // environment-sensitive FALSE failure: a fast local disk hides it, a
+    // slower machine or one whose antivirus briefly locks a freshly-written
+    // file surfaces it as a bogus `extract-failed` with no real cause. So the
+    // chain is wired with plain `.pipe()` and settled on tar's OWN completion,
+    // with an explicit error handler on every stage so a genuine decode/IO
+    // error still rejects. tar decompresses gzip itself; a plain tar and a
+    // gzip tar need no decode stage.
+    const src = createReadStream(archivePath);
+    const bz2 = kind === 'tar.bz2' ? makeBz2() : null;
+    const unpack = tar.x({
       cwd: tmpDir,
       strip,
       // Belt: tar's own protections. Braces: our explicit filter below.
@@ -115,9 +137,32 @@ export async function extractArchive({ archivePath, destDir, strip = 1, onProgre
           try { onProgress({ file: entry.path, count: written.length }); } catch { /* a sink must not break extraction */ }
         }
       },
-    }));
+    });
 
-    await pipeline(...stages);
+    const stages = bz2 ? [src, bz2, unpack] : [src, unpack];
+    await new Promise((resolve, reject) => {
+      let settled = false;
+      const settle = (err) => {
+        if (settled) return;
+        settled = true;
+        if (err) {
+          // Tear every stage down so a mid-stream failure never leaks an open
+          // descriptor on the read side; on success the streams have already
+          // ended on their own and destroying them could truncate a flush.
+          for (const s of stages) { try { s.destroy(); } catch { /* already gone */ } }
+          reject(err);
+        } else {
+          resolve();
+        }
+      };
+      for (const s of stages) s.on('error', settle);
+      // Success is tar having consumed the whole archive — NOT the source
+      // reaching EOF, which may carry trailing padding tar deliberately drops.
+      unpack.on('finish', () => settle());
+      unpack.on('close', () => settle());
+      let cur = src;
+      for (const s of stages.slice(1)) cur = cur.pipe(s);
+    });
   } catch (err) {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     return { ok: false, reason: 'extract-failed', detail: String(err?.message ?? err), files: [], bytes: 0 };

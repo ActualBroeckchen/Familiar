@@ -14,6 +14,7 @@
 
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { isCallActiveFromFile } from './call-engine.js';
 import { promises as fsp } from 'fs';
 
 import {
@@ -122,6 +123,8 @@ async function decideGraduation(candidates) {
 
 async function runTick() {
   if (!isEnabled()) return { reason: 'disabled' };
+  // Governor (§4.3): defer graduating tome knowledge during a live call.
+  if (await isCallActiveFromFile()) return { reason: 'call-active' };
   const tidyMode = readSettingsSync().tomeGraduationTidy === 'delete' ? 'delete' : 'pointer';
   const summary = await runOneGraduationTick({
     loadTomes,

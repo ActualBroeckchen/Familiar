@@ -441,11 +441,16 @@ test('the listening worker resolves to sherpa even when speaking is pocket', asy
   const pocketSpeaker = { voiceTts: { backend: 'pocket', voice: 'vctk/p255_023/enhanced' } };
 
   const speaking = await resolveBackend({ rootDir: process.cwd(), settings: pocketSpeaker });
-  const listening = await resolveBackend({ rootDir: process.cwd(), settings: {} });
+  // Mirror what `listeningWorker` actually does now: it asks for sherpa BY NAME,
+  // not via `settings: {}`. Since the speaking default is pocket, `settings: {}`
+  // would resolve to pocket on a machine that HAS voicebox installed — which is
+  // exactly why the listener no longer relies on the default meaning sherpa.
+  const listening = await resolveBackend({
+    rootDir: process.cwd(), settings: { voiceTts: { backend: BACKENDS.SHERPA } },
+  });
 
-  // Listening must be sherpa regardless. If voicebox happens not to be
-  // installed here, speaking falls back to sherpa too — which is fine and does
-  // not weaken the assertion that matters.
+  // Listening must be sherpa regardless of whether voicebox is installed —
+  // asking for it by name guarantees that even where `settings: {}` would not.
   assert.equal(listening.backend, BACKENDS.SHERPA, 'the listener is not pinned to sherpa');
   assert.match(listening.workerScript, /audio-worker\.mjs$/, 'the listener would spawn the wrong script');
   assert.doesNotMatch(listening.workerScript, /worker\.py$/);

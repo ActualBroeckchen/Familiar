@@ -31,6 +31,7 @@
  */
 
 import { pickInterest }            from './interest-picker.js';
+import { isCallActiveFromFile }    from './call-engine.js';
 import { computeRequiredInterval } from './pondering-cadence.js';
 
 const DEFAULT_TICK_MS = 60_000; // poll once per minute by default
@@ -154,6 +155,11 @@ export function startPonderingLoop({
     if (_activeTick) return;
     _activeTick = (async () => {
       try {
+        // Governor (§4.3): defer while a live voice call is up — pondering is
+        // minutes-scale and nothing is lost by running a tick later, but its LLM
+        // work would contend with the call my human is in right now. The finally
+        // still clears _activeTick, so the next tick runs normally once the call ends.
+        if (await isCallActiveFromFile()) return;
         const r = await runOneTick({ ...tickConfig, lastPonderAt: _lastPonderAt });
         if (r.acted) _lastPonderAt = r.at;
         try { onTick(r); } catch (err) { onError(err); }

@@ -25,10 +25,26 @@ async function withVoicebox(dir, { venv = true } = {}) {
   }
 }
 
-test('the cheap engine is the default — 600 MB is not something to opt someone into', () => {
-  // A Familiar that speaks slightly unevenly is worth having. One that will not
-  // install because the laptop is full is not.
-  assert.equal(DEFAULT_BACKEND, BACKENDS.SHERPA);
+test('the better engine is the default — but its cost is paid on first use, never at boot', () => {
+  // pocket does not drop the tail of a long message the way sherpa's per-utterance
+  // reset does, so it is the default CHOICE. The 600 MB it costs is deferred to the
+  // first time voice is actually used, with a sherpa fallback carrying the machine
+  // until then — so nothing downloads unasked at boot. See resolveBackend: a missing
+  // venv still resolves to a working (sherpa) worker with fellBackFrom attached.
+  assert.equal(DEFAULT_BACKEND, BACKENDS.POCKET);
+});
+
+test('a missing sidecar still SPEAKS on the default — the fallback carries first-use', async () => {
+  // The default being pocket must never mean silence on a machine that has not
+  // downloaded it yet. With no settings at all, the resolver falls back to sherpa
+  // and says what it fell back from, so the caller can start the download.
+  const { dir, cleanup } = await tmpRoot();
+  try {
+    const r = await resolveBackend({ rootDir: dir, settings: {} });
+    assert.equal(r.backend, BACKENDS.SHERPA);
+    assert.equal(r.fellBackFrom, BACKENDS.POCKET);
+    assert.equal(r.command, process.execPath, 'and still spawns something that works');
+  } finally { await cleanup(); }
 });
 
 test('sherpa is always available and says what it costs in quality', async () => {
@@ -97,11 +113,28 @@ test('choosing pocket when it IS installed spawns the Python worker', async () =
   } finally { await cleanup(); }
 });
 
-test('the default and anything unrecognised both land on sherpa', async () => {
+test('no choice at all lands on the default (pocket), which speaks when installed', async () => {
+  // undefined / null mean "my human never picked one", so they take the default.
+  // The default is pocket now, so with a venv present these resolve to it.
   const { dir, cleanup } = await tmpRoot();
   try {
     await withVoicebox(dir);
-    for (const backend of [undefined, null, '', 'sherpa', 'nonsense', 42]) {
+    for (const backend of [undefined, null]) {
+      const r = await resolveBackend({ rootDir: dir, settings: { voiceTts: { backend } } });
+      assert.equal(r.backend, BACKENDS.POCKET, `unset backend ${String(backend)} should take the default`);
+      assert.equal(r.fellBackFrom, null, 'the default was available, so nothing fell back');
+    }
+  } finally { await cleanup(); }
+});
+
+test('an unrecognised choice lands on sherpa, not the pocket default', async () => {
+  // A garbage value is not "no choice" — it is a choice we do not know. It must
+  // NOT silently pull 600 MB by resolving to the default; it lands on the safe,
+  // always-present engine instead.
+  const { dir, cleanup } = await tmpRoot();
+  try {
+    await withVoicebox(dir);
+    for (const backend of ['', 'sherpa', 'nonsense', 42]) {
       const r = await resolveBackend({ rootDir: dir, settings: { voiceTts: { backend } } });
       assert.equal(r.backend, BACKENDS.SHERPA, `backend ${String(backend)}`);
       assert.equal(r.fellBackFrom, null, 'not asking for pocket is not falling back from it');

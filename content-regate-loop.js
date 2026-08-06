@@ -14,6 +14,7 @@
 
 import { listContentGateCandidates, updateMemoryById, enrich } from './thalamus.js';
 import { getRegistry } from './village.js';
+import { isCallActiveFromFile } from './call-engine.js';
 import { readSettingsSync, connectionForFeature } from './cerebellum.js';
 import { PROVIDER_URLS } from './providers.js';
 import { callProviderChat } from './llm-call.js';
@@ -82,8 +83,9 @@ export function startContentRegateLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
   }
   _started = true;
   console.log('[regate] content-gating re-tag loop armed (opt-in; idles until "Review my private notes for content-sharing" is enabled in Settings)');
-  _interval = setInterval(() => {
+  _interval = setInterval(async () => {
     if (_active) return;                 // never overlap ticks
+    if (await isCallActiveFromFile()) return;   // governor (§4.3): defer during a live call
     _active = runTick()
       .catch(err => console.warn('[regate] tick error:', err?.message ?? err))
       .finally(() => { _active = null; });

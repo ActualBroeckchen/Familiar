@@ -138,6 +138,17 @@ export function elapsedLabel(seconds) {
  * and delete. Cancelling releases the microphone and resolves nothing.
  */
 export async function startRecording({ onTick, maxSeconds = MAX_SECONDS } = {}) {
+  // The microphone API only exists in a SECURE CONTEXT (https:// or localhost).
+  // Over Tailscale on plain http:// — which is how a phone reaches this — the
+  // browser hides `navigator.mediaDevices` entirely, so `.getUserMedia` throws
+  // "undefined is not an object". Say what's actually wrong and how to fix it,
+  // rather than leaking that raw TypeError.
+  if (!navigator.mediaDevices?.getUserMedia) {
+    const insecure = typeof window !== 'undefined' && window.isSecureContext === false;
+    throw new Error(insecure
+      ? 'Recording needs a secure connection. This page is on http://, and browsers only allow the microphone over https:// or on localhost. On the same machine, open http://localhost:8742. To use your phone over Tailscale, serve over HTTPS (e.g. `tailscale serve`) and open the https:// address.'
+      : 'This browser did not expose a microphone (no navigator.mediaDevices). Try a current Chrome/Safari/Firefox, and make sure the page is on https:// or localhost.');
+  }
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
   });

@@ -16,6 +16,7 @@
  */
 
 import { incompleteDates, collectDateSlices } from './memory-coverage.js';
+import { isCallActiveFromFile } from './call-engine.js';
 import { enqueueMemorization } from './memorization.js';
 
 const DEFAULT_TICK_MS = 10 * 60_000; // 10 min — coverage doesn't need a fast pulse
@@ -85,6 +86,8 @@ export function startMemorySweepLoop({
     if (_activeTick) return;
     _activeTick = (async () => {
       try {
+        // Governor (§4.3): defer the coverage sweep during a live call.
+        if (await isCallActiveFromFile()) return;
         if (!(await isEnabled())) { onTick({ acted: false, reason: 'disabled' }); return; }
         const r = await runMemorySweepTick({ getConnection });
         try { onTick(r); } catch (err) { onError(err); }

@@ -338,3 +338,48 @@ export function prepareForSpeech(input, opts = {}) {
     empty: parts.length === 0,
   };
 }
+
+/**
+ * Split a message into pieces that are each EXACTLY one engine utterance.
+ *
+ * ── Why do this ourselves ───────────────────────────────────────────────
+ * Handed a whole message, sherpa splits it internally (SplitByPunctuation →
+ * MergeShortSentences → SplitLongSentence) and returns one lump of audio. If
+ * one of those internal utterances renders empty or stops early — which it
+ * does; `Generate` skips a sentence that produced no samples without a word —
+ * the words are simply gone and nothing says which ones.
+ *
+ * Doing the same split up here costs nothing acoustically, because the LM state
+ * resets per utterance either way (measured: one call 27.68 s vs the same split
+ * as separate calls 28.16 s, 1.7% apart). What it buys is that each utterance
+ * comes back with its own duration, so a render that swallowed its text can be
+ * SEEN and re-tried, instead of arriving as a hole my human notices before I do.
+ *
+ * ── And it fixes the runt ───────────────────────────────────────────────
+ * `MergeShortSentences` pushes whatever is left in its buffer as a final chunk,
+ * however short — so a trailing "Great." becomes an utterance of its own, which
+ * is the documented EOS-at-step-0 trigger. Here a leftover too small to stand
+ * alone is merged back into the previous piece instead.
+ */
+export function splitForUtterances(text, { targetChars = MIN_CHAR_IN_SENTENCE } = {}) {
+  if (typeof text !== 'string' || !text.trim()) return [];
+  const target = Math.max(1, Number(targetChars) || MIN_CHAR_IN_SENTENCE);
+  // The smallest piece worth generating alone. Below this the model is being
+  // handed a fragment, which is where it misbehaves.
+  const minStandalone = Math.max(40, Math.floor(target / 4));
+
+  const sentences = splitForSpeech(text, { maxChars: MAX_CHAR_IN_SENTENCE - 20, minChars: 1 });
+  const out = [];
+  let buf = '';
+  for (const s of sentences) {
+    buf = buf ? `${buf} ${s}` : s;
+    if (buf.length >= target) { out.push(buf); buf = ''; }
+  }
+  if (buf) {
+    // A leftover that can stand on its own becomes a piece; one that cannot is
+    // folded back rather than handed over as a runt.
+    if (buf.length >= minStandalone || out.length === 0) out.push(buf);
+    else out[out.length - 1] = `${out[out.length - 1]} ${buf}`;
+  }
+  return out;
+}

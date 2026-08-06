@@ -225,6 +225,15 @@ function Start-Server {
     }
     $env:PORT = $script:port
     $env:TAILSCALE = $script:tailscale
+    # Make sure the Node dependencies match package.json before boot. The tray
+    # launches node directly and never runs the installer, so an update that
+    # added a package like `tar` would otherwise leave node_modules stale and
+    # voice failing with "Cannot find package 'tar'". Cheap when nothing
+    # changed; installs only what drifted; never blocks the launch.
+    $ensureDeps = Join-Path $script:projectRoot 'scripts\ensure-node-deps.mjs'
+    if (Test-Path $ensureDeps) {
+        try { & node $ensureDeps } catch { }
+    }
     try {
         $script:serverProc = Start-Process -FilePath "node" `
             -ArgumentList "server.js" `

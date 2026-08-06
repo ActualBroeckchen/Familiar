@@ -22,6 +22,7 @@
 
 import { listRecurring, resolveScheduleOccurrence } from './thalamus.js';
 import { getThreat } from './threat-tracker.js';
+import { isCallActiveFromFile } from './call-engine.js';
 import { readSettingsSync } from './cerebellum.js';
 import { selectMissedOccurrences, isNeedWindow } from './needs-tracking.js';
 
@@ -89,8 +90,9 @@ export function startNeedsTrackingLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
   }
   _started = true;
   console.log('[needs] needs-tracking loop armed (opt-in; idles until "Track unmet needs" is enabled in Settings)');
-  _interval = setInterval(() => {
+  _interval = setInterval(async () => {
     if (_active) return;                 // never overlap ticks
+    if (await isCallActiveFromFile()) return;   // governor (§4.3): defer during a live call
     _active = runNeedsTick()
       .catch(err => console.warn('[needs] tick error:', err?.message ?? err))
       .finally(() => { _active = null; });

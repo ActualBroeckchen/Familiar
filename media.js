@@ -322,7 +322,7 @@ export async function getAsset(idOrSlug) {
  * readability while every old slug still resolves forever. Written once;
  * callers must not regenerate a description that already exists.
  */
-export async function setAssetDescription(idOrSlug, description) {
+export async function setAssetDescription(idOrSlug, description, { regraduate = false } = {}) {
   const id = await resolveAssetId(idOrSlug);
   if (!id) return { ok: false, error: 'asset not found' };
   const meta = await readJson(metaPath(id), null);
@@ -339,9 +339,15 @@ export async function setAssetDescription(idOrSlug, description) {
   // note, so audio depends on this graduation far more than images do. It is
   // how "snd-4kf2p1" becomes "oat-milk-list-x7" and I can find my own assets
   // by remembering what was said in them.
+  //
+  // `regraduate` is the ward-correction case: a mis-heard transcript graduated
+  // to a WRONG slug ("wish-may-look-x7" for "wish me luck"), so once my human
+  // fixes the words the id should follow. Every old slug stays in the list and
+  // keeps resolving forever — ids are opaque and nothing may break — the
+  // corrected one simply becomes preferred for anything rendered from now on.
   const arrivalWasGeneric = /^(img|snd)-[a-z0-9]{6}$/.test(arrival);
   const descWords = slugifyLabel(meta.description?.text ?? '');
-  if (arrivalWasGeneric && descWords) {
+  if ((arrivalWasGeneric || regraduate) && descWords) {
     const alias = `${descWords}-${shortSlug(2)}`;
     if (!meta.slugs.includes(alias)) meta.slugs = [alias, ...meta.slugs];
   }

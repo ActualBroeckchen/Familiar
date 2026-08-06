@@ -67,6 +67,14 @@
             <p id="tailscale-status" class="tailscale-status">Loading…</p>
             <ul id="tailscale-urls" class="tailscale-urls"></ul>
             <p class="tailscale-hint">When enabled, this server is reachable from anything that can hit your machine on the network. On a plain LAN that includes anyone on the same Wi-Fi; on a Tailnet, anyone signed into your tailnet.</p>
+
+            <hr class="tailscale-sep">
+            <div class="tailscale-row">
+              <span class="tailscale-state-label">Serve over HTTPS (needed for phone voice calls)</span>
+              <button id="tailscale-https-btn" class="btn-secondary" type="button">Enable HTTPS</button>
+            </div>
+            <p id="tailscale-https-status" class="tailscale-status"></p>
+            <p class="tailscale-hint">A phone browser only allows the microphone over HTTPS. This runs <code>tailscale serve</code> so your Familiar is reachable at an <code>https://…ts.net</code> address the mic can use. Needs HTTPS enabled once for your tailnet in the Tailscale admin console.</p>
           </div>
         </div>
         <button id="theme-toggle" class="icon-btn" aria-label="Toggle light/dark theme" title="Toggle theme"><span id="theme-icon-dark" data-ms-icon="light_mode" data-ms-size="18"></span><span id="theme-icon-light" data-ms-icon="dark_mode" data-ms-size="18" style="display:none"></span></button>
@@ -232,15 +240,39 @@
               <button id="voice-picker-btn" class="btn-secondary">🗣 Choose a voice</button>
             </div>
 
-            <p class="field-hint" style="margin-top:14px">Which engine does the speaking. The one that ships works everywhere and needs nothing; the other sounds steadier across a long message but is a large download.</p>
+            <p class="field-hint" style="margin-top:14px">Which engine does the speaking. Kyutai is the default — it holds one voice steadily across a whole message and never drops a sentence, but it is a large download that fetches itself the first time I speak. The built-in one ships with me and needs nothing; it can shift voice between paragraphs on a long message.</p>
             <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">
               <select id="voice-backend-select" aria-label="Speaking engine">
+                <option value="pocket">Kyutai sidecar — steadier, ~600 MB (default)</option>
                 <option value="sherpa">Built-in — ships with me, nothing to install</option>
-                <option value="pocket">Kyutai sidecar — steadier, ~600 MB</option>
               </select>
               <button id="voice-sidecar-install" class="btn-secondary hidden">⬇ Install the sidecar</button>
+              <button id="voice-sidecar-cancel" class="btn-secondary hidden">✕ Cancel download</button>
             </div>
             <p class="field-hint" id="voice-backend-state" style="margin-top:6px"></p>
+
+            <p class="field-hint" style="margin-top:14px">Live voice call (beta) — a real back-and-forth. The first call downloads the speech models it needs (~150 MB, once). Two modes: <strong>push-to-talk</strong> (hold the button to speak) or <strong>open mic</strong> (hands-free — just talk, and the pause when you stop is your turn). Talk over your Familiar to interrupt. From a phone this needs an HTTPS address (e.g. <code>tailscale serve</code>) — browsers only allow the microphone on a secure connection.</p>
+            <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">
+              <button id="voice-call-btn" class="btn-secondary">📞 Start voice call</button>
+              <button id="voice-call-talk" class="btn-secondary" hidden>🎙 Hold to talk</button>
+            </div>
+            <div class="action-row" style="margin-top:6px; align-items:center; gap:8px">
+              <label for="voice-call-mode" style="font-size:0.85em">Mode</label>
+              <select id="voice-call-mode" aria-label="Voice call mode">
+                <option value="push">Push-to-talk — hold the button to speak</option>
+                <option value="open">Open mic — hands-free, just talk</option>
+              </select>
+            </div>
+            <p class="field-hint" id="voice-call-state" style="margin-top:6px" aria-live="polite"></p>
+
+            <div class="action-row" id="voice-call-lang-row" style="margin-top:8px; align-items:center; gap:8px" hidden>
+              <label for="voice-call-lang" style="font-size:0.85em">Call language</label>
+              <select id="voice-call-lang" aria-label="Call speech-recognition language"></select>
+            </div>
+            <label class="switch-row" style="margin-top:8px; display:flex; align-items:center; gap:8px">
+              <input type="checkbox" id="voice-call-threat-toggle" checked>
+              <span>Let a call inform my safety read — my Familiar can notice distress in my voice, as it does in my messages. On by default.</span>
+            </label>
           </div>
         </div>
 
@@ -1945,5 +1977,6 @@
   <script src="graph-map.js"></script>
   <script src="icons.js"></script>
   <script src="app.js"></script>
+  <script src="voice-call.js"></script>
 </body>
 </html>

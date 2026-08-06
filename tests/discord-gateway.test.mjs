@@ -20,6 +20,7 @@ import {
   carriedExchange,
   discordChannelIdFromKey,
   parseDeferToken,
+  parseVoiceCommand,
   isDeferToken,
   getDiscordStatus,
   webSocketCtor,
@@ -528,8 +529,9 @@ describe('mergeParticipant', () => {
 // ── GATEWAY_INTENTS ───────────────────────────────────────────────
 
 describe('GATEWAY_INTENTS', () => {
-  it('includes GUILDS, GUILD_MESSAGES, DIRECT_MESSAGES, MESSAGE_CONTENT', () => {
+  it('includes GUILDS, GUILD_VOICE_STATES, GUILD_MESSAGES, DIRECT_MESSAGES, MESSAGE_CONTENT', () => {
     assert.ok(GATEWAY_INTENTS & (1 << 0),  'GUILDS');
+    assert.ok(GATEWAY_INTENTS & (1 << 7),  'GUILD_VOICE_STATES');   // Pass 3 voice bridge
     assert.ok(GATEWAY_INTENTS & (1 << 9),  'GUILD_MESSAGES');
     assert.ok(GATEWAY_INTENTS & (1 << 12), 'DIRECT_MESSAGES');
     assert.ok(GATEWAY_INTENTS & (1 << 15), 'MESSAGE_CONTENT');
@@ -537,6 +539,25 @@ describe('GATEWAY_INTENTS', () => {
   it('does not include presence or member intents (privileged, unneeded)', () => {
     assert.equal(GATEWAY_INTENTS & (1 << 8), 0,  'GUILD_PRESENCES not requested');
     assert.equal(GATEWAY_INTENTS & (1 << 1), 0,  'GUILD_MEMBERS not requested');
+  });
+});
+
+// ── parseVoiceCommand (Pass 3) ────────────────────────────────────
+
+describe('parseVoiceCommand', () => {
+  it('recognises join and leave aliases, case-insensitive', () => {
+    assert.equal(parseVoiceCommand('!call'), 'join');
+    assert.equal(parseVoiceCommand('!join'), 'join');
+    assert.equal(parseVoiceCommand('  !CALL  '), 'join');
+    assert.equal(parseVoiceCommand('!leave'), 'leave');
+    assert.equal(parseVoiceCommand('!hangup'), 'leave');
+  });
+  it('ignores anything that is not exactly the command', () => {
+    assert.equal(parseVoiceCommand('!call now please'), null);
+    assert.equal(parseVoiceCommand('call'), null);
+    assert.equal(parseVoiceCommand('please !call'), null);
+    assert.equal(parseVoiceCommand(''), null);
+    assert.equal(parseVoiceCommand(null), null);
   });
 });
 

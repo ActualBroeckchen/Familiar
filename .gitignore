@@ -62,6 +62,7 @@ tomes/Sample*.json
 .proto-familiar-config.json
 .proto-familiar.log.err
 .pf-install-complete
+.pf-node-deps.json
 settings.json
 settings.json.tmp
 packagebackup.json

@@ -37,6 +37,7 @@
  */
 
 import { getWaitStreak, recordWait, recordProactive, isWaitStreakEnabled } from './wait-streak.js';
+import { isCallActiveFromFile } from './call-engine.js';
 
 const DEFAULT_TICK_MS = 10 * 60_000;     // 10 min — warmth doesn't need a fast pulse
 
@@ -90,7 +91,7 @@ export async function runOneReachoutTick({
   getWarmVillagers,      // async () => [{ id, name, discordId, ... }]
   isQuietHours,          // async () => boolean
   decideReachout,        // async ({ pendingTells, warmVillagers, wardSilenceMs }) => decision
-  deliverWardKnock,      // async ({ message, tell }) => { ok, deduped? }
+  deliverWardKnock,      // async ({ message, tell, about, why }) => { ok, deduped? }
   deliverVillagerReach,  // async ({ villager, message }) => { ok, error? }
   now = Date.now,
   // Wait-streak recording (injectable for tests; defaults never throw).
@@ -184,7 +185,7 @@ export async function runOneReachoutTick({
   const tell = (decision.tellUid && Number.isInteger(decision.tellIndex))
     ? { uid: decision.tellUid, index: decision.tellIndex }
     : null;
-  const res = await deliverWardKnock({ message: decision.message, tell }).catch(err => ({ ok: false, error: err?.message }));
+  const res = await deliverWardKnock({ message: decision.message, tell, about: decision.about, why: decision.why }).catch(err => ({ ok: false, error: err?.message }));
   return {
     acted:  !!res?.ok && !res?.deduped,
     reason: !res?.ok ? 'delivery_failed' : (res?.deduped ? 'rate_limited' : 'reached_ward'),
@@ -213,6 +214,10 @@ export function startReachoutLoop({
     if (_activeTick) return;
     _activeTick = (async () => {
       try {
+        // Governor (§4.3): a warm reach-out is redundant during a live call — the
+        // ward is maximally present, which is exactly the state warmth exists to
+        // break. Defer; the call also feeds the ward-active gate.
+        if (await isCallActiveFromFile()) return;
         if (!(await isEnabled())) { onTick({ acted: false, reason: 'disabled' }); return; }
         const r = await runOneReachoutTick(tickConfig);
         try { onTick(r); } catch (err) { onError(err); }

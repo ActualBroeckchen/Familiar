@@ -17,6 +17,7 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, promises as fsp } from 'fs';
+import { isCallActiveFromFile } from './call-engine.js';
 import { randomUUID } from 'crypto';
 import { PROVIDER_URLS } from './providers.js';
 import { extractContent } from './llm-call.js';
@@ -996,6 +997,10 @@ let _activeTick = null;
 async function tick() {
   if (_activeTick) return _activeTick;
   _activeTick = (async () => {
+    // Governor (§4.3): defer draining the memorization queue during a live call —
+    // it is not time-critical and its LLM extraction would contend with the call.
+    // The outer finally still clears _activeTick, so it resumes after the call.
+    if (await isCallActiveFromFile()) return;
     await loadQueue();
     const now = Date.now();
     const job = pickNextJob(now);

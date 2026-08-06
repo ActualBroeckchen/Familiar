@@ -4082,6 +4082,8 @@ const REACH_OUT_TO_WARD_TOOL = {
       type: 'object',
       properties: {
         message: { type: 'string', description: 'What I want to say to my human, first person, genuine, in my own voice — it stands on its own as a message they receive.' },
+        about: { type: 'string', description: 'The specific thing I am bringing up, named so I would still know which one I meant hours later — "their D&D night this Tuesday", not "their game". They often answer long after I knock, and this is what lets me pick the conversation back up instead of asking them which thing I meant.' },
+        why: { type: 'string', description: 'What made me want to say it, in a few words — so when they answer I remember what I was actually wondering.' },
       },
       required: ['message'],
     },

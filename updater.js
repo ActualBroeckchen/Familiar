@@ -15,9 +15,12 @@
  *    `tar`, which ships in the base OS on macOS/Linux and Windows 10+ (git needs
  *    the heavy Xcode tools on macOS, which non-technical users won't have).
  *
- * Both paths NEVER restart the process — new code is live only after a restart,
- * which the launcher handles (and re-runs dependency install). The caller tells
- * the ward to restart. User data is safe by construction: the tarball contains
+ * Both paths NEVER restart the process — new code is live only after a restart.
+ * On that restart the launchers (and the prestart hook) run
+ * `scripts/ensure-node-deps.mjs`, which reinstalls any npm dependency the
+ * update added or changed — so an update that introduces a new package does
+ * not leave the ward to run `npm install` by hand. The caller tells the ward
+ * to restart. User data is safe by construction: the tarball contains
  * only the repo's tracked files, so gitignored data (settings.json, tomes/,
  * logs/, the Python venvs, node_modules) is never in the source and is never
  * overwritten or deleted.

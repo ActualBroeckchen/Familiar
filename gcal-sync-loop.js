@@ -24,6 +24,8 @@
  * "Google Calendar sync" Settings toggle (soft), both checked by isEnabled.
  */
 
+import { isCallActiveFromFile } from './call-engine.js';
+
 const BASE_TICK_MS = 60_000;                 // how often the loop wakes to check
 export const DEFAULT_SYNC_INTERVAL_MS = 60 * 60_000;  // hourly (§1.6)
 const MIN_SYNC_INTERVAL_MS = 5 * 60_000;     // floor so a heavy user can't hammer Google
@@ -124,6 +126,8 @@ export function startGcalSyncLoop({
     if (_activeTick) return;
     _activeTick = (async () => {
       try {
+        // Governor (§4.3): defer the calendar sync during a live call.
+        if (await isCallActiveFromFile()) return;
         if (!(await isEnabled())) { onTick({ synced: false, reason: 'disabled' }); return; }
         const intervalMs = clampSyncIntervalMs(await getIntervalMs());
         const nowMs = now();

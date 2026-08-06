@@ -489,6 +489,7 @@ is not an off-switch.
 | `PROTO_FAMILIAR_WARMTH_DISABLED` | warm reach-outs |
 | `PROTO_FAMILIAR_TRIAGE_DISABLED` | silence triage (**safety** — read §10 of the voice spec first) |
 | `PROTO_FAMILIAR_THREAT_DISABLED` | crisis-signal scoring (**safety**) |
+| `PROTO_FAMILIAR_VOICE_THREAT_DISABLED` | a live call informing your Familiar's safety read (**safety**) |
 | `PROTO_FAMILIAR_PONDERING_DISABLED` | autonomous pondering |
 | `PROTO_FAMILIAR_WAIT_STREAK_DISABLED` | the wait-streak nudge |
 
