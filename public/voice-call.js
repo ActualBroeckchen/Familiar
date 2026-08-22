@@ -36,11 +36,17 @@
   let playingSources = [];    // scheduled AudioBufferSourceNodes, so a barge can stop them mid-reply
   let callMode = 'push';      // 'push' (hold to talk) or 'open' (hands-free, mic always live)
 
-  // In open mic, a frame this loud while a reply is playing counts as my human
-  // talking over it — the onset that triggers a barge. Above residual echo (the
-  // reply leaking into the mic, mostly removed by echoCancellation), below normal
-  // speech. Tuned conservatively; a false barge only cuts a reply my human can ask to repeat.
-  const BARGE_PEAK = 0.12;
+  // In open mic, my human talking over a playing reply is a barge. The onset is
+  // measured as SUSTAINED energy, not a single loud sample: a peak threshold
+  // barges on any transient (a click, a cough, a door), which cuts the reply for
+  // nothing. So we require RMS energy (average, not peak — a lone spike can't
+  // carry it) to hold above the floor for a short attack window before calling
+  // it speech. Above residual echo (the reply leaking into the mic, mostly
+  // removed by echoCancellation), below normal speech; a false barge only cuts a
+  // reply my human can ask to repeat, so it stays conservative.
+  const BARGE_RMS = 0.06;         // sustained average energy that reads as speech-over-reply
+  const BARGE_SUSTAIN_MS = 60;    // it must hold this long — a transient won't reach it
+  let bargeSustainMs = 0;         // running length of the current above-floor run
 
   function setState(msg) { const el = $('voice-call-state'); if (el) el.textContent = msg || ''; }
 
@@ -100,13 +106,21 @@
     // onset by level and stop the reply, so the mic captures the new utterance
     // cleanly and the echo stops. (Push-to-talk barges explicitly on press.)
     if (callMode === 'open' && replyPlaying) {
-      let peak = 0;
-      for (let i = 0; i < input.length; i++) { const a = input[i] < 0 ? -input[i] : input[i]; if (a > peak) peak = a; }
-      if (peak >= BARGE_PEAK) {
+      let sum = 0;
+      for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
+      const rms = Math.sqrt(sum / input.length);
+      const blockMs = (input.length / (ctx?.sampleRate || 48000)) * 1000;
+      // Grow the run while loud, reset the moment it dips — so only CONTINUOUS
+      // energy (real speech onset), not a spike, reaches the sustain threshold.
+      bargeSustainMs = rms >= BARGE_RMS ? bargeSustainMs + blockMs : 0;
+      if (bargeSustainMs >= BARGE_SUSTAIN_MS) {
+        bargeSustainMs = 0;
         try { ws.send(JSON.stringify({ t: 'barge' })); } catch { /* socket gone */ }
         stopLocalPlayback();
         replyPlaying = false;
       }
+    } else {
+      bargeSustainMs = 0;   // not in a position to barge — don't carry a stale run
     }
     try {
       ws.send(floatTo16kS16(input, ctx.sampleRate));

@@ -18,7 +18,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { inspectBackends, POCKET_FOOTPRINT, BACKENDS, VOICEBOX_SUBDIR } from '../voice-backend.js';
+import { inspectBackends, POCKET_FOOTPRINT, BACKENDS, VOICEBOX_SUBDIR, ensureWindowsMsvcRuntime } from '../voice-backend.js';
 import { formatBytes } from '../voice-models.js';
 import { preflight } from '../voice-footprint.js';
 
@@ -105,6 +105,11 @@ async function main() {
     console.error(`\nuv sync failed${sync.detail ? `: ${sync.detail}` : ''}. Nothing else was changed.`);
     return 1;
   }
+
+  // On Windows, give torch the Visual C++ runtime uv doesn't provide, so a clean
+  // machine doesn't hit WinError 126 the first time it tries to speak. Best-effort
+  // — the built-in engine covers any failure here.
+  await ensureWindowsMsvcRuntime({ rootDir: ROOT, onLog: (m) => console.log(`  ${m}`) });
 
   const after = await inspectBackends(ROOT);
   if (!after[BACKENDS.POCKET].available) {

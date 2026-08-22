@@ -92,20 +92,6 @@ surfacing "any still-unresolved" prerequisite it can see, never inventing one th
 graph [@architecture-doc] — the same non-invention discipline the conversation's worked example
 assumed implicitly.
 
-## How this shipped in Proto-Familiar
-
-The three-tier model from the founding conversation maps directly onto what shipped in the
-codebase, under different names:
-
-| Conversation's term | What shipped |
-|---|---|
-| Calendar (what/when) | [Unruh](../architecture/unruh)'s schedule-layer nodes (events, tasks, phases) |
-| Event tome (what a kind of event requires) | `unruh/templates.py`'s requirement templates — per-obstacle prerequisites |
-| Requirement graph (prerequisites with lead times) | [Unruh](../architecture/unruh)'s `requires`/`depends_on` schedule edges, plus `stewardship.js`'s readiness check |
-
-The unprompted "this is x hours away" reach-out itself is `event-alerts.js`'s lead-time alert pass,
-riding the [reminders loop](../architecture/autonomous-loops) rather than running on its own timer.
-
 ## What this is not
 
 Temporal assurance is not a synonym for "reminders" or "calendar sync" individually — it is the

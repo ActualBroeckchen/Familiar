@@ -26,6 +26,8 @@ export const TOOL_MODULES = {
   recall: 'core', recall_timeframe: 'core', save_memory: 'core', save_to_tome: 'core',
   update_identity: 'core', schedule_find: 'core',
   interest_bump: 'core', interest_set_standing: 'core',
+  bookmark_for_later: 'core',   // the Familiar's own initiative (nothing in a user msg triggers it) — always reachable, like the other interest-layer tools
+
   contact_trusted_person: 'core', show_crisis_resources: 'core',
   flag_distress: 'core',   // safety: the Familiar's own read of distress → threat (ward-signed)
   get_trusted_contacts: 'core',   // pairs with contact_trusted_person
@@ -93,11 +95,18 @@ export const TOOL_MODULES = {
   intention_set: 'intentions', intention_list: 'intentions',
   intention_drop: 'intentions', intention_done: 'intentions',
   intention_mark_fired: 'intentions',
-  intention_set_rounds_visibility: 'intentions',
+  intention_visibility: 'intentions',
 
   // vision (vision build spec §6.5/§10) — looking again at an image + tying it
   // to a graph node. Surfaced whenever an image stand-in is in context.
   view_image: 'media', link_image_to_node: 'media', unlink_image_from_node: 'media',
+
+  // browser (browser build spec §4) — the Familiar's own hands on the web.
+  // Surfaced by URLs + browse-ish verbs; ward-only executors, so a villager
+  // turn never reaches them even if the module is advertised.
+  browse_open: 'browser', browse_see: 'browser', browse_act: 'browser', browse_close: 'browser',
+  browse_screenshot: 'browser', browse_tabs: 'browser', browse_history: 'browser', browse_handoff: 'browser',
+  watch_page: 'browser', list_page_watches: 'browser', unwatch_page: 'browser',
 };
 delete TOOL_MODULES['memory-edit']; // the namespace note above, not a tool
 
@@ -119,7 +128,8 @@ export const MODULE_INDEX =
   'maintenance (id tidy-up), ' +
   'stewardship (set the day-start time I open my human\'s day on), ' +
   'intentions (my own forward commitments and rounds: set/list/drop/complete, keep my rounds legible to my human or private), ' +
-  'media (look again at an image shared earlier, tie an image to someone/something in my graph)';
+  'media (look again at an image shared earlier, tie an image to someone/something in my graph), ' +
+  'browser (open a web page in my own browser and use it — click, fill, scroll, follow a flow — when reading isn\'t enough)';
 
 // ── Triggers ───────────────────────────────────────────────────────────
 // A module surfaces when its regex matches the turn text (user message +
@@ -160,6 +170,12 @@ const TRIGGERS = {
   },
   web: {
     text: /\b(search|look (it|this|that|him|her|them)? ?up|google|online|internet|web(site|page)?|news|weather|price of|what does .{1,40} mean|definition)\b/i,
+    blocks: [],
+  },
+  browser: {
+    // Using a page, not just reading it: a URL, or interaction verbs. Generous
+    // by design — the ward-only executors mean a stray match costs only tokens.
+    text: /(https?:\/\/\S+|\bwww\.\S+|\b(open (the |that |this )?(page|site|link|url|tab)|browse|click|fill (in|out)?|log ?in|sign ?in|log into|check ?out|add to (cart|basket)|book (a|the|it)|order (it|the|a)|navigate|on (the|that) (site|page|website)|submit the form|scroll (down|the page))\b)/i,
     blocks: [],
   },
   weather: {

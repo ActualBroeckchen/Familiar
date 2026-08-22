@@ -26,6 +26,15 @@ sources:
   - id: engineering-conventions
     type: file
     path: CLAUDE.md
+  - id: macos-launcher
+    type: file
+    path: Proto-Familiar.command
+  - id: stop-sh
+    type: file
+    path: stop.sh
+  - id: start-bat
+    type: file
+    path: start.bat
 ---
 
 # Installer And Launcher
@@ -120,6 +129,33 @@ Quit/Stop/Restart never actually killed the tracked process
 the tray spawned" signal, with a secondary check of who is listening on the
 port (`Get-NetTCPConnection`) as a fallback for orphans left over from before
 this fix existed [@win-tray-ps1].
+
+## Every launcher must write the same canonical process signal
+
+Process detection broke when the macOS double-click launcher (`Proto-Familiar.command`)
+did `exec node server.js` without writing `.proto-familiar.pid`, while `stop.sh`
+fell back to brittle `pgrep "node .*server.js"` + working-directory guessing.
+When that heuristic missed, a running Familiar read as "No Proto-Familiar process
+found".
+
+The fix unified process detection across all platforms:
+
+1. `Proto-Familiar.command` now writes `echo $$ > .proto-familiar.pid` right before
+   `exec` — the shell PID survives because `exec` replaces the shell process in-place,
+   so `$$` still refers to node's PID [@macos-launcher].
+2. `stop.sh` gained port-owner detection: `lsof -ti tcp:$PORT -sTCP:LISTEN`, then
+   cwd-verified, as a first-class detection method. This works regardless of how the
+   process was started and needs no PID file or command-name pattern match [@stop-sh].
+3. `start.bat` fixed its PID write from `echo X > file` (which includes a trailing
+   space, breaking the next re-read) to `(echo X)>file` [@start-bat].
+
+The lesson generalizes: **every launch path must leave the same canonical marker
+that every stopper reads.** Use port-owner detection as the first choice — it works
+regardless of launch method and doesn't depend on fragile argv matching. The PID
+file is a secondary signal; an exec-in-foreground launcher can still write it before
+exec. Detection logic is triplicated by necessity (bash / PowerShell-in-batch / Node),
+so keep the approach identical across launchers and note where paths mirror each other
+in code comments; divergence is how detection logic rots.
 
 ## Stale-instance recycling is shared, not copy-pasted per platform
 

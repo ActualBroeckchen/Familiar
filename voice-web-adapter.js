@@ -66,7 +66,7 @@ export function createWebCallAdapter({ hooks, send, log = () => {} } = {}) {
       // "Thinking…" forever waiting for a reply that is never coming. `no-reply`
       // tells it the turn finished with nothing to say (or an error the server
       // logged) so it can reset and wait for the next press.
-      if (reply == null) { control({ t: 'no-reply' }); return; }
+      if (reply == null) { control({ t: 'no-reply' }); return { barged: false }; }
       // The reply MAY carry a sample rate (TTS output rate) so the browser can
       // configure playback; a bare async-iterable (the default) omits it.
       const sampleRate = reply?.sampleRate;
@@ -88,6 +88,9 @@ export function createWebCallAdapter({ hooks, send, log = () => {} } = {}) {
         speaking = false;
         control({ t: 'speak-end' });
       }
+      // The engine times the call and, if barged, maps elapsed play time → the
+      // spoken-so-far text (2c `spokenUpTo`). We just report whether it was cut.
+      return { barged };
     },
     async stopPlayback() {
       barged = true;   // makes an in-flight playAudio loop break on its next chunk

@@ -1,5 +1,5 @@
 ---
-title: "Injection Guard: Documented but Never Wired"
+title: "Injection Guard: From Documented-but-Unwired to Two Wired Boundaries"
 topics: [architecture, safety]
 sources:
   - id: injection-guard
@@ -16,9 +16,11 @@ sources:
     path: docs/architecture.md
 ---
 
-# Injection Guard: Documented but Never Wired
+# Injection Guard: From Documented-but-Unwired to Two Wired Boundaries
 
-**Status: RESOLVED (0.8.57).** After reviewing this finding, the maintainer directed wiring at
+**Status: RESOLVED (0.8.57).** `injection-guard.js` was built, tested, and documented as a
+running defense for two audits before anyone checked whether any runtime code actually called
+it — none did. After reviewing this finding, the maintainer directed wiring at
 two boundaries — web reading (the guard's original intent) and Village communications — with
 two hard constraints: it must never block the relay system, and it must never block threat
 triage in a group setting. What shipped:
@@ -26,7 +28,10 @@ triage in a group setting. What shipped:
 - **Web:** `websearch.js` sanitizes search titles/snippets, `look_up` reference text, and
   `read_webpage` extractions at the module's return boundaries (URLs deliberately untouched so
   the read_webpage follow-up keeps working). The guard also became escape-tolerant for bracket
-  markers, because turndown renders `[SYSTEM]` as `\[SYSTEM\]` at exactly this boundary.
+  markers, because turndown renders `[SYSTEM]` as `\[SYSTEM\]` at exactly this boundary. The
+  [browser milestone](browser)'s `browser.js`, shipped later (0.11.0), is a second wired call
+  site: every page snapshot and act verdict passes through `sanitizeExternal()` before it can
+  reach a prompt, on top of the Stranger-tier framing that page content also gets there.
 - **Village:** `discord-gateway.js`'s new `inboundContent()` helper (both ingestion sites —
   spoken turns and observed messages) sanitizes villager/stranger text only. The constraints
   are structural, not behavioral: the ward's own words never pass through the guard on any
@@ -59,34 +64,37 @@ deliberately *not* applied to the ward's own words ("the injection guard is for 
 external data, not words my human has said") — a correct scoping decision for a defense that,
 as of this writing, runs nowhere.
 
-## Why this matters more than ordinary dead code
+## Why this mattered more than ordinary dead code
 
-This is the exact failure `CLAUDE.md`'s capability-reachability rule names as "dead code that
-looks like care," but on the *defensive* side: three layers of documentation assert a
-protection that does not exist, so every later design conversation (including the vision and
-browser build specs, which both lean on "passes through injection-guard.js" as a mitigation)
-inherited a false premise. External data currently reaching prompts unsanitized includes at
-minimum: web page extractions (`read_webpage`/`web_search` results), Discord villager and
-stranger message content, gcal-synced event titles, and villager-authored memory content
-surfaced on recall.
+This was the exact failure `CLAUDE.md`'s capability-reachability rule names as "dead code that
+looks like care," but on the *defensive* side: three layers of documentation asserted a
+protection that did not exist, so every design conversation up to that point (including the
+vision and browser build specs, which both leaned on "passes through injection-guard.js" as a
+mitigation) inherited a false premise. Before the fix, external data reaching prompts
+unsanitized included at minimum: web page extractions (`read_webpage`/`web_search` results),
+Discord villager and stranger message content, and gcal-synced event titles. Villager-authored
+memory content surfaced on recall was, and remains, out of scope — see below.
 
-## What wiring it needs (the open design questions)
+## Where the guard was wired, and why the boundaries needed judgment
 
-Where to apply it is not mechanical — the boundaries differ in risk and in cost-of-mangling:
+Deciding where to apply the guard was not mechanical — the candidate boundaries differed in risk
+and in cost-of-mangling, which is why the shipped scope (web reads plus Village communications,
+in the section above) is narrower than "every external boundary":
 
-1. **Web reads** are the broadest surface and the clearest win (third-party text, no dignity
-   cost to sanitizing).
-2. **Villager/stranger Discord content** is external but is also *conversation* — sanitizing
-   it can distort what a villager actually said, and the audience-gating + provenance systems
-   already carry part of this load structurally.
-3. **The ward's own words are exempt by design** (the triage comment above records why:
-   replacing a ward's distress phrasing with `[removed: …]` could cause the triage LLM to
+1. **Web reads** were the broadest surface and the clearest win (third-party text, no dignity
+   cost to sanitizing) — this is why they shipped first.
+2. **Villager/stranger Discord content** is external but is also *conversation* — sanitizing it
+   risks distorting what a villager actually said, so the audience-gating and provenance systems
+   were already carrying part of this load structurally before the guard was wired here too.
+3. **The ward's own words are exempt by design** (the triage comment referenced above records
+   why: replacing a ward's distress phrasing with `[removed: …]` could cause the triage LLM to
    dismiss genuine crisis as a jailbreak attempt).
 
-Until the maintainer decides, the honest state is: the guard's protection is *aspirational*,
-and prompt-injection defense currently rests on the structural systems (audience gating,
-fail-closed read scoping, provenance labels, code-gated actions) rather than on text
-sanitization.
+**Deliberately still unwired, by ongoing design choice rather than oversight:** Phylactery/Unruh
+recall (first-party stores; villager-written memories carry provenance labels instead of
+sanitization) and gcal event titles remain outside the guard's scope. Prompt-injection defense
+for those two surfaces rests on the structural systems (audience gating, fail-closed read
+scoping, provenance labels, code-gated actions) rather than on text sanitization.
 
 ## Related
 
@@ -95,3 +103,8 @@ sanitization.
   means even the read-side pattern layer it contrasts against was not actually running.
 - [Engineering conventions](../reference/engineering-conventions) — the capability-
   reachability rule this defect is the defensive-side mirror of.
+- [Browser milestone: guardrails in code, not prompts](../decisions/browser-guardrails-in-code)
+  — the design decisions behind the browsing milestone's deterministic code guardrails (an SSRF
+  proxy, a Stranger-tier default for page content), layered on top of this now-wired injection
+  guard rather than relying on prompt framing alone; see [Browser](browser) for the shipped
+  subsystem itself.

@@ -71,6 +71,29 @@ export const DEFAULT_LOCATION_MODE = 'strict';
 export const DEFAULT_ACTIVE_STRATEGY = 'llm';
 export const DEFAULT_ACTIVE_COOLDOWN_SEC = 60;
 
+// ── Voice call mode per location (Pass 3c) ────────────────────────
+// Whether/how I join a voice channel in this location:
+//   - off:    I never join here — even an explicit `!call` is refused.
+//             The ward's way to fully disable voice in a channel.
+//   - summon: I join only when explicitly asked (`!call`, the
+//             join_voice_call tool) — never on my own. The DEFAULT, so
+//             the deliberate act of typing `!call` always works and no
+//             config is needed to summon me.
+//   - auto:   I also join automatically when the ward ENTERS this voice
+//             channel — hands-free presence, opt-in.
+// Default SUMMON, not off: the proactivity-sensitive part is AUTO (joining
+// unprompted), which stays opt-in; refusing an explicit `!call` because an
+// unconfigured dropdown said "off" would just break the ward's own command.
+// So an unset/unknown/pre-3c location reads as summon (explicit works, no
+// auto); the ward opts up to auto or down to off deliberately.
+const CALL_MODES = ['off', 'summon', 'auto'];
+export const DEFAULT_CALL_MODE = 'summon';
+
+/** A location's normalized call mode. Unknown/absent → summon (explicit works, no auto). */
+export function locationCallMode(l) {
+  return CALL_MODES.includes(l?.callMode) ? l.callMode : DEFAULT_CALL_MODE;
+}
+
 // Normalize a location's presence-mode fields. Unknown mode → strict
 // (fail-quiet: an unrecognized mode must never make me chattier than
 // the ward asked). Strategy/cooldown only ride along in 'active' mode.
@@ -387,6 +410,9 @@ export function normalizeRegistry(raw) {
       // a pre-slug UUID assignment carries over to the migrated category id.
       assignedCategoryId: byId.has(remap(l.assignedCategoryId)) ? remap(l.assignedCategoryId) : CATEGORY_STRANGERS,
       ...normalizeLocationMode(l),
+      // Voice call mode (Pass 3c). Only stored when non-default, so old
+      // locations stay unchanged and 'off' never bloats the registry.
+      ...(locationCallMode(l) !== DEFAULT_CALL_MODE ? { callMode: locationCallMode(l) } : {}),
       // readBots: opt-in to seeing other bots/Familiars in this room.
       // Off by default — the loop guard. Independent of presence mode.
       ...(l.readBots === true ? { readBots: true } : {}),
@@ -513,15 +539,28 @@ export async function getRegistry({ filePath = DEFAULT_VILLAGE_PATH } = {}) {
 }
 
 /**
+ * Pure alias→villager match against an already-loaded registry. Match is
+ * by platform + exact id (the stable platform identifier, e.g. the Discord
+ * snowflake — NOT the display handle, which can be spoofed). Split out so a
+ * caller resolving MANY ids (a voice-call roster) reads the registry once and
+ * maps in memory, rather than one async read per id.
+ */
+export function villagerByAlias(reg, { platform, id } = {}) {
+  if (typeof platform !== 'string' || typeof id !== 'string') return null;
+  const p = platform.trim().toLowerCase();
+  const villagers = Array.isArray(reg?.villagers) ? reg.villagers : [];
+  return villagers.find(v => (v.aliases ?? []).some(a => a.platform === p && a.id === id)) ?? null;
+}
+
+/**
  * Resolve a platform alias to a villager, or null. Alias matching is
  * by platform + exact id (the stable platform identifier, e.g. the
  * Discord snowflake — NOT the display handle, which can be spoofed).
  */
 export async function findVillagerByAlias({ platform, id }, { filePath = DEFAULT_VILLAGE_PATH } = {}) {
   if (typeof platform !== 'string' || typeof id !== 'string') return null;
-  const p = platform.trim().toLowerCase();
   const reg = await readRegistryFile(filePath);
-  return reg.villagers.find(v => v.aliases.some(a => a.platform === p && a.id === id)) ?? null;
+  return villagerByAlias(reg, { platform, id });
 }
 
 // ── Category CRUD ─────────────────────────────────────────────────
@@ -785,7 +824,7 @@ export async function deleteVillager({ id }, { filePath = DEFAULT_VILLAGE_PATH }
 
 // ── Location CRUD ─────────────────────────────────────────────────
 
-export async function upsertLocation({ key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots }, { filePath = DEFAULT_VILLAGE_PATH } = {}) {
+export async function upsertLocation({ key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots, callMode }, { filePath = DEFAULT_VILLAGE_PATH } = {}) {
   return mutate(filePath, (reg) => {
     if (typeof key !== 'string' || !key.trim()) throw new Error('key (string) is required');
     if (assignedCategoryId !== undefined && !reg.categories.some(c => c.id === assignedCategoryId)) {
@@ -811,6 +850,12 @@ export async function upsertLocation({ key, label, assignedCategoryId, connectio
     if ((loc.mode ?? DEFAULT_LOCATION_MODE) !== 'active') {
       delete loc.activeStrategy;
       delete loc.activeCooldownSec;
+    }
+    // Voice call mode (Pass 3c). Unknown → off. Store only when non-default so
+    // the registry stays lean and old locations keep reading as off.
+    if (callMode !== undefined) {
+      const m = CALL_MODES.includes(callMode) ? callMode : DEFAULT_CALL_MODE;
+      if (m === DEFAULT_CALL_MODE) delete loc.callMode; else loc.callMode = m;
     }
     // readBots: independent of mode. On = this room may see/answer other
     // bots and Familiars (loops paced by the cooldown + rate limit; self

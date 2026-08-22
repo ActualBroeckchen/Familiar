@@ -53,6 +53,33 @@ sources:
   - id: causal-chain-spec
     type: file
     path: docs/causal-chain-fix-build-spec.md
+  - id: bookmark-migration
+    type: file
+    path: unruh/src/unruh/migrations/0003_bookmark_surfacing.sql
+  - id: interest-py
+    type: file
+    path: unruh/src/unruh/interest.py
+  - id: interest-test
+    type: file
+    path: unruh/tests/test_interest.py
+  - id: thalamus
+    type: file
+    path: thalamus.js
+  - id: audit-mcp-script
+    type: file
+    path: scripts/audit-mcp-contracts.mjs
+  - id: app-js
+    type: file
+    path: public/app.js
+  - id: server-py
+    type: file
+    path: unruh/src/unruh/server.py
+  - id: cerebellum-js
+    type: file
+    path: cerebellum.js
+  - id: tool-surfacing-js
+    type: file
+    path: tool-surfacing.js
 ---
 
 # Unruh
@@ -99,6 +126,78 @@ Unruh's design separates two layers that update at different rhythms [@unruh-des
   exception: they do not decay, are anchored in Phylactery as identity-level facts, and are
   expressed in Unruh as always-active orientations, so the Familiar's priorities cannot
   drift just because a value has been quiet for a while [@unruh-design].
+
+## Bookmark resurfacing and the M8 feedback loop
+
+Migration 0003 added four columns to the interest graph's bookmark nodes —
+`last_surfaced_at`, `last_surfacing_outcome`, `resurface_after_hours`,
+`consecutive_ignores` — plus a comment spelling out an adaptive resurfacing rule: an
+engaged bookmark's interval should grow, an ignored one should shrink, and repeated
+ignoring should nudge the parent topic's weight down [@bookmark-migration]. `thalamus.js`'s
+`reportSurfacingOutcomes()` runs after every chat turn that surfaced a bookmark: it scans the
+response text for the bookmark's or its topic's label, calls that an `engaged`/`ignored`
+outcome, and calls `interest_report_surfacing_outcome` on Unruh with the result
+[@thalamus]. `server.js` fires it from every streaming and non-streaming reply path
+[@server], and the Tomes/bookmarks UI renders the stored outcome as a badge on each
+bookmark [@app-js].
+
+For about three weeks after the 2026-07-25 commit that added the migration, the JS caller,
+and the UI badge, the Unruh side of this loop did not exist: no `@mcp.tool` named
+`interest_report_surfacing_outcome` was ever implemented [@audit-mcp-script]. Every call from
+`reportSurfacingOutcomes()` threw, and `thalamus.js` swallowed the error into a `console.error`
+line rather than surfacing it [@thalamus] — a correct application of graceful degradation (see
+[Engineering conventions](../reference/engineering-conventions)) for a peer being down, but it
+also meant a fully scaffolded feature ran on every turn, always failed, and never told anyone.
+No test crossed the JS→Python boundary to catch the missing tool, and the migration's own
+comment read like a finished plan, so later sessions that saw the columns, the caller, and the
+badge reasonably read the feature as wired. There is no data-loss or safety caveat attached to
+this gap — it is a feature that was scaffolded and then never finished, not a regression — but
+it is the concrete case behind
+[Cross-language MCP contracts: a silent-failure bug class and its gate](../reference/engineering-conventions),
+which records the bug class and the permanent gate that now catches a missing tool like this
+one before it ships.
+
+The recorder is now implemented as `report_surfacing_outcome()` in `unruh/src/unruh/interest.py`,
+following the migration's own rules: an engaged outcome multiplies `resurface_after_hours` by
+1.5, capped at 168 hours (one week); an ignored outcome multiplies it by 0.75, floored at 4
+hours; and three consecutive ignores nudge the bookmark's parent topic's interest weight down
+[@interest-py]. It is covered by `unruh/tests/test_interest.py` [@interest-test].
+
+### Closing the other two gaps: selection and creation
+
+Recording an outcome is only the third of three steps a bookmark needs to actually resurface —
+and a 0.10.107–0.10.109-alpha session (an intra-MCP audit of the whole loop, not just the
+recorder) found the other two were still missing, so the fully-scaffolded feature (DB columns,
+recorder, JS consumer, UI badge) had run on an empty shelf the whole time:
+
+- **Selection.** `temporal_context` — the tool that builds every turn's `[Temporal Context]`
+  block — never SELECTED due bookmarks at all. The fix adds `interests.due_bookmarks(conn)`
+  [@interest-py]: never-surfaced bookmarks first, then most-overdue by `resurface_after_hours`,
+  capped at `DUE_BOOKMARKS_LIMIT=2`, stamping `last_surfaced_at` on selection so each bookmark
+  respects its own adaptive interval. `temporal_context` gained a `mode` parameter and returns
+  `bookmarks` only when `mode == 'idle'` — a free cycle, never mid-conversation
+  [@server-py]. thalamus already sent `mode='idle'` once past `IDLE_THRESHOLD_MS`, but the tool
+  had no `mode` parameter to receive it, so pydantic silently dropped the argument and idle
+  gating never engaged — a fresh instance of the exact silent-arg-drop class
+  [Cross-language MCP contracts: a silent-failure bug class and its gate](../reference/engineering-conventions)
+  exists to catch.
+- **Creation**, the deeper gap, found only by auditing reachability rather than argument names:
+  the Unruh tool `interest_bookmark` existed but nothing called it — no JS wrapper, no
+  Familiar-facing tool, no HTTP endpoint. A bookmark could never be created in the first place,
+  so selection and recording had nothing to operate on. This is the "capability that isn't
+  reachable by the Familiar" anti-pattern (see
+  [Engineering conventions](../reference/engineering-conventions)), just applied to the write
+  side of a feature instead of a single tool. The fix adds `saveBookmark()` in `thalamus.js`
+  [@thalamus] and a first-person `bookmark_for_later` builtin in `cerebellum.js`
+  [@cerebellum-js], surfaced through the `CORE` tool-surfacing module — the same always-on
+  bucket as `interest_bump` and `interest_set_standing` — rather than a trigger-gated module,
+  because the Familiar reaches for it on its own initiative; nothing in a user message triggers
+  a save the way a search result triggers `mem_delete` [@cerebellum-js] [@tool-surfacing-js].
+
+With both halves closed, the M8 loop runs end-to-end: `bookmark_for_later` creates a bookmark,
+`due_bookmarks` selects it once due during an idle cycle, `reportSurfacingOutcomes()` records
+whether the ward engaged, and the adaptive interval it produces feeds back into the next
+selection.
 
 ## Origin: a schedule, not a cronjob checklist
 
@@ -342,3 +441,6 @@ All of these are transformation-only; no events are deleted or modified in the u
   Thalamus.
 - [Autonomous loops](autonomous-loops) — the pondering loop's tiered cadence, the shipped
   alternative to a fixed-interval checklist.
+- [Engineering conventions](../reference/engineering-conventions) — the cross-language MCP
+  contract bug class the bookmark-resurfacing gap above is the worked example of, and the
+  permanent gate that now catches a missing or misnamed tool call before it ships.

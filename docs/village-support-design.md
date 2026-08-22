@@ -729,6 +729,23 @@ the gate.
    (`tomes/.village-location-knocks.json`) so the Locations tab can offer
    one-click registration. Same privacy/cap discipline as the people
    knock list; saving a location auto-settles its knock.
+   - **Saved server list + auto-register (0.10.x).** Two additions on top of
+     the channel knock list. (a) A **persistent server list**
+     (`tomes/.village-servers.json`, `recordServer`/`listServers`/`dismissServer`
+     in `knocks.js`) names the Discord guilds the Familiar is in — captured from
+     `GUILD_CREATE` (`d.name`, cached in `gw.guildNames` and persisted) so the
+     Locations tab and the knock groups read as real server names, not raw IDs.
+     Unlike the knock lists it is NOT cap-evicted and NOT cleared when a knock
+     settles (leaving a server is the ward's `dismiss`); metadata-only, and it
+     confers no access (naming only — circles + locations still gate). The
+     channel-knock list is now **grouped by server** under those names.
+     (b) An opt-in **auto-register** setting (`villageAutoRegisterLocations`,
+     default OFF): when on, an unregistered guild channel is turned straight
+     into a Location (`upsertLocation`, born at the **Strangers** floor so it
+     grants nothing until the ward assigns a circle) instead of waiting in the
+     knock list. Both knock call sites go through one gateway helper
+     (`noteUnregisteredGuild`) so observe and reply paths behave identically.
+     Endpoints `GET/DELETE /api/village/servers`.
 10. **Room audience tag (0.5.5-alpha; membership rework audit 2026-07).**
    Every Discord session is stamped with `audienceTag` — a durable label of
    the room's audience computed by `audience.audienceTagFor()`. As of the

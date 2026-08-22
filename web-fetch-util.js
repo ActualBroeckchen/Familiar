@@ -1,17 +1,18 @@
 /**
  * web-fetch-util.js — a small timed fetch shared by the search backends.
  *
- * Both the SearXNG JSON path (websearch.js) and the proper-API adapters
+ * Both the keyless DuckDuckGo floor (websearch.js) and the proper-API adapters
  * (websearch-providers.js) need the same thing: a fetch with a hard
  * AbortController timeout, sensible JSON defaults, and optional method /
  * headers / body. Extracting it here keeps that logic in ONE place rather
  * than copy-pasted into each backend (CLAUDE.md: no copy-paste of
  * substantial logic).
  *
- * This is NOT the SSRF guard. These backends talk to sanctioned endpoints
- * (a configured/loopback SearXNG, or a provider's own public API host), so
- * they don't route through the public-only guard that governs read_webpage.
- * They DO need a timeout so one hung host can't stall a tool round.
+ * This is NOT the SSRF guard. These backends talk to FIXED, known endpoints
+ * (DuckDuckGo's host, or the selected provider's own public API host) — never
+ * an arbitrary URL — so they don't route through the public-only guard that
+ * governs read_webpage. They DO need a timeout so one hung host can't stall a
+ * tool round.
  */
 
 const WEB_FETCH_TIMEOUT_MS = 9000;

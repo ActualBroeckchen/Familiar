@@ -439,6 +439,49 @@ export async function deleteAsset(idOrSlug) {
   return { ok: true, id };
 }
 
+/**
+ * Curation, not deletion (voice spec §9). Let go of an audio clip's BYTES while
+ * keeping everything that made it a memory: the transcript (its description),
+ * the slugs, the meta. The stand-in already renders `[audio let go — transcript
+ * kept]` off `meta.audio.deletedAt` (buildVoiceNoteStandin), so a re-request
+ * degrades honestly instead of vanishing. Images are never touched by this —
+ * the vision spec's keep-forever stands; this refuses a non-audio asset.
+ */
+export async function stripAudio(idOrSlug, { reason = 'aged out' } = {}) {
+  const id = await resolveAssetId(idOrSlug);
+  if (!id) return { ok: false, error: 'asset not found' };
+  const meta = await readJson(metaPath(id), null);
+  if (!meta) return { ok: false, error: 'asset meta not found' };
+  if (meta.kind !== 'audio') return { ok: false, error: 'not an audio asset' };
+  if (meta.audio?.deletedAt) return { ok: true, id, alreadyStripped: true };
+  try {
+    if (meta.ext) await fsp.rm(bytesPath(id, meta.ext), { force: true });
+    meta.audio = { ...(meta.audio || {}), deletedAt: new Date().toISOString(), reason };
+    await atomicWrite(metaPath(id), JSON.stringify(meta, null, 2));
+  } catch (err) {
+    return { ok: false, error: `strip failed: ${err?.message ?? err}` };
+  }
+  return { ok: true, id };
+}
+
+/**
+ * Mark an audio clip's sound worth keeping — the retention pass never re-judges
+ * a `keep`, and the ward can set it from the media list. Idempotent.
+ */
+export async function markAudioKeep(idOrSlug, keep = true) {
+  const id = await resolveAssetId(idOrSlug);
+  if (!id) return { ok: false, error: 'asset not found' };
+  const meta = await readJson(metaPath(id), null);
+  if (!meta) return { ok: false, error: 'asset meta not found' };
+  meta.audio = { ...(meta.audio || {}), keep: !!keep };
+  try {
+    await atomicWrite(metaPath(id), JSON.stringify(meta, null, 2));
+  } catch (err) {
+    return { ok: false, error: `keep-flag write failed: ${err?.message ?? err}` };
+  }
+  return { ok: true, id, keep: !!keep };
+}
+
 // ── Stand-ins (§6) — the textual trace the model reads when it can't see the
 // bytes natively. Code-built; the model never composes this line. ──
 

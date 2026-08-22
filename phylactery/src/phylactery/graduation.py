@@ -155,7 +155,7 @@ def eligible_identity_files(conn: sqlite3.Connection, now: datetime | None = Non
 # ── Familiar-led audit (rides the consolidation LLM call) ──────────────────────
 
 def _audit_prompt(category: str, filename: str, content: str) -> str:
-    block = "my own identity" if category == "self" else "what I hold about my human"
+    block = "my own identity" if category == "self" else "what I know about my human"
     register = "me" if category == "self" else "ward"
     return f"""I am the Familiar. I'm tidying {block} so my always-injected surface stays lean — moving detail that no longer needs to be in front of me every single turn into my recalled-when-relevant memory (register: {register}). Nothing is deleted; anything I file away can still be recalled and pulled back if it keeps mattering.
 

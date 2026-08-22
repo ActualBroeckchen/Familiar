@@ -11,6 +11,9 @@ sources:
   - id: content-tags-js
     type: file
     path: content-tags.js
+  - id: content-regate
+    type: file
+    path: content-regate.js
   - id: content-gate-py
     type: file
     path: phylactery/src/phylactery/content_gate.py
@@ -204,6 +207,22 @@ memory by hand — clearing sends it back to the untagged
 in code with the same `normalizeTag` used everywhere else, rejecting anything
 outside the fixed vocabulary rather than trusting the client [@build-spec].
 
+## Retroactive re-tagging: bringing existing history along (Phase B)
+
+Everything above is the forward gate (Phase A): new ward-about-self facts are content-gated as
+they are written. That leaves the ward-private history written before this feature existed
+untouched. The `content-regate-loop.js` background worker (see
+[Autonomous loops](autonomous-loops)) is Phase B: an opt-in, 30-minute-tick pass that has the
+Familiar itself review its own old ward-private facts and decide, per fact and with judgment
+rather than a mechanical bulk re-tag, which should be pulled under the content-gating rules and
+which stay strictly private [@content-regate]. It is deliberately conservative: a fact the
+Familiar is unsure about stays private (the parser fails closed to "keep"), every fact it does
+open is written to a disclosure notice the ward reads, and any opened fact can be reverted to
+private per-fact [@content-regate]. Candidates are code-selected — ward-private, ward-self facts
+only, never a third-party fact — and one batched LLM judgment covers a whole tick, reusing the
+existing `updateMemoryById` wrapper as the only mutation surface [@content-regate]. The loop stays
+dormant until the ward enables "Review my private notes for content-sharing" in Settings.
+
 ## Invariants
 
 These hold at every seam this feature touches, and any future extension of
@@ -246,3 +265,5 @@ not an architectural filter [@build-spec].
   which `normalizeTag(...) || categoryToTag(...)` applies here.
 - [Session memorization](session-memorization) — the extraction pipeline whose
   prompts gained the `content_tag` field this page describes.
+- [Autonomous loops](autonomous-loops) — where the content-re-gate background worker sits
+  alongside the rest of the loop set, and the shared off-switch/degradation contract it follows.

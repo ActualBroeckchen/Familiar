@@ -101,3 +101,8 @@ of source code where a hash could be typed by hand and drift from the real file.
 `voice-speech.js` applies the timestamp-stripping half of the rule to spoken output: an
 LLM-emitted `[HH:MM]` is stripped before text-to-speech, because speaking a fabricated time
 asserts it as real the same way displaying one would.
+
+The unbuilt browser milestone specs a further application to secrets: the model may name a
+credentials-vault entry, but only code reads and types the value, so a password never enters a
+prompt, tool result, session log, or audit trail — see
+[Browser milestone: guardrails in code, not prompts](browser-guardrails-in-code).

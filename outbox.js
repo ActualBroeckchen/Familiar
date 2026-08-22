@@ -124,6 +124,30 @@ export async function acknowledgeOutbox({ id, tomesDir = DEFAULT_TOMES_DIR }) {
   });
 }
 
+/**
+ * Acknowledge every pending item of a kind at once. This is the escalation
+ * VETO for triage check-ins: my human actively replying stands down the
+ * trusted-contact escalation on any pending check-in, whereas passively
+ * DISPLAYING one no longer counts (ward decision — "received ≠ handled";
+ * `checkAndFirePendingContacts` only escalates UNacknowledged triage items,
+ * so this is what keeps a real escalation armed until my human truly engages).
+ * Returns how many it settled. Never throws into the caller.
+ */
+export async function acknowledgePendingByKind(kind, { tomesDir = DEFAULT_TOMES_DIR } = {}) {
+  const k = typeof kind === 'string' ? kind : '';
+  if (!k) return { ok: false, acknowledged: 0 };
+  return await withLock(async () => {
+    const items = await readAll(tomesDir);
+    const nowIso = new Date().toISOString();
+    let n = 0;
+    for (const it of items) {
+      if (it.kind === k && !it.acknowledged) { it.acknowledged = true; it.acknowledgedAt = nowIso; n++; }
+    }
+    if (n) await writeAll(tomesDir, items);
+    return { ok: true, acknowledged: n };
+  });
+}
+
 export async function clearAcknowledged({ tomesDir = DEFAULT_TOMES_DIR } = {}) {
   return await withLock(async () => {
     const items = await readAll(tomesDir);

@@ -6,6 +6,9 @@ npm-debug.log*
 logs/
 # Media store (vision build spec §2) — image bytes + meta, local per embodiment.
 media/
+# Browser (browser build spec §2) — the Familiar's own profile (cookies/logins)
+# and any auto-fetched Chromium binary. Local per machine, never committed.
+browser/
 # Vision capability cache (provider:model → yes/no) — advisory, rebuildable.
 tomes/.vision-capability.json
 tomes/.vision-capability.json.tmp
@@ -121,6 +124,11 @@ tomes/.stewardship-state.json.tmp
 # Measured pitch of previewed reference clips — a cache, re-derivable by listening again
 tomes/.voice-clip-features.json
 tomes/.voice-clip-features.json.tmp
+
+# Voiceprints — biometric-adjacent speaker embeddings (ward + opt-in villagers).
+# NEVER committed, never synced; local to this embodiment only (spec §8.1).
+tomes/.voiceprints.json
+tomes/.voiceprints.json.tmp
 
 # Python bytecode — machine artifacts from any of the Python peers.
 __pycache__/

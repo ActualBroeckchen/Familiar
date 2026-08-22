@@ -302,6 +302,27 @@ elif [ -f "$SCRIPT_DIR/unruh/pyproject.toml" ]; then
   warn "Skipping Unruh dep sync (uv not available). Temporal context will be disabled until uv is installed."
 fi
 
+# --- Voice provisioning (fresh install only) ----------------------------
+# Front-load everything voice needs so a new user never has to hunt for a
+# download or troubleshoot a half-set-up engine. This is heavy (Kyutai is a
+# ~600 MB torch install), so it runs on a FRESH install only and can be skipped
+# with PF_SKIP_VOICE_INSTALL=1 (metered connections, headless boxes). Every step
+# is non-fatal: a machine that can't fetch voice still gets a Familiar — it falls
+# back to the built-in engine, which needs nothing. ensure-voicebox.mjs does its
+# own disk pre-flight and, on Windows, installs the Visual C++ runtime torch
+# needs so there's nothing to troubleshoot after.
+if [ "$MODE" = "install" ] && [ "${PF_SKIP_VOICE_INSTALL:-0}" != "1" ]; then
+  say "Setting up voice — a large one-time download (skip with PF_SKIP_VOICE_INSTALL=1)..."
+  if [ "$HAVE_UV" = "1" ]; then
+    node "$SCRIPT_DIR/scripts/ensure-voicebox.mjs" --install \
+      || warn "Kyutai voice setup didn't finish — the built-in engine still speaks; retry later in Settings → Chat → Voice."
+  else
+    warn "Skipping Kyutai voice (needs uv). The built-in engine still speaks."
+  fi
+  node "$SCRIPT_DIR/scripts/ensure-audio-models.mjs" \
+    || warn "Listening-model download didn't finish — voice notes will fetch it on first use."
+fi
+
 # Make the shell launchers + updaters executable — a ZIP extractor or a
 # restored backup can drop the bit, which would break ./update.sh and the
 # macOS double-click path.

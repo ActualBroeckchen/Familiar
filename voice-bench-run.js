@@ -72,8 +72,6 @@ export function statusOf(state = current) {
   };
 }
 
-export function currentRun() { return current; }
-
 /**
  * Start a benchmark. Returns immediately with the run's status; the work
  * continues in the background and is read back by polling.

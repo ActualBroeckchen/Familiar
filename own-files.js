@@ -34,7 +34,9 @@ const DENY_SEGMENTS = new Set([
 const DENY_FILES = [
   /^\.env(\..*)?$/i,                 // .env, .env.local, …
   /^settings\.json$/i,               // API keys, Discord bot token, webhooks
-  /^\.proto-familiar-config\.json$/i // tailscale/runtime config
+  /^\.proto-familiar-config\.json$/i,// tailscale/runtime config
+  /^credentials-vault\.json$/i,      // browser §5.9: passwords the model must NEVER read
+  /^autonomy-grants\.json$/i,        // browser §5.9: the ward's hand-signed grant file
 ];
 
 function denied(relPath) {

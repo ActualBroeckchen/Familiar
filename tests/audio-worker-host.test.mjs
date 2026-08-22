@@ -295,7 +295,12 @@ test('a missing engine is a reported reason, never a crash — no restart, no pa
   const w = createAudioWorker({ workerScript: REAL_WORKER, idleMs: 0, onEvent: (e) => events.push(e.type) });
   try {
     const r = await w.request({ op: 'load', role: 'tts', modelDir: '/nowhere' }, { timeoutMs: 8000 });
-    if (!r.ok) assert.equal(r.reason, 'no-engine');
+    // The point is that an absent optional dependency is REPORTED, never a crash.
+    // Which reason depends on the machine: with no native binding it's 'no-engine';
+    // with the binding present, loading a bad path is a clean 'load-failed'. Both
+    // are a reported reason — accept either so the test holds in CI (no binding)
+    // AND on a dev machine that has sherpa-onnx-node installed.
+    if (!r.ok) assert.ok(['no-engine', 'load-failed'].includes(r.reason), `unexpected reason: ${r.reason}`);
     await new Promise((res) => setTimeout(res, 100));
     assert.equal(w.status().parked, false, 'an absent optional dependency must not park voice');
     assert.ok(!events.includes('exit'), 'and must not kill the worker');

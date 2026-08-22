@@ -408,7 +408,7 @@ intentions/rounds — *"Every morning I go over calendar nodes; every noon I
 check in on Chen if we haven't talked in an hour"* — read-only for the
 ward, charming and transparent by default. But a `rounds_visibility` flag
 on the intention store, flipped by a first-person Familiar tool
-(`set_rounds_visibility(shared|private)` — described in the Familiar's own
+(`intention_visibility(shared|private)` — described in the Familiar's own
 voice: *"I use this to decide whether my human sees the rounds I keep, or
 whether they stay mine"*), can hide them. This is the entity-as-subject
 stance taken further than anywhere else in the codebase: the Familiar owns

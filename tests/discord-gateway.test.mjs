@@ -27,6 +27,7 @@ import {
   clampDiscordMediaPerHour,
   isDiscordImageAttachment,
   discordResizeUrl,
+  attributeUserContent,
 } from '../discord-gateway.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────
@@ -702,6 +703,45 @@ describe('messageNamesBot — did this line pull me in', () => {
   });
   it('false when I have no bot id yet', () => {
     assert.equal(messageNamesBot({ mentions: [{ id: '999' }] }, null), false);
+  });
+});
+
+describe('attributeUserContent — who said what in a multi-party room', () => {
+  it('labels my human with a (WARD) marker in a guild room', () => {
+    // The reported bug: my human\'s guild messages arrived unprefixed, so I
+    // kept reading their words as my own or a villager\'s.
+    assert.equal(
+      attributeUserContent({ isWard: true, kind: 'guild', speakerName: null, wardName: 'Zara', content: 'did you eat?' }),
+      '[Zara (WARD)]: did you eat?',
+    );
+  });
+  it('leaves a one-on-one ward DM unprefixed (there is only us)', () => {
+    assert.equal(
+      attributeUserContent({ isWard: true, kind: 'ward-dm', speakerName: null, wardName: 'Zara', content: 'hi' }),
+      'hi',
+    );
+  });
+  it('prefixes a villager with their name (guild and DM alike, as before)', () => {
+    assert.equal(
+      attributeUserContent({ isWard: false, kind: 'guild', speakerName: 'Sam', wardName: 'Zara', content: 'hello' }),
+      '[Sam]: hello',
+    );
+    assert.equal(
+      attributeUserContent({ isWard: false, kind: 'villager-dm', speakerName: 'Sam', wardName: 'Zara', content: 'hey' }),
+      '[Sam]: hey',
+    );
+  });
+  it('falls back to a sensible ward name when none is configured', () => {
+    assert.equal(
+      attributeUserContent({ isWard: true, kind: 'guild', speakerName: null, wardName: 'my human', content: 'x' }),
+      '[my human (WARD)]: x',
+    );
+  });
+  it('never drops a non-ward turn even without a speaker name', () => {
+    assert.equal(
+      attributeUserContent({ isWard: false, kind: 'guild', speakerName: null, wardName: 'Zara', content: 'x' }),
+      'x',
+    );
   });
 });
 

@@ -35,6 +35,15 @@ sources:
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/dbfa7a64-Village_Support_implementation_comp.txt
     note: "Follow-up conversation after Village Support shipped, in which the maintainer named a false-positive concern about threat/triage."
+  - id: future-features
+    type: file
+    path: docs/future-features.md
+  - id: voice-audio-tags
+    type: file
+    path: voice-audio-tags.js
+  - id: voice-tagging
+    type: file
+    path: voice-tagging.js
 ---
 
 # Safety Spine
@@ -65,7 +74,7 @@ the LLM is reserved for interpreting the pattern once assembled, not for tagging
 regression suite CLAUDE.md points to watches phrases like "cut me off" or "I want to die from
 embarrassment," which read as crisis language on a naive scan but are not [@architecture-doc].
 
-**Image-derived threat signals** (0.9.2-alpha, PR #219): The ward authorized shared images to raise threat tier through `scoreImageDescriptionThreat()` in `vision.js` [@vision-js]. The function scores the image's cached description (never raw model prose) using the same `scoreMessage()` that scores typed text, then feeds the resulting delta through the existing `recordThreat()` with `source:'vision'`. Three design constraints are ward-signed: (1) *full weighting* — an image-derived signal counts the same as a typed distress signal (no damping), (2) *raise-only* — images can only increase threat, never lower it, and (3) *ward-images-only* — only images tagged `audienceTag === 'ward-private'` move the ward's safety state, enforcing the no-covert-safety-move discipline so a villager's shared bytes never alter the ward's threat tracking [@vision-js]. The feature fires fire-and-forget on the ward's own live turn when `visionThreatScoringOn` is true (default enabled, gated by `PROTO_FAMILIAR_VISION_THREAT_DISABLED=1` and `PROTO_FAMILIAR_THREAT_DISABLED=1`) [@vision-js].
+**Image-derived threat signals** (0.9.2-alpha, PR #219): The ward authorized shared images to raise threat tier through `scoreImageDescriptionThreat()` in `vision.js` [@vision-js]. The function scores the image's cached description (never raw model prose) using the same `scoreMessage()` that scores typed text, then feeds the resulting delta through the existing `recordThreat()` with `source:'vision'`. Three design constraints are ward-signed: (1) *full weighting* — an image-derived signal counts the same as a typed distress signal (no damping), (2) *raise-only* — images can only increase threat, never lower it, and (3) *ward-images-only* — only images tagged `audienceTag === 'ward-private'` move the ward's safety state, enforcing the no-covert-safety-move discipline so a villager's shared bytes never alter the ward's threat tracking [@vision-js]. The feature fires fire-and-forget on the ward's own live turn when `visionThreatScoringOn` is true (default enabled, gated by `PROTO_FAMILIAR_VISION_THREAT_DISABLED=1` and `PROTO_FAMILIAR_THREAT_DISABLED=1`) [@vision-js]. This `audienceTag` gate is the named precedent the unbuilt browser milestone cites for treating page content as unable to move safety state — see [Browser milestone: guardrails in code, not prompts](../decisions/browser-guardrails-in-code).
 
 ## Tracking: threat-tracker.js
 
@@ -144,11 +153,54 @@ ordinary defensive improvement [@claude-md]. That is why sign-off is scoped to *
 change specifically — a pure relocation with byte-identical behavior does not require it
 [@claude-md].
 
-## Image-derived threat: known limitations and deferred work
+## Deferred safety-gated work: what needs ward sign-off before a line of code is touched
 
-The full-weighting design for image signals is known to produce false positives on fictional violence: horror film stills, dark artwork, and other visual content depicting serious distress in a fictional or artistic context will read as crisis to the pattern scorer. The interim escape hatch is the in-app settings switch ("Let a distressing image raise concern"), which the ward can toggle [@vision-js]. The real fix is context-aware image interpretation that can distinguish genuine distress from horror or dark art — deferred to a future pass when description quality can be trusted to carry that distinction [@vision-js].
+Three follow-ups are named but deliberately not built, because each one would change *when or
+whether the Familiar acts on the ward's safety*, or *what a sensor is allowed to do with private
+signal* — the exact class of change CLAUDE.md requires a ward-signed build spec for before
+implementation starts, not after [@future-features] [@claude-md]. Each is recorded with the
+specific decision a future session needs from the ward, so nobody has to re-derive what is
+actually being asked [@future-features].
 
-Symmetrically, the raise-only constraint prevents genuinely calming or positive images from lowering an elevated threat tier. The ward-authorized revisit is context-aware de-escalation: allowing a positive image to bring down a tier when interpretation is confident enough [@vision-js]. This is also deferred until description models can reliably tell a calming image from a stray positive photo.
+**Fictional-violence exception.** The full-weighting design for image signals is known to
+produce false positives on fictional violence: horror film stills, dark artwork, and other
+visual content depicting serious distress in a fictional or artistic context will read as crisis
+to the pattern scorer, nudging a healthy horror fan's threat tier up. The interim escape hatch is
+`PROTO_FAMILIAR_VISION_THREAT_DISABLED`, plus the in-app settings switch ("Let a distressing image
+raise concern") [@vision-js] [@future-features]. The open ward decision is a real fork, not just
+"build it": suppress fictional-violence signal entirely (risk: a real image dressed up as
+fiction is missed) versus only damp it (risk: some false rise remains) — and where exactly that
+line sits [@future-features]. This is a ward-sign-off path touching `crisis-signals.js` /
+`threat-tracker.js` orchestration [@future-features].
+
+**Context-aware de-escalation.** Symmetrically, the raise-only constraint prevents genuinely
+calming or positive images from lowering an elevated threat tier. The open ward decision here is
+whether the project is confident enough in image reading to let it lower the safety tier at all,
+and under what evidence — a real loosening of the safety spine, squarely the ward's call
+[@future-features]. Both revisits are deferred until description quality can be trusted to carry
+that distinction [@vision-js].
+
+**Audio tagging → care detection (the voice build spec's §8.4 long-term ambition).** Room-sound
+tagging shipped in 0.10.102-alpha (`voice-tagging.js`, `voice-audio-tags.js`) strictly as
+**annotation-only**: `classifyRoomSounds()` in `voice-audio-tags.js` drops every human-vocalisation
+label — speech, shouting, crying, laughter, and related classes — before a tag ever reaches
+context, and the surviving room-sound tags never move the threat tier, never trigger an action,
+and never persist beyond the session [@voice-audio-tags]. That drop is deliberate, not
+incidental: "distressed shouting" and "crying" are exactly the sound classes the long-term
+ambition names, so reading them into context here would let that feature arrive quietly as a side
+effect [@voice-audio-tags]. The ambition itself is the opposite of annotation-only — sound
+classes like distressed shouting, breaking objects, or the acoustic pattern of purging could
+inform the care the ward is owed, which is detection that changes when the Familiar acts on
+safety, safety-critical by the same definition as the rest of this page [@future-features]. It
+needs its own spec with evidence-informed thresholds and honest false-positive/false-negative
+accounting before a single tag touches the caring spine, because both failure directions cost:
+missing real distress, or reacting to a TV drama as if it were the ward's life
+[@future-features]. The open ward decisions: build it at all, for which sound classes, and what a
+firing tag should do — a gentle check-in, a note-to-self only, or escalation [@future-features].
+Two mechanisms keep the shipped feature short of that ambition: the hard off-switch
+`PROTO_FAMILIAR_AUDIO_TAGGING_DISABLED` (checked in `audioTaggingDisabled()`, which also honors
+`PROTO_FAMILIAR_VOICE_DISABLED`) [@voice-tagging], and the classifier's human-vocal denylist
+itself, which no ward setting can reach around [@voice-audio-tags] [@future-features].
 
 ## Related
 
@@ -160,3 +212,6 @@ Symmetrically, the raise-only constraint prevents genuinely calming or positive 
   temporal model.
 - [Vision and media input](vision-and-media) — where images are described and cached before
   threat scoring consumes their descriptions.
+- [Voice](voice) — where room-sound tagging's shipped, annotation-only scope is built; this page
+  covers why that scope stops short of the care-detection ambition and what a future ward-signed
+  spec would need to decide.

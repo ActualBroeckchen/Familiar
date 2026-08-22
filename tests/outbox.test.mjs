@@ -4,7 +4,7 @@ import path from 'path';
 import os from 'os';
 import { mkdtempSync, rmSync } from 'fs';
 
-import { enqueueOutbox, listOutbox, acknowledgeOutbox, clearAcknowledged } from '../outbox.js';
+import { enqueueOutbox, listOutbox, acknowledgeOutbox, clearAcknowledged, acknowledgePendingByKind } from '../outbox.js';
 
 function tempDir() {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'outbox-test-'));
@@ -91,5 +91,41 @@ test('enqueueOutbox rejects missing kind / title', async () => {
   try {
     await assert.rejects(enqueueOutbox({ title: 'x',         tomesDir: dir }), /kind/i);
     await assert.rejects(enqueueOutbox({ kind:  'reminder',  tomesDir: dir }), /title/i);
+  } finally { cleanup(); }
+});
+
+test('acknowledgePendingByKind settles only the named kind — the escalation veto', async () => {
+  const { dir, cleanup } = tempDir();
+  try {
+    // Two pending check-ins (triage) and a reminder that must NOT be touched.
+    await enqueueOutbox({ kind: 'triage', originId: 't1', title: 'checking in', body: 'you ok?', tomesDir: dir });
+    await enqueueOutbox({ kind: 'triage', originId: 't2', title: 'checking in', body: 'still there?', tomesDir: dir });
+    await enqueueOutbox({ kind: 'reminder', originId: 'r1', title: 'water',       tomesDir: dir });
+
+    const r = await acknowledgePendingByKind('triage', { tomesDir: dir });
+    assert.equal(r.ok, true);
+    assert.equal(r.acknowledged, 2, 'both pending check-ins settled');
+
+    // Both triage items are now acknowledged (out of the escalation check);
+    // the reminder is still pending.
+    const pending = await listOutbox({ pendingOnly: true, tomesDir: dir });
+    assert.deepEqual(pending.map(i => i.kind), ['reminder'], 'only the reminder is still pending');
+
+    const all = await listOutbox({ pendingOnly: false, tomesDir: dir });
+    const triage = all.filter(i => i.kind === 'triage');
+    assert.ok(triage.every(i => i.acknowledged && i.acknowledgedAt), 'triage items carry an ack timestamp');
+  } finally { cleanup(); }
+});
+
+test('acknowledgePendingByKind is a no-op when nothing of that kind is pending', async () => {
+  const { dir, cleanup } = tempDir();
+  try {
+    await enqueueOutbox({ kind: 'reminder', originId: 'r1', title: 'x', tomesDir: dir });
+    const r = await acknowledgePendingByKind('triage', { tomesDir: dir });
+    assert.equal(r.acknowledged, 0);
+    assert.equal((await listOutbox({ pendingOnly: true, tomesDir: dir })).length, 1, 'reminder untouched');
+    // A blank kind settles nothing rather than everything.
+    const blank = await acknowledgePendingByKind('', { tomesDir: dir });
+    assert.equal(blank.ok, false);
   } finally { cleanup(); }
 });

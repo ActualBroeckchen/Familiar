@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from datetime import date, timedelta
 from typing import Any
@@ -30,6 +31,7 @@ from typing import Any
 
 from phylactery.db import get_conn, now_iso
 from phylactery.memory import create as memory_create
+from phylactery.memory import update_memory_by_id
 
 
 def _llm_config() -> dict[str, str] | None:
@@ -99,6 +101,34 @@ def _parse_date_key(dk: str | None) -> date | None:
         return date.fromisoformat(str(dk)[:10])
     except (ValueError, TypeError):
         return None
+
+
+# Migrated rows can carry tier keys that predate the ISO-key convention: monthlies
+# keyed 'YYYY-MM' and weeklies keyed 'YYYY-Wnn'. _parse_date_key can't read those
+# (they never enter a sweep as sources), and — worse — the tier guards compare
+# raw keys, so a migrated monthly did not count as "already rolled" and the 0.8.89
+# backlog sweep re-rolled Feb–May 2026 into duplicate monthlies. Guards compare on
+# the normalized form instead (the 2026-08-14 cleanup incident).
+_MONTH_KEY = re.compile(r"^\d{4}-\d{2}$")
+_WEEK_KEY = re.compile(r"^(\d{4})-W(\d{1,2})$")
+
+
+def _normalized_date_key(dk: str | None) -> str | None:
+    """date_key coerced to the ISO-date form the tier guards compare on.
+    'YYYY-MM' → first of month; 'YYYY-Wnn' → that ISO week's Monday; anything
+    else → the leading 10 chars (None if shorter/unparseable as a guard key)."""
+    if not dk:
+        return None
+    s = str(dk).strip()
+    if _MONTH_KEY.match(s):
+        return f"{s}-01"
+    m = _WEEK_KEY.match(s)
+    if m:
+        try:
+            return date.fromisocalendar(int(m.group(1)), int(m.group(2)), 1).isoformat()
+        except ValueError:
+            return None
+    return s[:10] if len(s) >= 10 else None
 
 
 def granularity_audit(conn: sqlite3.Connection | None = None, *, sample_limit: int = 8) -> dict[str, Any]:
@@ -200,6 +230,43 @@ def _prune_consolidated(conn: sqlite3.Connection, ids: list[str]) -> int:
     return len(ids)
 
 
+def _write_rollup(
+    conn: sqlite3.Connection,
+    granularity: str,
+    date_key: str,
+    summary: str,
+) -> dict[str, Any]:
+    """Write a tier rollup so a re-rolled period REPLACES its summary instead of
+    stacking another copy onto the same row.
+
+    memory_create's dedup path is the wrong writer for consolidation output: a
+    regenerated summary of the same sources lands as a near-duplicate of the
+    existing row and gets appended (`dup_content + "\\n" + content`). That is how
+    the June 2026 monthly accreted ~24 generations of the same summary into one
+    160 KB row before the once-only guards existed. Reaching past dedup with a
+    direct update is correct here: the row being replaced is the rollup WE wrote
+    for this exact period, not an independently remembered fact.
+
+    An empty summary is refused outright rather than stored — a zero-length row
+    would both say nothing and (pre-fix) mark the period as rolled."""
+    if not summary.strip():
+        return {"ok": False, "error": f"{granularity} consolidation produced an empty summary"}
+    # Prefer the substantial row when both a real summary and an empty stub sit at
+    # the same key (replace the summary, leave the stub for the sweep that owns
+    # it); otherwise claim whatever single row holds the period — including a
+    # stub, which gets overwritten rather than joined by a second row.
+    row = conn.execute(
+        "SELECT id FROM memories WHERE granularity=? AND date_key=? AND kind='narrative' "
+        "ORDER BY length(trim(coalesce(content,''))) DESC LIMIT 1",
+        (granularity, date_key),
+    ).fetchone()
+    if row:
+        res = update_memory_by_id(row["id"], new_content=summary, conn=conn)
+        return {"ok": bool(res.get("ok")), "dateKey": date_key, "replacedId": row["id"]}
+    res = memory_create(summary, granularity, date_key=date_key, conn=conn)
+    return {"ok": bool(res.get("ok")), "dateKey": res.get("dateKey") or date_key}
+
+
 def consolidate_to_weekly(
     conn: sqlite3.Connection,
     cfg: dict,
@@ -215,13 +282,13 @@ def consolidate_to_weekly(
         return {"ok": True, "skipped": True, "reason": "too few daily entries"}
 
     summary = _call_llm(cfg, _consolidation_prompt("daily", "weekly", [e["content"] for e in entries]))
-    result = memory_create(summary, "weekly", date_key=week_start.isoformat(), conn=conn)
+    result = _write_rollup(conn, "weekly", week_start.isoformat(), summary)
     # Prune the daily sources now captured in this weekly rollup, so daily rows
     # don't pile up forever after they've been summarised. Only the rows we
     # actually consolidated (consent-pending dailies were excluded above and are
     # left untouched for review).
     pruned = _prune_consolidated(conn, [e["id"] for e in entries]) if result.get("ok") else 0
-    return {"ok": True, "dateKey": result.get("dateKey"), "sourceDays": len(entries), "pruned": pruned}
+    return {**result, "sourceDays": len(entries), "pruned": pruned}
 
 
 def consolidate_to_monthly(
@@ -235,8 +302,8 @@ def consolidate_to_monthly(
     if len(entries) < 2:
         return {"ok": True, "skipped": True, "reason": "too few weekly entries"}
     summary = _call_llm(cfg, _consolidation_prompt("weekly", "monthly", [e["content"] for e in entries]))
-    result = memory_create(summary, "monthly", date_key=f"{month}-01", conn=conn)
-    return {"ok": True, "dateKey": result.get("dateKey"), "sourceWeeks": len(entries)}
+    result = _write_rollup(conn, "monthly", f"{month}-01", summary)
+    return {**result, "sourceWeeks": len(entries)}
 
 
 def consolidate_to_yearly(
@@ -250,8 +317,8 @@ def consolidate_to_yearly(
     if len(entries) < 2:
         return {"ok": True, "skipped": True, "reason": "too few monthly entries"}
     summary = _call_llm(cfg, _consolidation_prompt("monthly", "yearly", [e["content"] for e in entries]))
-    result = memory_create(summary, "yearly", date_key=f"{year}-01-01", conn=conn)
-    return {"ok": True, "dateKey": result.get("dateKey"), "sourceMonths": len(entries)}
+    result = _write_rollup(conn, "yearly", f"{year}-01-01", summary)
+    return {**result, "sourceMonths": len(entries)}
 
 
 # ── Backlog sweep: which past periods still hold un-consolidated entries ──────
@@ -282,18 +349,26 @@ def _distinct_past_weeks(conn: sqlite3.Connection) -> list[date]:
 
 
 def _existing_date_keys(conn: sqlite3.Connection, granularity: str) -> set[str]:
-    """The date_keys already present at a tier. Monthly/yearly don't prune their
-    sources (only weekly→daily does), so their enumerators use this to roll each
-    period exactly ONCE — without it, a past month with surviving weeklies would
-    be re-rolled every pass and its summary appended to endlessly."""
-    return {
-        str(r["date_key"])
-        for r in conn.execute(
-            "SELECT DISTINCT date_key FROM memories WHERE granularity=? AND kind='narrative'",
-            (granularity,),
-        ).fetchall()
-        if r["date_key"]
-    }
+    """The date_keys already present at a tier, NORMALIZED to ISO form (see
+    _normalized_date_key). Monthly/yearly don't prune their sources (only
+    weekly→daily does), so their enumerators use this to roll each period exactly
+    ONCE — without it, a past month with surviving weeklies would be re-rolled
+    every pass and its summary appended to endlessly.
+
+    An EMPTY row does not count as rolled: a zero-length summary stub blocks
+    nothing and must be re-rollable (the July 2026 stub sat on that month's
+    consolidation forever because existence alone marked it done)."""
+    keys: set[str] = set()
+    for r in conn.execute(
+        "SELECT DISTINCT date_key, content FROM memories WHERE granularity=? AND kind='narrative'",
+        (granularity,),
+    ).fetchall():
+        if not (r["content"] or "").strip():
+            continue
+        k = _normalized_date_key(r["date_key"])
+        if k:
+            keys.add(k)
+    return keys
 
 
 def _distinct_past_months(conn: sqlite3.Connection) -> list[date]:

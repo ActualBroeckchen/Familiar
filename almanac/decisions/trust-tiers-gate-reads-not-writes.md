@@ -138,7 +138,7 @@ tokens, and named jailbreaks, and can replace matches with a `[removed:label]` p
 [@injection-guard]. It answers a different threat model than the one this conversation worked
 through. At the time of the conversation this page records, the guard was built and tested but
 had no call sites outside its own module — see
-[Injection guard: documented but never wired](../architecture/injection-guard-gap) for that gap
+[Injection guard: wiring history](../architecture/injection-guard-gap) for that gap
 and its later resolution: as of 0.8.57 it is wired at the web-read boundary (`websearch.js`) and
 the Village inbound boundary (`discord-gateway.js`'s `inboundContent()`), still deliberately
 excluding Phylactery/Unruh recall, the ward's own words, and gcal event titles

@@ -55,8 +55,14 @@ def default_db_path() -> Path:
     """Resolve the canonical DB path: <package-parent>/data/unruh.db.
 
     Layout: src/unruh/db.py → src/unruh → src → <unruh-root>/data/unruh.db.
-    Override at call time by passing an explicit path to `get_conn`.
+    Override at call time by passing an explicit path to `get_conn`, or set
+    UNRUH_DB_PATH in the environment to relocate the store for the whole server
+    process (used by the cross-process smoke test to isolate its writes to a
+    temp file; also lets an install point at an external data dir).
     """
+    override = os.environ.get("UNRUH_DB_PATH")
+    if override:
+        return Path(override)
     return Path(__file__).resolve().parent.parent.parent / "data" / DB_FILENAME
 
 

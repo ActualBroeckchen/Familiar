@@ -30,6 +30,15 @@ export const VOICE_HARD_DISABLED = process.env.PROTO_FAMILIAR_VOICE_DISABLED ===
 let worker = null;
 let backend = null;
 
+/**
+ * Once we learn the pocket (Kyutai) engine can't actually LOAD on this machine —
+ * torch's native DLL won't load, a binding is missing — we stop trying to spawn
+ * a Python process that dies on import and speak on the built-in engine instead.
+ * null = not learned yet / fine; { reason, detail } = fall straight to sherpa.
+ * Cleared by stopAudioWorker so a repair (Fix Kyutai) + fresh worker is retried.
+ */
+let pocketBroken = null;
+
 /** The listening worker — separate from `worker`, and pinned to sherpa. */
 let listener = null;
 
@@ -48,6 +57,16 @@ function build(resolved) {
   });
 }
 
+// Indirection so a test can inject a fake resolver/builder and exercise the
+// pocket→sherpa fall-back without spawning real Python/ONNX processes.
+// Production always uses the real ones; the hooks default straight back to them.
+let resolver = resolveBackend;
+let builder = build;
+export function __setVoiceTestHooks({ resolveBackend: r, build: b } = {}) {
+  resolver = r || resolveBackend;
+  builder = b || build;
+}
+
 /**
  * The worker for the currently-chosen engine, spawning or re-spawning as
  * needed. Never throws — every caller is a request path or a chat turn.
@@ -61,9 +80,19 @@ export async function currentAudioWorker({ rootDir, readSettings } = {}) {
   if (VOICE_HARD_DISABLED) return { worker: null, resolved: null };
 
   const s = (() => { try { return readSettings?.() || {}; } catch { return {}; } })();
-  const resolved = await resolveBackend({ rootDir, settings: s });
+  let resolved = await resolver({ rootDir, settings: s });
 
-  if (worker && backend?.backend === resolved.backend && backend?.workerScript === resolved.workerScript) {
+  // We already learned pocket can't load its engine here — go straight to the
+  // built-in engine, which needs no torch and no downloads. It always speaks.
+  if (resolved.backend === BACKENDS.POCKET && pocketBroken) {
+    resolved = await sherpaFallback(rootDir, pocketBroken.reason);
+  }
+
+  // A change to the spawn env (e.g. PF_TTS_TEMPERATURE, which pocket bakes in at
+  // load) must respawn the worker, not reuse the old one — otherwise a tuning
+  // change would silently do nothing until the next restart.
+  const sameEnv = JSON.stringify(backend?.env ?? {}) === JSON.stringify(resolved.env ?? {});
+  if (worker && backend?.backend === resolved.backend && backend?.workerScript === resolved.workerScript && sameEnv) {
     // The WORKER can be reused (same engine + script), but the RESOLUTION
     // METADATA must not be stale: choosing the sidecar when it isn't installed
     // still resolves to sherpa, yet now carries fellBackFrom:'pocket'. Returning
@@ -75,14 +104,59 @@ export async function currentAudioWorker({ rootDir, readSettings } = {}) {
   }
 
   if (worker) { try { worker.stop(); } catch { /* already gone */ } }
-  worker = build(resolved);
+  worker = builder(resolved);
   backend = resolved;
+
+  // A pocket worker whose files EXIST can still fail to load at runtime (torch's
+  // DLL, a missing binding) — inspectBackends can't see that, it only checks the
+  // files are present. The first time we build one, prove it actually loads; if
+  // it doesn't, remember that and rebuild on the built-in engine. Every speaking
+  // surface calls through here, so all of them get a working voice without
+  // knowing pocket failed — the shared-path fix RULE C asks for, and the reason
+  // a missing Visual C++ runtime no longer means silence, only a lesser voice.
+  if (resolved.backend === BACKENDS.POCKET) {
+    const health = await pocketEngineLoads(worker);
+    if (!health.ok) {
+      pocketBroken = { reason: 'the Kyutai engine could not load on this machine', detail: health.detail };
+      console.warn(`[voice] Kyutai failed to load (${health.detail}) — speaking on the built-in engine instead. Repair with Fix Kyutai, then restart.`);
+      try { worker.stop(); } catch { /* already gone */ }
+      resolved = await sherpaFallback(rootDir, pocketBroken.reason);
+      worker = builder(resolved);
+      backend = resolved;
+    }
+  }
+
   if (resolved.fellBackFrom) {
     console.warn(`[voice] asked for ${resolved.fellBackFrom}, using ${resolved.backend}: ${resolved.reason}`);
   } else {
     console.log(`[voice] speaking through ${resolved.backend}`);
   }
   return { worker, resolved };
+}
+
+/** Resolve the built-in engine explicitly, tagged as a fall-back from pocket. */
+async function sherpaFallback(rootDir, reason) {
+  const r = await resolver({ rootDir, settings: { voiceTts: { backend: BACKENDS.SHERPA } } });
+  return { ...r, fellBackFrom: BACKENDS.POCKET, reason };
+}
+
+/**
+ * Does a freshly-built pocket worker's engine actually load? A pocket ping runs
+ * the torch import + model load, so this both verifies AND warms it. Torch
+ * failing to load throws almost immediately; a working engine may take a while
+ * to read the model off disk, so the timeout matches a real cold load rather
+ * than a short probe — otherwise a slow-but-fine laptop would be misread as
+ * broken and demoted to the lesser engine.
+ */
+async function pocketEngineLoads(w) {
+  try {
+    const r = await w.request({ op: 'ping' }, { timeoutMs: 180_000 });
+    if (!r?.ok) return { ok: false, detail: r?.detail ?? r?.reason ?? 'the engine did not respond' };
+    if (!r.engineAvailable) return { ok: false, detail: r.engineDetail ?? 'the engine could not load' };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, detail: String(e?.message ?? e) };
+  }
 }
 
 /**
@@ -123,6 +197,10 @@ export async function listeningWorker({ rootDir } = {}) {
 /** Stop whatever is running. Idempotent; used on shutdown. */
 export function stopAudioWorker() {
   let stopped = false;
+  // Forget what we learned about pocket: a stop precedes a repair (Fix Kyutai)
+  // or a settings change, and the next worker deserves a fresh verification
+  // rather than being demoted forever on one session's failure.
+  pocketBroken = null;
   if (worker) { try { worker.stop(); } catch { /* already gone */ } worker = null; backend = null; stopped = true; }
   if (listener) { try { listener.stop(); } catch { /* already gone */ } listener = null; stopped = true; }
   return stopped;

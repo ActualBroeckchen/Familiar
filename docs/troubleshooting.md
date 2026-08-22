@@ -477,6 +477,8 @@ is not an off-switch.
 | Switch | Stops |
 |---|---|
 | `PROTO_FAMILIAR_VOICE_DISABLED` | all of voice — reading aloud, voice notes, the worker |
+| `PROTO_FAMILIAR_VOICE_PRESENCE_DISABLED` | group-call awareness — who's present, who joined/left, and per-speaker labels (falls back to the old unlabelled transcript) |
+| `PROTO_FAMILIAR_VOICE_GREETINGS_DISABLED` | the spoken hello when someone joins a group call (presence/labels stay on) |
 | `PROTO_FAMILIAR_VISION_DISABLED` | seeing images |
 | `PROTO_FAMILIAR_VISION_THREAT_DISABLED` | an image raising your Familiar's concern |
 | `PROTO_FAMILIAR_ZAI_VISION_DISABLED` | the z.ai Coding-Plan vision route |
@@ -491,6 +493,7 @@ is not an off-switch.
 | `PROTO_FAMILIAR_THREAT_DISABLED` | crisis-signal scoring (**safety**) |
 | `PROTO_FAMILIAR_VOICE_THREAT_DISABLED` | a live call informing your Familiar's safety read (**safety**) |
 | `PROTO_FAMILIAR_PONDERING_DISABLED` | autonomous pondering |
+| `PROTO_FAMILIAR_PONDER_WEB_DISABLED` | looking things up on the web while pondering |
 | `PROTO_FAMILIAR_WAIT_STREAK_DISABLED` | the wait-streak nudge |
 
 **Time, reminders, calendar**
@@ -528,6 +531,7 @@ is not an off-switch.
 | `PROTO_FAMILIAR_DISCORD_TOOLS_DISABLED` | tools on Discord turns |
 | `PROTO_FAMILIAR_DISCORD_BATCH_DISABLED` | coalescing a burst into one reply |
 | `PROTO_FAMILIAR_WEBSEARCH_DISABLED` | web search |
+| `PROTO_FAMILIAR_PAGE_WATCH_DISABLED` | watching web pages for changes |
 | `PROTO_FAMILIAR_TOOL_SURFACING_DISABLED` | surfacing relevant tools per turn |
 | `PROTO_FAMILIAR_QUIET_TOOLS_DISABLED` | quiet tool calls |
 | `PROTO_FAMILIAR_GUIDE_CHAT_DISABLED` | the setup guide chat |
@@ -539,6 +543,8 @@ is not an off-switch.
 |---|---|
 | `PROTO_FAMILIAR_UPDATE_BRANCH` | which branch the updater checks |
 | `PROTO_FAMILIAR_ZAI_MCP_COMMAND` | overrides the command used to launch z.ai's vision MCP server |
+| `PROTO_FAMILIAR_CHROME` (or `CHROME`) | points the browser tools at an existing Chrome/Chromium binary, skipping the auto-download |
+| `PROTO_FAMILIAR_BROWSER_INSTALL_TIMEOUT_MS` | how long to wait for the one-time Chromium download before treating it as stalled (default 15 min); raise it for a genuinely slow link. If the download never finishes, its log is at `browser/chromium-install.log` |
 
 ### Settings only reachable by editing the file
 

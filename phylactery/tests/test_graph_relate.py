@@ -9,7 +9,7 @@ the embedding failure — so the fixture only needs the two relational tables.
 
 import sqlite3
 
-from phylactery.graph import relate, resolve_or_create_node, update_node
+from phylactery.graph import relate, resolve_or_create_node, update_node, search_nodes
 
 
 def _conn() -> sqlite3.Connection:
@@ -119,3 +119,17 @@ def test_update_node_sets_audience_deliberately():
     # label-only edit leaves audience untouched
     update_node(nid, label="Samuel", conn=c)
     assert _aud(c, "Samuel") == "family"
+
+def test_search_type_filter_restricts_by_node_type():
+    """graph_node_search grew a `type` filter (thalamus always sent one; the tool
+    silently ignored it, so a type-filtered search returned every type). No vec
+    table here → the fallback LIKE branch runs, which is exactly where the filter
+    must also apply."""
+    c = _conn()
+    relate("Alan", "person", "Acme", "organisation", "works_at", conn=c)
+    both = {r["node"]["label"] for r in search_nodes("a", conn=c)["results"]}
+    assert {"Alan", "Acme"} <= both, f"expected both types unfiltered, got {both}"
+    persons = search_nodes("a", type="person", conn=c)["results"]
+    assert persons, "the type filter must not drop the matching person"
+    assert all(r["node"]["type"] == "person" for r in persons)
+    assert "Acme" not in {r["node"]["label"] for r in persons}

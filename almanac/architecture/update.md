@@ -55,7 +55,12 @@ Update is never automatic and never silent. Detection runs on demand (via `/api/
 
 Windows batch and PowerShell scripts that apply updates cannot replace themselves while running — the OS holds the running script file open. Download-mode updates on Windows use a staged `.pfnew` + post-exit swap pattern: the new tarball is laid down as `.pfnew` before the script exits, and an exit-phase handler completes the swap from the old script to the new one. Both shell updaters (`update.bat` and the PowerShell equivalent) are fork-aware via the `repository` field in `package.json`, so each fork applies updates to its own remote rather than to upstream.
 
+## Two-speed updates: static assets vs. registered routes
+
+Because update never restarts the process, the front end and the back end can end up on different versions of the code for as long as the ward waits before restarting. Static assets under `public/` are served fresh from disk on every request, so a browser refresh alone is enough to pick up new markup or a new button. Express routes, by contrast, are registered once at boot, so a new route added by the same update is invisible to the running server until it restarts [@app-js]. A ward who updates and refreshes but does not restart can be shown a new control wired to an endpoint the running server does not have yet, producing a raw 404 that looks like a bug rather than a restart reminder. This surfaced concretely as the "Fix Kyutai" button described in [Voice](voice); `public/app.js` now detects that specific 404 shape and tells the ward they updated the files but have not restarted, rather than showing a cryptic error [@app-js]. The gap itself is general: it reopens for every new endpoint a future update adds, not only voice's.
+
 ## Related
 
 - [Installer and launcher](installer-and-launcher) — the one-click install path that also acts as the launcher after installation.
 - [Engineering conventions](../reference/engineering-conventions) — the repo-wide graceful-degradation and never-throw rules this subsystem follows.
+- [Voice](voice) — the "Fix Kyutai" repair button whose 404 report is what surfaced the two-speed update gap.

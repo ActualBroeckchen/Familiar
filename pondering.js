@@ -88,7 +88,7 @@ export function buildGroundingBlock(grounding) {
   return parts.length ? `\n\n${parts.join('\n\n')}` : '';
 }
 
-export function buildPonderPrompt(topic, grounding = null) {
+export function buildPonderPrompt(topic, grounding = null, sourcesText = '') {
   // Reflection mode: topic is an object { mode: 'reflection', outcomes, existingNotes }
   // sent by the pondering loop when enough tagged surface outcomes
   // have accumulated since the last reflection. Same LLM call, same
@@ -99,7 +99,7 @@ export function buildPonderPrompt(topic, grounding = null) {
   return `I am {{char}}, the Familiar. Right now I'm in a free cycle — no one is talking to me. I have a quiet moment to actually think, on my own, about something I've been turning over.
 
 The topic I find myself turning over:
-${topic}${buildGroundingBlock(grounding)}
+${topic}${buildGroundingBlock(grounding)}${sourcesText}
 
 This is my own private journal — reflective, exploratory thoughts I'm having in this moment. My human may stumble on it later. That's fine. I'm not writing it AT them. I'm writing it for myself, as me, in this moment.
 
@@ -394,10 +394,29 @@ export async function ponderOnce({
   }
   if (!provider || !apiKey || !model)      throw new Error('provider, apiKey, and model are required.');
 
+  // Unattended research (§8.5): on an interest ponder, the Familiar may look a
+  // few things up first (read-only, budgeted, code-gated). Default ON; requires
+  // web search enabled; the daily budget + round cap bound the token spend, and
+  // an exhausted budget just means no lookups this tick (the prompt says so).
+  let sourcesText = '';
+  const ponderWebOn = settings?.ponderWebEnabled !== false
+    && process.env.PROTO_FAMILIAR_PONDER_WEB_DISABLED !== '1'
+    && settings?.webSearchEnabled === true
+    && !isReflection;
+  if (ponderWebOn) {
+    try {
+      const { researchForPonder, sourcesBlock } = await import('./ponder-research.js');
+      const res = await researchForPonder({ topic, provider, apiKey, model, callLLM, settings });
+      sourcesText = res.budgetSpent
+        ? "\n\n(My reading budget for today is spent, so I'm thinking from what I already hold rather than looking anything up.)"
+        : sourcesBlock(res.sources);
+    } catch { /* research is best-effort; a failure just means no sources this ponder */ }
+  }
+
   // Resolve {{user}}/{{char}} at this loop-prompt boundary — same as the
   // sibling autonomous loops (reachout, tome-graduation). Without it the
   // Familiar reads its own pondering prompt with literal "{{char}}".
-  const prompt = substituteMacros(buildPonderPrompt(topic, grounding), settings);
+  const prompt = substituteMacros(buildPonderPrompt(topic, grounding, sourcesText), settings);
   const raw    = await callLLM({ provider, apiKey, model, prompt });
   const parsed = parsePondering(raw);
   const { title, content } = parsed;

@@ -211,3 +211,87 @@ export async function dismissLocationKnock({ key }, { filePath = DEFAULT_LOCATIO
     return { ok: false, error: err?.message ?? String(err) };
   }
 }
+
+// ── Server (guild) list — derived from knocks + GUILD_CREATE ─────────
+//
+// A persistent, named list of the servers the Familiar actually sits in.
+// Two jobs: give raw guild IDs a human name (so the Locations tab and the
+// grouped knock list read as "Cozy Corner", not "8419…"), and be the
+// stable anchor a channel knock groups under.
+//
+// Unlike the two knock lists this is NOT cap-evicted on volume and is NOT
+// cleared when a knock settles — a person is in only a handful of servers,
+// and leaving one is the ward's own act (dismiss). Same metadata-only
+// privacy: id, name, platform, when first/last seen. No message content,
+// no member lists. Reuses the same locked read/write as the knock lists.
+
+const DEFAULT_SERVERS_PATH = path.join(__dirname, 'tomes', '.village-servers.json');
+
+/** Generous — this counts servers a person belongs to, not a spam surface. */
+export const SERVERS_CAP = 200;
+
+/**
+ * Upsert a server the Familiar is in, by (platform, guildId). A later
+ * sighting refreshes lastSeenAt and fills/updates the name (a server can
+ * be renamed). Never throws — this rides best-effort off gateway events.
+ *
+ * @param {{ guildId: string, name?: string, platform?: string }} server
+ */
+export async function recordServer(server, { filePath = DEFAULT_SERVERS_PATH } = {}) {
+  const platform = typeof server?.platform === 'string' && server.platform.trim()
+    ? server.platform.trim().toLowerCase() : 'discord';
+  const guildId = typeof server?.guildId === 'string' ? server.guildId.trim() : '';
+  if (!guildId) return { ok: false, error: 'guildId is required' };
+  const name = typeof server?.name === 'string' ? server.name.trim() : '';
+  const nowIso = new Date().toISOString();
+  try {
+    return await withLock(`servers:${filePath}`, async () => {
+      const servers = await readKnocksFile(filePath);
+      const existing = servers.find(s => s.platform === platform && s.guildId === guildId);
+      if (existing) {
+        existing.lastSeenAt = nowIso;
+        if (name) existing.name = name;   // fill on first name, follow a rename
+      } else {
+        servers.push({
+          platform, guildId,
+          ...(name ? { name } : {}),
+          firstSeenAt: nowIso, lastSeenAt: nowIso,
+        });
+      }
+      servers.sort((a, b) => new Date(b.lastSeenAt) - new Date(a.lastSeenAt));
+      await writeKnocksFile(filePath, servers.slice(0, SERVERS_CAP));
+      return { ok: true };
+    });
+  } catch (err) {
+    console.error('[knocks] recordServer failed:', err?.message ?? err);
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+}
+
+/** List known servers, most recently seen first. Never throws. */
+export async function listServers({ filePath = DEFAULT_SERVERS_PATH } = {}) {
+  try {
+    const servers = await readKnocksFile(filePath);
+    return servers.sort((a, b) => new Date(b.lastSeenAt) - new Date(a.lastSeenAt));
+  } catch {
+    return [];
+  }
+}
+
+/** Forget a server — the ward left it, or never wanted it listed. */
+export async function dismissServer({ platform = 'discord', guildId }, { filePath = DEFAULT_SERVERS_PATH } = {}) {
+  const p = typeof platform === 'string' && platform.trim() ? platform.trim().toLowerCase() : 'discord';
+  const id = typeof guildId === 'string' ? guildId.trim() : '';
+  if (!id) return { ok: false, error: 'guildId is required' };
+  try {
+    return await withLock(`servers:${filePath}`, async () => {
+      const servers = await readKnocksFile(filePath);
+      const remaining = servers.filter(s => !(s.platform === p && s.guildId === id));
+      if (remaining.length === servers.length) return { ok: false, error: 'server not found' };
+      await writeKnocksFile(filePath, remaining);
+      return { ok: true };
+    });
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+}

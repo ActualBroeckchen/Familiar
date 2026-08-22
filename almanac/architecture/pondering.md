@@ -17,6 +17,12 @@ sources:
   - id: autonomous-loops-doc
     type: file
     path: docs/architecture.md
+  - id: pondering-js
+    type: file
+    path: pondering.js
+  - id: ponder-research-js
+    type: file
+    path: ponder-research.js
 ---
 
 # Pondering
@@ -57,6 +63,27 @@ The cadence tiers are: 30 minutes (high interest), 1 hour, 2 hours, and 6 hours 
 
 Because ponderings are per-embodiment and stored locally (in `recent-ponderings.js` memory or in a local sqlite table), `read_pondering` is synchronous and never calls out to Phylactery [@cerebellum-js].
 
+## Looking things up before writing (Pass 4, 0.11.7)
+
+`ponderOnce()` (`pondering.js`) can research a topic before it writes the thought, instead of
+only recombining what the Familiar already holds [@pondering-js]. The gate runs only for an
+interest ponder — never a reflection-mode tick — and requires `settings.ponderWebEnabled` (default
+true), `settings.webSearchEnabled` true, and the env off-switch
+`PROTO_FAMILIAR_PONDER_WEB_DISABLED` unset [@pondering-js]. When it fires, `ponderOnce()` calls
+`researchForPonder()` from [Browser](browser)'s `ponder-research.js`, then folds the result into
+`buildPonderPrompt()`'s `sourcesText` argument: either a cited-sources block naming what was
+found, or — when the shared daily read budget is spent — an honest line saying the Familiar is
+thinking from what it already holds rather than looking anything up [@pondering-js]
+[@ponder-research-js]. A research failure is swallowed and treated as "no sources this ponder,"
+since the lookup is best-effort and must never turn a background thought into a failed tick
+[@pondering-js].
+
+This research call is the one place a pondering tick reaches outside the Familiar's own stored
+context, and it runs read-only and code-bounded for that reason — see
+[Browser milestone: guardrails in code, not prompts](../decisions/browser-guardrails-in-code)'s
+Pass 4 section for why the loop hands the model no tool surface at all, only the ability to name
+what it wants looked up.
+
 ## Why ponderings stay per-embodiment
 
 Ponderings are not written to Phylactery, the canonical store, because they are thoughts in progress rather than conclusions about the ward or the world [@pondering-loop-js]. A pondering is context-sensitive to the current embodiment's conversation history, interruptions, current mood, and recent focus. The thought "I wonder if Chen is overcommitting again" makes sense in a particular chat session or embodiment flow, not as a fact to inject into every future conversation [@autonomous-loops-doc]. Ponderings are meant to be read in the moment or on-demand via `read_pondering`, not accumulated into standing identity.
@@ -67,3 +94,8 @@ Ponderings are not written to Phylactery, the canonical store, because they are 
 - [Safety spine](../architecture/safety-spine) — how pondering, warmth, and needs-tracking stand down during crisis.
 - [Unruh](../architecture/unruh) — the interest and threat scoring systems that shape pondering cadence.
 - [Proactivity over caution](../decisions/proactivity-over-caution) — the design principle that ponderings embody.
+- [Browser: click-and-fill web access](browser) — the `ponder-research.js`/`ponder-web-budget.js`
+  modules the research gate above calls, and the rest of the browser subsystem they share code
+  with.
+- [Browser milestone: guardrails in code, not prompts](../decisions/browser-guardrails-in-code) —
+  why Pass 4's research loop hands the model no tool surface, only the ability to name a lookup.

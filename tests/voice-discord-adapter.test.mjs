@@ -121,7 +121,7 @@ test('a speaker: speaking-start subscribes + decodes to 16k mono pushAudio; the 
   assert.equal(calls.pushAudio[0].pcm.length, 320 * 2);          // decoded → 16k mono
 });
 
-test('speaking-end finalises the utterance and tears the subscription down', async () => {
+test('speaking-end finalises the utterance but keeps the subscription open (no onset loss next time)', async () => {
   const deps = makeFakeDeps();
   const { hooks, calls } = makeHooks();
   const { adapter } = createDiscordCallAdapter({ hooks, joinSpec: joinSpec(), deps, slugId: (s) => s.toLowerCase().replace(/\s+/g, '-') });
@@ -133,6 +133,40 @@ test('speaking-end finalises the utterance and tears the subscription down', asy
 
   assert.equal(calls.endUtterance.length, 1);
   assert.equal(calls.endUtterance[0].speakerRef, 'person-u2');   // display-name slug
+  assert.equal(stream.destroyed, undefined, 'subscription stays open across utterances');
+
+  // A second utterance reuses the SAME subscription — no re-subscribe, no gap.
+  deps._receiver.speaking.emit('start', 'u2');
+  assert.equal(deps._receiver.subscribed.length, 1, 'no second subscription for the same speaker');
+});
+
+test('onset pre-roll: audio arriving just before speaking-start is not lost', async () => {
+  const deps = makeFakeDeps();
+  const { hooks, calls } = makeHooks();
+  const { adapter } = createDiscordCallAdapter({ hooks, joinSpec: joinSpec(), deps });
+  await adapter.joinCall();
+
+  // First speaking-start opens the subscription. End it, then feed a packet
+  // during the inactive gap (the onset that used to be dropped), then start again.
+  deps._receiver.speaking.emit('start', 'wardU');
+  deps._receiver.speaking.emit('end', 'wardU');
+  const before = calls.pushAudio.length;
+  const stream = deps._receiver.subscribed[0].stream;
+  stream.emit('data', Buffer.from([7]));           // arrives while inactive → buffered, not dropped
+  assert.equal(calls.pushAudio.length, before, 'inactive audio is held in the pre-roll, not pushed yet');
+  deps._receiver.speaking.emit('start', 'wardU');  // onset: the buffered frame is flushed
+  assert.equal(calls.pushAudio.length, before + 1, 'the pre-roll frame is prepended on the next utterance');
+});
+
+test('destroySpeaker on channel-leave tears the subscription down', async () => {
+  const deps = makeFakeDeps();
+  const { hooks } = makeHooks();
+  const { adapter } = createDiscordCallAdapter({ hooks, joinSpec: joinSpec(), deps });
+  await adapter.joinCall();
+  deps._receiver.speaking.emit('start', 'u2');
+  const stream = deps._receiver.subscribed[0].stream;
+  adapter.onVoiceStateChange({ userId: 'u2', channelId: 'c1' });   // present
+  adapter.onVoiceStateChange({ userId: 'u2', channelId: null });   // left → destroy
   assert.equal(stream.destroyed, true);
 });
 
@@ -189,6 +223,68 @@ test('stopPlayback (barge) stops the player, which resolves an in-flight playAud
   await adapter.stopPlayback();   // player.stop() → idle
   await p;                         // must resolve, not hang
   assert.equal(adapter.isSpeaking(), false);
+});
+
+test('a decoder detached by a heap move is rebuilt on the current heap and the packet retried', async () => {
+  // Model opusscript's shared-heap hazard: the FIRST decoder instance throws
+  // "memory access out of bounds" (its cached views were detached when a second
+  // speaker's decoder grew the shared heap); a REBUILT instance decodes fine.
+  const deps = makeFakeDeps();
+  let made = 0;
+  deps.makeOpusDecoder = () => {
+    const id = ++made;
+    return {
+      decode: (pkt) => {
+        if (id === 1) throw new Error('memory access out of bounds');   // detached views
+        const b = Buffer.alloc(960 * 4); b.writeInt16LE(pkt?.[0] ?? 0, 0); return b;
+      },
+      delete() {},
+    };
+  };
+  const { hooks, calls } = makeHooks();
+  const { adapter } = createDiscordCallAdapter({ hooks, joinSpec: joinSpec(), deps });
+  await adapter.joinCall();
+
+  deps._receiver.speaking.emit('start', 'wardU');
+  const { stream } = deps._receiver.subscribed[0];
+  stream.emit('data', Buffer.from([7]));               // first decode throws → rebuild → retry succeeds
+
+  assert.ok(made >= 2, 'the decoder was rebuilt on the current heap');
+  assert.equal(calls.pushAudio.length, 1, 'the same packet decoded on retry, so no audio is lost');
+  assert.equal(stream.destroyed, undefined, 'the stream stays open — no teardown, the speaker stays audible');
+});
+
+test('a persistently undecodable stream is skipped quietly (no throw, no flood, no audio)', async () => {
+  const deps = makeFakeDeps();
+  const logs = [];
+  deps.makeOpusDecoder = () => ({ decode: () => { throw new Error('memory access out of bounds'); }, delete() {} });
+  const { hooks, calls } = makeHooks();
+  const { adapter } = createDiscordCallAdapter({ hooks, joinSpec: joinSpec(), deps, log: (m) => logs.push(m) });
+  await adapter.joinCall();
+
+  deps._receiver.speaking.emit('start', 'wardU');
+  const { stream } = deps._receiver.subscribed[0];
+  assert.doesNotThrow(() => { for (let i = 0; i < 50; i++) stream.emit('data', Buffer.from([i])); });
+  assert.equal(calls.pushAudio.length, 0, 'nothing decodes → nothing pushed');
+  const skipWarnings = logs.filter(m => /skipping bad packets/.test(m));
+  assert.equal(skipWarnings.length, 1, 'the skip warning is rate-limited to one line, not one per packet');
+});
+
+test('an oversized packet is skipped before it can overflow the decoder input buffer', async () => {
+  const deps = makeFakeDeps();
+  let decoded = 0;
+  deps.makeOpusDecoder = () => ({ decode: (pkt) => { decoded++; const b = Buffer.alloc(960 * 4); b.writeInt16LE(pkt?.[0] ?? 0, 0); return b; }, delete() {} });
+  const { hooks, calls } = makeHooks();
+  const { adapter } = createDiscordCallAdapter({ hooks, joinSpec: joinSpec(), deps });
+  await adapter.joinCall();
+
+  deps._receiver.speaking.emit('start', 'wardU');
+  const { stream } = deps._receiver.subscribed[0];
+  stream.emit('data', Buffer.alloc(4000));             // > MAX_OPUS_PACKET (3828) → skipped, never decoded
+  assert.equal(decoded, 0);
+  assert.equal(calls.pushAudio.length, 0);
+  stream.emit('data', Buffer.from([1]));               // a normal packet still decodes
+  assert.equal(decoded, 1);
 });
 
 test('leaveCall destroys the connection and clears open speakers', async () => {

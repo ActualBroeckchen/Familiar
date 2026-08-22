@@ -77,7 +77,7 @@ When something might durably matter, I bring it into my canonical self rather th
 """
 ${(it.content || '').slice(0, 1200)}
 """
-What I already hold close to this:
+What I remember about this:
 ${it.recall || '(nothing close)'}`).join('\n\n');
 
   return `${identityContext ? identityContext + '\n\n' : ''}${rubric}

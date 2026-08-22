@@ -5,11 +5,6 @@ sources:
   - id: voice-build-spec
     type: file
     path: docs/voice-build-spec.md
-  - id: voice-transcript
-    type: file
-    path: docs/voice-development-transcript.md
-    note: "Development session in which the build spec's original process-isolation
-      justification was traced, found to be narrower than it looked, and rewritten."
   - id: audio-worker
     type: file
     path: audio-worker.mjs
@@ -50,8 +45,7 @@ runs inside Phylactery's own Python child process [@embed-py] [@architecture-doc
 event-loop argument said nothing about whether audio and embedding could share a runtime with
 each other. Read at face value, the argument was mistaken for ruling out all ONNX co-location,
 when it only ruled out one specific one. This gap was found by tracing the argument during a
-later development session, not by a design review that set out looking for it
-[@voice-transcript].
+later development session, not by a design review that set out looking for it.
 
 ## Decision
 

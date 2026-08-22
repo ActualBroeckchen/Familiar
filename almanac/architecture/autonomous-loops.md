@@ -8,15 +8,22 @@ sources:
   - id: architecture-doc
     type: file
     path: docs/architecture.md
+  - id: content-regate-loop
+    type: file
+    path: content-regate-loop.js
+  - id: media-retention-loop
+    type: file
+    path: media-retention-loop.js
 ---
 
 # Autonomous Loops
 
 Autonomous loops are background workers that run alongside Proto-Familiar's HTTP server and
 act without a human request — checking in during silence, firing a reminder, drifting off to
-ponder an interest, syncing a calendar. CLAUDE.md counts eleven of them, each booted in
-`server.js`'s `app.listen()` callback and each stopped from the SIGTERM/SIGINT/SIGHUP handler
-so a clean shutdown can await any in-flight tick [@claude-md] [@architecture-doc]. Loops exist
+ponder an interest, syncing a calendar, curating an old voice clip. CLAUDE.md counts thirteen of
+them, each booted in `server.js`'s `app.listen()` callback and each stopped from the
+SIGTERM/SIGINT/SIGHUP handler so a clean shutdown can await any in-flight tick [@claude-md]
+[@architecture-doc]. Loops exist
 because the Familiar is designed to be a companion who can reach out, not a request-response
 tool — see [Proactivity over caution](../decisions/proactivity-over-caution) for why that
 design choice is treated as safety-critical rather than a nice-to-have. The reminders and
@@ -55,6 +62,22 @@ Every loop follows the same shape, stated in CLAUDE.md as a rule rather than a h
 | Tome → Phylactery graduation | `tome-graduation-loop.js` | 30min | **off** | `PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1` |
 | Needs tracking | `needs-tracking-loop.js` | 30min | **off** | `PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1` |
 | Google Calendar sync | `gcal-sync-loop.js` | 60s base tick, ward-configurable interval | **off** | `PROTO_FAMILIAR_GCAL_DISABLED=1` |
+| Content re-gate | `content-regate-loop.js` | 30min | **off** | `PROTO_FAMILIAR_CONTENT_REGATE_DISABLED=1` |
+| Media retention | `media-retention-loop.js` | ~6h | on | `PROTO_FAMILIAR_MEDIA_RETENTION_DISABLED=1` |
+
+Content re-gate and media retention are the two most recently added loops, both from later
+milestone work (content-gating Phase B and the voice milestone's Pass 4 respectively) and are
+easy to miss when skimming `server.js`'s boot list because they are opt-in or slow-ticking rather
+than chat-path-adjacent [@content-regate-loop] [@media-retention-loop]. Content re-gate re-tags
+the ward's own existing private facts against the content-sensitivity scheme in
+[Content-based memory gating](content-gating) once the ward opts in via "Review my private notes
+for content-sharing," batching an LLM judgment over facts written before that gate existed and
+writing every change to a disclosure notice the ward reads [@content-regate-loop]. Media
+retention curates aged voice clips on a ~daily cadence, deciding only whether the *sound* of an
+old exchange is kept — the transcript always survives — so a wrong "let go" costs disk, not
+memory [@media-retention-loop]. Like every loop that reads threat state, it defers during a live
+call and at moderate-or-higher threat, because the crisis machinery owns that moment; see
+[Safety spine](safety-spine).
 
 (Sourced from CLAUDE.md's "Autonomous loops" section and `docs/architecture.md`'s
 autonomous-loop boot list [@claude-md] [@architecture-doc]. Stewardship and the weekly
@@ -118,6 +141,10 @@ ward-contact signal and the honesty rule that gates it.
 - [Pondering](pondering) — the autonomous thought loop, its cadence, and the `read_pondering` tool.
 - [Safety spine](safety-spine) — the crisis-detection and escalation machinery
   silence-triage sits on top of.
+- [Content-based memory gating](content-gating) — the sensitivity scheme content re-gate
+  re-applies to facts written before it existed.
+- [Voice](voice) — the milestone media retention shipped as part of, and the disk-footprint
+  budget it protects.
 - [Proactivity over caution](../decisions/proactivity-over-caution) — why these loops default
   to acting rather than waiting.
 - [Wait-streak experiment](../decisions/wait-streak-experiment) — the warm reach-out prompt fix

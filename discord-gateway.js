@@ -37,7 +37,7 @@ import { sessionSlugId } from './slug-ids.js';
 
 import { enrich, withLock, getScheduleWindow, getMemoriesBySubject, confirmConsentMemories, dropPendingMemories } from './thalamus.js';
 import { buildAvailabilityBlock } from './schedule-availability.js';
-import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC } from './village.js';
+import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC, locationCallMode, DEFAULT_CALL_MODE, upsertLocation } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom } from './audience.js';
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from './cerebellum.js';
 import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
@@ -51,15 +51,27 @@ import {
   CONSENT_CID, buildConsentHomeView, buildCategoryView, buildMemoriesView, buildPendingView, buildDoneView,
 } from './villager-consent.js';
 import { findVillagerByAlias } from './village.js';
+import { mergeSettings } from './settings-merge.js';
+import {
+  isQueueCommand, QUEUE_CID,
+  buildQueueHomeView, buildQueueItemView, buildQueueDoneView, buildQueueText,
+} from './ward-consent-queue.js';
+import {
+  isConnectionCommand, CONN_CID, DEFAULT_VALUE, FEATURE_CONNECTIONS,
+  buildConnHomeView, buildFeaturesView, buildFeatureView, buildConnDoneView, buildConnText,
+} from './ward-connections.js';
 import { PROVIDER_URLS } from './providers.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
 import { recordUserActivity } from './last-activity.js';
 import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';
-import { recordKnock, recordLocationKnock } from './knocks.js';
+import { recordKnock, recordLocationKnock, recordServer } from './knocks.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
-import { enqueueOutbox } from './outbox.js';
+import { enqueueOutbox, acknowledgePendingByKind } from './outbox.js';
+import { writeSessionLog as writeSessionLogShared } from './session-log.js';
 import { substituteMacros } from './macros.js';
+import { coreSystemSegment, postHistoryMessage } from './core-prompts.js';
+import { recordOutgoingPrompt } from './prompt-capture.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { sanitizeExternal } from './injection-guard.js';
 import { checkForUpdate, applyUpdate, updateDisabled } from './updater.js';
@@ -299,7 +311,10 @@ async function fireRevisit(item) {
     waitStreakLine: buildWaitStreakLine({ settings }),
   });
 
-  const systemContent = [enriched.static, preamble].filter(Boolean).join('\n\n---\n\n');
+  // Same four core prompts the live path folds in — a revisit is still the
+  // Familiar being itself in this room, so it carries its identity too.
+  const coreSeg = coreSystemSegment(settings);
+  const systemContent = [enriched.static, coreSeg, preamble].filter(Boolean).join('\n\n---\n\n');
   const history = (session.messages ?? [])
     .filter(m => m.role === 'user' || m.role === 'assistant')
     .slice(-HISTORY_LIMIT)
@@ -314,12 +329,15 @@ async function fireRevisit(item) {
       };
     });
 
+  const phMsg = postHistoryMessage(settings);
   const apiMessages = [
     ...(systemContent ? [{ role: 'system', content: systemContent }] : []),
     ...history,
     ...(enriched.dynamic ? [{ role: 'system', content: enriched.dynamic }] : []),
     { role: 'user', content: '[— quiet moment, checking back —]' },
+    ...(phMsg ? [phMsg] : []),
   ];
+  recordOutgoingPrompt('discord-revisit', { messages: apiMessages, model: conn?.model, provider: conn?.provider });
 
   const rawReply = await callChat({ conn, messages: apiMessages, settings });
 
@@ -712,6 +730,20 @@ function nameForUser(user, villagers = []) {
   return byVillager ?? user?.global_name ?? user?.username ?? null;
 }
 
+/** How a stored/replayed turn is labelled so a multi-party transcript stays
+ *  legible to me. In a shared room (a guild channel) EVERY speaker is
+ *  name-prefixed — my human included, marked `(WARD)` — so I never read their
+ *  words as my own or a villager's (the reported confusion: I kept thinking my
+ *  human had said things they hadn't). A one-on-one ward DM stays unprefixed —
+ *  there's only us, nothing to disambiguate. A villager is always prefixed,
+ *  DM or room, as before. The label is baked into the stored content so it
+ *  replays identically across turns. */
+export function attributeUserContent({ isWard, kind, speakerName, wardName, content }) {
+  const body = String(content ?? '');
+  if (isWard) return kind === 'guild' ? `[${wardName} (WARD)]: ${body}` : body;
+  return speakerName ? `[${speakerName}]: ${body}` : body;
+}
+
 export function directedAtOthers(msg, { botUserId = null, villagers = [] } = {}) {
   const names = [];
   const add = (user) => {
@@ -966,11 +998,10 @@ async function readSessionLog(sessionId) {
 }
 
 async function writeSessionLog(data) {
-  await fsp.mkdir(LOGS_DIR, { recursive: true });
-  const file = path.join(LOGS_DIR, `${data.sessionId}.json`);
-  const tmp  = `${file}.tmp`;
-  await fsp.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8');
-  await fsp.rename(tmp, file);
+  // One shared writer (session-log.js) — voice calls land as reviewable logs the
+  // same way, so the atomic tmp+rename lives in exactly one place.
+  const r = await writeSessionLogShared(data, { logsDir: LOGS_DIR });
+  if (!r.ok) console.warn(`[discord] session log write failed: ${r.reason}`);
 }
 
 /** Get (or rotate) the session for a location. One location = one live
@@ -1166,6 +1197,10 @@ async function handleVoiceCommand(gw, msg, action) {
   // join: the ward must be in a voice channel for me to know where to go.
   const channelId = voiceChannelOf(msg.guild_id, msg.author?.id);
   if (!channelId) { await send('Hop into a voice channel first, then say `!call` and I\'ll join you.'); return; }
+  // 'off' is the ward's explicit "no voice here" — honour it even for !call.
+  if ((await locationCallModeFor(msg.guild_id, channelId)) === 'off') {
+    await send("Voice is switched off for this channel — set its call mode to *summon* or *auto* in the location settings first."); return;
+  }
   const r = await gw.voiceController.joinVoiceCall({
     guildId: msg.guild_id,
     channelId,
@@ -1179,11 +1214,18 @@ async function handleVoiceCommand(gw, msg, action) {
   else await send(`I couldn't join (${r?.reason ?? 'unknown'}).`);
 }
 
-/** Best-effort display name for a speaker slug — the registry name if known,
- *  else the raw id. Kept simple for Pass 3a; 3b enriches this via the gate. */
+/** Best-effort display name for a voice speaker's slug. The ward is the
+ *  configured user name; anyone else is their cached Discord display name (a
+ *  real name the Familiar can tell apart from the next speaker), falling back
+ *  to a short opaque tag only when Discord hasn't named them yet. The
+ *  authoritative villager name (which outranks the display name) is applied
+ *  where the registry is loaded — the roster builder and the turn runner —
+ *  since that read is async and this must stay sync (the adapter mints slugs
+ *  synchronously). */
 function nameForVoiceUser(gw, guildId, userId) {
-  if (userId && userId === (readSettingsSync().discordWardUserId ?? '').trim()) return 'Ward';
-  return `user-${userId}`;
+  const s = readSettingsSync();
+  if (userId && userId === (s.discordWardUserId ?? '').trim()) return (s.userName || '').trim() || 'my human';
+  return discordVoiceDisplayName(userId) || `guest-${String(userId ?? '').slice(0, 6)}`;
 }
 
 async function handleUpdateCommand(gw, msg, content) {
@@ -1445,6 +1487,208 @@ async function handleConsentInteraction(gw, d) {
   }
 }
 
+// ── Ward console: `!queue` (memory-consent queue) + `!connection` ────────────
+//
+// The ward-facing twins of the villager `!consent` menu. Same discipline: pure
+// builders (ward-consent-queue.js / ward-connections.js), the gateway does the
+// I/O, and every surface is gated to my human — a villager can never open or
+// click these. No LLM call: a consent decision and a routing choice must be
+// exact, so they are code, not judgment.
+
+const WARD_SETTINGS_FILE = path.join(__dirname, 'settings.json');
+
+// Persist a ward settings change with the same locked, atomic write + wholesale
+// top-level merge the HTTP PUT uses, so a Discord change and a web change can't
+// tear the file. Only for ward-authenticated console actions.
+async function patchWardSettings(patch) {
+  await withLock(WARD_SETTINGS_FILE, async () => {
+    let prior = {};
+    try { prior = JSON.parse(await fsp.readFile(WARD_SETTINGS_FILE, 'utf8')); }
+    catch { /* first write / unreadable — the patch stands alone */ }
+    const merged = mergeSettings(prior, patch);
+    const tmp = WARD_SETTINGS_FILE + '.tmp';
+    await fsp.writeFile(tmp, JSON.stringify(merged, null, 2), 'utf8');
+    await fsp.rename(tmp, WARD_SETTINGS_FILE);
+  });
+}
+
+// The interacting user IS my human — the gate for every ward-console click. A
+// custom_id carries only the action, never identity, so this is re-checked on
+// every interaction (a forwarded or aged message can't act as the ward).
+function interactionIsWard(d) {
+  const wardId = (readSettingsSync().discordWardUserId ?? '').trim();
+  const userId = d.user?.id ?? d.member?.user?.id;
+  return !!wardId && userId === wardId;
+}
+
+// `!queue`: the pending memory-consent queue as a visual menu (keep/drop one at
+// a time, or the whole queue). Text fallback if the component send fails.
+async function handleQueueCommand(gw, { msg }) {
+  try {
+    const items = await readConsentPending().catch(() => []);
+    const list  = Array.isArray(items) ? items : [];
+    try {
+      await sendComponentMessage(gw.config.token, msg.channel_id, buildQueueHomeView({ items: list }));
+    } catch (err) {
+      console.error('[discord] queue menu failed — falling back to text:', err?.message ?? err);
+      await sendChannelMessage(gw.config.token, msg.channel_id, buildQueueText({ items: list }));
+    }
+  } catch (err) {
+    console.error('[discord] queue command failed:', err?.message ?? err);
+    await sendChannelMessage(gw.config.token, msg.channel_id,
+      'Something went wrong opening your memory queue just now — it\'s been logged.').catch(() => {});
+  }
+}
+
+// Settle one or more pending items: keep → confirm, drop → drop; either way
+// prune them out of the queue file. Returns how many were settled.
+async function settleQueueItems(ids, keep) {
+  const list = (Array.isArray(ids) ? ids : []).filter(Boolean);
+  if (!list.length) return 0;
+  if (keep) await confirmConsentMemories(list);
+  else      await dropPendingMemories(list);
+  await pruneConsentPending(list);
+  console.log(`[discord] queue: ward ${keep ? 'kept' : 'dropped'} ${list.length} pending`);
+  return list.length;
+}
+
+async function handleQueueInteraction(gw, d) {
+  const respond = (data) => respondToInteraction(gw.config.token, d, { type: 7, data });
+  try {
+    if (!interactionIsWard(d)) {
+      await respond({ embeds: [{ description: 'This menu isn\'t yours to use.' }], components: [] });
+      return;
+    }
+    const parts = String(d.data?.custom_id ?? '').split(':');   // pfqueue:<verb>[:…]
+    const verb  = parts[1];
+    const items = async () => (await readConsentPending().catch(() => [])) || [];
+
+    if (verb === 'done') { await respond(buildQueueDoneView()); return; }
+    if (verb === 'home') { await respond(buildQueueHomeView({ items: await items() })); return; }
+    if (verb === 'page') {
+      const page = parseInt(parts[2] ?? '0', 10) || 0;
+      await respond(buildQueueHomeView({ items: await items(), page }));
+      return;
+    }
+    if (verb === 'pick') {
+      const id = d.data?.values?.[0];
+      const item = (await items()).find(x => String(x.id) === String(id)) ?? null;
+      await respond(buildQueueItemView({ item }));
+      return;
+    }
+    if (verb === 'set') {
+      // pfqueue:set:<id>:keep|drop — id parsed defensively (never contains ':').
+      const action = parts[parts.length - 1];
+      const id     = parts.slice(2, -1).join(':');
+      const settled = await settleQueueItems([id], action === 'keep');
+      await respond(buildQueueHomeView({
+        items: await items(),
+        note: settled ? `✓ ${action === 'keep' ? 'Kept' : 'Dropped'} that one.` : 'That item was already settled.',
+      }));
+      return;
+    }
+    if (verb === 'all') {
+      const keep = parts[2] === 'keep';
+      const ids  = (await items()).map(x => x.id);
+      const settled = await settleQueueItems(ids, keep);
+      await respond(buildQueueHomeView({
+        items: await items(),
+        note: settled ? `✓ ${keep ? 'Kept' : 'Dropped'} ${settled} item${settled === 1 ? '' : 's'}.` : '',
+      }));
+      return;
+    }
+    await respond({ embeds: [{ description: 'That control has expired — type `!queue` for a fresh menu.' }], components: [] });
+  } catch (err) {
+    console.error('[discord] queue interaction failed:', err?.message ?? err);
+    try { await respond({ embeds: [{ description: 'Something went wrong — type `!queue` to try again.' }], components: [] }); }
+    catch { /* interaction already dead */ }
+  }
+}
+
+// `!connection` (also `!conn` / `!model`): pick the active connection and route
+// each background feature. Text fallback if the component send fails.
+async function handleConnectionCommand(gw, { msg }) {
+  try {
+    const s = readSettingsSync();
+    const view = {
+      connections: Array.isArray(s.connections) ? s.connections : [],
+      primaryId: s.primaryConnectionId ?? null,
+      featureConnections: s.featureConnections ?? {},
+    };
+    try {
+      await sendComponentMessage(gw.config.token, msg.channel_id, buildConnHomeView(view));
+    } catch (err) {
+      console.error('[discord] connection menu failed — falling back to text:', err?.message ?? err);
+      await sendChannelMessage(gw.config.token, msg.channel_id, buildConnText(view));
+    }
+  } catch (err) {
+    console.error('[discord] connection command failed:', err?.message ?? err);
+    await sendChannelMessage(gw.config.token, msg.channel_id,
+      'Something went wrong opening your connections just now — it\'s been logged.').catch(() => {});
+  }
+}
+
+async function handleConnectionInteraction(gw, d) {
+  const respond = (data) => respondToInteraction(gw.config.token, d, { type: 7, data });
+  try {
+    if (!interactionIsWard(d)) {
+      await respond({ embeds: [{ description: 'This menu isn\'t yours to use.' }], components: [] });
+      return;
+    }
+    const parts = String(d.data?.custom_id ?? '').split(':');   // pfconn:<verb>[:…]
+    const verb  = parts[1];
+    const snap  = () => {
+      const s = readSettingsSync();
+      return {
+        connections: Array.isArray(s.connections) ? s.connections : [],
+        primaryId: s.primaryConnectionId ?? null,
+        featureConnections: s.featureConnections ?? {},
+      };
+    };
+
+    if (verb === 'done')     { await respond(buildConnDoneView()); return; }
+    if (verb === 'home')     { await respond(buildConnHomeView(snap())); return; }
+    if (verb === 'features') { const s = snap(); await respond(buildFeaturesView(s)); return; }
+
+    if (verb === 'primary') {
+      const id = d.data?.values?.[0];
+      const known = snap().connections.some(c => String(c.id) === String(id));
+      if (known) {
+        await patchWardSettings({ primaryConnectionId: id });
+        console.log(`[discord] connection: ward set active -> ${id}`);
+      }
+      const s = snap();
+      const name = s.connections.find(c => String(c.id) === String(id));
+      await respond(buildConnHomeView({ ...s, note: known ? `✓ Active connection set to **${name?.name || name?.model || id}**.` : '' }));
+      return;
+    }
+    if (verb === 'feat') {
+      const feature = d.data?.values?.[0];
+      await respond(buildFeatureView({ feature, ...snap() }));
+      return;
+    }
+    if (verb === 'featset') {
+      const feature = parts[2];
+      const value   = d.data?.values?.[0];
+      if (FEATURE_CONNECTIONS.some(f => f.key === feature)) {
+        const s = snap();
+        const next = { ...(s.featureConnections || {}) };
+        if (value === DEFAULT_VALUE) delete next[feature];
+        else if (s.connections.some(c => String(c.id) === String(value))) next[feature] = value;
+        await patchWardSettings({ featureConnections: next });
+        console.log(`[discord] connection: ward routed ${feature} -> ${value === DEFAULT_VALUE ? 'primary' : value}`);
+      }
+      await respond(buildFeatureView({ feature, ...snap() }));
+      return;
+    }
+    await respond({ embeds: [{ description: 'That control has expired — type `!connection` for a fresh menu.' }], components: [] });
+  } catch (err) {
+    console.error('[discord] connection interaction failed:', err?.message ?? err);
+    try { await respond({ embeds: [{ description: 'Something went wrong — type `!connection` to try again.' }], components: [] }); }
+    catch { /* interaction already dead */ }
+  }
+}
+
 async function deliverReply(gw, { rawReply, audienceTag, apiMessages, conn, settings, channelId, session, locationKey, regLoc, priorMessages = [] }) {
   // Pillar D semantic outgoing gate. Ward-private (the ward's own DM)
   // fast-paths; every other room is filtered before I say anything.
@@ -1703,16 +1947,37 @@ async function ingestDiscordImages(msg, decision, { audienceTag, sessionId }) {
   return { attachments: out, failed };
 }
 
+/**
+ * A guild channel with no Location entry just had activity. Two jobs, both
+ * fire-and-forget so a turn is never blocked:
+ *   1. Remember the SERVER it belongs to — names the Locations server list
+ *      and groups this channel's knock under it (best-effort, in case the
+ *      GUILD_CREATE that would have named it was missed).
+ *   2. Either auto-create a Location for the channel (ward opted in) or drop
+ *      it in the knock list for one-click registration. An auto-created
+ *      location is born at the strangers floor (`upsertLocation` default), so
+ *      it grants NOTHING until the ward assigns it a circle — the same "a
+ *      knock grants nothing" guarantee, just pre-listed.
+ */
+function noteUnregisteredGuild(gw, { locationKey, guildId, channelId }) {
+  const name = guildId ? gw.guildNames.get(guildId) : undefined;
+  if (guildId) recordServer({ guildId, name, platform: 'discord' }).catch(() => { /* best-effort */ });
+  if (!locationKey) return;
+  if (readSettingsSync()?.villageAutoRegisterLocations === true) {
+    const label = `${name ? `${name} — ` : ''}channel ${channelId ?? ''}`.trim();
+    upsertLocation({ key: locationKey, label }).catch(() => { /* best-effort */ });
+  } else {
+    recordLocationKnock({ key: locationKey, platform: 'discord', guildId, channelId }).catch(() => { /* best-effort */ });
+  }
+}
+
 async function observeMessage(gw, msg, decision) {
   const registry = await getRegistry();
   const regLoc = (registry.locations ?? []).find(l => l.key === decision.locationKey);
   const label  = regLoc?.label ?? `Discord channel ${msg.channel_id}`;
 
   if (decision.kind === 'guild' && !regLoc) {
-    recordLocationKnock({
-      key: decision.locationKey, platform: 'discord',
-      guildId: msg.guild_id, channelId: msg.channel_id,
-    }).catch(() => { /* best-effort */ });
+    noteUnregisteredGuild(gw, { locationKey: decision.locationKey, guildId: msg.guild_id, channelId: msg.channel_id });
   }
 
   const session = await sessionForLocation(decision.locationKey, label, 'group');
@@ -1735,7 +2000,10 @@ async function observeMessage(gw, msg, decision) {
   // failed fetch degrades to a visible note, never blocks.
   const { attachments: obsAttachments, failed: obsFailed } = await ingestDiscordImages(msg, decision, { audienceTag, sessionId: session.sessionId });
   const failNote = obsFailed > 0 ? '\n[image failed to load]' : '';
-  const userContent = (decision.isWard ? content : `[${decision.speakerName}]: ${content}`) + failNote;
+  const wardName = (readSettingsSync()?.userName || '').trim() || 'my human';
+  const userContent = attributeUserContent({
+    isWard: decision.isWard, kind: decision.kind, speakerName: decision.speakerName, wardName, content,
+  }) + failNote;
   // Same structured signals as a spoken turn, so a lurked-then-active room
   // can still see whose exchange a later untagged line continues.
   const turnSpeaker = nameForUser(msg.author, registry.villagers) ?? decision.speakerName ?? null;
@@ -1756,6 +2024,17 @@ async function handleTurn(gw, msg, decision) {
   const settings = readSettingsSync();
   const registry = await getRegistry();
   await loadRateLimits();
+
+  // My human addressing me here is genuine engagement — the escalation VETO for
+  // pending check-ins, the same as a web/voice reply (ward decision: display
+  // never acks a triage item; only actually replying does). This is the Discord
+  // reply-ack the /api/chat seam couldn't cover (Discord text has its own turn
+  // path). WARD messages only — a villager's message must never settle my
+  // human's check-ins. Fire-and-forget; never blocks or throws into the turn.
+  if (decision.isWard) {
+    acknowledgePendingByKind('triage').catch(err =>
+      console.error('[discord] triage stand-down on ward reply failed:', err?.message ?? err));
+  }
 
   // V5: per-location connection routing. Use the location's designated
   // connection if one is configured and valid; fall back to primary.
@@ -1813,7 +2092,7 @@ async function handleTurn(gw, msg, decision) {
     }
     if (decision.kind === 'ward-dm') {
       await sendChannelMessage(gw.config.token, msg.channel_id,
-        'The consent menu is for villagers about themselves — your full controls live in the Village panel of the web app (People → remember settings).').catch(() => {});
+        '`!consent` is the villagers\' menu about themselves. For your own controls here: `!queue` to review what I\'m holding for your OK, `!connection` to pick where I run. Your full settings live in the web app\'s Village and Connections panels.').catch(() => {});
       return;
     }
     // In a guild room: ignore quietly (personal data never renders in a room).
@@ -1842,16 +2121,11 @@ async function handleTurn(gw, msg, decision) {
   const label  = regLoc?.label
     ?? (decision.kind === 'guild' ? `Discord channel ${msg.channel_id}` : `Discord DM`);
 
-  // Location knock — capture unregistered guild channels for one-click
-  // registration in the Locations tab. Fire-and-forget; registration
-  // grants nothing.
+  // Unregistered guild channel: remember its server (names the list, groups
+  // the knock) and either auto-register it or drop a knock — see the helper.
+  // Fire-and-forget; registration/auto-registration grants nothing.
   if (decision.kind === 'guild' && !regLoc) {
-    recordLocationKnock({
-      key: decision.locationKey,
-      platform: 'discord',
-      guildId: msg.guild_id,
-      channelId: msg.channel_id,
-    }).catch(() => { /* best-effort */ });
+    noteUnregisteredGuild(gw, { locationKey: decision.locationKey, guildId: msg.guild_id, channelId: msg.channel_id });
   }
   const session = await sessionForLocation(decision.locationKey, label, decision.kind === 'guild' ? 'group' : 'private');
   // A real incoming message supersedes any pending revisit for this location.
@@ -1911,7 +2185,13 @@ async function handleTurn(gw, msg, decision) {
   });
 
   const availability = await availabilityBlockFor(decision, audienceGrants);
-  const systemContent = [enriched.static, preamble, availability].filter(Boolean).join('\n\n---\n\n');
+  // The ward's four core prompts (System/Character/User/Post-History) make the
+  // Familiar itself — assembled by the browser on the web, but Discord has no
+  // browser, so they were absent entirely (the "doesn't see the user prompt on
+  // Discord" bug). Fold them in here from settings: the core segment sits with
+  // the identity (static → persona), the post-history prompt trails the turn.
+  const coreSeg = coreSystemSegment(settings);
+  const systemContent = [enriched.static, coreSeg, preamble, availability].filter(Boolean).join('\n\n---\n\n');
   const history = (session.messages ?? [])
     .filter(m => m.role === 'user' || m.role === 'assistant')
     .slice(-HISTORY_LIMIT)
@@ -1926,21 +2206,27 @@ async function handleTurn(gw, msg, decision) {
       };
     });
 
-  // Non-ward speakers are name-prefixed so multi-party rooms stay
-  // legible to me across turns. The ward's own words stay raw, same
-  // as the web chat.
+  // Speakers are name-prefixed so a multi-party room stays legible to me
+  // across turns — my human included, marked (WARD), so I never read their
+  // words as my own or a villager's. A one-on-one ward DM stays raw, same
+  // as the web chat (attributeUserContent gates on decision.kind).
   // Ingest this message's image attachments at arrival (§5) — stored beside
   // the content, materialized into provider image parts just before the call.
   const { attachments: turnAttachments, failed: turnFailed } = await ingestDiscordImages(msg, decision, { audienceTag, sessionId: session.sessionId });
   const turnFailNote = turnFailed > 0 ? '\n[image failed to load]' : '';
-  const userContent = (decision.isWard ? content : `[${decision.speakerName}]: ${content}`) + turnFailNote;
+  const wardName = (settings?.userName || '').trim() || 'my human';
+  const userContent = attributeUserContent({
+    isWard: decision.isWard, kind: decision.kind, speakerName: decision.speakerName, wardName, content,
+  }) + turnFailNote;
   const turnAttField = turnAttachments.length ? { attachments: turnAttachments } : {};
 
+  const phMsg = postHistoryMessage(settings);
   let apiMessages = [
     ...(systemContent ? [{ role: 'system', content: systemContent }] : []),
     ...history,
     ...(enriched.dynamic ? [{ role: 'system', content: enriched.dynamic }] : []),
     { role: 'user', content: userContent, ...turnAttField },
+    ...(phMsg ? [phMsg] : []),
   ];
 
   // Vision materialization (§3) — the same seam as the web path, applied once
@@ -1978,6 +2264,11 @@ async function handleTurn(gw, msg, decision) {
     }
   }
 
+  // Ground truth for the prompt inspector: what this Discord turn actually sends
+  // to the model, captured after assembly + materialization. This is the surface
+  // that had no browser to verify itself — now it can be inspected like the web.
+  recordOutgoingPrompt('discord', { messages: apiMessages, model: conn?.model, provider: conn?.provider });
+
   // Discord clearance-gated tools (discord-tools-build-spec). The Familiar's
   // tools this turn follow the SPEAKER: ward alone → full web-chat parity; a
   // villager → the universal relay + their grant-authorised subset; a stranger →
@@ -2007,6 +2298,27 @@ async function handleTurn(gw, msg, decision) {
       viaVillager: isVillager
         ? { id: decision.villager?.id ?? null, name: decision.speakerName ?? decision.villager?.name ?? null }
         : null,
+      // Pass 3c: the ward can tell the Familiar to join/leave a voice channel in
+      // natural language. Injected here (not in cerebellum) so the executor never
+      // has to import the gateway — the gateway owns the controller + who's in
+      // which VC. Ward-only; the tools are only composed for the ward anyway.
+      ...(decision.isWard && gw.voiceController ? {
+        voiceJoin: async () => {
+          if (!msg.guild_id) return { ok: false, reason: 'not-in-guild' };
+          // WHICH channel: the ward's current VC (guaranteed a voice channel), else
+          // a <#id> they mentioned in the message. The Familiar names no argument.
+          const mentionedId = (String(msg.content ?? '').match(/<#(\d+)>/) || [])[1] || null;
+          const channelId = voiceChannelOf(msg.guild_id, msg.author?.id) || mentionedId;
+          if (!channelId) return { ok: false, reason: 'no-channel' };
+          if ((await locationCallModeFor(msg.guild_id, channelId)) === 'off') return { ok: false, reason: 'off' };
+          return gw.voiceController.joinVoiceCall({
+            guildId: msg.guild_id, channelId,
+            wardUserId: (settings.discordWardUserId ?? '').trim(),
+            nameForUser: (id) => nameForVoiceUser(gw, msg.guild_id, id),
+          });
+        },
+        voiceLeave: async () => gw.voiceController.leaveVoiceCall(),
+      } : {}),
     };
     // On a villager turn, audit every state-mutating tool with the causing
     // villager before it runs — a villager-driven write is never silent. Reads
@@ -2162,7 +2474,32 @@ const gw = {
   voiceRosterListener: null,
   voiceStates: new Map(),      // guildId → Map<userId, channelId> — who is in which VC
   voiceController: null,        // { joinVoiceCall, leaveVoiceCall } from voice-discord-server (Pass 3)
+  guildNames: new Map(),        // guildId → server name, from GUILD_CREATE — names the server list + knock groups
+  userInfo: new Map(),          // userId → { id, username, global_name } — so a voice speaker reads as a NAME, not a raw snowflake the LLM can't tell apart
 };
+
+/** Cache what Discord tells us about a user (from GUILD_CREATE members, seeded
+ *  voice states, and VOICE_STATE_UPDATE.member) so a voice speaker can be named
+ *  even when they're not a registered villager. A snowflake means nothing to the
+ *  Familiar (an LLM); a display name is something it can hold onto and tell apart
+ *  from the next speaker. Best-effort: a partial object still upgrades the cache. */
+function rememberUser(user) {
+  const id = user?.id;
+  if (!id) return;
+  const prev = gw.userInfo.get(id) ?? {};
+  gw.userInfo.set(id, {
+    id,
+    username:    user.username    ?? prev.username    ?? null,
+    global_name: user.global_name ?? prev.global_name ?? null,
+  });
+}
+
+/** The best display name Discord has given us for a user id, or null. Villager
+ *  names (which outrank this) are resolved separately against the registry. */
+export function discordVoiceDisplayName(userId) {
+  const u = gw.userInfo.get(String(userId ?? ''));
+  return u ? (u.global_name || u.username || null) : null;
+}
 
 function clearTimers() {
   if (gw.heartbeatTimer) { clearInterval(gw.heartbeatTimer); gw.heartbeatTimer = null; }
@@ -2202,17 +2539,75 @@ export function setVoiceRosterListener(fn) { gw.voiceRosterListener = typeof fn 
 export function setDiscordVoiceController(ctl) { gw.voiceController = ctl && typeof ctl.joinVoiceCall === 'function' ? ctl : null; }
 
 /** Track who is in which voice channel from VOICE_STATE_UPDATE, so `!call` can
- *  find the ward's current VC. `channel_id: null` means they left voice. */
+ *  find the ward's current VC. `channel_id: null` means they left voice. Returns
+ *  the user's PREVIOUS channel so auto-join can tell an ENTER from a mic toggle. */
 function recordVoiceState(d) {
-  if (!d?.guild_id || !d?.user_id) return;
+  if (!d?.guild_id || !d?.user_id) return null;
   let g = gw.voiceStates.get(d.guild_id);
   if (!g) { g = new Map(); gw.voiceStates.set(d.guild_id, g); }
+  const prev = g.get(d.user_id) ?? null;
   if (d.channel_id) g.set(d.user_id, d.channel_id);
   else g.delete(d.user_id);
+  return prev;
 }
 
 /** The voice channel a user is currently in, or null. */
 function voiceChannelOf(guildId, userId) { return gw.voiceStates.get(guildId)?.get(userId) ?? null; }
+
+/** Where the ward is sitting in voice right now, across every tracked guild, or
+ *  null. Used by the proactive-voice push adapter (§7): when there is no live
+ *  call and `voiceProactiveJoin` is on, this is how I find the channel to join to
+ *  speak a check-in. First match wins (a user is in at most one VC per guild, and
+ *  effectively one across Discord). */
+export function findWardVoiceChannel(wardUserId) {
+  const ward = String(wardUserId ?? '').trim();
+  if (!ward) return null;
+  for (const [guildId, g] of gw.voiceStates) {
+    const channelId = g.get(ward);
+    if (channelId) return { guildId, channelId };
+  }
+  return null;
+}
+
+/** Everyone currently in a given voice channel (user ids). The voice audience
+ *  gate needs the COMPLETE set present — an undercount loosens the gate. */
+export function discordVoiceChannelMembers(guildId, channelId) {
+  const g = gw.voiceStates.get(guildId);
+  if (!g) return [];
+  const out = [];
+  for (const [uid, cid] of g) if (cid === channelId) out.push(uid);
+  return out;
+}
+
+/** A voice channel's call mode from its registered location (Pass 3c). Unknown /
+ *  unregistered → summon (explicit works, no auto) — never off, so an unconfigured
+ *  channel doesn't refuse an explicit `!call`. */
+async function locationCallModeFor(guildId, channelId) {
+  try {
+    const reg = await getRegistry();
+    const key = `discord:guild:${guildId}:channel:${channelId}`;
+    return locationCallMode((reg.locations ?? []).find(l => l.key === key));
+  } catch { return DEFAULT_CALL_MODE; }
+}
+
+/** Auto-join (Pass 3c): when the WARD enters a voice channel whose location is set
+ *  to 'auto', join them — hands-free presence, opt-in per location. Only on a real
+ *  ENTER (channel changed), only the ward, never if already on a call. */
+async function maybeAutoJoinVoice(d, prevChannel) {
+  try {
+    if (!gw.voiceController || !d?.guild_id || !d?.channel_id) return;
+    if (d.channel_id === prevChannel) return;                    // a mute/deafen toggle, not an entry
+    const wardId = (readSettingsSync().discordWardUserId ?? '').trim();
+    if (!wardId || d.user_id !== wardId) return;                 // only my human's entry auto-summons me
+    if (gw.voiceController.isCallActive?.()) return;             // already on a call somewhere
+    if ((await locationCallModeFor(d.guild_id, d.channel_id)) !== 'auto') return;
+    const r = await gw.voiceController.joinVoiceCall({
+      guildId: d.guild_id, channelId: d.channel_id,
+      wardUserId: wardId, nameForUser: (id) => nameForVoiceUser(gw, d.guild_id, id),
+    });
+    console.log(r?.ok ? `[discord] auto-joined ${d.guild_id}/${d.channel_id} (call mode: auto)` : `[discord] auto-join skipped (${r?.reason ?? 'unknown'})`);
+  } catch (err) { console.error('[discord] auto-join failed:', err?.message ?? err); }
+}
 
 /** The bot's own user id — the voice adapter reserves 'ward' for the ward and
  *  needs this to know which VOICE_STATE_UPDATE is its own connection. */
@@ -2295,12 +2690,42 @@ function onDispatch(t, d) {
   // methods for OUR OWN connection, and hand every voice-state change to the
   // active call's roster listener (who is in the channel drives the audience
   // set). Wrapped: a voice hiccup never tears the gateway down.
+  if (t === 'GUILD_CREATE') {
+    // Seed who is already in each voice channel BEFORE we connected — otherwise a
+    // villager sitting silently in the VC isn't counted, and the voice audience
+    // gate would read the room as more private than it is (a leak). GUILD_VOICE_
+    // STATES (bit 7) is what populates d.voice_states here.
+    try {
+      if (d?.id && Array.isArray(d.voice_states)) {
+        let g = gw.voiceStates.get(d.id);
+        if (!g) { g = new Map(); gw.voiceStates.set(d.id, g); }
+        for (const vs of d.voice_states) {
+          if (vs?.user_id && vs?.channel_id) g.set(vs.user_id, vs.channel_id);
+          if (vs?.member?.user) rememberUser(vs.member.user);   // name the people already sitting in voice
+        }
+      }
+      // Cache every member's user object so a voice speaker reads as a name.
+      if (Array.isArray(d?.members)) for (const m of d.members) if (m?.user) rememberUser(m.user);
+    } catch (err) { console.error('[discord] GUILD_CREATE voice-state seed failed:', err?.message ?? err); }
+    // Name the server so the Locations tab and grouped knocks read as the
+    // server's actual name, not a raw ID. GUILD_CREATE is the authoritative
+    // source of d.name; persist it and cache it for knock-time labelling.
+    try {
+      if (d?.id && typeof d.name === 'string' && d.name) {
+        gw.guildNames.set(d.id, d.name);
+        recordServer({ guildId: d.id, name: d.name, platform: 'discord' }).catch(() => { /* best-effort */ });
+      }
+    } catch (err) { console.error('[discord] GUILD_CREATE server-record failed:', err?.message ?? err); }
+    return;
+  }
   if (t === 'VOICE_STATE_UPDATE') {
     try {
-      recordVoiceState(d);
+      if (d?.member?.user) rememberUser(d.member.user);   // keep the speaker's name fresh as they move between channels
+      const prevChannel = recordVoiceState(d);
       const methods = gw.voiceAdapters.get(d?.guild_id);
       if (methods && d?.user_id === gw.botUserId) methods.onVoiceStateUpdate(d);
       gw.voiceRosterListener?.(d);
+      maybeAutoJoinVoice(d, prevChannel).catch(() => {});   // ward entered a VC? auto-join if that location says so
     } catch (err) { console.error('[discord] VOICE_STATE_UPDATE handling failed:', err?.message ?? err); }
     return;
   }
@@ -2314,11 +2739,18 @@ function onDispatch(t, d) {
     // Anything else — unknown namespace, other interaction types — is
     // ignored; there is nothing else interactive to click. Wrapped like
     // MESSAGE_CREATE: a bad interaction can never tear the gateway down.
-    if (d?.type === 3 && String(d?.data?.custom_id ?? '').startsWith(`${CONSENT_CID}:`)) {
-      (async () => {
-        try { await handleConsentInteraction(gw, d); }
-        catch (err) { console.error('[discord] interaction handler error:', err?.message ?? err); }
-      })();
+    if (d?.type === 3) {
+      const cid = String(d?.data?.custom_id ?? '');
+      const handler = cid.startsWith(`${CONSENT_CID}:`) ? handleConsentInteraction
+        : cid.startsWith(`${QUEUE_CID}:`) ? handleQueueInteraction
+        : cid.startsWith(`${CONN_CID}:`) ? handleConnectionInteraction
+        : null;
+      if (handler) {
+        (async () => {
+          try { await handler(gw, d); }
+          catch (err) { console.error('[discord] interaction handler error:', err?.message ?? err); }
+        })();
+      }
     }
     return;
   }
@@ -2370,6 +2802,16 @@ function onDispatch(t, d) {
         {
           const voiceAction = decision.isWard ? parseVoiceCommand(d.content) : null;
           if (voiceAction) { await handleVoiceCommand(gw, d, voiceAction); return; }
+        }
+
+        // Ward-only console commands, ward-DM only (personal data + settings
+        // never render in a shared room). `!queue` → the pending memory-consent
+        // menu; `!connection`/`!conn`/`!model` → active-connection + per-feature
+        // routing. Intercepted before any turn — exact code surfaces, no LLM. A
+        // villager typing these falls through to normal handling (just chat).
+        if (decision.isWard && decision.kind === 'ward-dm') {
+          if (isQueueCommand(d.content))      { await handleQueueCommand(gw, { msg: d }); return; }
+          if (isConnectionCommand(d.content)) { await handleConnectionCommand(gw, { msg: d }); return; }
         }
 
         // V8 lurk: read the room without replying.

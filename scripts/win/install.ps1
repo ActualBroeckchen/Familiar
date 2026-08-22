@@ -651,6 +651,25 @@ if ((Have "uv") -and (Test-Path (Join-Path $unruhDir "pyproject.toml"))) {
     Warn "Skipping Unruh dep sync (uv not available). Temporal context will be disabled until uv is installed."
 }
 
+# --- Voice provisioning (fresh install only) ---
+# Front-load everything voice needs so a new user never troubleshoots a
+# half-set-up engine. Heavy (Kyutai is a ~600 MB torch install), so it runs on a
+# FRESH install only and is skippable with PF_SKIP_VOICE_INSTALL=1. Non-fatal: a
+# machine that can't fetch voice still gets a Familiar on the built-in engine.
+# ensure-voicebox.mjs installs the Visual C++ runtime torch needs, so there is
+# nothing to troubleshoot after — the whole point on Windows.
+if ((-not $updateMode) -and ($env:PF_SKIP_VOICE_INSTALL -ne "1")) {
+    Step "Setting up voice - a large one-time download (skip with PF_SKIP_VOICE_INSTALL=1)..."
+    if (Have "uv") {
+        & node (Join-Path $projectRoot "scripts\ensure-voicebox.mjs") --install
+        if ($LASTEXITCODE -ne 0) { Warn "Kyutai voice setup didn't finish - the built-in engine still speaks; retry later in Settings > Chat > Voice." }
+    } else {
+        Warn "Skipping Kyutai voice (needs uv). The built-in engine still speaks."
+    }
+    & node (Join-Path $projectRoot "scripts\ensure-audio-models.mjs")
+    if ($LASTEXITCODE -ne 0) { Warn "Listening-model download didn't finish - voice notes will fetch it on first use." }
+}
+
 # --- Shortcuts (idempotent — runs in both modes) ---
 # Previously gated on `-not $updateMode`, which silently skipped
 # shortcut creation when node_modules already existed (common after a

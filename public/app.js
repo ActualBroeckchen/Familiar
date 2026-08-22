@@ -242,6 +242,14 @@ const state = {
   // PROTO_FAMILIAR_PONDERING_DISABLED=1 env var on the server.
   ponderingEnabled:        true,
   ponderingIntervalScale:  1,
+  // Unattended web research on a ponder tick (§8.5). When on, the Familiar can
+  // look a few things up mid-ponder instead of only recombining what it holds —
+  // model NAMES what to look up, code does the bounded reads. Default ON; the
+  // shared daily read budget keeps it cheap. Only active when web search is on;
+  // hard-disable with PROTO_FAMILIAR_PONDER_WEB_DISABLED=1 on the server.
+  ponderWebEnabled:        true,
+  ponderWebRoundsPerTick:  4,
+  ponderWebReadsPerDay:    12,
   // Deferred follow-ups (the "I'll do that later" catch). Default-ON: when I
   // tell my human I'll do something and don't actually use the tool to make
   // it real, memorization catches the open promise and re-surfaces it to me
@@ -289,6 +297,31 @@ const state = {
   // module stays (0-10).
   toolSurfacingEnabled:    false,
   toolStickyTurns:         2,
+  // Browser (browser build spec §10). Default OFF — like web search, being able
+  // to reach out of the box is opt-in. Env off-switch PROTO_FAMILIAR_BROWSE_DISABLED=1.
+  browseEnabled:           false,
+  browseIdleMin:           5,
+  browseMaxTabs:           3,
+  // read_webpage backend: 'auto' reads the live JS-rendered DOM through the
+  // browser when it's available (falls back to static), 'static' pins the old
+  // fetch+readability extractor. Inert until browsing is enabled.
+  webReadBackend:          'auto',
+  // Where my Familiar's browser may go (§5.2): 'open' (any public site) /
+  // 'blocklist' (open minus the list) / 'allowlist' (the list only).
+  browseSiteMode:          'open',
+  browseSiteList:          '',   // newline/comma-separated domains
+  // Domains where any submit-shaped act needs my fresh yes (§5 item 3). A hard
+  // gate; only the hand-edited autonomy-grants file's autoSubmit lifts it.
+  browseConfirmDomains:    '',
+  // How the confirm-list behaves: 'refuse' (default — hand it straight back) or
+  // 'ask' (hold it as a pending confirmation the ward approves out-of-band).
+  browseConfirmMode:       'refuse',
+  // Page watches (§9 Horizon #1). Default ON but inert until my Familiar (on my
+  // behalf) registers a URL to watch: it re-reads each watched page on a slow
+  // schedule, diffs it in code, and only nudges me when it genuinely changed.
+  // Uses the cheap static read, not the browser. Off via this toggle or
+  // PROTO_FAMILIAR_PAGE_WATCH_DISABLED=1 on the server.
+  pageWatchEnabled:        true,
   // Stewardship (docs/stewardship-build-spec.md, Pass 1). Default ON — the
   // executive layer that opens the day, surfaces aging floaters, and learns
   // the ward's real day-start. Anchor is 24h "HH:MM" ward-local.
@@ -361,6 +394,11 @@ const state = {
   discordToolsEnabled: true,   // clearance-gated tools on Discord turns; default ON
   discordBotToken:   '',
   discordWardUserId: '',
+  // Auto-register a new guild channel as a Location the moment it's seen,
+  // instead of leaving it in the knock list to register by hand. Default OFF:
+  // an auto-registered location is born at the strangers floor (grants nothing),
+  // but creating them silently is still the ward's call to opt into.
+  villageAutoRegisterLocations: false,
 
   // Per-feature connection routing: { <feature>: <connectionId> }. Absent/empty
   // for a feature → it uses the primary connection. Backend reads via
@@ -394,6 +432,14 @@ const state = {
   // How a call captures: 'push' (hold the button) or 'open' (hands-free — the mic
   // stays live and the recogniser's own endpointing segments what I say).
   voiceCallMode: 'push',
+  // Hybrid call transcription: the streaming model finds where I stop talking,
+  // then the accurate offline model (the one voice notes use) re-transcribes the
+  // utterance. Default ON — far fewer garbled words — at the cost of a small
+  // per-utterance delay the ward can trade away by turning this off.
+  voiceCallOfflineTranscribe: true,
+  // How long (ms) to wait for a pause before the Familiar answers on a call, so
+  // it doesn't interrupt a longer thought. 0 = reply as soon as an utterance ends.
+  voiceCallSettleMs: 1500,
   // Speak each new reply as it arrives, without pressing anything.
   //
   // Spec §11 puts this in Pass 1 and it was never built — found by auditing my
@@ -402,6 +448,20 @@ const state = {
   // screen: pressing 🔊 on every single message is not an accessible
   // alternative to text, it is a tax on needing one.
   readAloudByDefault: false,
+  // Voice Pass 4 — who's speaking, proactive voice, curation.
+  mediaRetentionEnabled: true,     // §9: curate aged voice-clip SOUNDS (words always kept). Default ON.
+  voiceNoteRetentionDays: 14,      // keep audio bytes this long before the retention pass judges them
+  voiceEscalationFactor: 0.5,      // §10: a check-in the ward HEARD in a live call gets a 0.5× ack window
+  voiceGuestPolicy: 'note',        // §8.2: ignore | note | gate — what a detected second voice does
+  voiceGuestThreshold: 0.5,        // cosine below which a segment isn't the ward
+  voiceGuestEnterSegments: 3,      // consecutive non-ward segments to raise a guest
+  voiceGuestExitSegments: 6,       // consecutive ward segments (with the quiet window) to release
+  voiceGuestExitQuietSec: 90,      // AND this long since the last non-ward segment
+  voiceAudioTaggingEnabled: false, // §8.4: annotation-only room-sound tags. Default OFF.
+  voiceProactiveJoin: false,       // §7: join the ward's VC to speak a tier-gated check-in. Default OFF.
+  voiceProactiveGreetings: true,   // group calls: say a short hello aloud when someone joins (rides the next silence, stands down under distress). Default ON.
+  voiceKeepAudio: false,           // §9: record a call to an audio asset (deliberate; default OFF)
+  voiceSpeakerModel: 'campplus',   // §8: which speaker-embedding model — 'campplus' (default) | 'titanet-large' (opt-in upgrade)
   // Transient (never synced/saved): images picked in the composer, awaiting send.
   pendingAttachments: [],
 
@@ -436,9 +496,12 @@ const SERVER_SYNCED_KEYS = [
   'tomeCaseSensitive', 'tomeMatchWholeWords',
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
   'providerApiKeys',
+  'browseEnabled', 'browseIdleMin', 'browseMaxTabs', 'webReadBackend', 'pageWatchEnabled',
+  'browseSiteMode', 'browseSiteList', 'browseConfirmDomains', 'browseConfirmMode',
   'phylacteryConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale', 'followupsEnabled',
+  'ponderWebEnabled', 'ponderWebRoundsPerTick', 'ponderWebReadsPerDay',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
   'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'weatherEnabled', 'weatherUnit',
   'intentionStandingPerPhase', 'intentionOpenOneShots',
@@ -452,9 +515,13 @@ const SERVER_SYNCED_KEYS = [
   'gcalCalendarAttribution', 'gcalIcalUrls', 'gcalCliCalendars',
   'trustedContacts', 'userDiscordWebhook',
   'discordEnabled', 'discordToolsEnabled', 'discordBotToken', 'discordWardUserId',
+  'villageAutoRegisterLocations',
   'featureConnections',
   'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring',
-  'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode',
+  'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode', 'voiceCallOfflineTranscribe', 'voiceCallSettleMs',
+  'mediaRetentionEnabled', 'voiceNoteRetentionDays', 'voiceEscalationFactor',
+  'voiceGuestPolicy', 'voiceGuestThreshold', 'voiceGuestEnterSegments', 'voiceGuestExitSegments', 'voiceGuestExitQuietSec',
+  'voiceAudioTaggingEnabled', 'voiceProactiveJoin', 'voiceProactiveGreetings', 'voiceKeepAudio', 'voiceSpeakerModel',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -2058,13 +2125,19 @@ function attachmentRow(attachments) {
   return row;
 }
 
-function createMessageEl(role, htmlContent, timestamp, attachments = null) {
+function createMessageEl(role, htmlContent, timestamp, attachments = null, speaker = null) {
   const el = document.createElement('div');
   el.className = `message ${role}`;
 
   const avatar = document.createElement('div');
   avatar.className = 'msg-avatar';
-  avatar.textContent = role === 'user' ? 'U' : role === 'assistant' ? 'A' : '!';
+  // A named speaker (a villager in a group Discord/voice session) shows their
+  // initial + full name, so reviewing a group conversation reads as who-said-what
+  // instead of a wall of "U". Absent on live web chat and the ward's own turns.
+  const who = typeof speaker === 'string' ? speaker.trim() : '';
+  avatar.textContent = who ? who.charAt(0).toUpperCase()
+    : role === 'user' ? 'U' : role === 'assistant' ? 'A' : '!';
+  if (who) avatar.title = who;
 
   const body = document.createElement('div');
   body.className = 'msg-body';
@@ -2128,6 +2201,13 @@ function createMessageEl(role, htmlContent, timestamp, attachments = null) {
 
   const attRow = attachmentRow(attachments);
   if (attRow) body.appendChild(attRow);   // thumbnails above the bubble text
+  if (who) {
+    const nameEl = document.createElement('div');
+    nameEl.className = 'msg-speaker';
+    nameEl.style.cssText = 'font-size:0.72rem;color:var(--text-muted);margin:0 0 2px 2px';
+    nameEl.textContent = who;
+    body.appendChild(nameEl);
+  }
   body.appendChild(bubble);
   body.appendChild(actions);
   body.appendChild(timeEl);
@@ -2215,8 +2295,14 @@ async function speakMessage(text, btn) {
     const audio = new Audio(`/api/voice/tts/${encodeURIComponent(plan.id)}`);
     speech.audio = audio;
     audio.addEventListener('ended', () => { if (speech.token === token) stopSpeaking(); });
-    audio.addEventListener('error', () => {
-      if (speech.token === token) fail('the voice could not start', 'the speech engine may not be installed');
+    audio.addEventListener('error', async () => {
+      if (speech.token !== token) return;
+      // The <audio> element only knows "it broke" — the real reason (e.g. torch's
+      // native DLL refusing to load) sits in the server. Probe for it so the
+      // button names the actual fix instead of the network tab holding the only
+      // clue. Re-check the token after the await: the ward may have moved on.
+      const detail = await probeSpeechFailure();
+      if (speech.token === token) fail('the voice could not start', speechFailureHint(detail));
     });
     await audio.play().catch(() => {
       if (speech.token === token) fail('playback was blocked', 'the browser refused to start audio');
@@ -2224,6 +2310,32 @@ async function speakMessage(text, btn) {
   } catch (err) {
     fail('read-aloud failed', String(err?.message ?? err));
   }
+}
+
+/**
+ * Ask the server WHY speaking just failed. The status probe pings the worker,
+ * so a speaking engine that can't load (torch's DLL, a missing binding) reports
+ * its real error here rather than only in the failed audio request. Returns the
+ * detail string, or '' if even the probe couldn't say.
+ */
+async function probeSpeechFailure() {
+  try {
+    const st = await (await fetch('/api/voice/status')).json();
+    return String(st?.engine?.detail || st?.backend?.reason || st?.voice?.reason || '');
+  } catch { return ''; }
+}
+
+/**
+ * Turn a speak-failure detail into guidance the ward can act on. The DLL-load
+ * signature (Windows "WinError 126", torch's c10.dll) is the one with a concrete
+ * fix, so it points at the 🔧 Fix Kyutai repair — which rebuilds the environment
+ * and, if the real cause is a missing Visual C++ Redistributable, says so.
+ */
+function speechFailureHint(detail) {
+  if (/WinError 126|DLL load failed|c10\.dll|not usable|no-engine/i.test(detail || '')) {
+    return 'the speaking engine can’t load its libraries — open Settings → Voice and press 🔧 Fix Kyutai';
+  }
+  return detail ? `the speech engine isn’t usable — ${detail}` : 'the speech engine may not be installed';
 }
 
 /**
@@ -2482,7 +2594,7 @@ function renderAllMessages() {
     const html = msg.role === 'user'
       ? esc(displayContent).replace(/\n/g, '<br>')
       : renderMarkdown(displayContent);
-    const { el, copyBtn, speakBtn } = createMessageEl(msg.role, html, msg.timestamp, msg.attachments);
+    const { el, copyBtn, speakBtn } = createMessageEl(msg.role, html, msg.timestamp, msg.attachments, msg.speaker);
     el.dataset.msgIndex = String(i);
     const capturedContent = msg.content;
     wireCopyButton(copyBtn, () => capturedContent);
@@ -3811,10 +3923,21 @@ function readSettingsFromUI() {
     const n = parseFloat($('pondering-scale').value);
     state.ponderingIntervalScale = Number.isFinite(n) && n >= 1 && n <= 10 ? n : 1;
   }
+  if ($('ponder-web-toggle')) state.ponderWebEnabled = $('ponder-web-toggle').checked;
+  if ($('ponder-web-reads')) {
+    const n = parseInt($('ponder-web-reads').value, 10);
+    state.ponderWebReadsPerDay = Number.isFinite(n) && n >= 0 && n <= 200 ? n : 12;
+  }
   if ($('warmth-toggle')) state.warmthEnabled = $('warmth-toggle').checked;
   if ($('baselines-toggle')) state.contactBaselinesEnabled = $('baselines-toggle').checked;
   if ($('wait-streak-toggle')) state.waitStreakEnabled = $('wait-streak-toggle').checked;
   if ($('noticing-toggle')) state.noticingEnabled = $('noticing-toggle').checked;
+  if ($('browse-toggle')) state.browseEnabled = $('browse-toggle').checked;
+  if ($('page-watch-toggle')) state.pageWatchEnabled = $('page-watch-toggle').checked;
+  if ($('browse-site-mode')) state.browseSiteMode = $('browse-site-mode').value;
+  if ($('browse-site-list')) state.browseSiteList = $('browse-site-list').value;
+  if ($('browse-confirm-domains')) state.browseConfirmDomains = $('browse-confirm-domains').value;
+  if ($('browse-confirm-mode')) state.browseConfirmMode = $('browse-confirm-mode').value;
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('content-regate-toggle')) state.contentRegateEnabled = $('content-regate-toggle').checked;
@@ -3846,6 +3969,14 @@ function readSettingsFromUI() {
   if ($('voice-call-threat-toggle')) state.voiceThreatScoring = $('voice-call-threat-toggle').checked;
   if ($('voice-call-lang') && $('voice-call-lang').value) state.voiceAsrLanguage = $('voice-call-lang').value;
   if ($('voice-call-mode')) state.voiceCallMode = $('voice-call-mode').value === 'open' ? 'open' : 'push';
+  if ($('voice-call-offline-toggle')) state.voiceCallOfflineTranscribe = $('voice-call-offline-toggle').checked;
+  if ($('voice-proactive-join-toggle')) state.voiceProactiveJoin = $('voice-proactive-join-toggle').checked;
+  if ($('voice-greetings-toggle')) state.voiceProactiveGreetings = $('voice-greetings-toggle').checked;
+  if ($('audio-tagging-toggle')) state.voiceAudioTaggingEnabled = $('audio-tagging-toggle').checked;
+  if ($('voice-call-settle') && $('voice-call-settle').value !== '') {
+    const n = parseInt($('voice-call-settle').value, 10);
+    if (Number.isFinite(n) && n >= 0) state.voiceCallSettleMs = Math.min(4000, n);
+  }
   if ($('read-aloud-default-toggle')) state.readAloudByDefault = $('read-aloud-default-toggle').checked;
   if ($('event-alerts-lead')) {
     const n = parseInt($('event-alerts-lead').value, 10);
@@ -3957,6 +4088,8 @@ function readSettingsFromUI() {
   if (dbtEl) state.discordBotToken = dbtEl.value.trim();
   const dwuEl = $('discord-ward-user-id');
   if (dwuEl) state.discordWardUserId = dwuEl.value.trim();
+  const arEl = $('vl-auto-register');
+  if (arEl) state.villageAutoRegisterLocations = arEl.checked;
   // Keep the primary connection in sync with the live Connection-section fields.
   syncFieldsToPrimaryConnection();
   saveSettings();
@@ -3978,10 +4111,21 @@ function writeSettingsToUI() {
   if ($('handoff-toggle')) setIfNotFocused($('handoff-toggle'), 'checked', state.handoffEnabled !== false);
   if ($('pondering-toggle')) setIfNotFocused($('pondering-toggle'), 'checked', state.ponderingEnabled !== false);
   if ($('pondering-scale'))  setIfNotFocused($('pondering-scale'),  'value',   state.ponderingIntervalScale ?? 1);
+  if ($('ponder-web-toggle')) setIfNotFocused($('ponder-web-toggle'), 'checked', state.ponderWebEnabled !== false);
+  if ($('ponder-web-reads'))  setIfNotFocused($('ponder-web-reads'),  'value',   state.ponderWebReadsPerDay ?? 12);
   if ($('warmth-toggle'))      setIfNotFocused($('warmth-toggle'),      'checked', state.warmthEnabled !== false);
   if ($('baselines-toggle'))   setIfNotFocused($('baselines-toggle'),   'checked', state.contactBaselinesEnabled !== false);
   if ($('wait-streak-toggle')) setIfNotFocused($('wait-streak-toggle'), 'checked', state.waitStreakEnabled !== false);
   if ($('noticing-toggle'))    setIfNotFocused($('noticing-toggle'),    'checked', state.noticingEnabled !== false);
+  if ($('browse-toggle'))      setIfNotFocused($('browse-toggle'),      'checked', state.browseEnabled === true);
+  if ($('page-watch-toggle'))  setIfNotFocused($('page-watch-toggle'),  'checked', state.pageWatchEnabled !== false);
+  if ($('browse-site-mode'))   setIfNotFocused($('browse-site-mode'),   'value',   state.browseSiteMode || 'open');
+  if ($('browse-site-list'))   setIfNotFocused($('browse-site-list'),   'value',   state.browseSiteList || '');
+  if ($('browse-confirm-domains')) setIfNotFocused($('browse-confirm-domains'), 'value', state.browseConfirmDomains || '');
+  if ($('browse-confirm-mode')) setIfNotFocused($('browse-confirm-mode'), 'value', state.browseConfirmMode || 'refuse');
+  { const m = state.browseSiteMode || 'open'; const show = m !== 'open';
+    if ($('browse-site-list')) $('browse-site-list').style.display = show ? '' : 'none';
+    if ($('browse-site-list-hint')) $('browse-site-list-hint').style.display = show ? '' : 'none'; }
   if ($('memory-sweep-toggle')) setIfNotFocused($('memory-sweep-toggle'), 'checked', state.memorySweepEnabled !== false);
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
   if ($('content-regate-toggle')) setIfNotFocused($('content-regate-toggle'), 'checked', state.contentRegateEnabled === true);
@@ -4010,6 +4154,11 @@ function writeSettingsToUI() {
   if ($('voice-call-threat-toggle')) setIfNotFocused($('voice-call-threat-toggle'), 'checked', state.voiceThreatScoring !== false);
   if ($('voice-call-lang')) setIfNotFocused($('voice-call-lang'), 'value', state.voiceAsrLanguage ?? 'en');
   if ($('voice-call-mode')) setIfNotFocused($('voice-call-mode'), 'value', state.voiceCallMode === 'open' ? 'open' : 'push');
+  if ($('voice-call-offline-toggle')) setIfNotFocused($('voice-call-offline-toggle'), 'checked', state.voiceCallOfflineTranscribe !== false);
+  if ($('voice-proactive-join-toggle')) setIfNotFocused($('voice-proactive-join-toggle'), 'checked', state.voiceProactiveJoin === true);
+  if ($('voice-greetings-toggle')) setIfNotFocused($('voice-greetings-toggle'), 'checked', state.voiceProactiveGreetings !== false);
+  if ($('audio-tagging-toggle')) setIfNotFocused($('audio-tagging-toggle'), 'checked', state.voiceAudioTaggingEnabled === true);
+  if ($('voice-call-settle')) setIfNotFocused($('voice-call-settle'), 'value', String(state.voiceCallSettleMs ?? 1500));
   if ($('weather-toggle')) setIfNotFocused($('weather-toggle'), 'checked', state.weatherEnabled !== false);
   setRadio('weather-unit', state.weatherUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius');
   if ($('event-alerts-lead')) setIfNotFocused($('event-alerts-lead'), 'value', state.eventAlertLeadMinutes ?? 60);
@@ -4049,6 +4198,7 @@ function writeSettingsToUI() {
   setIfNotFocused($('user-discord-webhook'), 'value', state.userDiscordWebhook ?? '');
   setIfNotFocused($('discord-enabled'),      'checked', state.discordEnabled === true);
   setIfNotFocused($('discord-tools-enabled'), 'checked', state.discordToolsEnabled !== false);
+  setIfNotFocused($('vl-auto-register'),     'checked', state.villageAutoRegisterLocations === true);
   setIfNotFocused($('discord-bot-token'),    'value', state.discordBotToken ?? '');
   setIfNotFocused($('discord-ward-user-id'), 'value', state.discordWardUserId ?? '');
   setIfNotFocused($('tome-scan-depth'),       'value',   state.tomeScanDepth ?? 4);
@@ -4144,7 +4294,8 @@ async function browseModels() {
 const SIDEBAR_NAV = [
   { group: 'Start here', items: [
     { id: 'section-connection', icon: 'cable',        title: 'Connection',       desc: 'Provider, API key, model' },
-    { id: 'section-chat',       icon: 'chat',         title: 'Chat',             desc: 'History, sounds, sessions' },
+    { id: 'section-chat',       icon: 'chat',         title: 'Chat',             desc: 'History, sounds, voice, sessions',
+      keywords: 'voice read aloud speak engine kyutai sherpa fix voice call microphone speed temperature expressiveness reference voice' },
   ]},
   { group: 'Your Familiar', items: [
     { id: 'section-knowledge',  icon: 'psychology',   title: 'Knowledge',        desc: 'Memories, identity, graph' },
@@ -4561,12 +4712,101 @@ function piSegmentEl(source, text) {
   return seg;
 }
 
-function openPromptInspector() {
-  const body = $('prompt-inspector-body');
+// ── Verbatim server-capture view ────────────────────────────────────────
+// The annotated view below reconstructs the web prompt from this browser's own
+// state. It can only ever show the WEB path, and it shows what SHOULD be
+// assembled. The captures fetched here are the real thing — the exact array
+// each surface sent to the model, recorded server-side at the send boundary —
+// so the Familiar's prompts can be verified on voice and Discord too, surfaces
+// with no browser of their own. This is the fix for "the inspector shows the
+// prompts but my Familiar on Discord doesn't see them."
+const PI_SURFACE_LABELS = {
+  web: 'Web', voice: 'Voice', discord: 'Discord',
+  'discord-revisit': 'Discord (revisit)',
+};
+
+function renderVerbatimCapture(container, cap) {
+  container.innerHTML = '';
+  if (!cap || !Array.isArray(cap.messages) || cap.messages.length === 0) {
+    container.innerHTML = '<p class="logs-empty">No prompt has been sent on this surface yet. Send a message there, then re-open.</p>';
+    return;
+  }
+  const meta = document.createElement('p');
+  meta.className = 'field-hint';
+  const when = cap.at ? new Date(cap.at).toLocaleString() : 'unknown time';
+  meta.textContent = `Exactly what was sent to ${cap.provider ?? 'the model'}${cap.model ? ` (${cap.model})` : ''} at ${when}. This is captured as it leaves the server — ground truth, not a reconstruction.`;
+  container.appendChild(meta);
+
+  cap.messages.forEach((msg) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'pi-msg';
+    const header = document.createElement('div');
+    header.className = 'pi-msg-header';
+    const extra = msg.attachmentCount ? ` · ${msg.attachmentCount} attachment(s)` : '';
+    header.innerHTML = `<span class="pi-role pi-role-${esc(msg.role ?? 'user')}">${esc(msg.role ?? 'user')}${esc(extra)}</span>`;
+    const text = typeof msg.content === 'string' ? msg.content
+      : JSON.stringify(msg.content ?? msg.tool_calls ?? '', null, 2);
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'btn-ghost pi-copy';
+    copyBtn.textContent = 'Copy';
+    wireCopyButton(copyBtn, () => text);
+    header.appendChild(copyBtn);
+    wrap.appendChild(header);
+    const pre = document.createElement('pre');
+    pre.className = 'pi-pre';
+    pre.textContent = text;
+    wrap.appendChild(pre);
+    container.appendChild(wrap);
+  });
+}
+
+async function openPromptInspector() {
+  const modalBody = $('prompt-inspector-body');
+  modalBody.innerHTML = '';
+  $('prompt-inspector-modal').classList.remove('hidden');
+
+  // Tab bar: the annotated web reconstruction, plus one tab per server surface
+  // that has actually sent a prompt. Fetched fresh each open.
+  const tabs = document.createElement('div');
+  tabs.className = 'ke-tabs pi-surface-tabs';
+  const content = document.createElement('div');
+  content.className = 'pi-tab-content';
+  modalBody.appendChild(tabs);
+  modalBody.appendChild(content);
+
+  let captures = [];
+  try {
+    const r = await fetch('/api/last-prompt');
+    if (r.ok) captures = (await r.json())?.surfaces ?? [];
+  } catch { /* server captures are best-effort — the annotated view still works */ }
+
+  const mkTab = (label, onClick) => {
+    const b = document.createElement('button');
+    b.className = 'ke-tab';
+    b.textContent = label;
+    b.addEventListener('click', () => {
+      [...tabs.children].forEach(c => c.classList.remove('active'));
+      b.classList.add('active');
+      onClick(content);
+    });
+    tabs.appendChild(b);
+    return b;
+  };
+
+  const annotatedTab = mkTab('This browser (annotated)', (c) => renderAnnotatedInspector(c));
+  for (const cap of captures) {
+    const label = PI_SURFACE_LABELS[cap.surface] ?? cap.surface;
+    mkTab(`${label} — actually sent`, (c) => renderVerbatimCapture(c, cap));
+  }
+
+  annotatedTab.classList.add('active');
+  renderAnnotatedInspector(content);
+}
+
+function renderAnnotatedInspector(body) {
   body.innerHTML = '';
   if (!lastSentMessages) {
-    body.innerHTML = '<p class="logs-empty">Send a message first.</p>';
-    $('prompt-inspector-modal').classList.remove('hidden');
+    body.innerHTML = '<p class="logs-empty">Send a message here first, or pick a surface tab above to see what it actually sent.</p>';
     return;
   }
 
@@ -4692,8 +4932,6 @@ function openPromptInspector() {
   if (lastThalamus?.timeAnchor) {
     renderMessage({ role: 'system', content: lastThalamus.timeAnchor, __source: 'thalamus-time-anchor' }, lastSentMessages.length);
   }
-
-  $('prompt-inspector-modal').classList.remove('hidden');
 }
 
 function closePromptInspector() {
@@ -5262,9 +5500,10 @@ function init() {
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
     'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle',
-    'pondering-toggle', 'pondering-scale',
+    'pondering-toggle', 'pondering-scale', 'ponder-web-toggle', 'ponder-web-reads',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
-    'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle',
+    'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle', 'browse-toggle', 'page-watch-toggle',
+    'browse-site-mode', 'browse-site-list', 'browse-confirm-domains', 'browse-confirm-mode',
     'memory-sweep-toggle',
     'tool-surfacing-toggle', 'tool-sticky-turns', 'tool-rounds-per-turn',
     'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',
@@ -5276,6 +5515,7 @@ function init() {
     'event-alerts-toggle', 'event-alerts-lead', 'elapsed-stamp-hours',
     'weather-toggle', 'vision-enabled-toggle', 'vision-threat-toggle',
     'voice-call-threat-toggle', 'voice-call-lang', 'voice-call-mode',
+    'voice-call-offline-toggle', 'voice-call-settle', 'voice-proactive-join-toggle', 'voice-greetings-toggle', 'audio-tagging-toggle',
     'gcal-write-toggle', 'gcal-write-command',
     'gcal-ical-urls', 'gcal-cli-calendars',
     'user-name', 'char-name',
@@ -5285,6 +5525,7 @@ function init() {
     'web-search-api-key', 'web-search-google-cse-id',
     'user-discord-webhook',
     'discord-enabled', 'discord-tools-enabled', 'discord-bot-token', 'discord-ward-user-id',
+    'vl-auto-register',
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',
     'tome-case-sensitive', 'tome-match-whole-words',
     'max-empty-retries',
@@ -5305,6 +5546,71 @@ function init() {
   document.querySelectorAll('input[name="weather-unit"]').forEach(el => {
     el.addEventListener('change', readSettingsFromUI);
   });
+
+  // Browser: show the domain list only for blocklist/allowlist modes, and load
+  // the activity viewer (the action audit log + live status) on demand.
+  $('browse-site-mode')?.addEventListener('change', e => {
+    const show = e.target.value !== 'open';
+    if ($('browse-site-list')) $('browse-site-list').style.display = show ? '' : 'none';
+    if ($('browse-site-list-hint')) $('browse-site-list-hint').style.display = show ? '' : 'none';
+  });
+  async function renderBrowserActivity() {
+    const pre = $('browse-activity'), pend = $('browse-pending'); if (!pre) return;
+    pre.style.display = ''; pre.textContent = 'Loading…';
+    try {
+      const [st, acts] = await Promise.all([
+        fetch('/api/browser/status').then(r => r.json()).catch(() => ({})),
+        fetch('/api/browser-actions').then(r => r.json()).catch(() => []),
+      ]);
+      // Pending confirmations (the 'ask' flow) — approve/decline out-of-band.
+      const pcs = Array.isArray(st?.pendingConfirms) ? st.pendingConfirms : [];
+      if (pend) {
+        pend.innerHTML = '';
+        // A headed handoff window is open → offer "hand it back".
+        if (st?.awaitingHandback) {
+          pend.style.display = '';
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:13px';
+          row.appendChild(Object.assign(document.createElement('span'), { textContent: `A window is open for you${st.handoffUrl ? ` (${st.handoffUrl})` : ''}. Finish your part, then:`, style: 'flex:1' }));
+          const hb = document.createElement('button');
+          hb.type = 'button'; hb.className = 'secondary-btn'; hb.textContent = 'Hand it back';
+          hb.addEventListener('click', async () => {
+            hb.disabled = true; hb.textContent = 'Resuming…';
+            await fetch('/api/browser/handback', { method: 'POST' }).catch(() => {});
+            renderBrowserActivity();
+          });
+          row.appendChild(hb);
+          pend.appendChild(row);
+        }
+        if (pcs.length) {
+          pend.style.display = '';
+          pend.appendChild(Object.assign(document.createElement('div'), { textContent: 'Waiting for your yes:', style: 'font-weight:600; margin-bottom:4px' }));
+          for (const p of pcs) {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:4px; font-size:13px';
+            row.appendChild(Object.assign(document.createElement('span'), { textContent: `${p.action} on ${p.host}`, style: 'flex:1' }));
+            for (const [label, approve] of [['Approve', true], ['Decline', false]]) {
+              const b = document.createElement('button');
+              b.type = 'button'; b.className = 'secondary-btn'; b.textContent = label;
+              b.addEventListener('click', async () => {
+                b.disabled = true;
+                await fetch('/api/browser/confirm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: p.id, approve }) }).catch(() => {});
+                renderBrowserActivity();
+              });
+              row.appendChild(b);
+            }
+            pend.appendChild(row);
+          }
+        } else if (!st?.awaitingHandback) { pend.style.display = 'none'; }
+      }
+      const head = st?.disabled ? 'Browser: hard-disabled'
+        : `Browser: ${st?.running ? 'running' : 'idle'}${st?.install?.status && st.install.status !== 'idle' ? ` · install ${st.install.status}` : ''}${st?.proxyBlocked ? ` · ${st.proxyBlocked} blocked request(s)` : ''}${st?.grants?.length ? ` · GRANTS: ${st.grants.join(', ')}` : ''}`;
+      const lines = (Array.isArray(acts) ? acts : []).slice(0, 40).map(a =>
+        `${(a.at || '').slice(0, 16).replace('T', ' ')}  ${a.tool}  ${a.target || ''}  → ${String(a.verdict || '').split('\n')[0].slice(0, 80)}`);
+      pre.textContent = head + '\n\n' + (lines.length ? lines.join('\n') : 'No browser activity yet.');
+    } catch { pre.textContent = "Couldn't load browser activity."; }
+  }
+  $('browse-activity-btn')?.addEventListener('click', renderBrowserActivity);
 
   // Provider change → refresh model suggestions and set sane default. Also
   // auto-fill the API key field from any saved connection using the same
@@ -5566,6 +5872,9 @@ function init() {
   $('voice-backend-select')?.addEventListener('change', onVoiceBackendChange);
   $('voice-sidecar-install')?.addEventListener('click', installVoiceSidecar);
   $('voice-sidecar-cancel')?.addEventListener('click', cancelVoiceSidecar);
+  $('voice-fix-kyutai')?.addEventListener('click', fixKyutai);
+  initVoiceTuning();
+  initVoiceprints();
   refreshVoiceBackendPane();
   $('voice-picker-close')?.addEventListener('click', closeVoicePicker);
   $('voice-picker-done')?.addEventListener('click', closeVoicePicker);
@@ -5689,6 +5998,7 @@ function init() {
   }
   $('ke-mem-refresh').addEventListener('click', keLoadMemories);
   $('ke-mem-granularity').addEventListener('change', keLoadMemories);
+  $('ke-mem-audit')?.addEventListener('click', keLoadGranularityAudit);
   $('ke-mem-search')?.addEventListener('input', keRenderMemories);
   $('ke-cov-refresh')?.addEventListener('click', keLoadCoverage);
   $('ke-cov-prev')?.addEventListener('click', () => { if (_keCovMonth) { _keCovMonth = keCovShiftMonth(_keCovMonth, -1); keRenderCalendar(); } });
@@ -8036,21 +8346,174 @@ async function refreshVoiceBackendPane() {
   }
 }
 
+/**
+ * Merge a patch into the nested `voiceTts` setting and persist it.
+ *
+ * ⚠️ The server's settings merge is TOP-LEVEL only, so PUTting `voiceTts:{speed}`
+ * would replace the WHOLE object and silently discard the chosen engine, voice,
+ * and other tuning. Read the current one, merge, send it back whole. This is the
+ * one writer for every voiceTts field (engine, speed, temperature) so they can't
+ * clobber each other.
+ */
+async function updateVoiceTts(patch) {
+  const current = await (await fetch('/api/settings')).json();
+  const voiceTts = { ...(current?.settings?.voiceTts ?? {}), ...patch };
+  const res = await fetch('/api/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ settings: { voiceTts } }),
+  });
+  if (!res.ok) throw new Error(`settings PUT HTTP ${res.status}`);
+  return voiceTts;
+}
+
+/**
+ * Wire the speed / expressiveness sliders: seed them from the stored voiceTts,
+ * update the readout live while dragging, and persist on release (a PUT per
+ * pixel while dragging would hammer the server for nothing).
+ */
+async function initVoiceTuning() {
+  const speed = $('voice-speed'), temp = $('voice-temp');
+  const speedVal = $('voice-speed-val'), tempVal = $('voice-temp-val');
+  if (!speed || !temp) return;
+
+  const trim = (v) => Number(v).toFixed(2).replace(/\.?0+$/, '');
+  const showSpeed = () => { if (speedVal) speedVal.textContent = `${trim(speed.value)}×`; };
+  const showTemp = () => { if (tempVal) tempVal.textContent = Number(temp.value).toFixed(2); };
+
+  // Seed from stored settings; keep the HTML defaults if the read fails.
+  try {
+    const s = (await (await fetch('/api/settings')).json())?.settings?.voiceTts ?? {};
+    if (Number.isFinite(Number(s.speed))) speed.value = String(s.speed);
+    if (Number.isFinite(Number(s.temperature))) temp.value = String(s.temperature);
+  } catch { /* keep defaults */ }
+  showSpeed(); showTemp();
+
+  speed.addEventListener('input', showSpeed);
+  temp.addEventListener('input', showTemp);
+  const save = (patch, isTemp) => async () => {
+    const st = $('voice-tuning-state');
+    try { await updateVoiceTts(patch()); }
+    catch (err) { if (st) st.textContent = `Could not save: ${String(err?.message ?? err)}`; return; }
+    // Temperature is baked into Kyutai when its model loads, so a change reloads
+    // that worker — reflect the "takes effect on the next thing I speak" reality.
+    if (isTemp) { try { await refreshVoiceBackendPane(); } catch { /* cosmetic */ } }
+  };
+  speed.addEventListener('change', save(() => ({ speed: Number(speed.value) }), false));
+  temp.addEventListener('change', save(() => ({ temperature: Number(temp.value) }), true));
+}
+
+// ── Voiceprint enrolment + speaker-model download (voice Pass 4, §8) ─────────
+// Records a clip, uploads it as a ward-private audio asset, and enrols it as a
+// voiceprint. The biometric data lives only on the machine (server-side store);
+// this UI is the reachable surface for it. Blind-built — verified live by my human.
+let _vpRecording = null;
+
+async function refreshVoiceprintUi() {
+  const sel = $('speaker-model-select'), modelState = $('speaker-model-state');
+  const vpState = $('voiceprint-state'), forgetBtn = $('voiceprint-forget');
+  try {
+    const r = await (await fetch('/api/voice/voiceprints')).json();
+    if (sel && r?.speakerModel) sel.value = r.speakerModel;
+    const modelName = r?.speakerModel === 'titanet-large' ? 'TitaNet-Large' : 'CAM++';
+    if (modelState) modelState.textContent = r?.model
+      ? `${modelName} is installed and active.`
+      : `${modelName} isn't downloaded yet — click "Download model" (needed before I can learn a voice).`;
+    if (vpState && forgetBtn) {
+      if (r?.ward) { vpState.textContent = 'Your voiceprint is set. Re-record any time to refresh it.'; forgetBtn.classList.remove('hidden'); }
+      else { vpState.textContent = 'When you record, read a few sentences aloud for ~15 seconds so I get a good sense of your voice.'; forgetBtn.classList.add('hidden'); }
+    }
+  } catch { /* leave the static hints in place */ }
+}
+
+// Toggle-record: first click starts, second click stops → upload → enrol.
+async function recordVoiceprint({ who, name, btn, stateEl }) {
+  if (_vpRecording) {
+    const handle = _vpRecording; _vpRecording = null;
+    btn.classList.remove('is-recording');
+    if (btn.dataset.idle) btn.textContent = btn.dataset.idle;
+    if (stateEl) stateEl.textContent = 'Saving your voiceprint…';
+    let blob;
+    try { blob = await handle.stop(); }
+    catch (err) { if (stateEl) stateEl.textContent = `Recording failed: ${err?.message ?? err}`; return; }
+    try {
+      const { toWav } = await import('./voice-recorder.js');
+      const wav = await toWav(blob);
+      const up = await fetch('/api/media', { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wav });
+      if (!up.ok) throw new Error((await up.json().catch(() => ({})))?.error || `upload ${up.status}`);
+      const meta = await up.json();
+      const id = meta.slugs?.[0] || meta.id;
+      const body = { who, ids: [id], ...(name ? { name } : {}) };
+      const enr = await (await fetch('/api/voice/enroll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+      if (stateEl) {
+        if (enr?.ok) stateEl.textContent = 'Got it — voiceprint saved.';
+        else if (enr?.reason === 'no-speaker-model') stateEl.textContent = "I don't have the recognition model yet — download it above first.";
+        else if (enr?.reason === 'no-usable-clips') stateEl.textContent = 'That clip was too short or unclear — try again, speaking for a bit longer.';
+        else stateEl.textContent = `Couldn't save the voiceprint (${enr?.reason ?? 'error'}).`;
+      }
+      await refreshVoiceprintUi();
+    } catch (err) { if (stateEl) stateEl.textContent = `Couldn't save the voiceprint: ${err?.message ?? err}`; }
+    return;
+  }
+  try {
+    const { startRecording } = await import('./voice-recorder.js');
+    _vpRecording = await startRecording({ onTick: (_s, label) => { if (stateEl) stateEl.textContent = `Recording ${label} — read aloud, then click Stop.`; } });
+    btn.dataset.idle = btn.textContent;
+    btn.textContent = '⏹ Stop';
+    btn.classList.add('is-recording');
+  } catch (err) {
+    _vpRecording = null;
+    const denied = /NotAllowed|Permission/i.test(String(err?.name ?? err));
+    if (stateEl) stateEl.textContent = denied ? 'I need microphone permission to learn your voice.' : `Couldn't start recording: ${err?.message ?? err}`;
+  }
+}
+
+async function initVoiceprints() {
+  const sel = $('speaker-model-select'), dl = $('speaker-model-download');
+  const recBtn = $('voiceprint-record'), forgetBtn = $('voiceprint-forget');
+  const vRecBtn = $('villager-print-record');
+  if (!recBtn) return;
+
+  if (sel) {
+    if (state.voiceSpeakerModel) sel.value = state.voiceSpeakerModel;
+    sel.addEventListener('change', () => {
+      state.voiceSpeakerModel = sel.value === 'titanet-large' ? 'titanet-large' : 'campplus';
+      saveSettings();
+      refreshVoiceprintUi();
+    });
+  }
+  dl?.addEventListener('click', async () => {
+    const st = $('speaker-model-state'), model = sel?.value || 'campplus';
+    dl.disabled = true;
+    if (st) st.textContent = `Downloading ${model === 'titanet-large' ? 'TitaNet-Large' : 'CAM++'}… (this can take a minute; progress prints in the server log)`;
+    try {
+      const r = await (await fetch('/api/voice/install-speaker-model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) })).json();
+      if (st) st.textContent = r?.ok ? 'Model installed and ready.' : `Download failed (${r?.reason ?? 'error'}${r?.detail ? ': ' + r.detail : ''}).`;
+    } catch (err) { if (st) st.textContent = `Download failed: ${err?.message ?? err}`; }
+    finally { dl.disabled = false; await refreshVoiceprintUi(); }
+  });
+  recBtn.addEventListener('click', () => recordVoiceprint({ who: 'ward', btn: recBtn, stateEl: $('voiceprint-state') }));
+  forgetBtn?.addEventListener('click', async () => {
+    try { await fetch('/api/voice/voiceprint?who=ward', { method: 'DELETE' }); } catch { /* */ }
+    await refreshVoiceprintUi();
+  });
+  vRecBtn?.addEventListener('click', () => {
+    const id = ($('villager-print-id')?.value || '').trim();
+    const name = ($('villager-print-name')?.value || '').trim();
+    const st = $('villager-print-state');
+    if (!id) { if (st) st.textContent = 'Enter their Village id first.'; return; }
+    recordVoiceprint({ who: id, name, btn: vRecBtn, stateEl: st });
+  });
+
+  refreshVoiceprintUi();
+}
+
 async function onVoiceBackendChange(ev) {
   const backend = ev.target.value;
   const state = $('voice-backend-state');
   if (state) state.textContent = 'Saving…';
   try {
-    // ⚠️ The server's merge is TOP-LEVEL only, so sending `voiceTts: {backend}`
-    // would replace the whole object and silently discard the chosen voice and
-    // any tuning. Read the current one and send it back whole.
-    const current = await (await fetch('/api/settings')).json();
-    const voiceTts = { ...(current?.settings?.voiceTts ?? {}), backend };
-    await fetch('/api/settings', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ settings: { voiceTts } }),
-    });
+    await updateVoiceTts({ backend });
   } catch (err) {
     if (state) state.textContent = `Could not save: ${String(err?.message ?? err)}`;
     return;
@@ -8129,6 +8592,71 @@ async function cancelVoiceSidecar() {
   if (state) state.textContent = 'Cancelling…';
   try { await fetch('/api/voice/install-sidecar', { method: 'DELETE' }); } catch { /* the poll will still settle it */ }
   await refreshVoiceBackendPane();
+}
+
+/**
+ * Rebuild a broken Kyutai environment, then poll to completion.
+ *
+ * The failure this repairs is torch's native library refusing to load after a
+ * bad update — the files are there (so nothing offers to reinstall), but they
+ * don't work. The server deletes the venv and rebuilds it, so like the sidecar
+ * install this is a started-then-poll job, not a request that waits it out.
+ */
+async function fixKyutai() {
+  const btn = $('voice-fix-kyutai');
+  const state = $('voice-fix-kyutai-state');
+  if (btn) { btn.disabled = true; btn.textContent = '🔧 Rebuilding…'; }
+  if (state) state.textContent = 'Deleting the old environment and rebuilding it (torch is a large download, so this takes a while)…';
+  try {
+    const res = await fetch('/api/voice/fix-kyutai', { method: 'POST' });
+    // A 404 here means the running server is the OLD code — the files were
+    // updated on disk (that's why this button exists), but the server wasn't
+    // restarted, so this route doesn't exist yet. The button reloaded with the
+    // page; the route did not. Say that plainly instead of a cryptic error.
+    if (res.status === 404) {
+      if (btn) { btn.disabled = false; btn.textContent = '🔧 Fix Kyutai'; }
+      if (state) state.textContent = 'This button is here but the server doesn’t know it yet — you updated the files but haven’t restarted. Close Proto-Familiar and relaunch it (reloading the page is not enough), then try again.';
+      return;
+    }
+    const started = await res.json();
+    if (!started.ok) throw new Error(started.reason || 'could not start');
+    pollFixKyutai();
+  } catch (err) {
+    if (btn) { btn.disabled = false; btn.textContent = '🔧 Fix Kyutai'; }
+    if (state) state.textContent = `Couldn't start the repair: ${String(err?.message ?? err)}`;
+  }
+}
+
+/** Poll a running Kyutai rebuild, showing the latest log line as it goes. */
+function pollFixKyutai() {
+  if (VP.fixKyutaiPolling) return;
+  VP.fixKyutaiPolling = true;
+  const btn = $('voice-fix-kyutai');
+  const state = $('voice-fix-kyutai-state');
+  const poll = setInterval(async () => {
+    let s;
+    try { s = await (await fetch('/api/voice/fix-kyutai')).json(); } catch { return; }
+    const job = s?.repair;
+    if (!job) return;
+    if (!job.done) {
+      const last = job.log?.[job.log.length - 1];
+      if (last && state) state.textContent = `Rebuilding… ${last}`;
+      return;
+    }
+    clearInterval(poll);
+    VP.fixKyutaiPolling = false;
+    if (btn) { btn.disabled = false; btn.textContent = '🔧 Fix Kyutai'; }
+    if (state) {
+      if (job.ok) {
+        state.textContent = `Kyutai is repaired${job.torch ? ` (torch ${job.torch})` : ''}. Try reading a reply aloud again.`;
+      } else {
+        // The hint carries the actionable next step (e.g. install the MSVC
+        // redistributable); the detail is the raw error for someone digging.
+        state.textContent = `Repair failed: ${job.hint || job.detail || job.reason || 'no detail'}`;
+      }
+    }
+    await refreshVoiceBackendPane();
+  }, 3000);
 }
 
 /**
@@ -8539,6 +9067,44 @@ async function keLoadMemories() {
     _keMemCache = data.memories ?? [];
     keRenderMemories();
   } catch (err) { list.innerHTML = keError(err, 'Failed to load memories.'); }
+}
+
+// Consolidation legibility audit (GET /api/memory-granularity) — a read-only
+// look at which dated memories the weekly/monthly roll-up can't see, because
+// their date_key isn't ISO (usually old entity-core imports). It changes
+// nothing; it just lets my human SEE the stuck rows. Toggles a panel below the
+// toolbar so it's out of the way until asked for.
+async function keLoadGranularityAudit() {
+  const panel = $('ke-mem-audit-panel');
+  if (!panel) return;
+  if (!panel.hidden && panel.dataset.loaded === '1') { panel.hidden = true; panel.dataset.loaded = ''; return; }
+  panel.hidden = false;
+  panel.innerHTML = '<p class="logs-loading">Checking…</p>';
+  try {
+    const res = await fetch('/api/memory-granularity');
+    const d = await res.json().catch(() => ({}));
+    if (!d?.ok) { panel.innerHTML = keError(d?.error || 'unknown', 'Consolidation check unavailable.'); return; }
+    const total = d.narrative_rows ?? 0;
+    const stuck = d.unparseable_date_key?.total ?? 0;
+    const byGran = (m) => Object.entries(m || {}).map(([g, n]) => `${esc(g)}: ${n}`).join(', ') || '—';
+    const samples = (d.samples || []).map((s) =>
+      `<li><code>${esc(s.id)}</code> · ${esc(s.granularity)} · <code>${esc(s.date_key ?? '—')}</code>${s.migrated ? ' · migrated' : ''}`
+      + `<br><span class="field-hint">${esc(s.excerpt ?? '')}</span></li>`).join('');
+    panel.innerHTML = `
+      <p style="margin:0 0 6px">${stuck === 0
+        ? `All ${total} dated memories can be rolled up into weekly/monthly summaries — nothing is stuck.`
+        : `<strong>${stuck}</strong> of ${total} memories can't be rolled up: their date isn't in <code>YYYY-MM-DD</code> form, so weekly/monthly consolidation never sees them. Usually old imports the entity-core migration mislabeled.`}</p>
+      ${stuck === 0 ? '' : `
+        <details>
+          <summary>Details</summary>
+          <p class="field-hint">Stuck by granularity — ${byGran(d.unparseable_date_key?.by_granularity)}</p>
+          <p class="field-hint">From the entity-core migration — ${byGran(d.migrated_from_entity_core)}</p>
+          ${samples ? `<ul style="margin:6px 0; padding-left:18px">${samples}</ul>` : ''}
+          <p class="field-hint">${esc(d.note ?? '')}</p>
+        </details>`}
+      <p class="field-hint" style="margin:6px 0 0">Read-only — this checks, it never changes anything.</p>`;
+    panel.dataset.loaded = '1';
+  } catch (err) { panel.innerHTML = keError(err, 'Consolidation check failed.'); }
 }
 
 // Render the cached memories through the live search filter — a memory
@@ -11770,9 +12336,22 @@ async function injectOutboxAsChatMessage(item) {
   const content = stripDisplayTimestamps(formatOutboxAsMessageContent(item));
   if (!content) return;
 
+  // If this item was already SPOKEN into a live voice call (delivery recorded by
+  // the voice-call push adapter, Pass 2d), my human just heard it — the chat
+  // copy is a record for the session log, not something to ping about again.
+  const spokenOnCall = item.delivery?.['voice-call']?.status === 'delivered';
+
   const timestamp = item.ts || new Date().toISOString();
   const { el, bubble, copyBtn, speakBtn } = appendAssistantShell(timestamp);
   bubble.innerHTML = renderMarkdown(content);
+  if (spokenOnCall) {
+    // A quiet marker so a message that appeared without a ping reads as "you
+    // already heard this on the call", not a glitch.
+    const tag = document.createElement('div');
+    tag.style.cssText = 'font-size:0.72rem;color:var(--text-muted);margin-top:2px';
+    tag.textContent = '· spoken on the call';
+    bubble.appendChild(tag);
+  }
   scrollToBottom();
 
   // Persist alongside normal messages so reloading the session shows
@@ -11794,9 +12373,18 @@ async function injectOutboxAsChatMessage(item) {
   refreshTopicGutter?.();
   wireCopyButton(copyBtn, () => content);
   wireSpeakButton(speakBtn, () => content);
-  notifyNewMessage({ proactive: true });   // reminders / reach-outs / triage always ping
+  // Reminders / reach-outs / triage ping — UNLESS my human already heard this
+  // one spoken into a live call, where a second ping for the same thing is noise.
+  if (!spokenOnCall) notifyNewMessage({ proactive: true });
 
-  await acknowledgeOutboxItem(item.id);
+  // Acknowledge on display — EXCEPT triage check-ins. Merely SHOWING a check-in
+  // must not count as my human handling it: acking gates the trusted-contact
+  // escalation (checkAndFirePendingContacts skips acknowledged items), and a tab
+  // just rendering it is not the same as my human engaging (ward decision:
+  // "received ≠ handled"). A triage item stays unacknowledged — the per-tab
+  // _injectedOutboxIds set already stops it re-rendering here — and is settled
+  // only when my human actually replies (server-side, on their next ward turn).
+  if (item.kind !== 'triage') await acknowledgeOutboxItem(item.id);
 }
 
 async function fetchOutbox() {
@@ -12697,7 +13285,72 @@ async function vlDeleteCategory(id) {
   } catch (err) { status.textContent = `Error: ${err.message}`; }
 }
 
-// ── Location knock list (V4.x) ──
+// ── Saved server list (derived from knocks + GUILD_CREATE) ──
+
+// The servers the Familiar is in, kept so the knock list can name the server a
+// channel belongs to instead of showing a raw guild ID. Loaded before knocks.
+let _vlServers = [];
+
+/** A readable server name for a guild id, from the saved list; falls back plainly. */
+function vlServerName(guildId) {
+  if (!guildId) return 'Direct messages';
+  const s = _vlServers.find(x => x.guildId === guildId);
+  return s?.name || `Server ${guildId}`;
+}
+
+async function vlLoadServers() {
+  try {
+    const r = await fetch('/api/village/servers');
+    _vlServers = r.ok ? await r.json() : [];
+  } catch { _vlServers = []; }
+  vlRenderServers();
+}
+
+function vlRenderServers() {
+  const box = $('vl-servers');
+  if (!box) return;
+  if (!Array.isArray(_vlServers) || !_vlServers.length) {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  box.classList.remove('hidden');
+  box.innerHTML = `<div class="vl-knocks-head">🖥 Servers <span class="field-hint">— the Discord servers my Familiar is in, derived from where it's been. Naming only; access is set by Locations + circles below.</span></div>`
+    + _vlServers.map((s, i) => {
+      const sub = [
+        `id ${esc(s.guildId)}`,
+        s.lastSeenAt ? `seen ${new Date(s.lastSeenAt).toLocaleDateString()}` : '',
+      ].filter(Boolean).join(' · ');
+      return `<div class="vl-knock" data-si="${i}">
+        <div class="vl-knock-info">
+          <div class="vl-knock-name">${esc(s.name || `Server ${s.guildId}`)}</div>
+          <div class="vl-knock-sub">${sub}</div>
+        </div>
+        <div class="vl-knock-actions">
+          <button class="btn-ghost vl-server-x" type="button" title="Forget this server (it reappears if my Familiar is active there again)" aria-label="Forget server">${msIcon('close')}</button>
+        </div>
+      </div>`;
+    }).join('');
+  box.querySelectorAll('.vl-knock').forEach(row => {
+    const s = _vlServers[Number(row.dataset.si)];
+    row.querySelector('.vl-server-x').addEventListener('click', () => vlDismissServer(s));
+  });
+}
+
+async function vlDismissServer(s) {
+  if (!s?.guildId) return;
+  if (!confirm(`Forget "${s.name || s.guildId}"? It reappears if my Familiar is active there again.`)) return;
+  try {
+    await fetch('/api/village/servers', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guildId: s.guildId, platform: s.platform }),
+    });
+  } catch { /* best-effort */ }
+  vlLoadServers();
+}
+
+// ── Location knock list (V4.x) — grouped by server ──
 
 async function vlLoadLocationKnocks() {
   const box = $('vl-location-knocks');
@@ -12706,6 +13359,11 @@ async function vlLoadLocationKnocks() {
     const r = await fetch('/api/village/location-knocks');
     vlRenderLocationKnocks(r.ok ? await r.json() : []);
   } catch { box.classList.add('hidden'); }
+}
+
+/** Pull the guild id off a knock (explicit field, else parsed from the key). */
+function vlKnockGuildId(k) {
+  return k.guildId || (k.key.match(/guild:([^:]+)/)?.[1] ?? '');
 }
 
 function vlRenderLocationKnocks(knocks) {
@@ -12717,29 +13375,45 @@ function vlRenderLocationKnocks(knocks) {
     return;
   }
   box.classList.remove('hidden');
-  box.innerHTML = `<div class="vl-knocks-head">🚪 Knocked on the door <span class="field-hint">— Discord channels your Familiar has spoken in that aren't registered yet. Register them to set an access ceiling.</span></div>`
-    + knocks.map((k, i) => {
-      const channelId = k.channelId || (k.key.split(':channel:')[1] ?? '');
-      const guildId   = k.guildId   || (k.key.match(/guild:([^:]+)/)?.[1] ?? '');
-      const displayKey = channelId ? `#${channelId}` : k.key;
-      const sub = [
-        guildId ? `guild ${guildId}` : '',
-        esc(k.platform ?? ''),
-        `${k.count ?? 1}×, last ${k.lastSeenAt ? new Date(k.lastSeenAt).toLocaleString() : '?'}`,
-      ].filter(Boolean).join(' · ');
-      return `<div class="vl-knock" data-lki="${i}">
-        <div class="vl-knock-info">
-          <div class="vl-knock-name">${esc(displayKey)} <span class="vl-knock-id">${esc(k.key)}</span></div>
-          <div class="vl-knock-sub">${sub}</div>
-        </div>
-        <div class="vl-knock-actions">
-          <button class="btn-secondary vl-loc-knock-register" type="button">Register</button>
-          <button class="btn-ghost vl-loc-knock-x" type="button" title="Dismiss (the channel can knock again — nothing is blocked)" aria-label="Dismiss channel knock">${msIcon('close')}</button>
-        </div>
-      </div>`;
+
+  // Group by server so a big server's channels sit together under its name
+  // instead of a flat channel soup. Groups ordered by their most-recent knock.
+  const groups = new Map();
+  knocks.forEach((k, i) => {
+    const gid = vlKnockGuildId(k);
+    if (!groups.has(gid)) groups.set(gid, []);
+    groups.get(gid).push({ k, i });
+  });
+  const orderedGids = [...groups.keys()].sort((a, b) => {
+    const la = Math.max(...groups.get(a).map(({ k }) => new Date(k.lastSeenAt || 0).getTime()));
+    const lb = Math.max(...groups.get(b).map(({ k }) => new Date(k.lastSeenAt || 0).getTime()));
+    return lb - la;
+  });
+
+  box.innerHTML = `<div class="vl-knocks-head">🚪 Knocked on the door <span class="field-hint">— Discord channels my Familiar has spoken in that aren't registered yet. Register them to set an access ceiling.</span></div>`
+    + orderedGids.map(gid => {
+      const rows = groups.get(gid).map(({ k, i }) => {
+        const channelId = k.channelId || (k.key.split(':channel:')[1] ?? '');
+        const displayKey = channelId ? `#${channelId}` : k.key;
+        const sub = [
+          esc(k.platform ?? ''),
+          `${k.count ?? 1}×, last ${k.lastSeenAt ? new Date(k.lastSeenAt).toLocaleString() : '?'}`,
+        ].filter(Boolean).join(' · ');
+        return `<div class="vl-knock" data-lki="${i}">
+          <div class="vl-knock-info">
+            <div class="vl-knock-name">${esc(displayKey)} <span class="vl-knock-id">${esc(k.key)}</span></div>
+            <div class="vl-knock-sub">${sub}</div>
+          </div>
+          <div class="vl-knock-actions">
+            <button class="btn-secondary vl-loc-knock-register" type="button">Register</button>
+            <button class="btn-ghost vl-loc-knock-x" type="button" title="Dismiss (the channel can knock again — nothing is blocked)" aria-label="Dismiss channel knock">${msIcon('close')}</button>
+          </div>
+        </div>`;
+      }).join('');
+      return `<div class="vl-knock-group"><div class="vl-knock-group-head">${esc(vlServerName(gid))}</div>${rows}</div>`;
     }).join('');
 
-  box.querySelectorAll('.vl-knock').forEach(row => {
+  box.querySelectorAll('.vl-knock[data-lki]').forEach(row => {
     const k = knocks[Number(row.dataset.lki)];
     row.querySelector('.vl-loc-knock-register').addEventListener('click', () => vlRegisterFromLocationKnock(k));
     row.querySelector('.vl-loc-knock-x').addEventListener('click', () => vlDismissLocationKnock(k));
@@ -12778,6 +13452,8 @@ async function vlLoadLocations() {
   try {
     vlRenderLocList(await vlFetch(true));
   } catch (err) { list.innerHTML = vlErr(err); }
+  // Servers first so the knock groups can show real server names, not IDs.
+  await vlLoadServers();
   vlLoadLocationKnocks();
 }
 
@@ -12875,6 +13551,15 @@ function vlRenderLocDetail(loc) {
         <option value="active">Active — can chime in without being mentioned</option>
       </select>
     </div>
+    <div>
+      <div class="vl-field-label">Voice call <span class="field-hint">(whether the Familiar joins this as a voice channel)</span></div>
+      <select id="vl-l-callmode" style="width:100%">
+        <option value="summon">Summon — joins only when asked (!call, or “come to voice”)</option>
+        <option value="auto">Auto — also joins when you enter this voice channel</option>
+        <option value="off">Off — never joins here</option>
+      </select>
+      <p class="field-hint">For a voice-channel location. Default <b>summon</b>: the Familiar joins when you ask, never on its own. <b>Auto</b> adds hands-free joining the moment you enter. <b>Off</b> fully disables voice here, even <code>!call</code>.</p>
+    </div>
     <div id="vl-l-active-opts" style="display:none;padding-left:8px;border-left:2px solid var(--border,#333)">
       <div class="vl-field-label">Active cadence</div>
       <select id="vl-l-active-strategy" style="width:100%">
@@ -12915,6 +13600,8 @@ function vlRenderLocDetail(loc) {
     modeSel.addEventListener('change', toggleActiveOpts);
     toggleActiveOpts();
   }
+  const callModeSel = $('vl-l-callmode');
+  if (callModeSel) callModeSel.value = ['off', 'summon', 'auto'].includes(loc?.callMode) ? loc.callMode : 'summon';
   const readBotsBox = $('vl-l-readbots');
   if (readBotsBox) readBotsBox.checked = loc?.readBots === true;
 
@@ -12937,12 +13624,13 @@ async function vlSaveLocation(key) {
   const cdRaw = $('vl-l-active-cooldown')?.value.trim();
   const activeCooldownSec = cdRaw ? parseInt(cdRaw, 10) : undefined;
   const readBots = $('vl-l-readbots')?.checked === true;
+  const callMode = $('vl-l-callmode')?.value || 'summon';
   status.textContent = 'Saving…';
   try {
     const r = await fetch('/api/village/locations', {
       method: key ? 'PATCH' : 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key: locKey, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots }),
+      body: JSON.stringify({ key: locKey, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots, callMode }),
     });
     if (!r.ok) throw new Error(await vlErrMsg(r));
     const saved = await r.json();

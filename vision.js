@@ -80,9 +80,66 @@ export function findConnection(settings, { provider, model } = {}) {
 }
 
 /**
+ * Does this model NAME look like a known vision-capable family?
+ *
+ * Model names don't reliably encode modality, so this is a heuristic — but it is
+ * deliberately asymmetric, because the two ways to be wrong are not equal:
+ *
+ *   - A false NEGATIVE (a real vision model we don't recognise → treated as
+ *     blind) is SAFE: the image gets DESCRIBED by the vision connection and the
+ *     model reads accurate words. Slightly worse than seeing pixels; nobody is
+ *     misled.
+ *   - A false POSITIVE (a text-only model we wrongly wave through → the image is
+ *     sent to it live) is the trust-break this whole change exists to stop: a
+ *     blind model that gets an image it can't parse confabulates its contents.
+ *     A tester shared a photo of food and a non-vision primary (GLM) gushed
+ *     about the ward's FACE. That is the failure mode.
+ *
+ * So the list stays TIGHT — it matches only families known to take image parts,
+ * and crucially does NOT match text-only siblings that merely share a prefix
+ * (GLM's vision models carry a `v` suffix: glm-4v / glm-4.6v — bare glm-4.6 /
+ * glm-5.2 are text-only and must NOT match). When in doubt it returns false and
+ * the image is described. The ward's explicit `visionCapable:'yes'` and the
+ * learned cache both override this, so an unrecognised-but-capable model is one
+ * setting away from live sight.
+ */
+export function looksVisionCapable(provider, model) {
+  const m = String(model ?? '').toLowerCase().trim();
+  if (!m) return false;
+  const PATTERNS = [
+    // OpenAI — 4o / 4.1 / 4-turbo / 4-vision / 5 / o-series (all multimodal)
+    /gpt-4o/, /gpt-4\.1/, /gpt-4-turbo/, /gpt-4-vision/, /gpt-4-1106-vision/,
+    /gpt-5/, /chatgpt-4o/, /\bo[134]\b/, /\bo1-/, /\bo3-/, /\bo4-/,
+    // Anthropic — Claude 3 and up are all vision (opus/sonnet/haiku names too)
+    /claude-3/, /claude-4/, /claude-5/, /claude-opus/, /claude-sonnet/, /claude-haiku/,
+    // Google — modern Gemini is multimodal
+    /gemini/,
+    // Qwen — the -VL / -V vision variants only (qwen-plus/turbo text is NOT here)
+    /qwen.*-vl/, /qwen.*-v\b/, /qwen\d[.\d]*-?vl/, /qwenvl/, /qwen3-v/,
+    // Mistral — Pixtral + the multimodal Small 3.x
+    /pixtral/, /mistral-small-3/,
+    // Meta — Llama 3.2 vision + Llama 4 + LLaVA
+    /llama-3\.2-.*vision/, /llama-3\.2-(11|90)b/, /llama-4/, /llava/,
+    // Zhipu GLM — the `v` vision variants ONLY (glm-4v / glm-4.5v / glm-4.6v /
+    // glm-4.1v). Bare glm-4.6 / glm-5.2 are text-only and deliberately excluded.
+    /glm-4[.\d]*v/, /glm-\d+v/,
+    // Assorted open + hosted VLMs
+    /internvl/, /minicpm-v/, /\bmolmo/, /phi-3.*vision/, /phi-3\.5-vision/,
+    /phi-4-multimodal/, /grok.*vision/, /grok-2-vision/, /step-1v/, /yi-vision/,
+    /cogvlm/, /deepseek-vl/, /\bvl-/, /-vl-/, /vision-/,
+  ];
+  return PATTERNS.some((re) => re.test(m));
+}
+
+/**
  * Resolve whether this connection can see images, as a boolean.
  *   'yes'/'no' → the ward's explicit word, never second-guessed.
- *   'auto'     → cached verdict if present; else OPTIMISTIC true (the turn probes).
+ *   'auto'     → cached verdict if present; else a TIGHT name heuristic
+ *                (`looksVisionCapable`) — recognised vision families ride live
+ *                (self-confirming via the cache), everything else is treated as
+ *                blind and DESCRIBED. This replaced a blanket "optimistic true"
+ *                that waved a text-only primary through and let it hallucinate a
+ *                photo it never saw.
  * `connection` may be a saved connection object OR a bare {provider, model}.
  */
 export async function resolveVisionCapable(connection, settings) {
@@ -94,7 +151,7 @@ export async function resolveVisionCapable(connection, settings) {
   const explicit = connection?.visionCapable;
   if (explicit === 'yes') return true;
   if (explicit === 'no')  return false;
-  // 'auto' / unset → consult the cache, default optimistic.
+  // 'auto' / unset → consult the cache, else the name heuristic.
   const conn = connection?.provider ? connection
     : findConnection(settings, connection || {});
   const provider = conn?.provider ?? connection?.provider;
@@ -107,7 +164,10 @@ export async function resolveVisionCapable(connection, settings) {
   const cached = cache[capKey(provider, model)];
   if (cached === 'no')  return false;
   if (cached === 'yes') return true;
-  return true;   // uncached auto → optimistic; the real turn is the probe
+  // Uncached auto: recognised vision families ride live (a successful turn
+  // caches 'yes'); an unrecognised model is treated as blind and gets DESCRIBED
+  // rather than sent an image it may not be able to see. Safe by default.
+  return looksVisionCapable(provider, model);
 }
 
 // ── The materializer ──────────────────────────────────────────────
@@ -176,6 +236,7 @@ export async function materializeAttachments(apiMessages, {
   const stripAtt = (m) => { if (!m || !('attachments' in m)) return m; const { attachments, ...rest } = m; return rest; };
 
   let imagesLive = 0, imagesStoodIn = 0, notesStoodIn = 0;
+  let blindImageStandins = 0;      // image stand-ins carrying NO description (confabulation risk)
   const stoodInUndescribed = [];   // asset ids stood in with no description yet
   const out = [];
   for (let mi = 0; mi < messages.length; mi++) {
@@ -201,6 +262,13 @@ export async function materializeAttachments(apiMessages, {
         : `[image ${ref.id ?? '?'}: no longer available]`;
       standinLines.push(standin);
       if (ref.meta?.kind === 'audio') notesStoodIn++; else imagesStoodIn++;
+      // An image standing in with NO real description is the confabulation
+      // hazard: the model has a marker for an image but nothing about its
+      // contents. Count it so the seam can inject a hard don't-invent rule.
+      if (ref.meta?.kind !== 'audio') {
+        const hasDesc = !!(ref.meta?.description && typeof ref.meta.description.text === 'string' && ref.meta.description.text.trim());
+        if (!hasDesc) blindImageStandins++;
+      }
       // An undescribed asset stood in as text is a candidate for a background
       // describe (§6) — so NEXT time it carries real words, not "not yet described".
       if (ref.meta && ref.meta.description === null) stoodInUndescribed.push(ref.meta.id);
@@ -239,7 +307,20 @@ export async function materializeAttachments(apiMessages, {
       content: '[The [image …] notes in this conversation are images that were shared with me. "What I saw when I looked" is exactly that — I looked at the image and those are my own words about it. I talk about these images naturally, from what I saw. One marked "I haven\'t looked at this one yet" is one I genuinely haven\'t seen.]',
     });
   }
-  return { messages: out, imagesLive, imagesStoodIn, notesStoodIn, stoodInUndescribed };
+  // Hard guard against the worst break: an image I have NO description for. The
+  // softer convention line above isn't enough on its own — a model handed a
+  // marker for an unseen image will otherwise invent its contents (a tester
+  // shared food; the Familiar gushed about my human's face). So when any image
+  // stands in blind, say the invariant plainly and forcefully. This earns a
+  // NEVER: fabricating what an unseen image shows is a real trust-break, not a
+  // style preference.
+  if (blindImageStandins > 0) {
+    out.push({
+      role: 'system',
+      content: '[This is only about images marked "I haven\'t looked at this one yet" or "I have no way to look at images right now" — those specifically I genuinely cannot see and have no description of, so for THOSE I don\'t describe them, guess their contents, or name who or what is in them; I say plainly I can\'t see it (yet) and ask what\'s in it if it matters. It does NOT apply to an image marked "what I saw when I looked: …" — that description IS my sight of it, and I talk about it normally, in full, as something I saw. A text description still counts as having seen the image. Inventing what an unseen image shows would be a serious breach — I never do that.]',
+    });
+  }
+  return { messages: out, imagesLive, imagesStoodIn, notesStoodIn, stoodInUndescribed, blindImageStandins };
 }
 
 /**
@@ -288,11 +369,24 @@ async function isDescribeCapable(c, settings) {
  * does not.
  */
 export async function resolveVisionConnection(settings = {}) {
+  // An EXPLICIT `vision` feature assignment is the ward's WORD that this
+  // connection is for seeing — honour it for describing even if its model name
+  // isn't in the recognised-vision list (`looksVisionCapable` is a heuristic; an
+  // assignment is a decision). Only an EXPLICIT assignment counts:
+  // connectionForFeature falls back to the primary when unassigned, and a
+  // text-only primary is not a vision choice. If the ward mis-assigned a truly-
+  // blind model the describe call fails, the description stays null, and the
+  // blind-stand-in hardening covers it — never a hallucination.
+  if (settings?.featureConnections?.vision) {
+    const assigned = connectionForFeature(settings, 'vision');
+    if (assigned?.apiKey && assigned?.model) return assigned;
+  }
+
+  // No explicit assignment → fall back to whoever can actually describe: primary
+  // first, then any saved connection the heuristic/cache says can see.
   const candidates = [];
-  const assigned = connectionForFeature(settings, 'vision');
-  if (assigned) candidates.push(assigned);
   const primary = primaryConnectionFrom(settings);
-  if (primary && primary !== assigned) candidates.push(primary);
+  if (primary) candidates.push(primary);
   for (const c of (Array.isArray(settings.connections) ? settings.connections : [])) {
     if (c && !candidates.includes(c)) candidates.push(c);
   }

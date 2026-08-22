@@ -2,7 +2,7 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   materializeAttachments, resolveVisionCapable, findConnection,
-  isModalityError, DEFAULT_MAX_LIVE_IMAGES,
+  isModalityError, DEFAULT_MAX_LIVE_IMAGES, looksVisionCapable,
   describeAsset, resolveVisionConnection, scoreImageDescriptionThreat,
   graduateImageDescriptionToNode, ensureDescribed,
 } from '../vision.js';
@@ -28,11 +28,35 @@ after(async () => { for (const id of created) await deleteAsset(id); });
 
 // ── Capability resolution ─────────────────────────────────────────
 
-test("resolveVisionCapable: 'yes'/'no' are the ward's word; auto is optimistic", async () => {
+test("resolveVisionCapable: 'yes'/'no' are the ward's word; uncached auto follows the name heuristic (SAFE default)", async () => {
   assert.equal(await resolveVisionCapable({ visionCapable: 'yes' }, {}), true);
   assert.equal(await resolveVisionCapable({ visionCapable: 'no' }, {}), false);
-  assert.equal(await resolveVisionCapable({ visionCapable: 'auto', provider: 'p', model: 'never-seen' }, {}), true);
-  assert.equal(await resolveVisionCapable({ provider: 'p', model: 'also-never' }, {}), true);
+  // The bug this replaced: an unknown/text-only model was waved through as
+  // "optimistically capable" and got sent an image it couldn't see → it
+  // hallucinated the contents. An unrecognised model is now treated as BLIND
+  // (→ described), not sent live.
+  assert.equal(await resolveVisionCapable({ visionCapable: 'auto', provider: 'p', model: 'glm-5.2' }, {}), false,
+    'a text-only primary must NOT be assumed to see');
+  assert.equal(await resolveVisionCapable({ provider: 'p', model: 'also-never' }, {}), false);
+  // A recognised vision family still rides live out of the box.
+  assert.equal(await resolveVisionCapable({ provider: 'p', model: 'gpt-4o' }, {}), true);
+});
+
+test('looksVisionCapable: recognises vision families, rejects their text-only siblings', () => {
+  // Known vision-capable → true
+  for (const m of ['gpt-4o', 'gpt-4.1-mini', 'gpt-5', 'claude-3-5-sonnet', 'claude-opus-4-8',
+                   'gemini-2.0-flash', 'qwen2.5-vl-72b', 'qwen3-vl-plus', 'pixtral-12b',
+                   'llama-3.2-90b-vision', 'llava-1.6', 'glm-4v', 'glm-4.6v', 'internvl2-8b',
+                   'deepseek-vl-7b']) {
+    assert.equal(looksVisionCapable('p', m), true, `${m} should read as vision-capable`);
+  }
+  // Text-only models — including vision families' non-vision siblings → false.
+  // GLM 5.2 / GLM-4.6 are the exact false-positive that caused the incident.
+  for (const m of ['glm-5.2', 'glm-4.6', 'glm-4-flash', 'deepseek-chat', 'deepseek-r1',
+                   'qwen-plus', 'qwen2.5-72b-instruct', 'mistral-large', 'llama-3.1-70b',
+                   'claude-2.1', 'gpt-3.5-turbo', 'kimi-k2', '']) {
+    assert.equal(looksVisionCapable('p', m), false, `${m} must NOT read as vision-capable`);
+  }
 });
 
 test('a z.ai-coding connection is NOT live-capable (chat cannot see) but IS chosen for describe', async () => {
@@ -96,6 +120,34 @@ test('non-capable connection: content stays a string with a stand-in appended', 
   assert.equal(imagesStoodIn, 1);
   assert.equal(typeof messages[0].content, 'string');
   assert.match(messages[0].content, /^look\n\[image the-sketch-/);
+});
+
+test('BLIND guard: an undescribed stand-in triggers the hard no-confabulation system line', async () => {
+  // The trust-break: a model handed a marker for an image it cannot see invents
+  // the contents (a food photo became "my human's face"). When any image stands
+  // in with no description, the seam must inject the forceful don't-invent rule.
+  const m = await mk('undescribed food photo');   // no description → blind
+  const msgs = [{ role: 'user', content: 'what do you think?', attachments: [{ id: m.id }] }];
+  const res = await materializeAttachments(msgs, { connection: { visionCapable: 'no' } });
+  assert.equal(res.blindImageStandins, 1);
+  const guard = res.messages.find(x => x.role === 'system' && /serious breach/.test(x.content));
+  assert.ok(guard, 'a blind stand-in must carry the hard no-confabulation instruction');
+  assert.match(guard.content, /don't describe them, guess their contents, or name who or what is in them/);
+  // Must NOT bleed into the described case: it explicitly excludes a "what I saw
+  // when I looked" description, so a model doesn't clam up about images it DOES
+  // have words for (or read "text description" as "didn't really see it").
+  assert.match(guard.content, /what I saw when I looked/);
+  assert.match(guard.content, /text description still counts as having seen/);
+});
+
+test('BLIND guard: a DESCRIBED image does NOT trigger the hard rule (it can be talked about)', async () => {
+  const m = await mk('a described mug');
+  await setAssetDescription(m.id, 'a white mug of tea on a wooden table');
+  const msgs = [{ role: 'user', content: 'nice?', attachments: [{ id: m.id }] }];
+  const res = await materializeAttachments(msgs, { connection: { visionCapable: 'no' } });
+  assert.equal(res.blindImageStandins, 0, 'a described image is not blind');
+  const guard = res.messages.find(x => x.role === 'system' && /serious breach|never do it/.test(x.content));
+  assert.equal(guard, undefined, 'no hard guard when the model has a real description to work from');
 });
 
 test('live budget: only the newest N ride live, older ones stand in', async () => {

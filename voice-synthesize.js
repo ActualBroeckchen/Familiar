@@ -27,7 +27,7 @@ const nextTtsStreamId = () => (ttsStreamSeq = ttsStreamSeq >= 65500 ? 40000 : tt
 
 /** A well-formed empty stream — a reply with nothing speakable in it. */
 export function emptyStream() {
-  return { sampleRate: 24000, async *[Symbol.asyncIterator]() { /* nothing */ } };
+  return { sampleRate: 24000, text: '', async *[Symbol.asyncIterator]() { /* nothing */ } };
 }
 
 /**
@@ -85,6 +85,9 @@ export function createSynthesizer({ readSettings, getTtsWorker, resolveVoiceForS
 
     return {
       sampleRate,
+      // The spoken text rides along so a barge can be mapped back to "how far
+      // did I get" without the engine having to know how the reply was built.
+      text: String(text ?? ''),
       async *[Symbol.asyncIterator]() {
         for (const part of parts) {
           if (signal?.aborted) return;

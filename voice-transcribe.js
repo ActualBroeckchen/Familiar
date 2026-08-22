@@ -31,8 +31,12 @@
  */
 
 import path from 'node:path';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { getAssetMeta, setAssetDescription, assetBytesPath } from './media.js';
+import { composePlan } from './voice-models.js';
+import { fetchPlan, MODELS_SUBDIR } from './voice-fetch.js';
+import { normalizeTranscriptCase } from './voice-speech.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -42,6 +46,68 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * `scripts/ensure-audio-models.mjs --extras=asr-offline` from a terminal.
  */
 export const ASR_MODEL_DIR = path.join(__dirname, 'models', 'audio', 'asr-offline');
+
+/**
+ * Hybrid call transcription: re-transcribe each finished call utterance with this
+ * accurate offline model instead of trusting the lossy streaming one. Default ON
+ * (the streaming zipformer's "ENGRAVED"/"TOLL STO" errors make calls hard to
+ * follow); the ward can turn it off — `voiceCallOfflineTranscribe:false` — if the
+ * small per-utterance latency ever bothers them on their hardware. Hard
+ * off-switch `PROTO_FAMILIAR_VOICE_OFFLINE_ASR_DISABLED=1`.
+ */
+export function voiceOfflineAsrEnabled(settings) {
+  if (process.env.PROTO_FAMILIAR_VOICE_OFFLINE_ASR_DISABLED === '1') return false;
+  return settings?.voiceCallOfflineTranscribe !== false;
+}
+
+/**
+ * How long to wait for my human to actually STOP before I answer — the settle
+ * window that stops me interrupting a longer thought (a pause between sentences
+ * is not my cue to speak). Ward-tunable `voiceCallSettleMs` (clamped [0, 4000]);
+ * default 1.5s. 0 disables (push-to-talk, where the release is the definitive end).
+ */
+export function voiceCallSettleMs(settings) {
+  const n = Number(settings?.voiceCallSettleMs);
+  if (Number.isFinite(n) && n >= 0) return Math.min(4000, Math.floor(n));
+  return 1500;
+}
+
+/** Is the offline recogniser actually unpacked on disk (not just the dir)? */
+export function offlineModelPresent() {
+  return existsSync(path.join(ASR_MODEL_DIR, 'model.int8.onnx'));
+}
+
+let _offlineFetchInFlight = null;
+/**
+ * Make sure the offline recogniser is downloaded — the half that makes hybrid
+ * call transcription an actual capability rather than a dead setting (the
+ * every-capability-reachable rule). Idempotent + in-flight-guarded: a no-op when
+ * already present, and concurrent calls share one download. Fetches ONLY the
+ * `asr-offline` extra (not a whole voice), reusing the same plan the
+ * `/api/voice/install-models {what:'listen'}` path uses. Never throws.
+ */
+export function ensureOfflineAsrModel({ rootDir, log = () => {} } = {}) {
+  if (offlineModelPresent()) return Promise.resolve({ ok: true, already: true });
+  if (_offlineFetchInFlight) return _offlineFetchInFlight;
+  const plan = composePlan({ capabilityTier: 'read-aloud', voiceEngine: 'pocket', extras: ['asr-offline'] });
+  const narrowed = { ...plan, voice: null, capability: [], all: plan.extras };
+  const modelsDir = path.join(rootDir, MODELS_SUBDIR);
+  log('accurate call-transcription model (SenseVoice) not installed — fetching it in the background; calls use basic transcription until it is ready');
+  let lastPct = -1;
+  _offlineFetchInFlight = fetchPlan({
+    plan: narrowed, modelsDir,
+    onProgress: (e) => {
+      if (e?.phase === 'download' && e.totalBytes > 0) {
+        const pct = Math.floor((e.receivedBytes / e.totalBytes) * 10) * 10;
+        if (pct > lastPct) { lastPct = pct; log(`transcription model ${pct}%`); }
+      } else if (e?.phase && e.phase !== 'download') { log(`transcription model ${e.phase}${e.file ? ` ${e.file}` : ''}`); }
+    },
+  })
+    .then((r) => { log(r?.ok === false ? `transcription model download failed: ${r?.message ?? r?.reason}` : 'transcription model ready — the next call will use it'); return r; })
+    .catch((err) => { log(`transcription model fetch errored: ${err?.message ?? err}`); return { ok: false }; })
+    .finally(() => { _offlineFetchInFlight = null; });
+  return _offlineFetchInFlight;
+}
 
 /**
  * Loading 226 MB of ONNX off a laptop disk is slow enough that an ordinary
@@ -148,7 +214,8 @@ export async function transcribeAsset(idOrSlug, { getWorker } = {}) {
       return { ok: false, reason: said?.reason ?? 'transcribe-failed', detail: said?.detail ?? null };
     }
 
-    const text = typeof said.text === 'string' ? said.text.trim() : '';
+    // Un-shout an all-caps result (a no-op on SenseVoice's already-cased output).
+    const text = normalizeTranscriptCase(typeof said.text === 'string' ? said.text.trim() : '');
     // A recording with no speech in it is a real outcome, not an error — my
     // human's pocket, a false start, a room with nobody talking. It is cached
     // so the same silence is not decoded twice, and it is said plainly.

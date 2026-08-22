@@ -7,6 +7,7 @@ are always accessible. WAL mode + busy_timeout for robustness.
 
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 import uuid
@@ -18,6 +19,13 @@ MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
 
 def default_db_path() -> Path:
+    # PHYLACTERY_DB_PATH relocates the store for the whole server process (the
+    # cross-process smoke test uses it to isolate its writes to a temp file;
+    # also lets an install point at an external data dir). Unset → canonical
+    # <phylactery-root>/data/phylactery.db.
+    override = os.environ.get("PHYLACTERY_DB_PATH")
+    if override:
+        return Path(override)
     return Path(__file__).resolve().parent.parent.parent / "data" / DB_FILENAME
 
 

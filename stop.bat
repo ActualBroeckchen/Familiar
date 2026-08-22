@@ -43,7 +43,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "  try { $owner = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue ^| Select-Object -First 1 -ExpandProperty OwningProcess } catch {};" ^
   "  if ($owner) {" ^
   "    $proc = Get-CimInstance Win32_Process -Filter \"ProcessId=$owner\" -ErrorAction SilentlyContinue;" ^
-  "    if ($proc -and $proc.Name -match '^node(\\.exe)?$' -and $proc.CommandLine -match 'server\\.js') {" ^
+  "    if ($proc -and $proc.Name -match '^node(\.exe)?$' -and $proc.CommandLine -match 'server\.js') {" ^
   "      Write-Host \"Reclaiming port $port from orphaned node.exe PID $owner...\";" ^
   "      Stop-Tree $owner; $killed = $true" ^
   "    } else {" ^

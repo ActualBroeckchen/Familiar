@@ -133,7 +133,12 @@ pushd "%SCRIPT_DIR%"
 REM Launch detached; capture PID via PowerShell.
 for /f %%P in ('powershell -NoProfile -Command "$p = Start-Process -FilePath 'node' -ArgumentList 'server.js' -WorkingDirectory '%SCRIPT_DIR%' -WindowStyle Hidden -RedirectStandardOutput '%LOG_FILE%' -RedirectStandardError '%LOG_FILE%.err' -PassThru; $p.Id"') do set "NEW_PID=%%P"
 popd
-echo !NEW_PID! > "%PID_FILE%"
+REM Write the PID with no trailing space. `echo X > file` includes the space
+REM before the `>` in the file, and `set /p` on the next run reads it back with
+REM that trailing space, so `tasklist /FI "PID eq 1234 "` never matched and
+REM start.bat's own "already running?" check silently failed. Parenthesising the
+REM echo also avoids a trailing digit being parsed as a stream-redirect number.
+(echo !NEW_PID!)>"%PID_FILE%"
 echo Started PID !NEW_PID!.
 
 REM Wait for port

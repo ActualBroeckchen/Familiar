@@ -11,7 +11,56 @@ import {
   VILLAGER_WRITE_TOOLS,
   DISCORD_SCHEDULE_WRITE_TOOLS,
   DISCORD_MEMORY_WRITE_TOOLS,
+  VOICE_CALL_TOOLS,
+  executeToolCall,
 } from '../cerebellum.js';
+
+// ── Voice-call tools (Pass 3c) ───────────────────────────────────────
+
+test('voice-call tools are ward-only, Discord-only, and off when voice is hard-disabled', () => {
+  const wardNames = composeDiscordTools({ isWard: true, settings: {} }).map(t => t.function?.name);
+  assert.ok(wardNames.includes('join_voice_call') && wardNames.includes('leave_voice_call'), 'ward gets both');
+
+  const villagerNames = composeDiscordTools({ isVillager: true, grants: { schedule: 'full', memories: true }, settings: {} }).map(t => t.function?.name);
+  assert.ok(!villagerNames.includes('join_voice_call'), 'villager never gets voice-call tools');
+
+  const prev = process.env.PROTO_FAMILIAR_DISCORD_VOICE_DISABLED;
+  process.env.PROTO_FAMILIAR_DISCORD_VOICE_DISABLED = '1';
+  try {
+    const off = composeDiscordTools({ isWard: true, settings: {} }).map(t => t.function?.name);
+    assert.ok(!off.includes('join_voice_call'), 'hard off-switch removes them');
+  } finally {
+    if (prev === undefined) delete process.env.PROTO_FAMILIAR_DISCORD_VOICE_DISABLED;
+    else process.env.PROTO_FAMILIAR_DISCORD_VOICE_DISABLED = prev;
+  }
+});
+
+test('join_voice_call executor: no injected voiceJoin → a graceful not-on-discord message, never a throw', async () => {
+  const r = await executeToolCall('join_voice_call', '{}', {});
+  assert.match(String(r), /only join a voice call from a Discord chat/i);
+});
+
+test('join_voice_call executor: routes to ctx.voiceJoin and maps the result', async () => {
+  const okCtx = { voiceJoin: async () => ({ ok: true, callId: 'c1' }) };
+  assert.match(String(await executeToolCall('join_voice_call', '{}', okCtx)), /joined the voice channel/i);
+
+  const busyCtx = { voiceJoin: async () => ({ ok: false, reason: 'busy' }) };
+  assert.match(String(await executeToolCall('join_voice_call', '{}', busyCtx)), /already on a call/i);
+
+  const noChanCtx = { voiceJoin: async () => ({ ok: false, reason: 'no-channel' }) };
+  assert.match(String(await executeToolCall('join_voice_call', '{}', noChanCtx)), /needs to be in one/i);
+});
+
+test('leave_voice_call executor: maps wasActive', async () => {
+  assert.match(String(await executeToolCall('leave_voice_call', '{}', { voiceLeave: async () => ({ wasActive: true }) })), /left the voice channel/i);
+  assert.match(String(await executeToolCall('leave_voice_call', '{}', { voiceLeave: async () => ({ wasActive: false }) })), /wasn't in a voice channel/i);
+});
+
+test('VOICE_CALL_TOOLS take no required arguments (operability: the Familiar names nothing)', () => {
+  for (const t of VOICE_CALL_TOOLS) {
+    assert.deepEqual(t.function.parameters.required, [], `${t.function.name} requires no args`);
+  }
+});
 
 // ── villagerToolNames: grant-based tool allowlist ────────────────────
 

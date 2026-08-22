@@ -50,6 +50,39 @@ sources:
   - id: claude-md
     type: file
     path: CLAUDE.md
+  - id: audio-worker-current
+    type: file
+    path: audio-worker-current.js
+  - id: app-js
+    type: file
+    path: public/app.js
+  - id: voice-audio-tags
+    type: file
+    path: voice-audio-tags.js
+  - id: voice-tagging
+    type: file
+    path: voice-tagging.js
+  - id: voice-presence-js
+    type: file
+    path: voice-presence.js
+  - id: voice-discord-server-js
+    type: file
+    path: voice-discord-server.js
+  - id: voice-discord-adapter-js
+    type: file
+    path: voice-discord-adapter.js
+  - id: call-engine-js
+    type: file
+    path: call-engine.js
+  - id: discord-gateway-js
+    type: file
+    path: discord-gateway.js
+  - id: village-js
+    type: file
+    path: village.js
+  - id: media-retention-loop
+    type: file
+    path: media-retention-loop.js
 ---
 
 # Voice
@@ -61,10 +94,20 @@ measuring pass, and it built the supply chain, the disk-footprint budget, and a 
 a ward can run themselves to replace the spec's `~` estimates with numbers from their own
 machine [@pr-voice-pass-0] [@architecture-doc]. **Pass 1**, built on Pass 0's supply chain,
 shipped the first thing that actually speaks: per-message read-aloud text-to-speech
-[@architecture-doc]. Live conversation (streaming ASR, barge-in, the compute governor) and
-Discord voice are later passes, not yet built [@voice-build-spec]. This page covers both
-shipped passes; see [Vision and media](vision-and-media) for the sibling multimodal-input
-milestone that voice's media storage reuses.
+[@architecture-doc]. Later passes have since shipped live conversation and voiceprint enrolment
+(Pass 4, through 0.10.102-alpha) [@voice-tagging]; this page documents Pass 0 and Pass 1 in
+depth and does not yet cover Pass 2–4 in full. Three later pieces are covered on this page in
+their own sections below: group-call presence, speaker naming, and join/leave awareness on the
+Discord call path (0.11.8-alpha) [@voice-presence-js]; room-sound tagging
+(`voice-tagging.js`, `voice-audio-tags.js`), which ships **annotation-only** by deliberate
+design — see [Safety spine](safety-spine)'s deferred-work section for why it stops short of using
+room sounds for care detection, and what a future ward-signed spec would need to decide
+[@voice-audio-tags]; and a shared-heap decode bug in the `opusscript` Opus decoder that silenced
+one Familiar whenever a second one joined the same Discord call, fixed in 0.11.10-alpha
+[@voice-discord-adapter-js]; and media retention (Pass 4 §9), the default-on background worker
+that curates aged voice-clip sounds without ever touching their transcripts
+[@media-retention-loop]. See [Vision and media](vision-and-media) for the sibling
+multimodal-input milestone that voice's media storage reuses.
 
 ## The footprint budget: disk as an accessibility constraint
 
@@ -320,6 +363,29 @@ hook the way [Phylactery](phylactery) is — unlike Phylactery, `pocket` is opti
 downloading 600 MB because someone ran `npm start` would be hostile on a nearly-full laptop
 [@architecture-doc].
 
+### Reliability: pocket falling back to sherpa instead of going silent
+
+A pocket install can have every file in place and still fail to speak, because `inspectBackends` only checks that the venv's interpreter and worker files exist — it reports pocket "available" even when torch cannot actually be imported, so the ordinary reinstall path never fires for a present-but-broken install [@voice-backend]. The most common cause on Windows is an environment gap, not a code bug: torch's Windows wheels are built against the Microsoft Visual C++ runtime, and `uv`'s standalone Python does not ship it the way conda does (astral-sh/uv#18413) [@voice-backend]. A developer's machine usually already has the redistributable from other software; a ward's clean machine does not, so torch's `c10.dll` cannot load its dependency and torch import fails with `OSError: [WinError 126]` — "same hardware, mine works, theirs doesn't" [@voice-backend].
+
+The fix revealed a Windows-specific loader detail: on Python 3.8+, a native DLL's own dependencies (such as the runtime DLLs that `c10.dll` needs) are searched only in the DLL's own directory, in `os.add_dll_directory` folders, and in the system paths — never on `PATH` or in `sys.prefix` [@voice-backend]. Installing `msvc-runtime` to `sys.prefix/Scripts` (where the wheel places its DLLs) therefore does nothing for torch, which loads `c10.dll` from `torch/lib` and searches only within that folder and registered directories for its dependencies [@voice-backend].
+
+Three layers close this gap, from prevention to graceful degradation:
+
+- **`ensureWindowsMsvcRuntime` (`voice-backend.js`) installs the runtime and copies it to the right place** instead of sending the ward to Microsoft: it installs cgohlke's `msvc-runtime` wheel into the voicebox venv (to acquire the DLLs), then calls `placeMsvcRuntimeBesideTorch` to copy those DLLs into `torch/lib` where the native loader actually searches — no admin rights and no system-wide redistributable needed [@voice-backend]. It runs from every install/repair path (`ensure-voicebox.mjs`, the first-use auto-install it shells out to, and `rebuildVoicebox`) [@voice-backend]. It is best-effort: `msvc-runtime` only ships wheels for Python 3.11+, so on an older interpreter it logs and moves on rather than failing the install, and it is a no-op off Windows [@voice-backend]. The official `vc_redist` download is now only the last-resort hint shown after this automatic fix has already been tried.
+- **"Fix Kyutai" (`rebuildVoicebox` in `voice-backend.js`, `POST /api/voice/fix-kyutai`) repairs a present-but-broken install.** It stops the audio worker first (so Windows can delete the venv's `python.exe`, which a running worker holds open), deletes the venv, runs `uv sync --reinstall`, calls `ensureWindowsMsvcRuntime`, and then proves `import torch` actually works before declaring success — never trusting file presence the way `inspectBackends` does [@voice-backend]. It runs as a background job (started + polled), mirroring the shape of the sidecar-install flow.
+- **`currentAudioWorker` (`audio-worker-current.js`) falls back to sherpa at runtime instead of answering `no-engine` and going silent.** The first time a pocket worker is built, `currentAudioWorker` verifies it actually loads with one `ping` — which runs the torch import and model load, so the check doubles as a warm-up — and if that fails, it rebuilds transparently on the built-in sherpa engine (which needs no torch and always ships) and tags the result `fellBackFrom: 'pocket'` [@audio-worker-current]. Every speaking surface (web read-aloud, Discord, voice call) calls through this one seam, so all of them get a working voice without individually knowing pocket failed. The verdict is cached in a module-level `pocketBroken` flag so a known-bad pocket install is not re-verified and respawned on every turn, and `stopAudioWorker` clears that cache so a Fix Kyutai repair gets a fresh verification instead of a permanent demotion [@audio-worker-current]. A test hook, `__setVoiceTestHooks`, injects a fake resolver and worker builder so the fallback path can be exercised without spawning real processes [@audio-worker-current]. Net effect: a missing Visual C++ runtime now costs a *lesser voice*, not silence.
+
+The Fix Kyutai button itself surfaced a general [Update](update) gap: a ward who updated the files but had not restarted the server saw the new button 404, because Express routes are registered at boot while static assets refresh live. `public/app.js` now recognizes that 404 shape and tells the ward to restart rather than showing a cryptic error [@app-js] — see [Update](update)'s two-speed-updates section for the mechanism, which applies to any future endpoint, not just this one.
+
+### Voice settings: speed and expressiveness differ by engine
+
+`voiceTts.speed` and `voiceTts.temperature` are ward-tunable under Settings → Chat → Voice, consolidated there along with the rest of voice settings (only the Voice benchmark stays in Diagnostics). The two engines honour them differently, and the UI says so rather than shipping a control that silently no-ops for one engine [@voice-backend]:
+
+- **sherpa** takes both `speed` and `temperature` per request.
+- **pocket** has no speed control at all — `generate_audio_stream` accepts none, and the setting is reported `unsupported` for that engine — and bakes `temperature` in at model-load time rather than per request [@voice-backend]. `resolveBackend` threads the chosen temperature into the pocket worker's spawn environment as `PF_TTS_TEMPERATURE` [@voice-backend]. Because that value is fixed at load time, `currentAudioWorker` compares the spawn environment of the resolved backend against the running worker's and respawns the worker whenever it differs, rather than reusing a stale process — which is why changing expressiveness takes effect on the *next* spoken message, not mid-utterance [@audio-worker-current].
+
+The installers provision voice on a fresh install (Kyutai, the Windows runtime fix, and the listening models), skippable with `PF_SKIP_VOICE_INSTALL=1`, with every step non-fatal so a failed step degrades rather than aborting the install.
+
 ### Text preparation and media storage
 
 `voice-speech.js` turns markdown written to be read into text meant to be heard — spoken
@@ -338,6 +404,133 @@ byte-level tokens [@architecture-doc].
 file extension from one shared lookup table, so a voice note can no longer be stored as an
 image carrying an audio file extension, and the audience tag, dedup, and slug-id machinery
 built for images cover voice notes for free [@media] [@architecture-doc].
+
+## Group-call presence, speaker names, and join/leave (0.11.8-alpha)
+
+A live Discord voice call can hold more than the ward, and the call path did not originally
+account for that: transcripts arrived as a flat wall of unattributed `user` turns tagged with raw
+Discord snowflakes the model cannot tell apart, and nothing told the Familiar who was present or
+who had joined or left [@voice-presence-js]. Three fixes, layered on top of the live-conversation
+call path, close this gap without touching audience gating, threat scoring, or what gets stored
+at each clearance [@voice-presence-js].
+
+**Names now resolve.** `nameForVoiceUser()` in `discord-gateway.js` previously special-cased only
+the ward and returned a literal `user-<snowflake>` for anyone else, even though Discord's own
+`member.user` payload arrives on every `VOICE_STATE_UPDATE` and `GUILD_CREATE` event
+[@discord-gateway-js]. A module-level `gw.userInfo` cache, seeded from `GUILD_CREATE` members and
+each voice state's `member`, and kept current on `VOICE_STATE_UPDATE`, now backs name resolution:
+the ward's configured name, then a cached Discord display name, then a short `guest-xxxxxx` tag
+only when Discord has not named the user yet [@discord-gateway-js]. `village.js`'s existing
+`findVillagerByAlias()` was split so a pure `villagerByAlias(reg, {platform, id})` can run against
+an already-loaded registry [@village-js]. This lets the roster builder resolve many ids from one
+registry read, where a registered villager's own name always outranks the raw Discord display
+name.
+
+**Speaker labels reach the turn, not just the memory write.** `voice-presence.js` is a new pure
+module: `isGroupCall(roster)` is true once 2 or more humans share the call, and only then does
+`attributeSpeaker()` return a label; `prefixTurn(label, text)` prepends `"Name: "` to a turn only
+when a label exists, so a solo call's transcript stays byte-identical to before
+[@voice-presence-js]. In a group call every turn is labelled, the ward's own turns included — a
+ward decision, made so the model can tell the ward's turns apart from a villager's rather than
+inferring it from context [@voice-presence-js]. `attributeSpeaker()` gained an `isWard` parameter
+(0.11.18) that appends a `(WARD)` marker to the ward's own group-call label (`"Zara (WARD)"`, not
+just `"Zara"`), after a live report that the Familiar kept reading the ward's words as its own or
+a villager's; the same disambiguation, `attributeUserContent()` in `discord-gateway.js`, covers
+multi-party **text** rooms — a villager's guild turn is prefixed `[Name]:`, the ward's is
+`[Name (WARD)]:`, and a one-on-one ward DM stays unprefixed, since there is only the two of them
+to tell apart [@voice-presence-js] [@discord-gateway-js]. `voice-discord-server.js` wires this into
+`runTurn()`: it resolves the speaker's name, computes `isGroupCall(roster)`, and prefixes the
+transcript before it reaches the model, while the memory write for the turn still carries the
+speaker as its own structured field rather than folding it into the text [@voice-discord-server-js].
+
+**A presence signal now exists.** `call-engine.js`'s `rosterChanged` hook used to be a dead
+no-op stub with a comment that Pass 3 would consume it [@call-engine-js]. `voice-discord-adapter.js`
+now calls it from `onVoiceStateChange()` whenever a user's presence in the call's channel flips
+[@voice-discord-adapter-js]. `voice-presence.js`'s `diffRoster()` compares the previous and next
+id lists to find who joined and left, and `formatPresenceNote()` renders a first-person "who's
+here / who just joined or left" line — returning `null` for a solo call with no change, so a quiet
+moment stays quiet [@voice-presence-js]. Like the room-sound tagging note covered in
+[Safety spine](safety-spine)'s deferred-work section, this presence note is **annotation only**:
+it is never stored, never moves the threat tier, and never touches the audience gate described in
+[Content-Based Memory Gating](content-gating) — it only changes what the Familiar reads about who
+is in the room [@voice-presence-js].
+
+**A proactive spoken greeting rides the existing quiet-gap mechanism.** `greetArrival()` in
+`voice-discord-server.js` builds a short greeting via `voice-presence.js`'s
+`buildGreetingPrompt()`/`parseGreeting()` and speaks it through the call engine's existing
+`speakProactive()`, which only fires at the next `PROACTIVE_QUIET_MS` gap with nobody already
+speaking [@voice-discord-server-js] [@call-engine-js]. Riding that existing mechanism gets "never
+talk over a mid-sentence join" for free, without a bespoke wait-for-quiet implementation. The
+greeting prompt is deliberately leak-free — it names only the arriving person and the join/leave
+event, no memory recall — because the line is spoken aloud to the whole channel at any clearance
+[@voice-presence-js]. It is deduped per stay (a rejoin clears the dedup so a second arrival gets
+greeted again), stands down entirely at moderate-or-higher threat because triage owns distress
+moments, is never offered to the ward's own presence (the call itself is not a guest to greet),
+and is recorded into call history once actually spoken so the Familiar does not repeat it
+[@voice-discord-server-js].
+
+This work is scoped to the Discord voice call path, where raw snowflakes and multi-human calls
+occur; the web call path already diarizes named guests and did not need the fix
+[@voice-presence-js]. Settings: `voiceProactiveGreetings` (default on). Off-switches:
+`PROTO_FAMILIAR_VOICE_PRESENCE_DISABLED=1` reverts the whole layer to the old unlabelled
+transcript, and `PROTO_FAMILIAR_VOICE_GREETINGS_DISABLED=1` silences only the spoken hello
+[@voice-presence-js].
+
+## Two Familiars in one call: the opusscript shared-heap decode bug (0.11.9–0.11.10)
+
+A live test with two Familiars in the same Discord voice call left one of them silent, with
+the terminal flooded by `opus decode failed for <speaker>: memory access out of bounds`
+[@voice-discord-adapter-js]. The root cause is a property of the `opusscript` WASM binding,
+not of this repo's code: `opusscript` keeps **one** emscripten heap shared across every
+`OpusScript` decoder instance and caches its heap views (`inOpus`/`outPCM`) at construction
+time. `voice-discord-adapter.js` allocates one decoder per speaker (`ensureSpeaker()`), so a
+second speaker joining the call allocates a second decoder — and if that allocation grows the
+shared heap, every already-existing decoder's cached views detach, so the first speaker's
+decoder throws "memory access out of bounds" on its very next packet [@voice-discord-adapter-js].
+This is why the ward's own Familiar went quiet the instant a second one joined the call: the
+newcomer's decoder allocation, not anything about the newcomer's audio, broke the existing one.
+
+The first attempt at a fix (0.11.9-alpha) treated the symptom instead of the cause: it added a
+`shouldHear(userId)` loop guard mirroring the text path's `author.bot` + `readBots` check, so a
+second bot's audio was never subscribed or decoded at all, plus a five-consecutive-failure
+teardown as a blunt self-heal. That shipped, then was reverted one commit later
+[@voice-discord-adapter-js] — the goal is two Familiars *hearing* each other, so skipping a
+second bot's audio sidesteps the bug rather than fixing it, and the underlying decoder still
+wedges for any two-decoder roster, bot or human.
+
+0.11.10-alpha replaces both with a fix at the actual fault line. `decodeOpus(entry, speakerRef,
+opusPacket)` in `voice-discord-adapter.js` tries the existing decoder first; on a throw, it
+deletes that decoder, calls `deps.makeOpusDecoder()` again to get a fresh instance with views
+bound to the *current* heap, and retries the same packet once — no audio is lost, and the
+subscription stays open throughout [@voice-discord-adapter-js]. Once the roster stops changing,
+the heap stops growing and no more rebuilds happen; a packet that fails even the rebuilt decoder
+is a genuinely bad packet, not a heap issue, and is skipped with a per-speaker rate-limited log
+line rather than flooding the terminal on every subsequent packet [@voice-discord-adapter-js]. A
+separate, unrelated guard — `MAX_OPUS_PACKET = 3828` bytes, opusscript's WASM input buffer size
+— drops any packet too large to decode before it can overflow `inOpus.set(buffer)`; normal voice
+frames are well under 1 KB, so this is a defensive floor, not the fix for the silence bug
+[@voice-discord-adapter-js]. The `shouldHear` loop guard and the gateway's per-user bot-flag
+cache from 0.11.9 were both reverted along with the old fail-counting teardown: with the real bug
+fixed, filtering out other bots is no longer needed, and **all speakers, including other bots,
+are decoded** — two Familiars conversing by voice over Discord is supported
+[@voice-discord-adapter-js].
+
+## Media retention: curating aged voice clips (Pass 4 §9)
+
+§9 of the build spec is the other later piece this page covers: `media-retention-loop.js` (see
+[Autonomous loops](autonomous-loops)) is a default-on, ~6-hour-tick background worker that
+decides whether an old voice clip's SOUND is worth keeping, never whether the conversation is
+[@media-retention-loop]. Code gates pick candidates first — audio past
+`voiceNoteRetentionDays` (default 14), not already stripped, not flagged `keep`, and carrying a
+transcript — then one batched LLM judgment per tick names which sounds to keep; everything else
+goes through `media.stripAudio`, which deletes only the bytes: the transcript, metadata, and
+slugs survive, and a stand-in renders `[audio let go — transcript kept]` wherever the clip used
+to play [@media-retention-loop]. The transcript always surviving is the load-bearing property —
+it means a wrong "let go" costs disk, not memory, so the loop can run unattended. It fails soft
+in the same spirit: an LLM error or an unparseable response keeps *everything* that pass, because
+`parseKeepRefs` returns `null` on no-JSON, a state the loop deliberately treats as distinct from
+a valid "keep none" [@media-retention-loop]. Like the noticing loop, it stands down during a live
+call and at moderate-or-higher threat — curation can always wait for a calmer tick.
 
 ## What Pass 0 flagged for later passes
 
@@ -370,3 +563,12 @@ questions for the passes that follow [@pr-voice-pass-0]:
 - [Exact values are code's job](../decisions/exact-values-in-code) — the general rule that
   voice's machine-written pins, stripped LLM timestamps, and manifest-sourced download-size
   copy are all specific applications of.
+- [Update](update) — the self-update mechanism whose static-assets-vs-registered-routes gap
+  produced the "Fix Kyutai" 404 incident above, and applies to any future endpoint the same way.
+- [Safety spine](safety-spine) — why Pass 4's room-sound tagging is annotation-only, and the
+  ward decisions a future care-detection spec would need to answer; the same annotation-only
+  discipline shapes the group-call presence note above.
+- [Content-Based Memory Gating](content-gating) — the audience-gate and content-tag machinery
+  group-call presence deliberately leaves untouched.
+- [Autonomous loops](autonomous-loops) — where media retention sits alongside the rest of the
+  loop set, and the shared off-switch/degradation contract it follows.

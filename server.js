@@ -49,7 +49,10 @@ import {
   setIntention, roundsForWard, listIntentions, getDueIntentions,
 } from './thalamus.js';
 import { scoreMessage } from './crisis-signals.js';
-import { foldReasoningIntoContent } from './llm-call.js';
+import { foldReasoningIntoContent, callProviderChat } from './llm-call.js';
+import { fetchReadable } from './websearch.js';
+import { startPageWatchLoop, stopPageWatchLoop } from './page-watch-loop.js';
+import { buildPageWatchPrompt, parsePageWatchDecision } from './page-watch.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
 import { ponderOnce } from './pondering.js';
 import { startPonderingLoop, stopPonderingLoop } from './pondering-loop.js';
@@ -93,13 +96,14 @@ import {
   resolveAttribution, isIgnored, wardCalendarId,
   writeCalendarCache, readCalendarCache, normalizeAttributionEntry,
 } from './gcal-attribution.js';
-import { listOutbox, acknowledgeOutbox, clearAcknowledged } from './outbox.js';
+import { listOutbox, acknowledgeOutbox, clearAcknowledged, acknowledgePendingByKind } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
 import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';
 import { startMemorySweepLoop, stopMemorySweepLoop } from './memory-sweep-loop.js';
 import { startTomeGraduationLoop, stopTomeGraduationLoop } from './tome-graduation-loop.js';
 import { startContentRegateLoop, stopContentRegateLoop } from './content-regate-loop.js';
 import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './needs-tracking-loop.js';
+import { startMediaRetentionLoop, stopMediaRetentionLoop } from './media-retention-loop.js';
 import { isNeedWindow } from './needs-tracking.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './reachout.js';
 import { recordReachOut } from './reach-out-log.js';
@@ -116,6 +120,7 @@ import {
   appendTriageEventLog, readTriageEvents,
   appendReachoutEventLog, readReachoutEvents,
   appendNoticingEventLog, readNoticingEvents, composeNoticingTools,
+  appendPageWatchEventLog, readPageWatchEvents,
   registerPushAdapterFactory, formatItemForPush,
   // Tool dispatch — the registry + executors live in cerebellum; the
   // multi-round loop runs inside /api/chat below.
@@ -161,8 +166,10 @@ import { filterOutgoingReply } from './outgoing-filter.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw } from './discord-gateway.js';
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
 import { substituteMacros } from './macros.js';
+import { withCorePrompts } from './core-prompts.js';
+import { recordOutgoingPrompt, lastOutgoingPrompts } from './prompt-capture.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
-import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock } from './knocks.js';
+import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock, listServers, dismissServer } from './knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -265,6 +272,10 @@ import { measureFootprint } from './voice-footprint.js';
 import { listClips, measureClip, cachedFeatures, catalogueSummary } from './voice-clips.js';
 import { currentAudioWorker as currentAudioWorkerShared, listeningWorker, stopAudioWorker, VOICE_HARD_DISABLED } from './audio-worker-current.js';
 import { hearVoiceNotes, transcribeAsset, transcriptionAllowed, correctTranscript } from './voice-transcribe.js';
+import { enrollWard, enrollVillager, speakerModelPresent, speakerModelDir } from './voice-enroll.js';
+import { pinAndInstallModel } from './voice-pin.js';
+import { readVoiceprints, listVillagerPrints, deleteWardPrint, deleteVillagerPrint } from './voiceprints.js';
+import { assetBytesPath } from './media.js';
 import { DEFAULT_VOICE } from './voice-catalogue.js';
 import { resolveVoice, installVoice, saveWardVoice, listLocalVoices } from './voices.js';
 import { mergeSettings } from './settings-merge.js';
@@ -280,7 +291,7 @@ import {
  * else is a per-part problem and must NOT silence the parts that still work.
  */
 const FATAL_TTS_REASONS = new Set(['no-worker', 'no-engine', 'not-loaded', 'stopped', 'worker-died', 'worker-stopped', 'parked', 'spawn-failed']);
-import { resolveBackend, inspectBackends, BACKENDS } from './voice-backend.js';
+import { resolveBackend, inspectBackends, BACKENDS, rebuildVoicebox } from './voice-backend.js';
 import { wavHeader, WAV_STREAMING_LENGTH, measureVoiceClip, floatToPcm16 } from './voice-audio-features.js';
 import { KIND_PCM } from './audio-frame.js';
 import { shortSlug } from './slug-ids.js';
@@ -322,7 +333,7 @@ function chatRateLimit(req, res, next) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode } = req.body;
+  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode, injectCorePrompts } = req.body;
   // runToolLoop: the app sends true when the user has tools enabled.
   // The server then composes the tool list (built-ins + custom) and runs
   // the multi-round tool-call loop HERE — executing via cerebellum —
@@ -431,6 +442,18 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     }
   }
 
+  // My human actively replying is the escalation VETO for pending check-ins — it
+  // stands down a triage item's trusted-contact escalation. Ward decision:
+  // passively DISPLAYING a check-in no longer acknowledges it ("received ≠
+  // handled"); only genuinely engaging does, and this is where "you actually
+  // replied" lands. Ward-private turns only — a villager's message must never
+  // settle my human's check-ins. Fire-and-forget; never blocks or throws into
+  // the reply. (Covers web chat AND ward voice calls, both of which post here.)
+  if (enrichMode === 'full' && userText && userText.trim() && audienceTag === 'ward-private') {
+    acknowledgePendingByKind('triage').catch(err =>
+      console.error('[server] triage stand-down on ward reply failed:', err?.message ?? err));
+  }
+
   // liveTurn: only the full chat path may reconcile state (consume the
   // surfaced session handoff, demote standing values whose Phylactery
   // anchor vanished). 'static' fetches persona only (handoff summariser);
@@ -475,18 +498,30 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
 
   const depth = getThalamusDynamicDepth();
 
-  let enrichedMessages = messages;
+  // Server-initiated callers (a voice call) have no browser to assemble the
+  // ward's four core prompts — System/Character/User/Post-History — the way the
+  // web client does. When they ask (`injectCorePrompts`), fold those in here
+  // from settings so the Familiar arrives with its identity on every surface,
+  // not just the web. The web client builds them itself and never sets the flag
+  // (setting it would double them). Core segment leads (it becomes the system
+  // message the static block then prepends to, matching the web order); the
+  // post-history prompt trails the conversation, exactly as the client appends it.
+  let baseMessages = injectCorePrompts
+    ? withCorePrompts(messages, readSettingsSync() || {})
+    : (Array.isArray(messages) ? messages : []);
+
+  let enrichedMessages = baseMessages;
 
   // 1) Prepend static block to the system message. Lives at the very
   //    top of the prompt so the provider's prefix cache covers it.
   if (enrichedResult.static) {
-    const sysIdx = messages.findIndex(m => m.role === 'system');
+    const sysIdx = baseMessages.findIndex(m => m.role === 'system');
     if (sysIdx >= 0) {
-      enrichedMessages = messages.map((m, i) =>
+      enrichedMessages = baseMessages.map((m, i) =>
         i === sysIdx ? { ...m, content: enrichedResult.static + '\n\n' + m.content } : m,
       );
     } else {
-      enrichedMessages = [{ role: 'system', content: enrichedResult.static }, ...messages];
+      enrichedMessages = [{ role: 'system', content: enrichedResult.static }, ...baseMessages];
     }
   }
 
@@ -529,6 +564,18 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       enrichedMessages = [...enrichedMessages, { role: 'system', content: timeAnchor }];
     }
   }
+
+  // Capture what we're actually about to send, so the prompt inspector shows
+  // ground truth rather than a client-side reconstruction. A voice turn is its
+  // own surface; everything else on this endpoint is the web chat. In loop mode
+  // the time anchor rides per-round, so include it here for a faithful view.
+  // Best-effort — never blocks or throws into the turn.
+  recordOutgoingPrompt(voiceMode ? 'voice' : 'web', {
+    messages: (loopMode && timeAnchor)
+      ? [...enrichedMessages, { role: 'system', content: timeAnchor }]
+      : enrichedMessages,
+    model, provider,
+  });
 
   // ── Vision materialization (vision build spec §3) ─────────────────
   // The ONE seam where media references become provider content-parts. Applied
@@ -1204,6 +1251,23 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
 });
 
 /**
+ * GET /api/last-prompt
+ * The LAST message array actually sent to the model, per surface (web / voice /
+ * discord / …), captured at the real send boundary. This is ground truth for the
+ * prompt inspector — what left the building — not a reconstruction of what should
+ * have been assembled. It is how the Familiar's core prompts can be verified on
+ * Discord and voice, surfaces with no browser to introspect themselves.
+ *
+ * WARNING: like /api/debug-prompt this exposes enriched context (identity /
+ * memory) with no auth — keep it localhost-only, same as the rest of this server.
+ */
+app.get('/api/last-prompt', (req, res) => {
+  const surfaces = lastOutgoingPrompts();
+  const only = typeof req.query.surface === 'string' ? req.query.surface : null;
+  res.json({ surfaces: only ? surfaces.filter(s => s.surface === only) : surfaces });
+});
+
+/**
  * POST /api/debug-prompt
  * Body: { messages }
  * Returns the full message array that would be sent to the LLM for a given
@@ -1762,6 +1826,58 @@ app.delete('/api/voice/install-sidecar', (_req, res) => {
   res.json({ ok: true, cancelled: true });
 });
 
+// ── Fix Kyutai: repair a broken voicebox venv ─────────────────────────────
+// The tester's symptom: read-aloud fails with torch's native DLL refusing to
+// load ("[WinError 126] … c10.dll") — a corrupt/partial install an update left
+// behind. inspectBackends reports pocket "available" (the files exist) even
+// though torch won't import, so the ordinary reinstall path never fires. This
+// deletes the venv, rebuilds it, and PROVES torch loads before calling it done.
+//
+// Long-running (torch is most of a ~600 MB reinstall), so the same started +
+// poll shape as the sidecar install: POST kicks it off, GET reports progress.
+let voiceboxRepair = null;   // { startedAt, done, ok, reason, detail, hint, torch, log:[] }
+
+async function startVoiceboxRepair() {
+  if (voiceboxRepair && !voiceboxRepair.done) {
+    return { started: true, already: true, startedAt: voiceboxRepair.startedAt };
+  }
+  voiceboxRepair = { startedAt: new Date().toISOString(), done: false, ok: false, reason: null, detail: null, hint: null, torch: null, log: [] };
+  const started = voiceboxRepair;
+
+  // On Windows a running worker holds python.exe / the torch DLLs open, so the
+  // venv can't be deleted out from under it. Release it before the rebuild; a
+  // real speak path spawns a fresh worker afterwards.
+  try { stopAudioWorker(); } catch { /* already stopped */ }
+
+  // Fire and forget — the caller polls. Bound the kept log so a chatty uv sync
+  // can't grow it without limit.
+  rebuildVoicebox({
+    rootDir: __dirname,
+    onLog: (m) => {
+      console.log(`[voice] fix-kyutai: ${m}`);
+      started.log = [...started.log, m].slice(-40);
+    },
+  }).then((result) => {
+    Object.assign(started, result, { done: true });
+    console.log(result.ok
+      ? `[voice] fix-kyutai: repaired (torch ${result.torch || 'ok'})`
+      : `[voice] fix-kyutai: failed (${result.reason})`);
+  }).catch((err) => {
+    Object.assign(started, { done: true, ok: false, reason: 'crashed', detail: String(err?.message ?? err) });
+  });
+
+  return { started: true, startedAt: voiceboxRepair.startedAt };
+}
+
+app.post('/api/voice/fix-kyutai', async (_req, res) => {
+  if (VOICE_HARD_DISABLED) return res.json({ ok: false, reason: 'voice-disabled' });
+  res.json({ ok: true, ...(await startVoiceboxRepair()) });
+});
+
+app.get('/api/voice/fix-kyutai', (_req, res) => {
+  res.json({ ok: true, repair: voiceboxRepair });
+});
+
 // Clearing a park is deliberate — the ward has presumably fixed something.
 app.post('/api/voice/unpark', async (_req, res) => {
   if (VOICE_HARD_DISABLED) return res.json({ ok: false, reason: 'voice-disabled' });
@@ -2089,6 +2205,91 @@ app.get('/api/voice/local', async (_req, res) => {
   catch (err) { res.json({ ok: false, error: String(err?.message ?? err) }); }
 });
 
+// ── Voiceprint enrolment (voice Pass 4, §8) ────────────────────────────────
+// Biometric data — the store is local-only, never synced (voiceprints.js). The
+// client records clips, uploads each via POST /api/media (kind audio,
+// ward-private), collects the ids, and posts them here to enrol. Only wav is
+// embeddable (the browser records wav); a non-wav id is refused, not guessed.
+
+/** GET the enrolment state (never the vectors) so the UI can show what's set. */
+app.get('/api/voice/voiceprints', async (_req, res) => {
+  try {
+    const { ward } = await readVoiceprints();
+    const s = readSettingsSync() || {};
+    res.json({ ok: true, model: speakerModelPresent(speakerModelDir(s)), speakerModel: s.voiceSpeakerModel === 'titanet-large' ? 'titanet-large' : 'campplus', ward: !!ward, villagers: await listVillagerPrints() });
+  } catch (err) { res.json({ ok: false, error: String(err?.message ?? err) }); }
+});
+
+/**
+ * POST { who: 'ward' | '<villagerId>', name?, ids: [assetId,...] } → enrol.
+ * Resolves each media id to its wav path; the enrol module embeds + averages +
+ * stores. Continuous listening being off does NOT block enrolment (it's a
+ * deliberate ward action, like recording a note), but the hard switch does.
+ */
+app.post('/api/voice/enroll', async (req, res) => {
+  if (VOICE_HARD_DISABLED) return res.json({ ok: false, reason: 'voice-disabled' });
+  const { who, name, ids } = req.body ?? {};
+  if (!who || typeof who !== 'string') return res.status(400).json({ ok: false, reason: 'who-required' });
+  if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ ok: false, reason: 'no-clips' });
+  const modelDir = speakerModelDir(readSettingsSync() || {});
+  if (!speakerModelPresent(modelDir)) return res.json({ ok: false, reason: 'no-speaker-model', hint: 'the speaker-embedding model is not installed yet' });
+
+  // Resolve each id to a wav path (ward-private audio only). A missing/non-wav
+  // asset is skipped with a note rather than failing the whole enrolment.
+  const wavPaths = [];
+  const skipped = [];
+  for (const id of ids) {
+    const meta = await getAssetMeta(id).catch(() => null);
+    if (!meta || meta.kind !== 'audio') { skipped.push({ id, why: 'not-audio' }); continue; }
+    if (meta.ext !== 'wav') { skipped.push({ id, why: 'not-wav' }); continue; }
+    wavPaths.push(assetBytesPath(meta));
+  }
+  if (!wavPaths.length) return res.json({ ok: false, reason: 'no-usable-clips', skipped });
+
+  const deps = { getWorker: () => listeningWorker({ rootDir: __dirname }), modelDir };
+  const r = who === 'ward'
+    ? await enrollWard(wavPaths, deps)
+    : await enrollVillager(who, wavPaths, { name: typeof name === 'string' ? name : null, ...deps });
+  res.json({ ...r, skipped });
+});
+
+/** DELETE ?who=ward|<villagerId> — forget a print. */
+app.delete('/api/voice/voiceprint', async (req, res) => {
+  const who = String(req.query?.who ?? '').trim();
+  if (!who) return res.status(400).json({ ok: false, reason: 'who-required' });
+  const r = who === 'ward' ? await deleteWardPrint() : await deleteVillagerPrint(who);
+  res.json(r);
+});
+
+/**
+ * POST /api/voice/install-speaker-model { model: 'campplus' | 'titanet-large' }
+ * Download + pin + install the chosen speaker-embedding model. The default
+ * (CAM++) and the opt-in upgrade (TitaNet-Large) map to their BASE_MODELS ids;
+ * the ward's explicit request is the trust decision (pin-on-demand). Progress
+ * lands in the terminal; the response reports the final outcome.
+ */
+const SPEAKER_MODEL_IDS = { campplus: 'speaker-embed', 'titanet-large': 'speaker-embed-large' };
+app.post('/api/voice/install-speaker-model', async (req, res) => {
+  if (VOICE_HARD_DISABLED) return res.json({ ok: false, reason: 'voice-disabled' });
+  const modelId = SPEAKER_MODEL_IDS[String(req.body?.model ?? '')];
+  if (!modelId) return res.status(400).json({ ok: false, reason: 'unknown-model', hint: "model must be 'campplus' or 'titanet-large'" });
+  console.log(`[voice] installing speaker model ${modelId}…`);
+  let lastPct = -1;
+  const r = await pinAndInstallModel(modelId, {
+    rootDir: __dirname,
+    onProgress: (e) => {
+      if ((e?.phase === 'measuring' || e?.phase === 'download') && e.totalBytes > 0) {
+        const pct = Math.floor((e.receivedBytes / e.totalBytes) * 10) * 10;
+        if (pct > lastPct) { lastPct = pct; console.log(`[voice]   speaker model ${pct}%`); }
+      } else if (e?.phase && e.phase !== 'measuring' && e.phase !== 'download') {
+        console.log(`[voice]   ${e.phase}${e.file ? ` ${e.file}` : ''}`);
+      }
+    },
+  });
+  console.log(r.ok ? `[voice] speaker model ${modelId} ready` : `[voice] speaker model ${modelId} failed: ${r.reason} ${r.detail ?? ''}`);
+  res.json(r);
+});
+
 app.get('/api/voice/clips/summary', async (_req, res) => {
   try { res.json({ ok: true, ...(await catalogueSummary(__dirname)) }); }
   catch (err) { res.json({ ok: false, error: String(err?.message ?? err) }); }
@@ -2311,6 +2512,14 @@ app.get('/api/noticing-events', async (_req, res) => {
   catch { res.json([]); }
 });
 
+// Page-watch decision log (§9 Horizon #1): every tick that read a due page,
+// with its checked/changed/surfaced/failed counts — so "it never told me the
+// page changed" is auditable, not a black box.
+app.get('/api/page-watch-events', async (_req, res) => {
+  try { res.json(await readPageWatchEvents()); }
+  catch { res.json([]); }
+});
+
 // The Familiar's rounds (Initiative Pass 3): the ward-facing view of the
 // Familiar's standing rounds, honouring the Familiar's own visibility choice. A private
 // round is COUNTED (hidden_count) but its contents withheld — existence is
@@ -2394,6 +2603,55 @@ app.get('/api/discord-writes', async (_req, res) => {
     res.json(await readDiscordWrites({ limit: 200 }));
   } catch {
     res.json([]);
+  }
+});
+
+// ── Browser (browser build spec §2, §5.6) — status + the action audit log ──
+app.get('/api/browser/status', async (_req, res) => {
+  if (process.env.PROTO_FAMILIAR_BROWSE_DISABLED === '1') {
+    return res.json({ running: false, disabled: true, reason: 'PROTO_FAMILIAR_BROWSE_DISABLED=1' });
+  }
+  try {
+    const { browserStatus } = await import('./browser.js');
+    res.json(browserStatus());
+  } catch (err) {
+    res.json({ running: false, error: err?.message ?? String(err) });
+  }
+});
+
+app.get('/api/browser-actions', async (_req, res) => {
+  try {
+    const { readBrowserActions } = await import('./browser-audit.js');
+    res.json(await readBrowserActions({ limit: 200 }));
+  } catch {
+    res.json([]);
+  }
+});
+
+// The ward's out-of-band yes/no on a held submit ([CONFIRM] 'ask' flow). This
+// is deliberately NOT a Familiar tool — the approval must come from the ward,
+// not a model the page could try to talk into self-approving.
+app.post('/api/browser/confirm', async (req, res) => {
+  if (process.env.PROTO_FAMILIAR_BROWSE_DISABLED === '1') return res.status(403).json({ ok: false, error: 'browsing disabled' });
+  try {
+    const { id, approve } = req.body || {};
+    const { resolveConfirm } = await import('./browser.js');
+    res.json(await resolveConfirm(id, approve === true));
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message ?? String(err) });
+  }
+});
+
+// The ward's "hand it back" after a headed handoff (§4.8) — close the window,
+// relaunch headless at the same URL, now signed in.
+app.post('/api/browser/handback', async (_req, res) => {
+  if (process.env.PROTO_FAMILIAR_BROWSE_DISABLED === '1') return res.status(403).json({ ok: false, error: 'browsing disabled' });
+  try {
+    const { browseHandback } = await import('./browser.js');
+    const s = (() => { try { return readSettingsSync(); } catch { return {}; } })();
+    res.json(await browseHandback({ settings: s }));
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message ?? String(err) });
   }
 });
 
@@ -3695,8 +3953,9 @@ app.patch('/api/entity/graph/nodes/:id', async (req, res) => {
 app.delete('/api/entity/graph/nodes/:id', async (req, res) => {
   const { id } = req.params;
   if (!VALID_GRAPH_ID_RE.test(id)) return badRequest(res, 'invalid id');
-  const permanent = req.query.permanent === '1' || req.query.permanent === 'true';
-  const result = await deleteGraphNode({ id, permanent });
+  // Phylactery graph deletion is always a hard delete (node + edges, snapshot
+  // first) — there is no soft-delete, so no `permanent` flag to honour.
+  const result = await deleteGraphNode({ id });
   if (!result.ok) return gatewayDown(res, result.error);
   res.json(result.result);
 });
@@ -4641,6 +4900,20 @@ app.delete('/api/village/location-knocks', async (req, res) => {
   res.json({ ok: true });
 });
 
+// The saved server list — the Discord guilds the Familiar is in, named from
+// GUILD_CREATE and derived from knocks. Read-only + forget; it's not a grant
+// surface (a server here confers nothing; Locations + circles do that).
+app.get('/api/village/servers', async (_req, res) => {
+  res.json(await listServers());
+});
+
+app.delete('/api/village/servers', async (req, res) => {
+  const { guildId, platform } = req.body ?? {};
+  const result = await dismissServer({ guildId, platform });
+  if (!result.ok) return res.status(result.error === 'server not found' ? 404 : 400).json({ error: result.error });
+  res.json({ ok: true });
+});
+
 app.get('/api/village', async (_req, res) => {
   try { res.json(await getVillageRegistry()); }
   catch (err) { res.status(500).json({ error: err.message }); }
@@ -4708,9 +4981,9 @@ app.delete('/api/village/villagers/:id', async (req, res) => {
 });
 
 app.post('/api/village/locations', async (req, res) => {
-  const { key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots } = req.body ?? {};
+  const { key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots, callMode } = req.body ?? {};
   try {
-    const saved = await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots });
+    const saved = await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots, callMode });
     reconcileLocationKnock(saved);
     res.json(saved);
   }
@@ -4719,9 +4992,9 @@ app.post('/api/village/locations', async (req, res) => {
 
 app.patch('/api/village/locations', async (req, res) => {
   // Location keys contain ':' and '/' so they ride the body, not the path.
-  const { key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots } = req.body ?? {};
+  const { key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots, callMode } = req.body ?? {};
   try {
-    const saved = await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots });
+    const saved = await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots, callMode });
     reconcileLocationKnock(saved);
     res.json(saved);
   }
@@ -4929,6 +5202,7 @@ const httpServer = app.listen(PORT, HOST, async () => {
   startAutonomousPondering();
   startRemindersScheduler();
   startGcalSync();
+  startPageWatches();
   startSilenceTriage();
   startReachout();
   startNoticing();
@@ -4959,9 +5233,10 @@ const httpServer = app.listen(PORT, HOST, async () => {
       const { attachDiscordVoice } = await import('./voice-discord-server.js');
       const { setDiscordVoiceController } = await import('./discord-gateway.js');
       const discordVoice = attachDiscordVoice({
-        rootDir: __dirname,
+        rootDir: __dirname, port: PORT,
         readSettings: readSettingsSync,
         ...sharedVoiceWorkers,
+        connectionForFeature,
       });
       setDiscordVoiceController(discordVoice);
     } catch (err) {
@@ -5790,6 +6065,55 @@ function startGcalSync() {
   console.log('[gcal] Calendar sync loop ENABLED (idles until an iCal URL + toggle are set). Hard-disable with PROTO_FAMILIAR_GCAL_DISABLED=1.');
 }
 
+// ── Page watches (browser milestone §9 Horizon #1) ───────────────
+// "Tell me when the page changes." A slow loop re-reads each watched URL over
+// the cheap static read path, diffs it in CODE, and only on a real change asks
+// the LLM whether it's worth a banner — then drops one through the outbox (and
+// the ward's push channels). Inert until a watch is registered.
+function startPageWatches() {
+  if (process.env.PROTO_FAMILIAR_PAGE_WATCH_DISABLED === '1') {
+    console.log('[page-watch] PROTO_FAMILIAR_PAGE_WATCH_DISABLED=1 — page watches are OFF');
+    return;
+  }
+  startPageWatchLoop({
+    isEnabled: async () => readSettingsSync()?.pageWatchEnabled !== false,
+    // The cheap static read (spec §9.1: the read_webpage path, NOT the browser),
+    // through the same SSRF guard every web read uses.
+    fetchReadable: (url) => fetchReadable(url, readSettingsSync()),
+    // The LLM step — consulted ONLY on a real (code-detected) change. Leak-free:
+    // it sees only the watched page's own before/after text.
+    decideChange: async ({ url, label, note, oldSnapshot, newText }) => {
+      const s = readSettingsSync();
+      const conn = connectionForFeature(s, 'chat') || connectionForFeature(s, 'pondering');
+      if (!(conn?.apiKey && conn?.provider && conn?.model)) return { surface: true, summary: '' };   // no model → surface plainly rather than swallow the change
+      const prompt = substituteMacros(buildPageWatchPrompt({ url, label, note, oldSnapshot, newText }), s);
+      const raw = await callProviderChat({ provider: conn.provider, apiKey: conn.apiKey, model: conn.model, prompt, temperature: 0.4, maxTokens: 2000 });
+      return parsePageWatchDecision(raw);
+    },
+    // Surface as a gentle banner AND push to the ward's channels (same path the
+    // reminders/reachout use). Dedup per distinct change via originId=id:hash.
+    enqueue: async ({ id, url, label, summary, hash }) => {
+      await enqueueAndDispatch({
+        kind: 'page_watch',
+        originId: `${id}:${hash}`,
+        title: label || url,
+        body: summary ? `${summary}\n${url}` : `Something changed on this page.\n${url}`,
+        meta: { url, watchId: id },
+      });
+    },
+    onTick: (r) => {
+      // Only log ticks that actually read a due page — an idle wake (nothing due)
+      // carries no decision, exactly like the reachout/noticing cadence skips.
+      if (r?.ran && r.checked > 0) {
+        appendPageWatchEventLog({ ts: new Date().toISOString(), ...r });
+        if (r.surfaced) console.log(`[page-watch] ${r.surfaced} change(s) surfaced (${r.checked} checked, ${r.changed} changed, ${r.failed} failed)`);
+      }
+    },
+    onError: (err) => console.error('[page-watch]', err?.message ?? err),
+  });
+  console.log('[page-watch] Page-watch loop ENABLED (idle until a watch is set). Hard-disable with PROTO_FAMILIAR_PAGE_WATCH_DISABLED=1.');
+}
+
 // ── Silence-triage loop (M12b) ──────────────────────────────────
 // Every 5 min, asks: "user is quiet AND threat is elevated — should
 // I gently reach out?" The DECISION is an LLM call (per design doc:
@@ -5984,6 +6308,13 @@ function startReachout() {
   // building the needs-fulfilment ledger. Stands down at moderate+ threat;
   // hard off-switch: PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1.
   startNeedsTrackingLoop();
+
+  // Media-retention (voice Pass 4, §9) — the 13th background worker. DEFAULT ON:
+  // aged voice-clip SOUNDS are curated (kept when the sound is the point, else
+  // let go to transcript-only — the words always survive). Defers during a live
+  // call and at moderate+ threat; hard off-switch:
+  // PROTO_FAMILIAR_MEDIA_RETENTION_DISABLED=1.
+  startMediaRetentionLoop();
 }
 
 // ── Noticing loop (Initiative Pass 4) — the Familiar's own turn ──────
@@ -6264,11 +6595,13 @@ async function handleSignal(signal) {
   try { await stopPonderingLoop(); } catch { /* already stopped */ }
   try { await stopRemindersLoop(); } catch { /* already stopped */ }
   try { await stopGcalSyncLoop(); } catch { /* already stopped */ }
+  try { await stopPageWatchLoop(); } catch { /* already stopped */ }
   try { await stopSilenceTriageLoop(); } catch { /* already stopped */ }
   try { await stopReachoutLoop(); } catch { /* already stopped */ }
   try { await stopTomeGraduationLoop(); } catch { /* already stopped */ }
   try { await stopContentRegateLoop(); } catch { /* already stopped */ }
   try { await stopNeedsTrackingLoop(); } catch { /* already stopped */ }
+  try { await stopMediaRetentionLoop(); } catch { /* already stopped */ }
   try { await stopMemorySweepLoop(); } catch { /* already stopped */ }
   try { await stopNoticingLoop(); } catch { /* already stopped */ }
   try { stopDiscordGateway(); } catch { /* already stopped */ }

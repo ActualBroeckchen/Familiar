@@ -866,6 +866,32 @@ def interest_list_bookmarks(limit: int = 100) -> dict[str, Any]:
         return {"ok": True, "bookmarks": bms}
 
 
+@mcp.tool()
+def interest_report_surfacing_outcome(
+    bookmark_id: str,
+    outcome: str,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """I use this to remember whether my human engaged with an interest I surfaced,
+    so I resurface it at a smarter pace — later when it lands, sooner when it's
+    ignored (M8 adaptive rules). Repeated ignores also let the topic fade on its own.
+
+    Args:
+        bookmark_id: the bookmark node I surfaced.
+        outcome: 'engaged' or 'ignored'.
+        now: ward-local timestamp of the outcome (defaults to now).
+
+    Returns: {ok, resurface_after_hours, consecutive_ignores, topic_deprioritised}.
+    """
+    try:
+        with get_conn() as conn:
+            return interests.report_surfacing_outcome(
+                conn, bookmark_id=bookmark_id, outcome=outcome, now=now,
+            )
+    except ValueError as e:
+        return _err(str(e))
+
+
 # ── Session handoff (M6) ──────────────────────────────────────────────
 
 
@@ -946,6 +972,10 @@ def intention_set(
               {"kind":"at","at":"2026-07-16T09:00:00"}  (my local time)
               {"kind":"phase","phase":"morning","recurring":true}  (a round)
               {"kind":"on_next_contact"}  | {"kind":"none"}
+            For a phase round, `phase` is matched against my human's actual
+            routine phases (case-insensitive, forgiving of a longer label) — if
+            it matches none, I still create it but the result carries a
+            `warning` telling me the round can't fire yet and which phases exist.
         condition: an optional extra gate before I act — any of
               {"minContactGapMs": <ms>, "needsStatus": "missed", "unresolvedRefs": true}.
         source: where this came from ('chat','pondering','reflection','noticing').
@@ -956,9 +986,19 @@ def intention_set(
     Returns: {ok, id} or {ok:false, error}.
     """
     with get_conn() as conn:
+        # For a phase round, hand set_intention the ward's real routine-phase
+        # labels so it can canonicalise the typed word (and warn when nothing
+        # matches). Only queried for a phase trigger — cheap, and irrelevant otherwise.
+        available_phases = None
+        if isinstance(trigger, dict) and trigger.get("kind") == "phase":
+            try:
+                available_phases = [p.get("label") for p in sched.list_phases(conn) if p.get("label")]
+            except Exception:
+                available_phases = []
         return intentions_mod.set_intention(
             conn, what=what, why=why, refs=refs, trigger=trigger,
             condition=condition, source=source, visibility=visibility,
+            available_phases=available_phases,
         )
 
 
@@ -1189,7 +1229,7 @@ def weather_read(location_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def temporal_context(now: str | None = None) -> dict[str, Any]:
+def temporal_context(now: str | None = None, mode: str | None = None) -> dict[str, Any]:
     """I use this to assemble my full per-message temporal context — schedule, interests,
     and session handoff in one payload. Thalamus calls this every turn so I always know
     where my human is in their day, what I care about, and what I was working on last.
@@ -1249,6 +1289,13 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
         intentions_due = intentions_mod.intentions_due(
             conn, now=now, current_phase_label=(phase or {}).get("label"),
         )
+        # M8: bookmarks DUE to resurface — but ONLY in idle mode (a free cycle),
+        # never mid-active-conversation. The chat path passes mode='idle' once the
+        # ward has been quiet past its idle threshold; that arg used to be silently
+        # dropped (temporal_context had no `mode` param), so surfacing never gated.
+        # Interval-gated by resurface_after_hours (which report_surfacing_outcome
+        # adapts) and marked shown here so they respect their cadence.
+        bookmarks = interests.due_bookmarks(conn, now=now) if mode == "idle" else []
     # Edges ride along so the Familiar sees the consequence graph, not just
     # a flat list (temporal-format renders a "Consequence links" block from
     # these). `linked` carries the edge endpoints that aren't window nodes —
@@ -1280,6 +1327,9 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
         # Intentions whose trigger has come due (Pass 3). The Node side
         # applies the condition gate + renders; empty list renders nothing.
         "intentions_due": intentions_due,
+        # M8 bookmarks due to resurface. The chat path reads these to weave in
+        # AND to report the engaged/ignored outcome after the reply.
+        "bookmarks": bookmarks,
     }
 
 

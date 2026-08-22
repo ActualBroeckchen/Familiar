@@ -49,6 +49,7 @@ def search_nodes(
     limit: int = 10,
     min_score: float = 0.3,
     audiences=None,
+    type: str | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     own_conn = conn is None
@@ -56,6 +57,11 @@ def search_nodes(
         conn = get_conn()
     try:
         aud_clause, aud_params = audience_in_sql(audiences, col="n.audience")
+        # Optional node-type filter (person / place / concept / …). graph_node_list
+        # has always supported this; search did not, so a type-filtered search
+        # silently returned every type. Mirror the audience-clause pattern.
+        type_clause = "AND n.type = ?" if type else ""
+        type_params = [type] if type else []
         try:
             from phylactery.embed import embed_text
             q_vec = embed_text(query)
@@ -64,9 +70,9 @@ def search_nodes(
                 FROM graph_node_vecs v
                 JOIN graph_nodes n ON n.id = v.node_id
                 WHERE v.embedding MATCH ? AND k = ?
-                  AND {aud_clause}
+                  AND {aud_clause} {type_clause}
                 ORDER BY v.distance
-            """, [q_vec, limit * 2] + aud_params).fetchall()
+            """, [q_vec, limit * 2] + aud_params + type_params).fetchall()
             results = []
             for r in rows[:limit]:
                 dist = r["distance"] if "distance" in r.keys() else 0.0
@@ -81,9 +87,9 @@ def search_nodes(
             # Degrade to label-fuzzy search when embeddings unavailable.
             rows = conn.execute(f"""
                 SELECT n.id, n.label, n.type, n.description FROM graph_nodes n
-                WHERE n.label LIKE ? AND {aud_clause}
+                WHERE n.label LIKE ? AND {aud_clause} {type_clause}
                 LIMIT ?
-            """, [f"%{query}%"] + aud_params + [limit]).fetchall()
+            """, [f"%{query}%"] + aud_params + type_params + [limit]).fetchall()
             results = [{"node": _node_row_to_dict(r), "score": 0.5} for r in rows]
 
         return {"results": results}

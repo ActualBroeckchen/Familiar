@@ -562,16 +562,18 @@ def graph_node_search(
     limit: Optional[int] = None,
     minScore: Optional[float] = None,
     audiences: Optional[list[str]] = None,
+    type: Optional[str] = None,
 ) -> dict[str, Any]:
     """I use this to search my knowledge graph by meaning. I reach for it when I need
     to find a person, place, concept, or other entity node I might be connected to.
     Optionally expands to 1-hop GraphRAG neighbours.
     `audiences` is the room's allowed audience-tag set (omit for ward-private → all).
+    `type` optionally restricts results to one node type (person / place / concept / …).
     Returns { results: [{ node: {id, label, type, description}, score }] }
     """
     k = max(1, min(50, int(limit or 10)))
     ms = float(minScore or 0.3)
-    return graph.search_nodes(query, limit=k, min_score=ms, audiences=audiences, conn=_c())
+    return graph.search_nodes(query, limit=k, min_score=ms, audiences=audiences, type=type, conn=_c())
 
 
 @mcp.tool()

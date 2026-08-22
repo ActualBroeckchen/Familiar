@@ -7,6 +7,7 @@ import path from 'node:path';
 import {
   BACKENDS, DEFAULT_BACKEND, POCKET_FOOTPRINT,
   voiceboxPython, inspectBackends, resolveBackend, VOICEBOX_SUBDIR,
+  ensureWindowsMsvcRuntime, placeMsvcRuntimeBesideTorch,
 } from '../voice-backend.js';
 
 async function tmpRoot() {
@@ -157,4 +158,84 @@ test('the footprint is stated in parts, so the cost is legible before it is paid
   assert.ok(Math.abs(summed - POCKET_FOOTPRINT.downloadBytes) < 30 * 1024 * 1024,
     'the parts should roughly account for the total, or one of them is wrong');
   assert.ok(POCKET_FOOTPRINT.parts.some((p) => /torch/.test(p.what)));
+});
+
+test('ensureWindowsMsvcRuntime is a no-op off Windows and never throws', async (t) => {
+  if (process.platform === 'win32') return t.skip('Windows path is exercised on Windows only');
+  // Off Windows torch needs no MSVC runtime, so this must skip cleanly rather
+  // than spawn uv or blow up an install/repair that is otherwise fine.
+  const r = await ensureWindowsMsvcRuntime({ rootDir: '/definitely/not/here' });
+  assert.deepEqual(r, { ok: true, skipped: 'not-windows' });
+});
+
+// ── placeMsvcRuntimeBesideTorch: the actual cure for WinError 126 ──────────
+// The bug this whole change fixes was NOT a failed install — msvc-runtime
+// installed fine. It put the DLLs beside python.exe (sys.prefix / Scripts),
+// which is exactly where torch's native loader never looks. torch loads
+// c10.dll from torch/lib and Python 3.8+ resolves that DLL's dependencies from
+// torch/lib + add_dll_directory dirs only. So the fix is a COPY into torch/lib,
+// and that copy is what these tests pin. Platform-independent by design.
+
+/** A fake venv: a torch/lib to copy INTO, and runtime DLLs to copy FROM. */
+async function fakeVenv(dir, { dllsAt = 'Scripts', names = ['vcruntime140.dll', 'msvcp140.dll'], torchLib = true } = {}) {
+  const venv = path.join(dir, VOICEBOX_SUBDIR, '.venv');
+  if (torchLib) await fs.mkdir(path.join(venv, 'Lib', 'site-packages', 'torch', 'lib'), { recursive: true });
+  const src = path.join(venv, ...dllsAt.split('/'));
+  await fs.mkdir(src, { recursive: true });
+  for (const n of names) await fs.writeFile(path.join(src, n), `bytes of ${n}`);
+  return venv;
+}
+
+test('placeMsvcRuntimeBesideTorch copies the runtime INTO torch/lib', async () => {
+  const { dir, cleanup } = await tmpRoot();
+  try {
+    const venv = await fakeVenv(dir, { dllsAt: 'Scripts', names: ['vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll'] });
+    const r = await placeMsvcRuntimeBesideTorch({ venvDir: venv });
+    const libDir = path.join(venv, 'Lib', 'site-packages', 'torch', 'lib');
+    assert.equal(r.libDir, libDir);
+    assert.deepEqual(r.copied.sort(), ['msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll']);
+    for (const n of r.copied) {
+      assert.ok(await fs.readFile(path.join(libDir, n)), `${n} landed where torch loads it`);
+    }
+  } finally { await cleanup(); }
+});
+
+test('placeMsvcRuntimeBesideTorch finds DLLs beside python.exe (sys.prefix), not only Scripts', async () => {
+  // msvc-runtime is inconsistent about where it drops them across versions; the
+  // venv ROOT is the other common spot, and the finder must cover it.
+  const { dir, cleanup } = await tmpRoot();
+  try {
+    const venv = await fakeVenv(dir, { dllsAt: '.', names: ['vcruntime140.dll', 'msvcp140.dll'] });
+    const r = await placeMsvcRuntimeBesideTorch({ venvDir: venv });
+    assert.deepEqual(r.copied.sort(), ['msvcp140.dll', 'vcruntime140.dll']);
+  } finally { await cleanup(); }
+});
+
+test('placeMsvcRuntimeBesideTorch is idempotent — a second pass copies nothing', async () => {
+  const { dir, cleanup } = await tmpRoot();
+  try {
+    const venv = await fakeVenv(dir, { names: ['vcruntime140.dll', 'msvcp140.dll'] });
+    await placeMsvcRuntimeBesideTorch({ venvDir: venv });
+    const again = await placeMsvcRuntimeBesideTorch({ venvDir: venv });
+    assert.deepEqual(again.copied, [], 'already in place, so nothing to do the second time');
+    assert.deepEqual(again.found.sort(), ['msvcp140.dll', 'vcruntime140.dll'], 'but it still SEES them');
+  } finally { await cleanup(); }
+});
+
+test('placeMsvcRuntimeBesideTorch signals no-torch when torch is not installed', async () => {
+  // No torch/lib → nowhere to copy to. The caller turns this into the redist
+  // hint rather than pretending it fixed anything.
+  const { dir, cleanup } = await tmpRoot();
+  try {
+    const venv = await fakeVenv(dir, { torchLib: false, names: ['vcruntime140.dll'] });
+    const r = await placeMsvcRuntimeBesideTorch({ venvDir: venv });
+    assert.equal(r.libDir, null);
+    assert.deepEqual(r.copied, []);
+  } finally { await cleanup(); }
+});
+
+test('placeMsvcRuntimeBesideTorch never throws on a bad venv path', async () => {
+  const r = await placeMsvcRuntimeBesideTorch({ venvDir: '/definitely/not/here' });
+  assert.equal(r.libDir, null);
+  assert.deepEqual(r.copied, []);
 });

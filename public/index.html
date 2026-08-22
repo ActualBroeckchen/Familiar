@@ -177,6 +177,116 @@
             <button id="notif-sound-test" class="btn-ghost" type="button" title="Play a test chime" style="margin-left:6px">▶</button>
           </div>
           <div class="field-hint">A soft chime when a new message arrives while this tab is open — always for proactive ones (reminders, check-ins), and for replies only when the tab isn't focused, so an active conversation stays quiet.</div>
+
+          <h3 class="section-label" style="margin-top:16px">Voice</h3>
+          <div class="field-row">
+            <label for="read-aloud-default-toggle">Read every new reply aloud automatically</label>
+            <input type="checkbox" id="read-aloud-default-toggle">
+          </div>
+          <p class="field-hint">Off by default. With it on, each reply is spoken as it arrives — no need to press 🔊 on every message. Press the button again, or just start typing, to cut it off. There is a 🔊 button under each of your Familiar's messages either way, and neither needs the voice-note microphone.</p>
+          <p class="field-hint" style="margin-top:10px"><strong>Voice notes:</strong> the microphone button sits next to the message box — press it, say what you meant, press it again. The words appear under the recording before you send, so you can check they were heard right. It all happens on this machine. The first recording downloads the listening model — 158 MB to fetch, 233 MB once unpacked (and briefly both at once while it unpacks).</p>
+
+          <p class="field-hint" style="margin-top:14px">Listen to the reference voices my Familiar could speak with, and pick one.</p>
+          <div class="action-row" style="margin-top:4px">
+            <button id="voice-picker-btn" class="btn-secondary">🗣 Choose a voice</button>
+          </div>
+
+          <p class="field-hint" style="margin-top:14px">Which engine does the speaking. Kyutai is the default — it holds one voice steadily across a whole message and never drops a sentence. The built-in one ships with me and needs nothing; it can shift voice between paragraphs on a long message.</p>
+          <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">
+            <select id="voice-backend-select" aria-label="Speaking engine">
+              <option value="pocket">Kyutai sidecar — steadier, ~600 MB (default)</option>
+              <option value="sherpa">Built-in — ships with me, nothing to install</option>
+            </select>
+            <button id="voice-sidecar-install" class="btn-secondary hidden">⬇ Install the sidecar</button>
+            <button id="voice-sidecar-cancel" class="btn-secondary hidden">✕ Cancel download</button>
+          </div>
+          <p class="field-hint" id="voice-backend-state" style="margin-top:6px"></p>
+          <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">
+            <button id="voice-fix-kyutai" class="btn-secondary" type="button">🔧 Fix Kyutai</button>
+          </div>
+          <p class="field-hint" id="voice-fix-kyutai-state" style="margin-top:6px">If read-aloud fails even though Kyutai is installed — a broken update leaves torch unable to load its files (on Windows, "WinError 126 … c10.dll") — this deletes the environment and rebuilds it from scratch, then checks torch actually loads. It takes a while (torch is a large download).</p>
+
+          <h4 class="section-label" style="margin-top:16px; font-size:0.9em; opacity:0.85">How the voice sounds</h4>
+          <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">
+            <label for="voice-speed" style="font-size:0.85em; min-width:8.5em">Speed <span id="voice-speed-val" style="font-variant-numeric:tabular-nums">1.0×</span></label>
+            <input type="range" id="voice-speed" min="0.5" max="2" step="0.05" value="1" style="flex:1" aria-label="Speaking speed">
+          </div>
+          <div class="action-row" style="margin-top:6px; align-items:center; gap:10px">
+            <label for="voice-temp" style="font-size:0.85em; min-width:8.5em">Expressiveness <span id="voice-temp-val" style="font-variant-numeric:tabular-nums">0.70</span></label>
+            <input type="range" id="voice-temp" min="0.1" max="1.5" step="0.05" value="0.7" style="flex:1" aria-label="Speaking temperature (expressiveness)">
+          </div>
+          <p class="field-hint" id="voice-tuning-state" style="margin-top:6px">Speed changes how fast I talk (the built-in engine only — Kyutai always speaks at its natural pace). Expressiveness is the model's temperature: higher is more varied and lively, lower is flatter and steadier. Changing expressiveness reloads Kyutai, so it takes effect on the next thing I speak.</p>
+
+          <p class="field-hint" style="margin-top:14px">Live voice call (beta) — a real back-and-forth. The first call downloads the speech models it needs (~150 MB, once). Two modes: <strong>push-to-talk</strong> (hold the button to speak) or <strong>open mic</strong> (hands-free — just talk, and the pause when you stop is your turn). Talk over your Familiar to interrupt. From a phone this needs an HTTPS address (e.g. <code>tailscale serve</code>) — browsers only allow the microphone on a secure connection.</p>
+          <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">
+            <button id="voice-call-btn" class="btn-secondary">📞 Start voice call</button>
+            <button id="voice-call-talk" class="btn-secondary" hidden>🎙 Hold to talk</button>
+          </div>
+          <div class="action-row" style="margin-top:6px; align-items:center; gap:8px">
+            <label for="voice-call-mode" style="font-size:0.85em">Mode</label>
+            <select id="voice-call-mode" aria-label="Voice call mode">
+              <option value="push">Push-to-talk — hold the button to speak</option>
+              <option value="open">Open mic — hands-free, just talk</option>
+            </select>
+          </div>
+          <p class="field-hint" id="voice-call-state" style="margin-top:6px" aria-live="polite"></p>
+
+          <div class="action-row" id="voice-call-lang-row" style="margin-top:8px; align-items:center; gap:8px" hidden>
+            <label for="voice-call-lang" style="font-size:0.85em">Call language</label>
+            <select id="voice-call-lang" aria-label="Call speech-recognition language"></select>
+          </div>
+          <label class="switch-row" style="margin-top:8px; display:flex; align-items:center; gap:8px">
+            <input type="checkbox" id="voice-call-threat-toggle" checked>
+            <span>Let a call inform my safety read — my Familiar can notice distress in my voice, as it does in my messages. On by default.</span>
+          </label>
+          <label class="switch-row" style="margin-top:8px; display:flex; align-items:center; gap:8px">
+            <input type="checkbox" id="voice-call-offline-toggle" checked>
+            <span>Transcribe calls with the accurate model — re-reads each thing I say with the same model as voice notes, so far fewer words come out garbled. Adds a small delay. On by default.</span>
+          </label>
+          <div class="action-row" style="margin-top:8px; align-items:center; gap:8px">
+            <label for="voice-call-settle" style="font-size:0.85em">Wait for a pause before replying</label>
+            <input type="number" id="voice-call-settle" min="0" max="4000" step="250" style="width:6em" aria-label="Milliseconds of pause before the Familiar answers on a call">
+            <span class="field-hint">ms — higher = I let you finish a longer thought before I answer (0 = reply the moment you stop). Applies to Discord calls and web open-mic.</span>
+          </div>
+          <label class="switch-row" style="margin-top:8px; display:flex; align-items:center; gap:8px">
+            <input type="checkbox" id="voice-proactive-join-toggle">
+            <span>Let me speak check-ins in Discord voice — when I have something to say and you're sitting alone in a voice channel, I'll join and say it aloud, then leave. Only ever when you're alone there; if anyone else is present it stays a private message instead. Off by default.</span>
+          </label>
+          <label class="switch-row" style="margin-top:8px; display:flex; align-items:center; gap:8px">
+            <input type="checkbox" id="voice-greetings-toggle" checked>
+            <span>Greet people who join a group voice call — when someone else drops into a call I'm on, I'll say a short hello aloud in my own voice. I wait for a natural gap so I never talk over anyone, and I stay quiet if things are tense. On by default. (Either way, in a group call I always know who's present and who came or went, and who's speaking.)</span>
+          </label>
+          <label class="switch-row" style="margin-top:8px; display:flex; align-items:center; gap:8px">
+            <input type="checkbox" id="audio-tagging-toggle">
+            <span>Let me notice sounds in the room on a call — a dog barking, a TV, running water — so I can be a better listener to where you are. It's just for the moment; these sounds are never saved and never change how I read your safety. Needs the small audio-tagging model. Off by default.</span>
+          </label>
+
+          <h4 class="section-label" style="margin-top:16px; font-size:0.9em; opacity:0.85">Who's speaking (voiceprint)</h4>
+          <p class="field-hint">If I learn your voice, I can tell on a call when someone else is in the room and keep our private things private until we're alone again. Your voiceprint stays on this machine and is never synced.</p>
+          <div class="action-row" style="margin-top:8px; align-items:center; gap:8px; flex-wrap:wrap">
+            <label for="speaker-model-select" style="font-size:0.85em">Recognition model</label>
+            <select id="speaker-model-select" aria-label="Speaker recognition model">
+              <option value="campplus">CAM++ — small &amp; fast (default)</option>
+              <option value="titanet-large">TitaNet-Large — more accurate, bigger (~97 MB)</option>
+            </select>
+            <button id="speaker-model-download" class="btn-secondary" type="button">⬇ Download model</button>
+          </div>
+          <p class="field-hint" id="speaker-model-state" style="margin-top:6px" aria-live="polite"></p>
+          <div class="action-row" style="margin-top:8px; align-items:center; gap:8px">
+            <button id="voiceprint-record" class="btn-secondary" type="button">🎙 Record my voiceprint</button>
+            <button id="voiceprint-forget" class="btn-secondary hidden" type="button">Forget my voiceprint</button>
+          </div>
+          <p class="field-hint" id="voiceprint-state" style="margin-top:6px" aria-live="polite">When you record, read a few sentences aloud for ~15 seconds so I get a good sense of your voice.</p>
+          <details style="margin-top:10px">
+            <summary style="cursor:pointer; font-size:0.85em">Add someone else's voice (optional)</summary>
+            <p class="field-hint" style="margin-top:6px">With their okay, record a short clip of a specific person from your Village so I can recognise them by name on a shared call. Their voiceprint also stays on this machine.</p>
+            <div class="action-row" style="margin-top:6px; align-items:center; gap:6px; flex-wrap:wrap">
+              <input id="villager-print-id" type="text" placeholder="their Village id" style="width:11em" aria-label="Villager id">
+              <input id="villager-print-name" type="text" placeholder="their name" style="width:8em" aria-label="Villager name">
+              <button id="villager-print-record" class="btn-secondary" type="button">🎙 Record</button>
+            </div>
+            <p class="field-hint" id="villager-print-state" style="margin-top:6px" aria-live="polite"></p>
+          </details>
         </div>
 
         <!-- Tomes -->
@@ -235,44 +345,6 @@
             <div class="action-row" style="margin-top:4px">
               <button id="voice-bench-btn" class="btn-secondary">🎤 Voice benchmark</button>
             </div>
-            <p class="field-hint" style="margin-top:10px">Listen to the reference voices my Familiar could speak with, and pick one.</p>
-            <div class="action-row" style="margin-top:4px">
-              <button id="voice-picker-btn" class="btn-secondary">🗣 Choose a voice</button>
-            </div>
-
-            <p class="field-hint" style="margin-top:14px">Which engine does the speaking. Kyutai is the default — it holds one voice steadily across a whole message and never drops a sentence, but it is a large download that fetches itself the first time I speak. The built-in one ships with me and needs nothing; it can shift voice between paragraphs on a long message.</p>
-            <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">
-              <select id="voice-backend-select" aria-label="Speaking engine">
-                <option value="pocket">Kyutai sidecar — steadier, ~600 MB (default)</option>
-                <option value="sherpa">Built-in — ships with me, nothing to install</option>
-              </select>
-              <button id="voice-sidecar-install" class="btn-secondary hidden">⬇ Install the sidecar</button>
-              <button id="voice-sidecar-cancel" class="btn-secondary hidden">✕ Cancel download</button>
-            </div>
-            <p class="field-hint" id="voice-backend-state" style="margin-top:6px"></p>
-
-            <p class="field-hint" style="margin-top:14px">Live voice call (beta) — a real back-and-forth. The first call downloads the speech models it needs (~150 MB, once). Two modes: <strong>push-to-talk</strong> (hold the button to speak) or <strong>open mic</strong> (hands-free — just talk, and the pause when you stop is your turn). Talk over your Familiar to interrupt. From a phone this needs an HTTPS address (e.g. <code>tailscale serve</code>) — browsers only allow the microphone on a secure connection.</p>
-            <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">
-              <button id="voice-call-btn" class="btn-secondary">📞 Start voice call</button>
-              <button id="voice-call-talk" class="btn-secondary" hidden>🎙 Hold to talk</button>
-            </div>
-            <div class="action-row" style="margin-top:6px; align-items:center; gap:8px">
-              <label for="voice-call-mode" style="font-size:0.85em">Mode</label>
-              <select id="voice-call-mode" aria-label="Voice call mode">
-                <option value="push">Push-to-talk — hold the button to speak</option>
-                <option value="open">Open mic — hands-free, just talk</option>
-              </select>
-            </div>
-            <p class="field-hint" id="voice-call-state" style="margin-top:6px" aria-live="polite"></p>
-
-            <div class="action-row" id="voice-call-lang-row" style="margin-top:8px; align-items:center; gap:8px" hidden>
-              <label for="voice-call-lang" style="font-size:0.85em">Call language</label>
-              <select id="voice-call-lang" aria-label="Call speech-recognition language"></select>
-            </div>
-            <label class="switch-row" style="margin-top:8px; display:flex; align-items:center; gap:8px">
-              <input type="checkbox" id="voice-call-threat-toggle" checked>
-              <span>Let a call inform my safety read — my Familiar can notice distress in my voice, as it does in my messages. On by default.</span>
-            </label>
           </div>
         </div>
 
@@ -526,16 +598,6 @@
         <h3 class="section-label" style="margin-top:16px">Which connection each feature uses</h3>
         <p class="field-hint">Every background job that calls a model can run on its own connection — handy for pointing cheap/idle work at a cheaper model while chat stays on your best one. "Primary" means it follows your primary connection above.</p>
         <div id="feature-connection-rows"></div>
-
-        <h3 class="section-label" style="margin-top:16px">Reading aloud</h3>
-        <div class="field-row">
-          <label for="read-aloud-default-toggle">Read every new reply aloud automatically</label>
-          <input type="checkbox" id="read-aloud-default-toggle">
-        </div>
-        <p class="field-hint">Off by default. With it on, each reply is spoken as it arrives — no need to press 🔊 on every message. Press the button again, or just start typing, to cut it off. There is a 🔊 button under each of your Familiar's messages either way, and neither needs the voice-note microphone.</p>
-
-        <h3 class="section-label" style="margin-top:16px">Voice notes</h3>
-        <p class="field-hint">Nothing to switch on. The microphone button sits next to the message box — press it, say what you meant to say, press it again. The words you said appear under the recording before you send, so you can check they were heard right. It all happens on this machine; the first recording offers the one-time download it needs — 158&nbsp;MB to fetch, 233&nbsp;MB once unpacked.</p>
 
         <h3 class="section-label" style="margin-top:16px">Seeing images (vision)</h3>
         <div class="field-row">
@@ -873,7 +935,9 @@
             </label>
             <span id="ke-mem-count" class="vl-count" aria-live="polite"></span>
             <button id="ke-mem-refresh" class="btn-ghost">Refresh</button>
+            <button id="ke-mem-audit" class="btn-ghost" type="button" title="Check which memories can't be rolled up into weekly/monthly summaries">Check consolidation</button>
           </div>
+          <div id="ke-mem-audit-panel" hidden aria-live="polite" style="margin:8px 0; padding:10px 12px; border:1px solid var(--border); border-radius:8px"></div>
           <div class="ke-split">
             <div class="ke-list" id="ke-mem-list"></div>
             <div class="ke-detail" id="ke-mem-detail">
@@ -1083,6 +1147,16 @@
             <label for="pondering-scale">Pondering interval scale</label>
             <input type="number" id="pondering-scale" value="1" min="1" max="10" step="0.5">
             <div class="field-hint">Multiplies the base ponder interval. 1× = default cadence (30 min – 6 hr). 2× doubles every interval (1 hr – 12 hr). Use this to dial token cost down without disabling entirely. Only stretches, never speeds up.</div>
+          </div>
+          <div class="field-row" style="margin-top:12px">
+            <label for="ponder-web-toggle">Look things up while pondering</label>
+            <input type="checkbox" id="ponder-web-toggle" checked>
+          </div>
+          <div class="field-hint">On by default (only active while web search is enabled). When on, your Familiar can read a few sources mid-ponder instead of only recombining what it already holds — it decides what to look up, and a shared daily read budget keeps it cheap. The reads are audited (surface "pondering") so you can see what it read while you were away. Off keeps ponders to its own memory. Budget below caps reads per day across all its idle research.</div>
+          <div class="field">
+            <label for="ponder-web-reads">Daily research reads</label>
+            <input type="number" id="ponder-web-reads" value="12" min="0" max="200" step="1">
+            <div class="field-hint">The most searches + page-reads your Familiar may spend on unattended research in one day, shared across every idle surface. 0 turns idle research off as surely as the toggle. Spent budget is never a failed call — the ponder just says it's thinking from what it already holds.</div>
           </div>
 
           <div class="field-row" style="margin-top:12px">
@@ -1580,6 +1654,44 @@
               <input type="checkbox" id="noticing-toggle" checked>
             </div>
             <div class="field-hint">When on, your Familiar takes quiet moments of its own — but only when something is genuinely worth a look (an intention it set has come due, your rhythm of contact is off, groundwork for something is running late). It can then reach out, keep a note for later, or simply decide nothing's needed. This is what lets it notice things you didn't spell out. It keeps working even when concern is elevated — that's when noticing matters most — and it paces itself to you over time. It's the most judgment-heavy thing it does on its own, so pinning it to a stronger model in Connections is worth considering. Off means it only acts when you talk to it or a scheduled reminder fires.</div>
+            <div class="field-row" style="margin-top:8px">
+              <label for="browse-toggle">Let my Familiar browse the web</label>
+              <input type="checkbox" id="browse-toggle">
+            </div>
+            <div class="field-hint">Off by default. When on, your Familiar can open a web page in its own browser and actually use it — click, fill a form, follow a flow — for tasks where reading a page isn't enough. It browses as itself, only on your own turns (never a villager's), it can't type into password or payment fields, and everything it does is logged. If no browser is found on this machine it fetches a private copy of Chromium (~130 MB) the first time. What a page shows it is something it reads, never instructions it obeys.</div>
+            <div class="field-row" style="margin-top:8px">
+              <label for="browse-site-mode">Where it may go</label>
+              <select id="browse-site-mode">
+                <option value="open">Any public site</option>
+                <option value="blocklist">Any site except my list</option>
+                <option value="allowlist">Only sites on my list</option>
+              </select>
+            </div>
+            <textarea id="browse-site-list" rows="2" placeholder="one domain per line — e.g. example.com" style="width:100%; margin-top:6px; display:none"></textarea>
+            <div class="field-hint" id="browse-site-list-hint" style="display:none">One domain per line (a domain covers its subdomains). Applies on the next page it opens.</div>
+            <div class="field-row" style="margin-top:8px; align-items:flex-start; flex-direction:column">
+              <label for="browse-confirm-domains">Always ask me before submitting on</label>
+              <textarea id="browse-confirm-domains" rows="2" placeholder="one domain per line — e.g. mybank.com" style="width:100%; margin-top:6px"></textarea>
+            </div>
+            <div class="field-hint">On these sites your Familiar won't press buy / pay / submit itself — it hands the moment back to you. A hard gate (only the hand-edited autonomy-grants file can lift it).</div>
+            <div class="field-row" style="margin-top:8px">
+              <label for="browse-confirm-mode">When it hits one of those</label>
+              <select id="browse-confirm-mode">
+                <option value="refuse">Hand it straight back to me</option>
+                <option value="ask">Hold it for my one-tap approval</option>
+              </select>
+            </div>
+            <div class="field-hint">"Hold" queues the submit and waits — you approve or decline it below, and only then does it act. It never assumes it went through.</div>
+            <div class="field-row" style="margin-top:8px">
+              <button type="button" id="browse-activity-btn" class="secondary-btn">View browser activity</button>
+            </div>
+            <div id="browse-pending" style="display:none; margin-top:6px"></div>
+            <pre id="browse-activity" style="display:none; max-height:220px; overflow:auto; font-size:12px; white-space:pre-wrap; background:var(--surface-2, #1a1a1a); padding:8px; border-radius:6px; margin-top:6px"></pre>
+            <div class="field-row" style="margin-top:12px">
+              <label for="page-watch-toggle">Let my Familiar watch pages for changes</label>
+              <input type="checkbox" id="page-watch-toggle" checked>
+            </div>
+            <div class="field-hint">On by default (inert until it starts a watch). Your Familiar can keep an eye on a web page you care about — a restock, a posted decision, an announced date — and nudge you only when it genuinely changes. It re-reads on a slow schedule and diffs in code, so an unchanged page is nearly free; it uses the cheap page reader, not the full browser, so this works even with browsing off. Off stops it watching anything.</div>
           </div>
           <div class="routine-rounds" id="te-rounds" style="padding:10px 12px; border-bottom:1px solid var(--border-subtle, #2a2a2a)">
             <div class="field-row" style="margin-top:0; align-items:center">
@@ -1956,9 +2068,15 @@
             <button id="vl-loc-refresh" class="btn-ghost">Refresh</button>
             <button id="vl-loc-add" class="btn-secondary" style="margin-left:auto">+ Add location</button>
           </div>
+          <label class="switch-row" style="margin:6px 0; display:flex; align-items:flex-start; gap:8px; font-size:0.85rem">
+            <input type="checkbox" id="vl-auto-register" style="margin-top:3px">
+            <span>Auto-register new channels as locations — the moment my Familiar is active in an unregistered channel, save it as a location automatically. It's born at the <strong>Strangers</strong> floor (granting nothing until you assign it a circle), so this is safe; off by default. When off, new channels wait in the knock list below for one-click registration.</span>
+          </label>
+          <!-- Saved server list — the Discord servers the Familiar is in, named
+               from GUILD_CREATE and derived from knocks. Hidden when empty. -->
+          <div id="vl-servers" class="vl-servers hidden"></div>
           <!-- Location knock list (V4.x) — unregistered Discord channels the
-               Familiar has spoken in, captured so the ward can register them
-               without hunting guild/channel IDs. Hidden when empty. -->
+               Familiar has spoken in, grouped by server. Hidden when empty. -->
           <div id="vl-location-knocks" class="vl-knocks hidden"></div>
           <div class="vl-split">
             <div class="vl-loc-list" id="vl-loc-list">

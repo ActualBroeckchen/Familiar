@@ -36,14 +36,36 @@ content-deduped, ward-images only), fired from the link tool, the link endpoint,
 and describeAsset. Pass 2 is now complete bar the safety item below (shipped in
 0.9.2).
 
-**Pass 1 deviation worth recording — the capability probe (§3.1).** The spec
-described a synthetic one-time probe image. As built, an uncached `auto`
-connection is instead treated as **optimistically capable** and the *real turn
-serves as the probe*: a modality rejection triggers the mid-turn hard fallback
-(retry with stand-ins, cache `no`); a successful live-image turn caches `yes`.
-This is strictly better against the acceptance criteria — a synthetic probe
-would add an LLM call on the first image, breaking "**zero** additional LLM
-calls beyond the turn." No bundled test image ships.
+**Pass 1 deviation, and its 0.10.x correction — the capability default (§3.1).**
+The spec described a synthetic one-time probe image. Pass 1 instead treated an
+uncached `auto` connection as **optimistically capable**, with the real turn as
+the probe (a modality rejection → mid-turn fallback, cache `no`; a successful
+live-image turn → cache `yes`). That optimism shipped a trust-break: a text-only
+primary (GLM) was waved through, sent an image it couldn't see, did NOT cleanly
+reject the modality, and **hallucinated the contents** — a tester's food photo
+became the ward's face. Optimism assumed a clean rejection that a blind model
+doesn't always give.
+
+**Corrected:** an uncached `auto` now defaults via `looksVisionCapable()` — a
+TIGHT allowlist of known vision families (gpt-4o, claude-3+, gemini, qwen-*-vl,
+pixtral, llava, glm-4v/glm-4.6v, …) that deliberately excludes text-only
+siblings sharing a prefix (glm-4.6 / glm-5.2 do NOT match). Recognised families
+ride live and self-confirm via the cache; **everything else is treated as blind
+and DESCRIBED** by the vision connection (accurate words, no guessing). The
+asymmetry is intentional: a false negative (a real vision model we don't
+recognise → described) is a minor quality cost; a false positive (a blind model
+→ sent an image → confabulation) is the trust-break, so the default fails toward
+describe. The ward's explicit `visionCapable:'yes'` and the learned cache both
+override. Still zero extra LLM calls; still no bundled probe image. The mid-turn
+modality-reject fallback stays as a second line of defence.
+
+**Blind-image confabulation guard (0.10.x).** Even with capability fixed, a
+describe can fail (vision model down). When any image stands in with NO
+description, the materializer seam injects a hard, forceful system line: the
+Familiar does not describe, guess, or name what's in an unseen image — it says
+plainly it can't see it and asks if it matters. This earns a NEVER (a true
+trust-invariant, not a style preference); it rides the shared seam so every
+surface gets it (`materializeAttachments` → `blindImageStandins`).
 
 **Ward decision recorded (§15.1) — image→threat scoring is a YES**, landing in
 Pass 2 as its own confirmed safety-critical change (not Pass 1).

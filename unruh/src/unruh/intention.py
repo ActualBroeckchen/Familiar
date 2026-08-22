@@ -103,6 +103,40 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
 # ── Writes ────────────────────────────────────────────────────────────
 
 
+def phase_matches(trigger_phase: str | None, current_label: str | None) -> bool:
+    """Forgiving phase-trigger match. The Familiar types a day-part word
+    ('evening'); the ward's routine phase carries a real, possibly custom label
+    ('Evening wind-down'). Match case-insensitively, and either way as a
+    substring — so a generic trigger still fires against a specifically-named
+    phase, and a legacy round starts working without being re-created. Empty on
+    either side is no match. (This is the due-time safety net; set_intention
+    also canonicalises the label up front — see resolve_phase.)"""
+    t = (trigger_phase or "").strip().lower()
+    c = (current_label or "").strip().lower()
+    if not t or not c:
+        return False
+    return t == c or t in c or c in t
+
+
+def resolve_phase(typed: str, available_labels: list[str]) -> tuple[str, bool]:
+    """Resolve a typed phase word to a real routine-phase label at SET time, so
+    a round is stored against the exact label it will later be checked against.
+    Case-insensitive exact wins; else a unique substring match (either
+    direction). Returns (canonical_label, matched). No or ambiguous match keeps
+    the typed word and matched=False, so the caller can warn the Familiar rather
+    than silently create an unfulfillable trigger."""
+    t = (typed or "").strip()
+    tl = t.lower()
+    labels = [l.strip() for l in (available_labels or []) if isinstance(l, str) and l.strip()]
+    exact = [l for l in labels if l.lower() == tl]
+    if exact:
+        return exact[0], True
+    subs = [l for l in labels if tl and (tl in l.lower() or l.lower() in tl)]
+    if len(subs) == 1:
+        return subs[0], True
+    return t, False
+
+
 def set_intention(
     conn: sqlite3.Connection,
     *,
@@ -113,6 +147,7 @@ def set_intention(
     condition: dict | None = None,
     source: str | None = None,
     visibility: str | None = None,
+    available_phases: list[str] | None = None,
 ) -> dict[str, Any]:
     """Record a new intention. `trigger` is a dict:
         {"kind": "at",   "at": "2026-07-16T09:00:00"}
@@ -136,6 +171,19 @@ def set_intention(
     trigger_phase = (trig.get("phase") or "").strip() or None if kind == "phase" else None
     if kind == "phase" and not trigger_phase:
         return {"ok": False, "error": "trigger.phase is required when kind='phase'"}
+    # Canonicalise a phase round to a real routine-phase label at set time, so it
+    # is stored against the exact label intentions_due checks — and, when nothing
+    # matches, warn instead of silently creating a round that can never fire.
+    phase_warning = None
+    if kind == "phase" and trigger_phase and available_phases is not None:
+        trigger_phase, matched = resolve_phase(trigger_phase, available_phases)
+        if not matched:
+            labs = ", ".join(sorted({l.strip() for l in available_phases if isinstance(l, str) and l.strip()}))
+            phase_warning = (
+                f"No routine phase matches '{trigger_phase}', so this round won't fire until one does. "
+                + (f"Your phases right now: {labs}. Tie it to one of those, or add a '{trigger_phase}' phase to the routine."
+                   if labs else "There are no routine phases defined yet — add one (e.g. an evening block) and this round will start firing.")
+            )
     # recurring only means anything for a phase round; force 0 otherwise so a
     # one-shot 'at' can't accidentally read as re-firing.
     recurring = 1 if (kind == "phase" and trig.get("recurring")) else 0
@@ -160,7 +208,10 @@ def set_intention(
                      source, visibility, ts, ts),
         label=what_clean, kind="intention",
     )
-    return {"ok": True, "id": new_id}
+    result = {"ok": True, "id": new_id}
+    if phase_warning:
+        result["warning"] = phase_warning
+    return result
 
 
 def drop_intention(conn: sqlite3.Connection, *, id: str) -> dict[str, Any]:
@@ -261,7 +312,7 @@ def intentions_due(
             if row["trigger_at"] and row["trigger_at"] <= now and not row["last_fired_date"]:
                 out.append(_row_to_dict(row))
         elif kind == "phase":
-            if current_phase_label and row["trigger_phase"] == current_phase_label:
+            if phase_matches(row["trigger_phase"], current_phase_label):
                 if row["recurring"]:
                     if row["last_fired_date"] != today:
                         out.append(_row_to_dict(row))

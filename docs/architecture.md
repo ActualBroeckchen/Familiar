@@ -99,7 +99,7 @@ ponderings injection, care-check framing) and as background loops
 ```
 /
 ├── server.js                Express server — chat proxy, all HTTP endpoints, autonomous-loop boot
-├── thalamus.js              MCP bridge — Phylactery + Unruh, plus all the helper wrappers
+├── thalamus.js              MCP bridge — Phylactery + Unruh, plus all the helper wrappers. MUTATING wrappers read results honestly via `unruhResult` / `mcpToolError` (phylactery-result.js): the SDK's callTool does NOT throw when a tool raises (it resolves isError:true), so a wrapper that just returned `{ok:true}` reported success on failure — the silent-write class behind the identity_update_section bug. Reads deliberately still degrade to empty (absence renders as absence). `saveBookmark` is the M8 write side (→ interest_bookmark), feeding the resurfacing loop
 ├── cerebellum.js            Motor module — tool registry + executors + tool loop, triage deliberation, trusted-contact delivery, escalation deadlines
 ├── crisis-signals.js        Pattern-based detector — 5 tiers, ~13 signal categories, damping
 ├── threat-tracker.js        Decaying scalar with audit history, off-switches, file persistence
@@ -140,13 +140,19 @@ ponderings injection, care-check framing) and as background loops
 ├── temporal-format.js       Pure renderer for the Unruh temporal_context payload
 ├── media.js                 Media store (vision build spec §2, Pass 1–2) — content-addressed image persistence in media/ (sha256 bytes + `.json` meta + `.slugs.json` index). saveAsset (dedup free — same bytes = one asset), getAsset/getAssetMeta, setAssetDescription (also upgrades a generic `img-xxxx` slug to a meaning-bearing alias once described), listAssets/deleteAsset, resolveAssetId (slug/sha → sha, index + meta-scan heal). **Pass 2 picture→node linking (§6.5):** addAssetLink/removeAssetLink (links[] on meta, deduped by nodeId — bytes stay local, the link is an embodiment-local annotation), assetsForNode ("show me what Milkyway looks like"), and buildStandin names linked nodes ("— of Milkyway —"). drainPendingImages (§10 — view_image's stash → a user image message for the next tool round; lives here so both tool loops call it without a cerebellum↔vision cycle). Caps at save (MEDIA_MAX_BYTES 6MB, image mime allow-list). Pure-code readImageSize (JPEG/PNG/GIF/WebP headers, no native lib). buildStandin + contentWithStandins (§6/§7). Never throws into a caller. Off via PROTO_FAMILIAR_VISION_DISABLED=1 — inert until an image arrives
 ├── zai-vision.js            z.ai coding-plan vision (0.9.5) — on the GLM Coding Plan, vision is NOT on the chat endpoint; it's a separate "Vision Understanding" MCP server (@z_ai/mcp-server, GLM-4.6V) with its own quota pool. This module lazily spawns that server as a stdio MCP child (keyed by API key, env Z_AI_API_KEY + Z_AI_MODE=ZAI), discovers its analyze_image tool + schema (pickAnalyzeTool/buildAnalyzeArgs adapt to whatever it names its image param — path/url/base64 — writing a temp file only when a path is wanted), and describeViaZaiVision() returns the description text. describeAsset (vision.js) routes here when the resolved vision connection is provider 'zai-coding' — so a coding connection assigned to the vision feature spends the coding vision allotment (describe-only; the coding chat models can't take live image parts). Graceful: any spawn/call failure → {ok:false}, description stays null. Off: PROTO_FAMILIAR_ZAI_VISION_DISABLED=1
-├── vision.js                The provider boundary (vision build spec §3, Pass 1–2) — the ONE seam turning media references into provider content-parts. materializeAttachments(apiMessages,{connection,settings,visibleAudiences}) → live `image_url` data-URL parts (capable + within the live budget, newest-first) OR a text stand-in appended to the content STRING (otherwise); returns `stoodInUndescribed` ids so the chat path can background-describe them; a request with no attachments is returned identical, and the internal `attachments` field is stripped from every outgoing message. Audience gate first, fail-closed (a ward-private asset contributes nothing on a gated turn). Capability (§3.1): per-connection `visionCapable` tri-state ('yes'/'no' the ward's word; 'auto' → cache tomes/.vision-capability.json, uncached = optimistic — the real turn is the probe, no synthetic image). isModalityError classifies a modality rejection for the mid-turn hard fallback. **Pass 2:** describeAsset (look-once-keep-forever — resolveVisionConnection picks a capable connection via connectionForFeature('vision')→primary→first-capable; one callProviderChat with the image as a data-URL part; the result is injection-guarded THEN cached via setAssetDescription, never regenerated). **Image→threat scoring (0.9.2, ward-signed §15.1):** scoreImageDescriptionThreat scores the ward's OWN image's DESCRIPTION with the ward's scoreMessage and feeds recordThreat(source:'vision') — FULL weight, RAISE-ONLY, ward-private only; crisis-signals.js/threat-tracker.js unchanged. Fired fire-and-forget from the chat path on the ward's live turn (server.js visionThreatScoringOn gate); off-switch PROTO_FAMILIAR_VISION_THREAT_DISABLED=1
+├── vision.js                The provider boundary (vision build spec §3, Pass 1–2) — the ONE seam turning media references into provider content-parts. materializeAttachments(apiMessages,{connection,settings,visibleAudiences}) → live `image_url` data-URL parts (capable + within the live budget, newest-first) OR a text stand-in appended to the content STRING (otherwise); returns `stoodInUndescribed` ids so the chat path can background-describe them; a request with no attachments is returned identical, and the internal `attachments` field is stripped from every outgoing message. Audience gate first, fail-closed (a ward-private asset contributes nothing on a gated turn). Capability (§3.1): per-connection `visionCapable` tri-state ('yes'/'no' the ward's word; 'auto' → cache tomes/.vision-capability.json, then a TIGHT name allowlist `looksVisionCapable` — recognised vision families ride live and self-confirm, everything else defaults BLIND → described, never sent an image it may not see. This replaced a blanket "optimistic = capable" that let a text-only primary hallucinate a photo it never saw). isModalityError classifies a modality rejection for the mid-turn hard fallback. **Blind-image confabulation guard:** when any image stands in with NO description (a describe failed), the seam injects a hard system line — the Familiar never describes/guesses/names what's in an unseen image (`blindImageStandins`). **Pass 2:** describeAsset (look-once-keep-forever — resolveVisionConnection picks a capable connection via connectionForFeature('vision')→primary→first-capable; one callProviderChat with the image as a data-URL part; the result is injection-guarded THEN cached via setAssetDescription, never regenerated). **Image→threat scoring (0.9.2, ward-signed §15.1):** scoreImageDescriptionThreat scores the ward's OWN image's DESCRIPTION with the ward's scoreMessage and feeds recordThreat(source:'vision') — FULL weight, RAISE-ONLY, ward-private only; crisis-signals.js/threat-tracker.js unchanged. Fired fire-and-forget from the chat path on the ward's live turn (server.js visionThreatScoringOn gate); off-switch PROTO_FAMILIAR_VISION_THREAT_DISABLED=1
 ├── unruh/ templates.py      Requirement templates (stewardship Pass 2b, 0.8.20) — a `templates` table (migration 0004, keyed by obstacle tag UNIQUE, one bundle per barrier) + upsert/list/delete accessors, exposed as MCP tools template_upsert/list/delete. Storage ONLY — deliberately NOT schedule nodes, so templates never leak into the schedule window. APPLYING a template is JS orchestration in cerebellum's template_apply: reads an event's payload.obstacle_tags, matches templates, resolve-or-creates each prerequisite task (findScheduleNodes exact-label reuse of an open task, else addScheduleNode — never duplicates) and links a `requires` edge (addScheduleEdge) — SUGGESTED + prunable per instance. schedule_add_event hints (loud) when a tagged event has a matching template. Templates are the Familiar's own editable objects (no ward UI, per spec §3.2)
 ├── surface-context.js       Consumer pipeline — hard gates + candidate selection + block format. Consequence-aware scoring reads schedule edges (summarizeConsequences: requires/depends_on/blocks/causes → priority pressure + plain "why"). Stewardship Pass 2a (0.8.19) adds an obstacle-radar nudge: a task whose `payload.obstacle_tags` names a real barrier (e.g. "outside") gets +1 pressure and a "worth keeping on the radar" reason, so an outside-the-house errand doesn't slide under the easier tasks
 ├── surface-events.js        Event store (offers + outcomes) + pure-code tagger + reflection inputs
 ├── village.js               Village registry (V1) — categories/grant sets, villagers (name/pronouns/aliases/relation/stance/comm-style/notes/privateNotes/remember consent map/graphNodeId), locations; local mirror + Phylactery write-through sync (see docs/village-support-design.md). The Familiar reaches it via the village_lookup / village_upsert tools (privateNotes field-gated to ward-private turns)
 ├── own-files.js             Sandboxed read-only access to the Familiar's own checkout — resolves repo-relative paths inside the root, denies secrets (settings.json, .env) + build noise (node_modules/.git/.venv), size-caps + text-only. Backs the list_files / read_file tools (ward-private only)
-├── websearch.js             Web access (opt-in, 0.7.0) — backs the look_up / web_search / read_webpage tools. look_up (0.7.19) answers definitions/facts/overviews from keyless official reference APIs (Wikipedia action API + DuckDuckGo Instant Answer API), no scraping/no setup. web_search finds pages; searchWeb resolves the human-chosen backend: webSearchBackend ∈ {basic → in-box keyless DuckDuckGo HTML scrape (no setup); api → a provider adapter (Marginalia/Tavily/Brave/Google) via webSearchApiProvider+key}. ANY backend failing falls through to the keyless floor — a wrong key / down provider never leaves the human without search. Each search logs which backend actually served (`[websearch] "q" — served via …` / `… failed […]; fell back to built-in keyless search`) so a silent fallback is visible (0.7.28). Owns the SSRF guard (scheme allow-list + resolved-IP block of loopback/private/link-local/metadata + redirect re-validation), the fetch timeout, and the linkedom→@mozilla/readability→turndown extraction with provenance stamping. cerebellum registers the defs + delegates; gated by webSearchEnabled / PROTO_FAMILIAR_WEBSEARCH_DISABLED=1. (The managed local engines — SearXNG/4get/LibreY — were removed in 0.7.38; Marginalia + APIs + the floor cover the same ground without the install/spawn machinery.)
+├── websearch.js             Web access (opt-in, 0.7.0) — backs the look_up / web_search / read_webpage tools. look_up (0.7.19) answers definitions/facts/overviews from keyless official reference APIs (Wikipedia action API + DuckDuckGo Instant Answer API), no scraping/no setup. web_search finds pages; searchWeb resolves the human-chosen backend: webSearchBackend ∈ {basic → in-box keyless DuckDuckGo HTML scrape (no setup); api → a provider adapter (Marginalia/Tavily/Brave/Google) via webSearchApiProvider+key}. ANY backend failing falls through to the keyless floor — a wrong key / down provider never leaves the human without search. Each search logs which backend actually served (`[websearch] "q" — served via …` / `… failed […]; fell back to built-in keyless search`) so a silent fallback is visible (0.7.28). Owns the SSRF guard (scheme allow-list + resolved-IP block of loopback/private/link-local/metadata + redirect re-validation), the fetch timeout, and the linkedom→@mozilla/readability→turndown extraction with provenance stamping — the html→framed-markdown half is `extractReadable(html,{url,maxChars})`, SHARED with the browser read path (browser.js) so live-DOM and static reads produce byte-identical output. cerebellum registers the defs + delegates; gated by webSearchEnabled / PROTO_FAMILIAR_WEBSEARCH_DISABLED=1. (The managed local engines — SearXNG/4get/LibreY — were removed in 0.7.38; Marginalia + APIs + the floor cover the same ground without the install/spawn machinery.)
+├── browser.js               Internet navigation — Pass 1 spine + Pass 2 eyes/hands + Pass 3a safety gates (docs/browser-build-spec.md; 0.11.x, opt-in/default-OFF). Pass 3a (0.11.3): site modes (`siteModeAllows` — open/blocklist/allowlist, subdomain match, fail-closed; enforced at browse_open + browseRead AND on page-TRIGGERED top-level navs via a driver route interceptor that aborts a disallowed main-frame navigation), hardened credential/payment fill refusal (autocomplete cc-*/current-password + name/inputmode heuristics in browser-lens.isProtectedField, over autocomplete/inputmode now captured by the DOM walk), and a Settings "browser activity" viewer (GET /api/browser-actions + /api/browser/status). A site-blocked read returns a DISTINCT `blocked` signal so read_webpage honours the block instead of falling through to the static floor. Pass 2 (0.11.1) adds: browse_screenshot (saves a PNG media asset, returns an id the executor pushes to _pendingImages so it rides the SAME turn on a vision-capable connection — capable-turn-gated like view_image), browse_tabs (list/switch/close), browse_history (query the audit log), and downloads→media on an act (size-cap + mime allow-list, never an executable). **read_webpage re-backing (0.11.2):** browseRead reads the LIVE JS-rendered DOM (driver.readPage → an ephemeral, cap-exempt tab → page.content()) through websearch.js's SHARED extractReadable, so browser + static output can't drift; the read_webpage executor routes here when shouldBrowserRead (browseEnabled + a browser exists + webReadBackend != 'static') and falls back to the static floor on any failure. The executor-facing browse_open/see/act/close ops: tie the engine (browser-driver.js) to the pure lens (browser-lens.js), sanitise every string leaving the lens through injection-guard, FRAME page content as Stranger-tier external speech (read, never obeyed), audit-log every action, and degrade any engine failure to a calm first-person line (never a throw into the turn). browseEnabled gate + PROTO_FAMILIAR_BROWSE_DISABLED=1. cerebellum's browse_* executors dynamic-import this (heavy engine out of the static graph); WARD-ONLY (a gated villager turn is refused). read_webpage is NOT re-backed this pass (Pass 2, spec §11).
+├── browser-driver.js        The engine: lazy playwright-core (optionalDependency — server boots without it), Chromium channel-detect (findChromium: PROTO_FAMILIAR_CHROME/CHROME env → PLAYWRIGHT_BROWSERS_PATH cache → browser/pw-browsers → system installs) with a BACKGROUND auto-fetch when none is found (startChromiumFetch shells out to playwright-core's own install CLI into browser/pw-browsers — it owns the version pin + checksum; the first browse call kicks it off and returns "setting up", status() surfaces install state, a later call finds it ready — never blocks a turn), one persistent context (browser/profile, git-ignored) launched THROUGH the guarded proxy, tab registry + hard cap (browseMaxTabs), idle reaper (browseIdleMin), crash supervision, GET /api/browser/status. extractPageData runs ONE in-page DOM walk → the lens shape with a code-computed unique CSS path per node (the act-time resolver; no held ElementHandles — verified against playwright-core 1.62.1 where page.accessibility is gone). extractPageData also emits IMAGE nodes (0.11.15: img/[role=img]/named-svg/figure/canvas, named or ≥100×100, capped 40, each with a css) so the model can perceive pictures and scope a screenshot to one. act() enforces the §4.1 dialog policy (confirm defaults dismiss; on_dialog:'accept' only for a benign one) + protected-field refusal + act-time unique-match-or-error + a generation guard (a nav / DOM rebuild bumps the page generation via framenavigated; a ref from an older generation errors to a re-observe). **Page-level scroll (0.11.15):** `scroll` with NO ref moves the viewport (value up/down/top/bottom via window.scrollBy/To) to reveal below-the-fold / lazy-loaded / infinite-scroll content, then re-snapshots — distinct from `scroll` with a ref (scrollIntoViewIfNeeded). Pass 2 adds screenshot({scope}), tab ops (list/switch/close), and download capture (page 'download' → takeLastDownload).
+├── browser-lens.js          The cognition layer (spec §3) — PURE, no playwright: PageData → leveled, ref'd, token-capped snapshots (outline/actions/text/full) + code-computed delta verdicts. **Refs are MEANING-BEARING slugs (0.11.14):** buildRefTable/mintRef assign each interactable a slug of its accessible name (role when unnamed), collision-suffixed (add-to-basket, quantity, button-2) via the shared slugifyLabel — the readable-slug-id law applied to page elements, so an LLM picks the right handle far more reliably than an opaque r14 (still code-minted, ephemeral, resolved by the code-held locator). **resolveTarget** powers select-by-text: browse_act may name a `target` (visible label, optional `role`) instead of a ref — exact-name→substring→slug match, unique→ref / several→candidate refs / none→re-observe; code owns disambiguation. **Images are perceivable (0.11.15):** the DOM walk emits image nodes (img/[role=img]/named-svg/figure/canvas, meaningful ones only), buildRefTable refs them, and renderSnapshot adds an `[images]` section — so the model KNOWS pictures are on the page and can `browse_screenshot scope=<image-ref>` to look at one (it reads text, not pixels, so without this it couldn't decide to screenshot). isProtectedField flags password/file/credential fields. Fixture-tested without a browser.
+├── browser-proxy.js         The SSRF enforcement floor (spec §5.1) — a small in-process CONNECT proxy Chromium launches through: the SINGLE DNS-resolution point, runs websearch.js's isBlockedIp over the real connect target and pins the checked IP, so main-nav + subresources + DNS-rebinding are closed together (context.route can't see the resolved IP; a pre-goto check races a rebind).
+├── browser-audit.js         Append-only audit of every browse action → logs/browser-actions.jsonl (GET /api/browser-actions). The mirror of discord-write-log.js; never throws.
+├── browser-grants.js        Sovereignty surfaces (Pass 3b, spec §5.9): the autonomy-grants reader + credentials vault. readGrants() re-reads browser/autonomy-grants.json per call, requires the `acknowledgment` sentence to match ACK_SENTENCE exactly (surrounding whitespace tolerated) or every grant is false (the shipped state); returns {credentials, payments, captchas, autoSubmit, active}. readVaultEntry(name) reads browser/credentials-vault.json (site→user/secret) ONLY under a credentials/payments grant, returns {user, secret} for CODE to type — the secret never enters a prompt/log/audit; the model only ever names the entry. Both files are git-ignored AND on the own-files.js denylist so no Familiar tool can read them. Grants are logged loudly at every browser launch and surfaced in browserStatus(); browse_act stamps the grant it used on the audit entry. The fill-source decision itself is pure in browser-lens.evaluateFill (protected field → vault secret under the matching grant only; a payment field needs `payments`, a credential field `credentials`; a plain field takes model bytes and refuses a stray secret). browse_handoff hands a moment back to the ward: with a display it opens the page HEADED on the SAME profile (openHeaded closes the headless context first — one Chromium per profile — and holds a module-level `handoff` state), the ward acts + clicks "hand it back" (POST /api/browser/handback → completeHandback: close headed, relaunch headless at the same URL, now signed-in via the persisted cookies); while awaiting handback the browse ops wait (isAwaitingHandback) and a failed headed launch parks honestly. Without a display it parks + is honest (0.11.6); the [CONFIRM]-domain submit gate (browseConfirmDomains) refuses a submit-shaped act on a listed domain unless the autoSubmit grant lifts it. browseConfirmMode (0.11.5): 'refuse' (default) hands back; 'ask' HOLDS the act as a pending confirmation (driver state.pendingConfirms) the ward resolves OUT-OF-BAND via POST /api/browser/confirm (a Settings button, never a model tool arg — so a page can't talk the model into self-approving); approval resumes the stored act generation-guarded, decline drops it, and the held tool-result never claims it acted.
 ├── websearch-providers.js   Proper search-API adapters (0.7.20; marginalia 0.7.37) — braveSearch / tavilySearch / googleSearch / marginaliaSearch, one small JSON client each (no scraping), all returning the same {rows}|{error} shape searchWeb dispatches through (API_PROVIDERS registry). Marginalia is an INDEPENDENT small-web index whose "public" key needs no signup (API-Key header; 503 when the shared key is rate-limited). Provider hosts are sanctioned public endpoints (not the SSRF-guarded read path); missing/bad key → {error} → searchWeb degrades to the floor
 ├── guide-chat.js            In-modal web-search explainer (0.7.29) — the SAME Familiar, scoped to explaining the search-backend options in plain language. buildGuideSystem() assembles a STRIPPED context (framing + identity layer via enrich staticOnly + the four prompt fields + a tools-info block with honest per-option trade-offs and Brave/Tavily signup steps + a no-jargon block), macro-resolved. Explainer only: no tools, no memory/graph/temporal/care-check, not persisted/memorised. Backs POST /api/guide-chat. Off-switch PROTO_FAMILIAR_GUIDE_CHAT_DISABLED=1
 ├── web-fetch-util.js        timedFetch — a shared fetch-with-AbortController-timeout used by the search-API provider adapters (one place, not copy-pasted). Not the SSRF guard; just the timeout + JSON defaults for sanctioned backends
@@ -155,6 +161,7 @@ ponderings injection, care-check framing) and as background loops
 ├── knocks.js                Village knock list (V4.x) — contact attempts from unregistered people, captured for one-click registration in the Village editor; tomes/.village-knocks.json, capped, metadata only
 ├── injection-guard.js       Prompt injection immunization — pattern scanner + sanitizer (span-surgical, conservative false-positive budget; escape-tolerant bracket markers). WIRED (0.8.57) at the two genuinely-external inbound boundaries: web text (websearch.js — search titles/snippets, look_up reference text, read_webpage extraction; URLs deliberately untouched) and Village communications (discord-gateway.js inboundContent() — villager/stranger text only). The ward's OWN words are never sanitized on any path (threat scoring must read them raw; a redacted distress line could read as a jailbreak to triage), and no OUTBOUND path (replies, relay_message, relay_to_ward, trusted-contact delivery) passes through it — the guard is inbound-third-party-only, which is what keeps relay and triage structurally unblockable by it. NOT applied to Phylactery/Unruh recall (first-party stores; villager-written memories carry provenance labels instead) or gcal event titles (the ward's own calendar)
 ├── memorization.js          Persistent per-session memorization queue + worker; V7: buildSharedRoomPrompt variant selected when audienceTag !== 'ward-private' — focuses on ward-only facts, skips unregistered-third-party detail. Source-aware consent (0.8.88): direct ward-self facts kept on implied consent, only third-party/group-room facts ask; extractor tags temporality (episodic→daily dated / standing→ward register). Deferred follow-ups: the ward-private `buildPrompt` also asks for `follow_ups` (things I said I'd do this session but never backed with a tool) on the SAME call — `parseFollowups` + `createSessionFollowup` (recent-ponderings.js) store each; gated by `followupsEnabled` (default ON) / `PROTO_FAMILIAR_FOLLOWUPS_DISABLED=1`
+├── session-log.js           Shared `writeSessionLog(data,{logsDir})` (atomic tmp+rename), `stampMessages` (id/timestamp safety net), and `turnMessages(user,assistant,{speaker})` (the one place a call's turn pair is built — id + real accumulation-time timestamp + a `speaker` on the user turn when known). The one place a conversation lands in `logs/` as a reviewable session. Used by the Discord gateway AND both voice-call servers: a voice call (web + Discord) lands as a reviewable session log the ward can open in the Sessions tab, not only as extracted facts — web at `ward-private`, each Discord segment stamped with ITS audience tag (a villager's segment never ward-private), written on hang-up before memorization, each half independent. GROUP calls: the room session attributes each turn to the villager who spoke (`speaker`, matching Discord text) so memorization and the reviewer both read who-said-what; `createMessageEl` renders the speaker's initial + name. Off-switch `PROTO_FAMILIAR_VOICE_SESSION_LOG_DISABLED=1`
 ├── outgoing-filter.js       Pillar D outgoing gate — semantic check before delivery; retries up to budget then safe-refusal
 ├── providers.js             Shared chat-completions URL map (used by server.js + thalamus.js)
 ├── llm-call.js              One chat-completion call for the autonomous background loops (pondering / reach-out / memorization / tome-graduation) — replaces four byte-identical `defaultCallLLM` copies. THINKING-MODEL handling lives here: a reasoning model bills its chain-of-thought against `max_tokens`, so a small cap returned an empty `message.content` (the "Provider returned empty content" the loops logged). `callProviderChat` uses a generous default cap (free for non-thinking models — they stop when done), falls back to `reasoning_content`/`reasoning` when `content` is empty (`extractContent`, shared with memorization which keeps its own finish_reason handling), and throws a diagnostic naming `finish_reason` (=length → raise the cap) instead of a bare mystery. The safety-critical triage call in `cerebellum.js` (silence-triage) now routes through this too (ward-signed, 0.8.82): its cap was 600 with no reasoning handling, and its empty-content path returns `action:'wait'` — so a thinking model there degraded to a SILENT no-op on a distressed ward (the 1.5-hour-silence class). The call now uses `callProviderChat` (cap 4000 + reasoning recovery); the decision logic is unchanged — a genuine transient failure still degrades to the safe `wait`, never a fabricated decision
@@ -256,6 +263,10 @@ lifecycle of the autonomous loops:
   through `/api/chat` with `enrich:false` so external clients get
   plain OpenAI-shape traffic without Proto-Familiar `_thalamus` extras.
 - `POST /api/debug-prompt` — offline preview (no upstream call).
+- `GET /api/last-prompt` — the verbatim message array last sent to the model,
+  per surface (web / voice / discord), captured at the send boundary
+  (`prompt-capture.js`). Ground truth for the prompt inspector; localhost-only,
+  same as `/api/debug-prompt`.
 - **Media (vision build spec §2):** `POST /api/media` (its OWN
   `express.raw({type:'image/*'})` body parser, so image bytes never
   touch the global JSON limit), `GET /api/media/:id` (streams bytes for
@@ -811,9 +822,21 @@ never snapshotted — dereferenced fresh when it surfaces), a `trigger`
 `unresolvedRefs` — the Node side applies the live-signal gate), and a
 `visibility` the Familiar itself controls. Unruh owns storage + trigger TIMING
 (`intentions_due`); the Node side owns the condition gate and budgets.
+**Phase-round matching is forgiving (0.11.17, bugfix):** a `phase` round's
+`trigger_phase` is matched to the ward's live routine-phase label via
+`phase_matches` — case-insensitive and substring either way — so a round the
+Familiar typed as `'evening'` still fires against a phase labelled
+`'Evening wind-down'` (the exact match `'evening' == 'Evening'` silently never
+fired, so evening check-ins never surfaced). `set_intention` also canonicalises
+the typed word to a real phase label at set time (`resolve_phase`, fed the
+ward's `list_phases` labels by the MCP wrapper) and, when nothing matches,
+returns a `warning` the Familiar surfaces — so a round that can never fire is
+visible, not silent dead care.
 Chat-path tools (`cerebellum.js`, first-person, ward-only, `intentions`
-surfacing module): `intention_set/list/drop/done/mark_fired/
-set_rounds_visibility`. Budget caps enforced at set time, ward-configurable:
+surfacing module): `intention_set/list/drop/done/mark_fired` +
+`intention_visibility` (rounds shared/private — renamed from
+`intention_set_rounds_visibility` in 0.11.16 so its name no longer collides on
+the `intention_set` prefix and mis-routes tool selection). Budget caps enforced at set time, ward-configurable:
 `intentionStandingPerPhase` (default 3), `intentionOpenOneShots` (default 30) —
 a cap hit tells the Familiar to prune, never a silent drop. Due intentions
 surface in `[Temporal Context]` via `temporal_context` (a payoff turn riding the
@@ -956,6 +979,35 @@ non-villager click strips the controls. Set/settle actions run through
 the same `applyConsentAndSettle` helper as the text path (shared, not
 copy-pasted) and the same audit log. DMs are inherently private, so no
 ephemeral flag is needed.
+
+*Ward console — `!queue` + `!connection` (0.11.19, `ward-consent-queue.js`,
+`ward-connections.js`).* The ward-facing twins of the villager consent menu,
+same discipline (pure builders, gateway does the I/O, no LLM). Shared
+component primitives (`btn`/`row`/`EMBED_COLOR`/`expiredView`) now live in
+`discord-menu-kit.js`, used by all three menu modules instead of copied.
+Both commands are **ward-DM only** (personal data + settings never render in
+a room) and intercepted before any turn, beside `!update`/`!call`.
+  - **`!queue`** — the pending memory-consent queue as a component menu:
+    paginated list, a picker to open one item (Keep it / Drop it), and
+    Keep all / Drop all. Keep → `confirmConsentMemories`, drop →
+    `dropPendingMemories`, both then `pruneConsentPending` (shared
+    `settleQueueItems`). Reads the same `.consent-pending.json` the web
+    `[PENDING MEMORY CONSENT]` block shows. `pfqueue:*` custom_ids.
+  - **`!connection`** (also `!conn`/`!model`, plurals accepted) — set the
+    active connection (`primaryConnectionId`) and route each background
+    feature (`featureConnections`, the six `connectionForFeature` keys,
+    mirroring `FEATURE_CONNECTIONS` in `public/app.js` — a test guards the
+    two against drift). Writes go through `patchWardSettings`: the same
+    locked, atomic, wholesale-top-level `mergeSettings` write the HTTP
+    `PUT /api/settings` uses, so a Discord change and a web change can't
+    tear the file. `pfconn:*` custom_ids; a `__default__` sentinel clears a
+    feature override back to the primary.
+  - Both interaction handlers **re-check that the clicking user is the ward**
+    on every event (`interactionIsWard` → `discordWardUserId`) — a villager
+    clicking a forwarded control is refused. The gateway's
+    `INTERACTION_CREATE` dispatch routes by custom_id prefix
+    (`pfconsent:`/`pfqueue:`/`pfconn:`). Ward `!consent` now points at both
+    new commands (discoverability) rather than only the web app.
 
 *Clearance-gated tools (V10, `docs/discord-tools-build-spec.md`).*
 `handleTurn` runs a tool loop (reusing `cerebellum.runToolCallLoop`;
@@ -1846,6 +1898,50 @@ doesn't sit in front of it.
 
 The depth defaults to 4 (`thalamusDynamicDepth`, 1–50, server-synced).
 
+### The four core prompts — every surface, not just the web (`core-prompts.js`)
+
+Separate from Phylactery identity (the `static` block above), the ward authors
+**four prompt fields** in Settings that make the Familiar *itself*: System
+Prompt, Character Profile, User (Human) Profile, and Post-History Prompt. On the
+**web** these are assembled by the browser (`_buildApiMessagesInner` in
+`public/app.js`) and POSTed inside the messages array. A **server-initiated
+turn** — Discord text, a voice call — has no browser, and until this fix it shipped
+**without any of them**: the Familiar answered Discord and voice with none of its
+configured identity (the reported "my Familiar doesn't see the user prompt at
+all on Discord").
+
+`core-prompts.js` is the server-side mirror of that client assembly — the ONE
+place, kept in step with `public/app.js` (order system → `[Character Profile]` →
+`[Human Profile]`, the same headers, `{{user}}`/`{{char}}` resolved via
+`substituteMacros`). It is NOT the lorebook/tome interleaving (that stays
+browser-only); it is exactly the four identity fields.
+
+- `coreSystemSegment(settings)` → the system-message segment (empty when unset).
+- `postHistoryMessage(settings)` → the trailing message, ward-configurable role.
+- `withCorePrompts(messages, settings)` → folds both into a bare array: core
+  segment LEADS (so the `static` block prepends in front of it, preserving the
+  web order static → persona), post-history TRAILS the conversation.
+
+Wiring: **`/api/chat`** injects them when the caller passes `injectCorePrompts`
+(the voice path, `voice-chat-turn.js`); the web client builds them itself and
+never sets the flag. **`discord-gateway.js`** folds `coreSystemSegment` into
+`systemContent` and appends `postHistoryMessage` in both the live (`handleTurn`)
+and revisit paths. Voice (web + Discord) routes through `voice-chat-turn.js`, so
+one flag covers both.
+
+### Prompt capture — the inspector shows what was actually sent (`prompt-capture.js`)
+
+The web prompt inspector used to be a client-side *reconstruction* — it could
+only ever describe the web assembly, and it showed what *should* be built, not
+what left the building. So it cheerfully showed core prompts present while
+Discord received none. `prompt-capture.js` records the real outgoing message
+array at each send boundary (`recordOutgoingPrompt(surface, …)` — web / voice /
+discord / discord-revisit; last-one-per-surface, best-effort, never throws into
+a turn). `GET /api/last-prompt` reads it, and the inspector gained a surface-tab
+view that renders each surface's **verbatim** captured payload beside the
+annotated web reconstruction — ground truth for the surfaces with no browser of
+their own.
+
 Within `dynamic`, the order is deliberate:
 1. **`[Now]`** — wall-clock + weekday + date + relative phrasing of "my human last sent a message" (see "Time perception" below). Always first so every other block reads against a consistent present.
 2. **RAG memories** — direct retrieval relevance, weight-bearing facts. Each result's date is rendered through `relativeDay()` so "from yesterday" appears alongside the granularity tag.
@@ -2247,8 +2343,9 @@ that is the contract talking — update all seams together or stop.
 | Loop | Cadence | Off-switch | What it does |
 |---|---|---|---|
 | Memorization | 5s tick | `PROTO_FAMILIAR_MEMORIZE_DISABLED=1` | Drains queue of session-memorization jobs |
-| Pondering | 1min tick + tier-based interval | Settings toggle + `PROTO_FAMILIAR_PONDERING_DISABLED=1` | Picks an interest, ponders it, writes a real tome entry |
+| Pondering | 1min tick + tier-based interval | Settings toggle + `PROTO_FAMILIAR_PONDERING_DISABLED=1` | Picks an interest, ponders it, writes a real tome entry. When web search is on, a tick may first do bounded unattended research (`ponder-research.js` + `ponder-web-budget.js`, §8.5): the model names searches/URLs, code executes the reads under a shared daily budget, sources are cited in the ponder and audited under surface `pondering`. Settings toggle + `PROTO_FAMILIAR_PONDER_WEB_DISABLED=1` |
 | Reminders | 30s tick | `PROTO_FAMILIAR_REMINDERS_DISABLED=1` | Polls `reminders_due`, enqueues into outbox, marks fired; same tick runs event lead-time alerts (`PROTO_FAMILIAR_EVENT_ALERTS_DISABLED=1` to silence those alone), the weather refresh (self-gated to a 6h cadence; `PROTO_FAMILIAR_WEATHER_DISABLED=1`), and elapsed-stamping of long-past unresolved events (self-gated hourly; `PROTO_FAMILIAR_ELAPSED_STAMP_DISABLED=1`) — both ride this tick rather than spinning their own loops |
+| Page watches | 5min base tick + per-watch interval (~6h default, 15min floor) | Settings toggle + `PROTO_FAMILIAR_PAGE_WATCH_DISABLED=1` | Re-reads each watched URL over the static read path, diffs in code, and only on a real change asks the LLM whether to surface an outbox banner (§9 Horizon #1; `page-watch.js` + `page-watch-loop.js`). Inert until a watch is registered. `logs/page-watch-events.jsonl` |
 | Silence triage | 5min tick + LLM-set cool-down | `PROTO_FAMILIAR_TRIAGE_DISABLED=1` | LLM decides "should I reach out?" given threat + silence |
 | Warm reach-out | 10min tick + LLM-set cool-down | Settings toggle + `PROTO_FAMILIAR_WARMTH_DISABLED=1` | Warm non-crisis outreach (ward banner or warm-villager DM); stands down at moderate+ threat |
 | Tome graduation | 30min tick (opt-in, default OFF) | Settings "Graduate tome knowledge" + `PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1` | Drains durable facts stranded in tomes → identity/memory/graph (relational facts resolve-or-create + dedup); confirmed route before tidy; consent-gated ward memory |
@@ -2256,6 +2353,7 @@ that is the contract talking — update all seams together or stop.
 | Needs tracking | 30min tick (opt-in, default OFF) | Settings "Track unmet needs" + `PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1` | Marks a recurring need-window's occurrence `missed` once its window elapses unresolved (the needs-fulfilment ledger). Stands down at moderate+ threat; only the lapse is made factual — never auto-confirms a projected consequence |
 | Memory coverage sweep | 10min tick (default ON) | Settings "Memory coverage sweep" + `PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1` | Memorizes PAST days that never ingested (day-anchoring Phase 2); skips today + completed days; only enqueues into the memorization worker — no LLM call of its own |
 | Noticing | 20min base pulse + self-set cadence (default ON) | Settings "Let my Familiar notice on its own" + `PROTO_FAMILIAR_NOTICING_DISABLED=1` | The Familiar's own turn: code-gated wake conditions (due intentions, rhythm deviation, readiness gaps, aging intents/tasks, overdue events) → bounded tool-using deliberation. Runs at ALL threat tiers (ward-signed no-stand-down); every decision-reaching tick logs to `logs/noticing-events.jsonl` |
+| Media retention | 6h tick (default ON) | Settings toggle + `PROTO_FAMILIAR_MEDIA_RETENTION_DISABLED=1` | Voice Pass 4 §9, the 13th worker. Curates aged voice-clip SOUNDS: code gates pick candidates (audio past `voiceNoteRetentionDays`, not stripped, not `keep`, has a transcript) → ONE batched LLM judgment names which sounds to keep → the rest `media.stripAudio` (bytes gone, transcript+meta+slugs survive). The transcript ALWAYS survives. Fail-soft: an LLM error or unparseable response keeps everything that pass (never strips on doubt). Defers during a live call + at moderate+ threat |
 | Google Calendar sync | 60s wake + ward interval (hourly default; opt-in, default OFF) | Settings "Google Calendar sync" + `PROTO_FAMILIAR_GCAL_DISABLED=1` | Fetch the ward's iCal feed → Unruh `gcal_ingest` (parse + reconcile + change-classify) → route ONLY `new` ids to the projection cue. Failure degrades silently and never reconciles deletions |
 | Discord gateway | 30s supervisor | Settings toggle + `PROTO_FAMILIAR_DISCORD_DISABLED=1` | Bidirectional Discord presence; follows Settings (token/enable) without restart |
 | Threat detection | per chat msg (in-band) | `PROTO_FAMILIAR_THREAT_DISABLED=1` | Patterns score my human's text; tracker accumulates with decay |
@@ -2426,6 +2524,60 @@ selecting `pocket` in Settings starts the same download (the selection is the
 consent). The worker is built on first use; the old one is stopped before the
 new starts so two engines never hold models in RAM at once.
 
+**Runtime fall-back, not just install-time.** `resolveBackend` only knows whether
+pocket's *files* are present — it can't see that torch's native library won't
+load (Windows "[WinError 126] … c10.dll" from a missing Visual C++ runtime, a
+corrupt install). So `currentAudioWorker` **verifies a freshly-built pocket
+worker actually loads** (one `ping`, which runs the torch import + model load, so
+it doubles as a warm-up) and, if it can't, tears it down and rebuilds on sherpa —
+same `fellBackFrom: 'pocket'` shape. The result is cached (`pocketBroken`) so a
+known-bad pocket isn't respawned every turn, and cleared by `stopAudioWorker` so
+a repair (Fix Kyutai) + fresh worker is re-verified rather than demoted forever.
+This is why a missing VC++ runtime now means a *lesser voice*, not silence.
+
+**Why a clean Windows box hits this at all:** torch's Windows wheels are built
+against the MSVC runtime, and `uv`'s standalone Python doesn't ship it the way
+conda does (astral-sh/uv#18413) — a dev machine usually already has the redist
+from something else, a fresh one doesn't, so "same hardware, mine works, theirs
+doesn't." `ensureWindowsMsvcRuntime` (voice-backend.js) closes that gap: on
+Windows it installs cgohlke's `msvc-runtime` wheel into the venv to ACQUIRE the
+runtime DLLs, then **copies them into `torch/lib`** — because the wheel drops
+them beside python.exe (sys.prefix / Scripts), which is *not* where torch looks.
+torch loads c10.dll from `torch/lib` and Python 3.8+ resolves that DLL's own
+dependencies from `torch/lib` + `add_dll_directory` dirs + system dirs only —
+never sys.prefix or PATH — so the runtime is discoverable only if it sits in
+`torch/lib` itself (the first version of this fix installed the wheel and stopped
+there, and Kyutai still failed with WinError 126). The copy is a pure, testable
+helper (`placeMsvcRuntimeBesideTorch`), idempotent, re-run after every venv sync.
+No admin, no system-wide redist. It runs from **every** install/repair path (the
+`ensure-voicebox.mjs` CLI, the Settings/first-use auto-install it shells, and
+`rebuildVoicebox`), best-effort (older Python has no wheel → the built-in engine
+still covers it). `POST /api/voice/fix-kyutai` rebuilds the venv, adds the
+runtime, and proves torch imports before declaring success (returning the
+official-redist hint only when even that isn't enough); it stops the audio
+worker first so Windows can delete the venv python.
+
+**Provisioned at install, not just first use.** The three installers (`install.sh`,
+`install.bat`, `scripts/win/install.ps1`) run the voice setup on a **fresh install**
+(Kyutai via `ensure-voicebox.mjs --install` + the listening models via
+`ensure-audio-models.mjs`), so a new user isn't left to discover a download or
+troubleshoot a half-set-up engine. Heavy, so it's fresh-install-only and skippable
+with `PF_SKIP_VOICE_INSTALL=1`; every step is non-fatal (a machine that can't fetch
+voice still gets a Familiar on the built-in engine). First-use auto-download still
+exists as the fallback for installs that skipped it.
+
+**Speed & expressiveness (`voiceTts.speed`, `voiceTts.temperature`).** User-tunable
+in Settings → Chat → Voice. The two engines honour them differently: **sherpa** takes
+both **per request** (threaded from settings into each TTS call); **pocket** takes no
+speed (`generate_audio_stream` has none — reported `unsupported`) and bakes
+temperature in at **model-load** time via `PF_TTS_TEMPERATURE`, so `resolveBackend`
+puts the chosen temperature in the pocket worker's spawn env and `currentAudioWorker`
+respawns the worker when that env changes (an env-signature compare) — which is why a
+temperature change takes effect on the next spoken message, not mid-utterance. The UI
+says as much. All voice settings now live under **Chat** (the engine picker, Fix
+Kyutai, voice call, tuning, read-aloud); only the **Voice benchmark** stays in
+Diagnostics.
+
 **Listening is not governed by this default.** `listeningWorker()` resolves
 sherpa **by name** (not via the default, which is now `pocket`) — the recogniser
 is always a sherpa model, and routing a voice note to the Python speaker would
@@ -2564,14 +2716,29 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   runner is an injected `onTurn` seam server.js wires to the chat path. Hard
   off-switch `PROTO_FAMILIAR_VOICE_CALL_DISABLED=1`. The web adapter + the real
   `onTurn` wiring are the next 2b slice.
+  - **Hybrid ASR (ward-configurable, default ON).** The streaming 20 M zipformer
+    is lossy (uppercase, no punctuation, weak on hard words). Since a call
+    utterance has an explicit boundary (Discord speaking-end / web release), the
+    engine uses streaming only for endpointing and re-transcribes the finished
+    clip with the accurate offline model (SenseVoice — the same one voice notes
+    use). `audio-worker.mjs` buffers the utterance and `emitFinal` runs the
+    offline pass on finalize, falling back to the streaming text if the offline
+    model isn't loaded or errors (graceful). The engine loads `asr-offline`
+    alongside `asr-streaming` at call start when enabled and opens each stream
+    with `offlineFinal`. Setting `voiceCallOfflineTranscribe`; off-switch
+    `PROTO_FAMILIAR_VOICE_OFFLINE_ASR_DISABLED=1`. Benefits web and Discord calls
+    equally (both share the engine + worker).
 - **`voice-discord-adapter.js` is the Discord transport (Pass 3).** A second
   `CallAdapter` behind the same contract, so `call-engine.js` is untouched. Its
   only real work is the two format seams: inbound Opus (48 kHz stereo, decoded
   by `opusscript`) → 16 kHz mono for the ASR, and the engine's 24 kHz mono reply
   → 48 kHz stereo for `createAudioResource(Raw)`. Discord's own SPEAKING
-  start/end events are the utterance boundary (no push-to-talk, no VAD):
-  speaking-start opens a per-speaker subscription+decoder, speaking-end calls
-  `endUtterance` and tears them down. The `@discordjs/voice` functions + the
+  start/end events are the utterance boundary (no push-to-talk, no VAD), but the
+  per-speaker subscription+decoder is opened once and kept OPEN for the whole
+  call — subscribing reactively on each speaking-start clipped the first ~30–60 ms
+  of every utterance ("Okay"→"KY"), so the events now only gate whether decoded
+  audio feeds the engine or a small pre-roll buffer (flushed at onset); the
+  subscription is torn down on channel-leave, not utterance-end. The `@discordjs/voice` functions + the
   Opus decoder are injected, so the whole adapter is unit-tested against a fake
   connection (`tests/voice-discord-adapter.test.mjs`); the resample helpers are
   pure and exported. The gateway voice bridge lives in `discord-gateway.js`
@@ -2586,13 +2753,163 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   `server.js` attaches it at boot and registers it as the gateway's voice
   controller (`setDiscordVoiceController`), so a ward-only `!call`/`!join` (join
   the ward's current VC, found from tracked voice states) and `!leave` drive it.
-  Off-switch `PROTO_FAMILIAR_DISCORD_VOICE_DISABLED=1`. The Pass 3a turn is a
-  canned spoken acknowledgement (audio-OUT proof); the real multi-speaker Discord
-  turn path through the audience gate (3b — a ward-sign-off privacy path), the
-  per-location call-mode dropdown, and the `join_voice_call`/`leave_voice_call`
-  Familiar tools (3c) are the following slices — ward-verified live (no
-  gateway/UDP/Opus in CI). Deps are pure-JS/WASM (`@discordjs/voice`,
-  `opusscript`, `libsodium-wrappers`) so no native compiler is needed.
+  Off-switch `PROTO_FAMILIAR_DISCORD_VOICE_DISABLED=1`. **Pass 3b:** the ward's
+  voice runs a real ward-private chat turn via `voice-chat-turn.js` — the shared
+  `/api/chat` spoken turn (RULE-A guarantees) the web call also uses — wrapped by
+  the same `createVoiceTurnRunner` (ward-only threat scoring, speakable,
+  synthesize). A **registered villager**'s voice runs a turn gated to the ROOM's
+  audience (ward-signed §5): the speaker slug resolves → user id (`refToUser`) →
+  villager, the audience input `{location, participants}` is built from the
+  complete VC roster (`discordVoiceChannelMembers`, seeded from `GUILD_CREATE`
+  voice_states), and that object is the `sessionAudience` — so `/api/chat` scopes
+  recall (`audiences`/`topicGrants`), withholds ward-private, tags storage. The
+  villager turn carries **no ward-private history**, so it can't leak; storage is
+  split per audience tag; a **stranger** is transcribed but never answered/stored
+  (fail-closed); threat stays ward-only. The gated turn carries no tools. **Pass 3c (partial):** the ward-only
+  `join_voice_call`/`leave_voice_call` Familiar tools (`cerebellum.js`
+  `VOICE_CALL_TOOLS`, appended for the ward in `composeDiscordTools`, off under the
+  hard switch) let her join/leave on natural language — the gateway injects
+  `voiceJoin`/`voiceLeave` into the ward turn's tool ctx (no import cycle; it owns
+  the controller + who's-in-which-VC), resolving the channel from the ward's
+  current VC or a `<#id>` they mentioned so the Familiar names no argument. The
+  per-location **call-mode dropdown** (`village.js` `callMode` off/summon/auto;
+  default summon so `!call` always works, auto-join opt-in) governs joining: `off`
+  refuses even `!call` (`locationCallModeFor`), `auto` joins hands-free when the
+  ward enters a VC (`maybeAutoJoinVoice` off `VOICE_STATE_UPDATE`). **Pass 3d —
+  group-call presence & attribution** (`voice-presence.js`, pure): in a group call
+  (2+ humans) each turn is prefixed with the speaker's real name — my human's
+  included, marked `(WARD)` (0.11.18) so I never read their words as my own or a
+  villager's — in the live transcript and stored call history (solo calls unchanged;
+  the memory write still carries the speaker as its own field). The same
+  disambiguation covers multi-party **text** rooms: `attributeUserContent`
+  (`discord-gateway.js`) prefixes every guild-channel turn — a villager as
+  `[Name]:`, my human as `[Name (WARD)]:` — while a one-on-one ward DM stays raw
+  (there's only us). Baked into the stored content so it replays identically. Names come from a
+  gateway user-object cache (`gw.userInfo`, seeded from `GUILD_CREATE` members +
+  `VOICE_STATE_UPDATE.member`) via `nameForVoiceUser`/`discordVoiceDisplayName`,
+  with the villager name winning through a one-read `villagerByAlias`. A
+  first-person "who's here / who joined or left" note is surfaced once per roster
+  change (annotation only — like the room-sound note, never stored, never moves
+  threat, gate untouched), and a leak-free spoken **greeting** (`voiceProactiveGreetings`,
+  default ON) welcomes a non-ward arrival via the engine's `speakProactive` so it
+  rides the next silence gap, deduped per stay and stood down at moderate+ threat.
+  Off-switches `PROTO_FAMILIAR_VOICE_PRESENCE_DISABLED=1` (whole layer) /
+  `PROTO_FAMILIAR_VOICE_GREETINGS_DISABLED=1` (spoken hello only). **opusscript
+  shared-heap decode fix** (0.11.10): opusscript keeps one emscripten heap across
+  all `OpusScript` instances and caches heap views at construction, so allocating a
+  new per-speaker decoder (a second speaker joining) can grow the heap and detach
+  the existing decoders' views → "memory access out of bounds" on their next packet
+  (an existing speaker went silent when another joined). `decodeOpus` in
+  `voice-discord-adapter.js` rebuilds the decoder on the current heap and retries
+  the packet once (no audio lost, stream stays open; converges once the roster
+  stabilises); a truly bad packet is skipped with a rate-limited warning, and an
+  oversized packet (> `MAX_OPUS_PACKET`) is dropped before it can overflow the
+  input buffer. All speakers including other bots are decoded (two Familiars by
+  voice is supported). **Noise/silence
+  polish** lives in `call-engine.js` as two options both call servers pass:
+  `transcriptFilter` (drops ambient noise the recogniser guessed as CJK, via
+  `isLikelyNoiseTranscript`) and `turnSettleMs` (coalesces sentences within a pause
+  into one turn so the Familiar doesn't interrupt; ward-tunable `voiceCallSettleMs`,
+  Discord always / web open-mic only). Ward-verified live (no gateway/UDP/Opus in CI). Deps: `@discordjs/voice` **≥0.19.2** (0.18 uses an
+  older voice gateway with no DAVE and can no longer complete Discord's current
+  voice handshake — it stalls `connecting → signalling`; 0.19 is gateway v8 +
+  DAVE + the multi-transition fix), `opusscript` (pure-JS Opus, only needed once
+  audio flows), `@noble/ciphers` (pure-JS transport encryption, primary) with
+  `libsodium-wrappers` as a WASM fallback, and `@snazzah/davey` (DAVE E2EE — a
+  napi-rs native module that ships PREBUILT binaries, so no compiler; pulled in by
+  `@discordjs/voice`). `loadDiscordVoiceDeps` probes the transport ciphers up
+  front, logs the active one, and fails the join FAST with a clear message if none
+  load (a broken libsodium ESM build — seen on Windows AND Linux — otherwise
+  stalls for 30s instead of naming the cause).
+
+## Voice — Pass 4 (who is speaking, proactive voice, curation) — IN PROGRESS
+
+The "who is speaking" spine is built as pure, testable modules ahead of the live
+wiring (so the safety-critical logic is verifiable without audio):
+
+- **`voice-embedding.js`** — pure vector math (cosine similarity, L2 normalise,
+  averaged enrolment). Fail-soft: garbage → 0, never NaN/throw (it runs on the
+  live-call path).
+- **`voiceprints.js`** — the LOCAL biometric store, `tomes/.voiceprints.json`
+  (git-ignored, never synced, never leaves the embodiment). Ward print + opt-in
+  per-villager prints. `enrolledPrints()` feeds the diarizer. Never throws on a
+  missing/corrupt file.
+- **`voice-guest-watchdog.js`** (SAFETY-CRITICAL, ward-signed §8.2) — the privacy
+  state machine. ENTER on N=3 consecutive non-ward segments; RELEASE only on BOTH
+  M=6 ward segments AND ≥90 s quiet; instant spoken-release ONLY in a
+  ward-matched segment (un-fakeable), plus manual/UI release. Emits transitions
+  for logging; the `voiceGuestPolicy` (ignore/note/gate) is the caller's, never
+  decided here. Any behavioural change needs the ward, like the audience gate.
+- **`voice-diarize.js`** (§8.3) — mixed-stream matcher: enrolled prints first,
+  then short-lived online clusters (guest-1/guest-2); unmatched → stranger-tier
+  (fail-closed). **Wired into the call engine (open-mic path):** the engine's
+  `diarize` + `diarizeSegments` seams run the stage only in open-mic mode with the
+  model present — on each finalized utterance the buffered PCM is embedded and
+  `diarize()` resolves `{ref,name}`; the turn is attributed to that speaker.
+  `voice-call-server.js` builds a per-call diarizer **only when a ward print
+  exists** (no baseline → no diarization, call stays ward-private), and `runTurn`
+  gates the audience **fail-closed**: any non-ward voice sets a
+  stranger/villager-present audience BEFORE anything that could throw, so a guest's
+  turn can never read ward-private context. A matched villager carries their
+  id+name (their real circle resolves via `/api/chat`); a guest is `someone`. The
+  stored transcript labels the diarized speaker. Push-to-talk is untouched (§8.2
+  watchdog owns it). Off-switch `PROTO_FAMILIAR_VOICE_DIARIZE_DISABLED=1`.
+- **`voice-audio-tags.js` + `voice-tagging.js`** (§8.4) — room-sound tagging,
+  **annotation-only** this milestone. `voice-audio-tags.js` is the pure classifier:
+  it DROPS human-vocalisation labels (speech, shouting, crying, laughter — the
+  care-detection territory §8.4 defers to its own ward-signed spec) and bare
+  acoustic-environment labels, keeps salient non-human sounds above a confidence
+  floor, and phrases them into one "[I can hear … in the room]" line.
+  `voice-tagging.js` is the plumbing: `createTagSegment` (the engine seam — loads
+  the tagging model on the worker, runs the `tag` op, returns RAW AudioSet events)
+  and `createRoomListener` (per-call dedup → one-off note). The engine's
+  `tagSegment` seam runs on each finalized utterance (independent of speaker ID —
+  different model); both call servers inject the classified line as a **one-off
+  system note, never stored, never touching the threat tier**. Inert until the
+  ward's `voiceAudioTaggingEnabled` (default OFF) AND the model is installed.
+  Off-switch `PROTO_FAMILIAR_AUDIO_TAGGING_DISABLED=1`.
+- **Worker op** (`audio-worker.mjs`): `role:'speaker'` loads the
+  `SpeakerEmbeddingExtractor` (sherpa `BASE_MODELS` id `speaker-embed`, unpinned
+  until `pin-audio-models.mjs speaker-embed <url>` records its sha); the `embed`
+  op turns a wav OR raw VAD samples into a number[] voiceprint. `role:'tagging'`
+  loads the zipformer AudioSet `AudioTagging` model (id `tagging-audioset`, pinned
+  via `pin-audio-models.mjs tagging-audioset --upstream`); the `tag` op turns a wav
+  OR raw samples into AudioSet events. Both: too-short/absent → honest
+  `not-ready`/`not-loaded`, never a fabricated result.
+
+Shipped alongside:
+
+- **Voice-escalation factor** (§10, ward-signed §16.4) — `contactDeadlineFor`
+  shortens the trusted-contact clock (×`voiceEscalationFactor`, default 0.5,
+  clamped [0.25, 1]) ONLY when a triage check-in was confirmed spoken into a live
+  call with the ward present (`delivery['voice-call'].{status:'delivered',
+  wardPresent:true}`). Tightens toward action only.
+- **Media-retention loop** — see the Autonomous-loops table (13th worker).
+- **Proactive voice → Discord (§7, `voice-discord-server.js`)** — the Discord half
+  of the web `voice-call` push adapter, registered under the SAME `voice-call`
+  name so a check-in spoken here earns the §10 escalation factor identically.
+  Two paths: (1) a live Discord call → speak the item into it; (2) no call +
+  `voiceProactiveJoin` (default OFF, ward toggle) + my human sitting in a VC →
+  transient join → speak → leave. BOTH gated on `wardVoiceState().wardAlone` —
+  a private check-in is never spoken where a villager/stranger (or any
+  unidentified member — fail-closed) can hear; when it can't be spoken privately
+  the adapter declines and the item still lands via the private channels
+  (webhook / bot-DM). The two `voice-call` factories never both deliver: at most
+  one voice connection is live (the shared call-state lock), and the proactive-join
+  branch stands down whenever any call is active (`isCallActiveFromFileSync` +
+  a delivery-time re-check), so the single delivery record is never overwritten.
+  `findWardVoiceChannel` (discord-gateway) locates my human's VC across guilds.
+  Off-switch: the whole feature rides `PROTO_FAMILIAR_DISCORD_VOICE_DISABLED=1`.
+
+**Pass 4 complete.** Shipped: enrolment endpoints + UI; the guest watchdog +
+diarizer integration into the call engine (§8.2/§8.3); the web AND Discord
+`voice-call` push adapters (proactive voice + §7 Discord proactive-join);
+ward-voice threat scoring (§10, ward-signed §16.1); the speaker-model pin/download
+(`voice-pin.js` + the in-UI downloader); and room-sound tagging (§8.4,
+annotation-only). The audio-tagging model still needs its live pin
+(`pin-audio-models.mjs tagging-audioset --upstream`), the same last step as the
+speaker models. The long-term care-detection ambition on top of §8.4 is a
+separate, ward-signed spec and deliberately NOT built here.
 
 ## Security design
 

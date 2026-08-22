@@ -29,6 +29,9 @@ sources:
   - id: providers-js
     type: file
     path: providers.js
+  - id: claude-md
+    type: file
+    path: CLAUDE.md
 ---
 
 # Vision and Media Input
@@ -61,13 +64,15 @@ The load-bearing constraint is that `message.content` stays a plain string forev
 
 **Stand-in text**: When an image cannot be sent (modality off, over the limit, audience gated), `buildStandin()` and `contentWithStandins()` render a human-readable trace like `[image: sunset.jpg]` inline in the string content [@vision-js].
 
-**Capability probe and caching**: The system optimistically assumes 'auto' connections can see images on the first live turn, then caches the actual capability in `tomes/.vision-capability.json` keyed by `provider:model` [@vision-js]. If a turn fails with a modality error (4xx response), it falls back mid-turn: the request is retried with stand-ins in place and the capability is cached as 'no' [@vision-js]. This "real turn is the probe" approach avoids adding an extra LLM call upfront — the acceptance criterion was zero additional LLM calls beyond the turn itself [@vision-js].
+**Capability probe and caching**: Uncached vision capability (e.g., `visionCapable: 'auto'`) is resolved via `looksVisionCapable()`, a tight allowlist of known vision-capable model families [@vision-js]. Models outside the allowlist default to BLIND — their images are described instead of sent live. This conservative default reflects [a design decision made after an incident](../decisions/vision-capability-defaults): betting safety on provider rejection is unsafe when some blind models silently accept requests and confabulate [@vision-js]. After a successful live image turn, the result is cached in `tomes/.vision-capability.json` keyed by `provider:model` [@vision-js]. This allowlist + caching approach avoids extra LLM calls while defaulting ambiguous cases toward safety [@vision-js].
 
 **Implementation in chat loops**: Both non-streaming and streaming chat paths in `server.js` wire the mid-turn fallback [@server-js]. The non-streaming loop wraps `runToolCallLoop` with a retry; the streaming loop re-runs the round with `round--` on the pre-header `!upstream.ok` branch when modality errors occur [@server-js].
 
 **Field stripping**: After materialization, the internal `attachments` field is stripped from every outgoing message so strict LLM providers never see the unknown field [@vision-js].
 
 **Modality detection**: `isModalityError()` classifies a 4xx response as a modality rejection so the fallback logic can distinguish it from other errors [@vision-js].
+
+**Blind-image confabulation guard**: Even with allowlist protection, a fresh image without a description might reach a model that cannot see it (e.g., during transition or fallback cases). To prevent confabulation, `materializeAttachments()` injects a hard system-level constraint: when an image lacks a description, the materializer adds a system line stating the Familiar cannot see images without descriptions and will not guess or name unseen content — it will plainly say it cannot see and ask. This guard applies through the shared `materializeAttachments()` seam (via `blindImageStandins`), protecting all surfaces (web, Discord, voice) equally. The constraint rides at the prompt level, above any user or tool content, so models cannot dismiss it [@vision-js].
 
 ## Messages with attachments
 
@@ -180,14 +185,21 @@ The feature is known to false-positive on fictional violence (horror film stills
 
 ## Vision milestone status
 
-The vision milestone remains feature-complete as of 0.9.5-alpha (PR #220):
-
 - **Pass 1** (0.9.0): introductory vision spine
 - **Pass 2** (0.9.1): sight-for-everything + picture→node linking
 - **Pass 2 tail** (0.9.3): composer tag UI + node graduation
 - **Image threat scoring** (0.9.2): image descriptions consumed by the safety spine
 - **Pass 3** (0.9.4): Discord image ingest
 - **z.ai Coding Plan vision allotment** (0.9.5-alpha, PR #220): describe-only vision via z.ai's Vision MCP for the Coding Plan quota
+- **Synchronous describe-before-reply** (0.9.38-alpha): `ensureDescribed()` describes a blind
+  connection's undescribed images before the prompt is assembled, so the stand-in the model reads
+  on THIS turn carries a real description instead of "not yet described" [@vision-js]. The web
+  chat path got this wiring first; Discord initially did not, a gap named
+  [RULE C](../reference/engineering-conventions) in CLAUDE.md's operating rules, fixed in 0.9.6
+  [@claude-md].
+
+Later passes (group-call presence, voiceprint enrolment, room-sound tagging) belong to the voice
+milestone rather than this one; see [Voice](voice) for those.
 
 ## Deferred work
 
@@ -198,6 +210,7 @@ Two ward-flagged threat-scoring refinements remain (out of the main spec):
 
 ## Related
 
+- [Vision capability defaults](../decisions/vision-capability-defaults) — the design decision to default unknown models to BLIND and require allowlist proof before sending images live
 - [Message format and attachments](../decisions/message-attachments-format) — the design decision to keep `message.content` as a plain string and ride media beside it
 - [Graceful degradation](../reference/engineering-conventions) — the repo-wide principle this subsystem follows
 - [Safety spine](../architecture/safety-spine) — threat detection, tracking, and escalation; now includes image-derived signals

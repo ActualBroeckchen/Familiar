@@ -5,7 +5,8 @@ import os from 'os';
 import { promises as fsp } from 'fs';
 
 import { recordKnock, listKnocks, dismissKnock, KNOCKS_CAP,
-         recordLocationKnock, listLocationKnocks, dismissLocationKnock, LOCATION_KNOCKS_CAP } from '../knocks.js';
+         recordLocationKnock, listLocationKnocks, dismissLocationKnock, LOCATION_KNOCKS_CAP,
+         recordServer, listServers, dismissServer } from '../knocks.js';
 
 let dir;
 let file;
@@ -254,5 +255,62 @@ describe('dismissLocationKnock', () => {
     const list = await listLocationKnocks(opts);
     assert.equal(list.length, 1);
     assert.equal(list[0].count, 1, 'fresh knock starts a fresh count');
+  });
+});
+
+describe('server list (recordServer / listServers / dismissServer)', () => {
+  it('records a server by guildId with its name and timestamps', async () => {
+    const opts = freshFile();
+    const r = await recordServer({ guildId: 'g1', name: 'Cozy Corner' }, opts);
+    assert.equal(r.ok, true);
+    const list = await listServers(opts);
+    assert.equal(list.length, 1);
+    assert.equal(list[0].guildId, 'g1');
+    assert.equal(list[0].name, 'Cozy Corner');
+    assert.equal(list[0].platform, 'discord');   // defaulted
+    assert.ok(list[0].firstSeenAt && list[0].lastSeenAt);
+  });
+
+  it('upserts by (platform, guildId): a later sighting follows a rename, no dup', async () => {
+    const opts = freshFile();
+    await recordServer({ guildId: 'g1', name: 'Old Name' }, opts);
+    await recordServer({ guildId: 'g1', name: 'New Name' }, opts);
+    const list = await listServers(opts);
+    assert.equal(list.length, 1);
+    assert.equal(list[0].name, 'New Name');
+  });
+
+  it('a nameless sighting keeps the previously-known name', async () => {
+    const opts = freshFile();
+    await recordServer({ guildId: 'g1', name: 'Named' }, opts);
+    await recordServer({ guildId: 'g1' }, opts);   // e.g. a knock without the name
+    const list = await listServers(opts);
+    assert.equal(list[0].name, 'Named');
+  });
+
+  it('requires a guildId', async () => {
+    const opts = freshFile();
+    const r = await recordServer({ name: 'no id' }, opts);
+    assert.equal(r.ok, false);
+    assert.equal((await listServers(opts)).length, 0);
+  });
+
+  it('dismiss removes exactly the named server', async () => {
+    const opts = freshFile();
+    await recordServer({ guildId: 'g1', name: 'One' }, opts);
+    await recordServer({ guildId: 'g2', name: 'Two' }, opts);
+    const r = await dismissServer({ guildId: 'g1' }, opts);
+    assert.equal(r.ok, true);
+    const list = await listServers(opts);
+    assert.equal(list.length, 1);
+    assert.equal(list[0].guildId, 'g2');
+  });
+
+  it('dismiss reports not-found for an unknown server', async () => {
+    const opts = freshFile();
+    await recordServer({ guildId: 'g1' }, opts);
+    const r = await dismissServer({ guildId: 'nope' }, opts);
+    assert.equal(r.ok, false);
+    assert.equal(r.error, 'server not found');
   });
 });

@@ -14,7 +14,7 @@ implemented**, or **proposed**. A "proposed" or "not yet implemented" status is 
 the page's honest record of how far the decision has actually traveled from conversation into
 code.
 
-Seventeen decisions live here. Grouped by the question each one answers:
+Twenty-two decisions live here. Grouped by the question each one answers:
 
 ## Naming and module identity
 
@@ -48,6 +48,16 @@ reoccurring.
 - [Single-user before platform](single-user-before-platform) — the founding scoping decision that
   bounds Village and every multi-channel surface to one ward's own support network rather than a
   general multi-user platform.
+- [Browser milestone: guardrails in code, not prompts](browser-guardrails-in-code) — settled
+  decisions for letting the Familiar click and fill on the web: an in-process SSRF proxy,
+  treating page content as a Village Stranger, and gating credentials, dialogs, and handoff in
+  code rather than by prompt. Pass 1 through Pass 4 (0.11.0 through 0.11.7) are shipped,
+  including the credential/payment gates and the consent-vault handoff flow — see
+  [Browser](../architecture/browser) for the built subsystem.
+- [CDP mode: driving the ward's own Chrome](browser-cdp-mode) — the browser milestone's §9
+  Horizon #2 alternate engine backing, designed in full and deliberately parked with no code
+  because the owned SSRF-proxy floor it depends on cannot apply to a Chrome instance the app
+  did not launch.
 
 ## The Initiative build spec: wait-streak and contact rhythm
 
@@ -69,6 +79,16 @@ and of what is normal for its bond with the ward:
   reconciliation policy for a Tome receiving writes from more than one source.
 - [Per-feature model routing](per-feature-model-routing) — letting the ward bind each background
   LLM job to its own saved connection instead of one shared provider.
+
+## Vision and multimodal input
+
+- [Message attachments ride beside content, not inside it](message-attachments-format) — why
+  `message.content` stays a plain string forever and images are stored as a separate
+  `attachments` field, so every existing consumer of message data keeps working unchanged.
+- [Vision capability defaults to BLIND; prove capability via allowlist](vision-capability-defaults)
+  — the trust-break incident that produced a conservative default: an unknown connection is
+  treated as unable to see images until an allowlist match, a ward override, or a cached success
+  proves otherwise.
 
 ## Voice and shared hardware budgets
 

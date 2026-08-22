@@ -26,25 +26,28 @@ import { WebSocketServer } from 'ws';
 import { createCallEngine, clearStaleCallState, callsDisabled } from './call-engine.js';
 import { createWebCallAdapter } from './voice-web-adapter.js';
 import { createVoiceTurnRunner } from './voice-call-turn.js';
-import { speakableText } from './voice-speech.js';
+import { speakableText, isLikelyNoiseTranscript } from './voice-speech.js';
 import { createSynthesizer } from './voice-synthesize.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
+import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs } from './voice-transcribe.js';
 import { enqueueSessionByDay } from './memorization.js';
+import { writeSessionLog, stampMessages, turnMessages } from './session-log.js';
 import { sessionSlugId } from './slug-ids.js';
 import { registerPushAdapterFactory, formatItemForPush } from './cerebellum.js';
-import { extractContent } from './llm-call.js';
+import { createVoiceChatTurn } from './voice-chat-turn.js';
+import { createCallGuard } from './voice-call-guard.js';
+import { createDiarizer } from './voice-diarize.js';
+import { createTagSegment, createRoomListenerMap } from './voice-tagging.js';
+import { getWardPrint, enrolledPrints } from './voiceprints.js';
+import { speakerModelDir, speakerModelPresent } from './voice-enroll.js';
 
 const WS_PATH = '/api/voice/call';
-// How long a single spoken turn may take before the call gives up and resets my
-// human off "Thinking…". Generous — the first turn pays MCP cold-start + context
-// enrichment + the model — but finite, so a hang can never masquerade as
-// thinking forever.
-const VOICE_TURN_TIMEOUT_MS = 90_000;
 
-/** The D2 gate: is ward-voice→threat scoring on right now? Ward-signed ON by default. */
-function voiceThreatEnabled(settings) {
+/** The D2 gate: is ward-voice→threat scoring on right now? Ward-signed ON by default.
+ *  Exported so the Discord voice server shares the exact same gate (no copy-paste). */
+export function voiceThreatEnabled(settings) {
   if (process.env.PROTO_FAMILIAR_THREAT_DISABLED === '1') return false;
   if (process.env.PROTO_FAMILIAR_VOICE_THREAT_DISABLED === '1') return false;
   return settings?.voiceThreatScoring !== false; // default ON
@@ -71,118 +74,249 @@ export function attachVoiceCall(deps) {
     log = (m) => console.log(`[voice-call] ${m}`),
   } = deps;
 
+  const logsDir = path.join(rootDir, 'logs');
+
   // Per-call chat history, keyed by callId (one call at a time, so at most one
   // live entry; a new call gets a new id and a fresh history).
   const histories = new Map();
   const HISTORY_MAX = 20;
 
   // The FULL call transcript, kept separate from `histories` (which is capped for
-  // the LLM context). On hang-up it is memorized like any ward-private session —
-  // otherwise a whole spoken conversation vanishes, unremembered and un-reviewable.
+  // the LLM context). On hang-up it lands as a reviewable session log AND is
+  // memorized like any ward-private session — otherwise a whole spoken
+  // conversation vanishes, un-reviewable and only extracted-as-facts.
   // callId → { sessionId, messages: [{role, content}], startedAt }.
   const callSessions = new Map();
 
-  // Enqueue a finished call's transcript for memorization, the same path web chat
-  // and Discord use (`enqueueSessionByDay` → consent-gated fact extraction). Called
-  // once, on hang-up. Never throws into the teardown.
+  // On hang-up: land the call as a reviewable session (logs/) so my human can
+  // read it back in the Sessions tab, THEN enqueue it for memorization (the same
+  // consent-gated fact extraction web chat + Discord use). Never throws into the
+  // teardown; each half is independent (a memorization skip still leaves a log).
   async function memorizeCall(callId) {
+    guards.delete(callId);   // the per-call guest guard is done when the call is
+    diarizers.delete(callId);   // and its call-scoped speaker clusters (§8.3)
+    roomListeners.forget(callId);   // and its room-sound "already mentioned" set (§8.4)
     const sess = callSessions.get(callId);
     callSessions.delete(callId);
     if (!sess || sess.messages.length < 2) return;
+    const s = readSettings();
+    const conn = connectionForFeature(s, 'chat') || connectionForFeature(s, 'pondering');
+
+    // A web call is my human on their own private surface → ward-private.
+    if (process.env.PROTO_FAMILIAR_VOICE_SESSION_LOG_DISABLED !== '1') {
+      const endedIso = new Date().toISOString();
+      const r = await writeSessionLog({
+        sessionId:  sess.sessionId,
+        startedAt:  new Date(sess.startedAt ?? Date.now()).toISOString(),
+        endedAt:    endedIso,
+        origin:     'voice-call',
+        audienceTag: 'ward-private',
+        provider:   conn?.provider ?? null,
+        model:      conn?.model ?? null,
+        messages:   stampMessages(sess.messages, endedIso),
+      }, { logsDir });
+      if (!r.ok) log(`session log not written: ${r.reason}`);
+    }
+
+    if (!(conn?.apiKey && conn?.provider && conn?.model)) { log('call ended but no connection to memorize it with — transcript not stored'); return; }
     try {
-      const s = readSettings();
-      const conn = connectionForFeature(s, 'chat') || connectionForFeature(s, 'pondering');
-      if (!(conn?.apiKey && conn?.provider && conn?.model)) { log('call ended but no connection to memorize it with — transcript not stored'); return; }
       const r = await enqueueSessionByDay({
         sessionId: sess.sessionId, messages: sess.messages,
         provider: conn.provider, apiKey: conn.apiKey, model: conn.model,
-        audienceTag: 'ward-private',   // a web call is my human on their own private surface
+        audienceTag: 'ward-private',
       });
       log(`call ${callId} ended — queued ${sess.messages.length} lines for memory (${r.enqueued} enqueued, ${r.skipped} skipped)`);
     } catch (err) { log(`memorizeCall failed: ${err?.message ?? err}`); }
   }
 
-  // ── onTurn dep: a full chat turn via /api/chat ──────────────────────────
-  async function runTurn(transcript, ctx) {
-    const s = readSettings();
-    const conn = connectionForFeature(s, 'chat') || connectionForFeature(s, 'pondering');
-    if (!(conn?.apiKey && conn?.provider && conn?.model)) {
-      log('no usable connection for a voice turn — staying silent');
-      return null;
-    }
-    const hist = histories.get(ctx.callId) ?? [];
-    const messages = [...hist, { role: 'user', content: transcript }];
-    let reply = '';
-    // A hung turn must not hang the call forever. The enriched, tool-looping
-    // chat path can be slow — an MCP cold start on the first turn, a thinking
-    // model — but it has to end, so the caller can reset my human off "Thinking…"
-    // and they can try again. Generous, so a legitimately slow reply is not cut,
-    // but finite.
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), VOICE_TURN_TIMEOUT_MS);
-    const started = Date.now();
+  // ── Guest watchdog (§8.2) — the per-call privacy guard ───────────────────
+  // SAFETY-CRITICAL (privacy), ward-signed. A guard exists for a call only when
+  // the ward has enrolled a voiceprint, the speaker model is present, and the
+  // policy isn't `ignore`. Otherwise there's nothing to compare a voice against,
+  // and it stays inert — never guessing.
+  const guards = new Map();   // callId → guard | null
+  async function guardFor(callId) {
+    if (guards.has(callId)) return guards.get(callId);
+    let guard = null;
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: ctrl.signal,
-        body: JSON.stringify({
-          provider: conn.provider, apiKey: conn.apiKey, model: conn.model,
-          // NO tool loop on a call. A spoken "Eury?" wants a fast "Hey?", not a
-          // 19-tool research task — and a tool loop that ends in tool_calls with
-          // no final text is dead air. Removing it is the single biggest latency
-          // win for a live turn; tools during a call are a later, opt-in refinement.
-          //
-          // RULE A (0.9 post-mortem): with runToolLoop:false this request lands on
-          // /api/chat's RAW non-stream passthrough — which, unlike the tool-loop
-          // path, applies NEITHER of callProviderChat's guarantees. So we
-          // replicate BOTH here: a generous max_tokens (a thinking model bills its
-          // reasoning against the cap; with no cap it spends the provider default
-          // reasoning and returns empty content — dead silence on the call), and
-          // extractContent at the reply boundary below (the answer may sit in
-          // reasoning_content, not content). This is the same fix Discord paid for
-          // in 0.9.7; the voice path is the surface that hadn't gotten the memo.
-          messages, stream: false, runToolLoop: false, enrich: true,
-          max_tokens: 4000,
-          userMessage: transcript,
-          // Tell the turn it is spoken, so the reply comes out speech-shaped
-          // (short, no markdown) instead of screen-shaped (2e).
-          voiceMode: true,
-          // A live spoken turn is the ward on their own private surface.
-          sessionAudience: 'ward-private',
-        }),
-      });
-      const data = await res.json().catch(() => null);
-      // extractContent, not raw .content — a thinking model parks its answer in
-      // reasoning_content when content is empty (RULE A). Reading .content alone
-      // was the silence: the reply existed, we just weren't looking where it landed.
-      reply = extractContent(data?.choices?.[0]?.message ?? {});
-      // Silence with a reason. An error status or an empty body used to vanish
-      // here — my human heard nothing and no log said why. Now every no-reply
-      // path names itself, so "it thinks and never answers" is diagnosable.
-      if (!res.ok) {
-        log(`voice turn /api/chat returned ${res.status}: ${JSON.stringify(data)?.slice(0, 300)}`);
-      } else if (!reply) {
-        log(`voice turn produced no content after ${Date.now() - started}ms (thinking model with empty content? tool loop with no final text?)`);
+      const s = readSettings() || {};
+      const policy = s.voiceGuestPolicy ?? 'note';
+      if (policy !== 'ignore' && speakerModelPresent(speakerModelDir(s))) {
+        const wardPrint = await getWardPrint();
+        if (wardPrint) {
+          guard = createCallGuard({
+            wardPrint, policy,
+            thresholds: {
+              threshold: s.voiceGuestThreshold, enterSegments: s.voiceGuestEnterSegments,
+              exitSegments: s.voiceGuestExitSegments, exitQuietSec: s.voiceGuestExitQuietSec,
+            },
+          });
+        }
       }
-    } catch (err) {
-      if (err?.name === 'AbortError') {
-        log(`voice turn timed out after ${VOICE_TURN_TIMEOUT_MS}ms — giving up so the call can reset`);
-      } else {
-        log(`voice turn /api/chat failed: ${err?.message ?? err}`);
+    } catch (err) { log(`guest-guard init failed (continuing without): ${err?.message ?? err}`); }
+    guards.set(callId, guard);
+    return guard;
+  }
+
+  // The speaker-embedding tap the call engine calls on each finalized utterance
+  // (§8.2). Returns null (speaker ID off, no model, no worker) rather than an
+  // error shape, so a non-array never reaches the guard's cosine. Never throws.
+  async function embedSegment(samples, sampleRate) {
+    const modelDir = speakerModelDir(readSettings() || {});
+    if (!speakerModelPresent(modelDir)) return null;
+    const out = await getWorkerThen(async (w) => {
+      try {
+        const loaded = await w.request({ op: 'load', role: 'speaker', modelDir }, { timeoutMs: 180_000 });
+        if (!loaded?.ok) return null;
+        const r = await w.request({ op: 'embed', samples: Array.from(samples), sampleRate }, { timeoutMs: 30_000 });
+        return r?.ok && Array.isArray(r.embedding) ? r.embedding : null;
+      } catch { return null; }
+    });
+    return Array.isArray(out) ? out : null;
+  }
+
+  // ── Diarization stage (§8.3) — WHO is speaking on a MIXED stream ──────────
+  // The web open-mic hands every voice in on one stream, so the engine can't tell
+  // speakers apart. This per-call diarizer does: it matches each utterance's
+  // embedding to an enrolled print (the ward, plus any villager who consented to
+  // one) or an online guest cluster. It only exists when there IS a ward print to
+  // contrast against — without one there's no baseline, so a mixed stream stays
+  // ward-private by default (the "absence disables §8.3, never blocks" rule).
+  // Hard off-switch: PROTO_FAMILIAR_VOICE_DIARIZE_DISABLED=1.
+  const DIARIZE_DISABLED = process.env.PROTO_FAMILIAR_VOICE_DIARIZE_DISABLED === '1';
+  const diarizers = new Map();   // callId → diarizer | null
+  async function diarizerFor(callId) {
+    if (diarizers.has(callId)) return diarizers.get(callId);
+    let d = null;
+    try {
+      const prints = await enrolledPrints();
+      // A ward print is the required baseline: without it we can't tell the ward
+      // from a guest, so we must not downgrade their own call. (Villager prints
+      // ride along when present but never substitute for the ward baseline.)
+      if (prints.some((p) => p.ref === 'ward')) {
+        const s = readSettings() || {};
+        d = createDiarizer({ prints, matchThreshold: s.voiceGuestThreshold });
       }
-      return null;
-    } finally {
-      clearTimeout(timer);
+    } catch (err) { log(`diarizer init failed (continuing without): ${err?.message ?? err}`); }
+    diarizers.set(callId, d);
+    return d;
+  }
+
+  // The engine calls this on each finalized utterance of a mixed stream. Returns
+  // the resolved speaker ({ref, name}) or null to keep the adapter's own ref.
+  // Never throws — a failure keeps the call ward-private rather than breaking it.
+  async function diarize(embedding, { ts, callId } = {}) {
+    try {
+      if (DIARIZE_DISABLED) return null;
+      const d = await diarizerFor(callId);
+      if (!d) return null;
+      return d.assign(embedding, { ts });
+    } catch (err) { log(`diarize failed: ${err?.message ?? err}`); return null; }
+  }
+
+  // Run the diarization stage only in open-mic mode (a true mixed stream) with the
+  // speaker model present; push-to-talk is one speaker per press (§8.2 owns it).
+  function diarizeSegments() {
+    if (DIARIZE_DISABLED) return false;
+    const s = readSettings() || {};
+    return s.voiceCallMode === 'open' && speakerModelPresent(speakerModelDir(s));
+  }
+
+  // ── Room-sound tagging (§8.4) — annotation only ──────────────────────────
+  // The engine calls tagSegment on each finalized utterance; it stays inert until
+  // the ward turns tagging on AND the model is installed. A per-call room listener
+  // dedups (a TV on the whole call is mentioned once) and turns the raw events into
+  // a one-off "what I can hear" system note — never stored, never threat.
+  const tagSegment = createTagSegment({ getWorkerThen: (fn) => getWorkerThen(fn), readSettings, log });
+  const roomListeners = createRoomListenerMap();
+
+  // ── onTurn dep: a full chat turn via /api/chat ──────────────────────────
+  const runVoiceChatTurn = createVoiceChatTurn({ port, readSettings, connectionForFeature, log });
+  async function runTurn(transcript, ctx) {
+    const hist = histories.get(ctx.callId) ?? [];
+    // The shared /api/chat voice turn (voice-chat-turn.js) — the Discord ward
+    // turn runs the exact same request. A web call is my human on their own
+    // private surface, so ward-private BY DEFAULT — unless the guest watchdog
+    // says otherwise.
+    const speaker = ctx.speakerRef;
+    const isWard = !speaker || speaker === 'ward';
+    let sessionAudience = 'ward-private';
+    // §8.3 fail-closed: if diarization placed this utterance with a voice that
+    // ISN'T the ward, the turn is NOT ward-private — set the gated audience FIRST,
+    // before anything that could throw, so an error can never leave a guest's turn
+    // reading ward-private context. A matched villager carries their id+name so
+    // /api/chat resolves their real circle; an unplaced guest is stranger-tier
+    // ('someone'), the same disposition as an unknown Discord user.
+    if (!isWard) {
+      const guest = String(speaker).startsWith('guest');
+      const name = ctx.speakerName || (guest ? 'someone' : String(speaker));
+      sessionAudience = { location: 'voice-call', participants: [{ id: guest ? null : String(speaker), name }] };
     }
+    let turnHistory = hist;
+    const notes = [];   // one-off system context for THIS turn — never stored, never threat
+    try {
+      if (isWard) {
+        // Ward stream — §8.2 guest watchdog guards a second voice in the room on a
+        // dedicated ward stream (push-to-talk). On open-mic, diarization diverts
+        // non-ward voices to the branch above, so the watchdog never sees one.
+        const guard = await guardFor(ctx.callId);
+        if (guard && Array.isArray(ctx.embedding)) {
+          const r = guard.observeWardSegment(ctx.embedding, { text: transcript });
+          if (r.transition) log(`guest watchdog ${r.transition} (${r.reason ?? ''}) — policy ${guard.policy}`);
+        }
+        if (guard?.withholdWardPrivate()) {
+          // gate + a guest present → this turn is NOT ward-private. A stranger-
+          // present audience makes /api/chat withhold ward-private context.
+          sessionAudience = { location: 'voice-call', participants: [{ id: null, name: 'someone' }] };
+        }
+        const note = guard?.noteLine();
+        if (note) notes.push(note);
+      } else {
+        log(`diarized speaker ${speaker}${ctx.speakerName ? ` (${ctx.speakerName})` : ''} — this turn is not ward-private`);
+      }
+    } catch (err) { log(`speaker-guard apply failed: ${err?.message ?? err}`); }
+
+    // §8.4 room-sound annotation — a one-off "what I can hear" line, deduped per
+    // call. Annotation only: it never moves the threat tier and is never stored.
+    if (Array.isArray(ctx.roomSounds) && ctx.roomSounds.length) {
+      try { const line = roomListeners.for(ctx.callId).note(ctx.roomSounds); if (line) notes.push(line); }
+      catch (err) { log(`room-sound note failed: ${err?.message ?? err}`); }
+    }
+    if (notes.length) turnHistory = [...hist, ...notes.map((content) => ({ role: 'system', content }))];
+
+    const reply = await runVoiceChatTurn({ transcript, history: turnHistory, sessionAudience });
     if (reply) {
+      const messages = [...hist, { role: 'user', content: transcript }];
       const next = [...messages, { role: 'assistant', content: reply }];
       histories.set(ctx.callId, next.slice(-HISTORY_MAX));
       // Accumulate the FULL exchange for the end-of-call memorization (uncapped).
       const sess = callSessions.get(ctx.callId);
-      if (sess) sess.messages.push({ role: 'user', content: transcript }, { role: 'assistant', content: reply });
+      // Stamp at accumulation time. A ward turn is unattributed (speaker omitted),
+      // like Discord text's ward turns; a diarized non-ward voice (open-mic §8.3)
+      // is labelled so the stored transcript reads "someone / <villager> said …"
+      // instead of implying my human said it.
+      const speakerLabel = isWard ? null : (ctx.speakerName || (String(speaker).startsWith('guest') ? 'someone' : String(speaker)));
+      if (sess) sess.messages.push(...turnMessages(transcript, reply, { speaker: speakerLabel }));
     }
     return reply;
+  }
+
+  // ── engine dep: a barge cut a reply short (2c `spokenUpTo`) ─────────────
+  // Rewrite the last assistant turn to what my human ACTUALLY heard before they
+  // talked over it, plus a marker. Both the LLM-context history and the
+  // memorization transcript get it, so the next turn knows it was cut off and
+  // the stored record reflects the real exchange, not a reply nobody finished.
+  function onReplyInterrupted(ctx, { spokenUpTo }) {
+    const heard = String(spokenUpTo ?? '').trim();
+    const cut = heard ? `${heard} —[my human cut me off here]` : '[my human cut me off before I got a word out]';
+    const markLastAssistant = (arr) => {
+      if (!Array.isArray(arr)) return;
+      for (let i = arr.length - 1; i >= 0; i--) {
+        if (arr[i]?.role === 'assistant') { arr[i].content = cut; break; }
+      }
+    };
+    markLastAssistant(histories.get(ctx.callId));
+    markLastAssistant(callSessions.get(ctx.callId)?.messages);
   }
 
   // ── onTurn dep: reply text → TTS PCM, streamed as it is generated (2c) ───
@@ -218,7 +352,19 @@ export function attachVoiceCall(deps) {
       },
     },
     onTurn,
+    onReplyInterrupted,
     streamingModelDir: path.join(rootDir, MODELS_SUBDIR, `asr-streaming-${asrLang(readSettings())}`),
+    offlineModelDir: ASR_MODEL_DIR,
+    offlineFinal: () => voiceOfflineAsrEnabled(readSettings()),
+    ensureOffline: () => ensureOfflineAsrModel({ rootDir, log }),
+    // Settle only in open-mic mode — push-to-talk's release IS the definitive end,
+    // so it replies immediately. Noise filter applies in both modes.
+    turnSettleMs: () => (readSettings()?.voiceCallMode === 'open' ? voiceCallSettleMs(readSettings()) : 0),
+    transcriptFilter: (t) => !isLikelyNoiseTranscript(t, { language: asrLang(readSettings()) }),
+    embedSegment,   // §8.2 speaker ID — inert until the ward enrols + the model is present
+    diarize,        // §8.3 who-is-speaking on a mixed stream (web open-mic)
+    diarizeSegments, // run diarization only in open-mic mode with the model present
+    tagSegment,     // §8.4 room-sound tagging — inert until the ward opts in + the model is present
     tomesDir: path.join(rootDir, 'tomes'),
     log,
   });
@@ -251,7 +397,12 @@ export function attachVoiceCall(deps) {
           const text = speakableText(formatItemForPush(item))?.text?.trim();
           if (!text) return { ok: false, error: 'nothing speakable in this item' };
           const heard = await engine.speakProactive(() => synthesize(text));
-          return heard ? { ok: true } : { ok: false, error: 'call ended before it could be spoken' };
+          // A web call is my human alone on their own surface — if it was spoken
+          // and heard, they were present at delivery by definition. That machine
+          // fact rides onto the delivery record so the §10 escalation factor
+          // (contactDeadlineFor) can shorten the ack window for a check-in they
+          // demonstrably heard. (A Discord VC would set this from the roster.)
+          return heard ? { ok: true, meta: { wardPresent: true } } : { ok: false, error: 'call ended before it could be spoken' };
         } catch (err) { return { ok: false, error: String(err?.message ?? err) }; }
       },
     };

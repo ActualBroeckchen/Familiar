@@ -117,6 +117,7 @@ index names what each does and the architecture doc section that owns it.
 | `POST/PATCH/DELETE /api/village/locations` | Location (channel) presence config |
 | `GET /api/village/knocks` · `DELETE …/:platform/:id` | Unknown-DM knocks (list / dismiss) |
 | `GET/DELETE /api/village/location-knocks` | Unconfigured-channel knocks |
+| `GET/DELETE /api/village/servers` | Saved server list (Discord guilds, derived from knocks + GUILD_CREATE; naming only, grants nothing) |
 | `GET /api/discord/status` · `POST /api/discord/apply` | Gateway status / apply settings now |
 | `GET /api/discord-writes` | Audit log of villager-initiated writes |
 

@@ -383,3 +383,63 @@ export function splitForUtterances(text, { targetChars = MIN_CHAR_IN_SENTENCE } 
   }
   return out;
 }
+
+// ── Noise-transcript detection (voice calls) ──────────────────────────────
+// The offline recogniser (SenseVoice) is multilingual and does its own
+// per-utterance language ID, so ambient noise — traffic, a fan, a door —
+// frequently comes back as a stray CJK filler token ("嗯") or a short run of
+// Han/Kana. For a ward whose language isn't CJK, that is never real speech, so
+// treating it as a transcript makes the Familiar answer the street. This flags
+// those so the call path can drop them (no turn, no memory).
+const NOISE_FILLERS = new Set(['嗯', '啊', '呃', '唉', '哦', '嗯嗯', '呵', '哈', '唔', '呣', 'ん']);
+/**
+ * Rescue an ALL-CAPS ASR transcript to ordinary sentence case.
+ *
+ * The streaming zipformer emits uppercase ("WISH ME LUCK"), and an LLM handed a
+ * wall of capitals reads it as shouting / an acronym and mis-weights it. This
+ * un-shouts it: an all-caps result is lowercased and given sentence casing (the
+ * first letter of each sentence, and the pronoun "I"). Proper nouns can't be
+ * recovered from caps alone — the LLM infers those from context, which is fine.
+ *
+ * It touches ONLY all-caps input. A transcript that already has any lowercase
+ * letter (SenseVoice's inverse-text-normalised output, a ward correction) is
+ * already cased and is returned untouched — so this is safe to run on every
+ * transcript regardless of engine.
+ */
+export function normalizeTranscriptCase(text) {
+  const s = String(text ?? '');
+  if (!s.trim()) return s;
+  if (/\p{Ll}/u.test(s)) return s;            // already has lowercase → leave it
+  if (!/\p{Lu}/u.test(s)) return s;           // no cased letters (digits/CJK) → nothing to do
+  const lower = s.toLowerCase();
+  // Capitalise the first letter of the string and of each sentence after . ! ?
+  const cased = lower.replace(/(^\s*|[.!?]\s+)(\p{Ll})/gu, (_, pre, ch) => pre + ch.toUpperCase());
+  // Standalone "i" → "I" (the \b before an apostrophe also catches i'm / i'll / i've).
+  return cased.replace(/\bi\b/g, 'I');
+}
+
+const CJK_LANGS = new Set(['zh', 'ja', 'ko', 'yue']);
+
+/**
+ * Is this ASR result most likely ambient noise rather than speech?
+ * @param {string} text
+ * @param {{language?: string}} [opts]  the ward's expected ASR language (default 'en')
+ */
+export function isLikelyNoiseTranscript(text, { language = 'en' } = {}) {
+  const t = String(text ?? '').trim();
+  if (!t) return true;                      // empty is silence
+  if (NOISE_FILLERS.has(t)) return true;    // a bare hum/breath token, any language
+  if (CJK_LANGS.has(String(language).toLowerCase())) return false; // a CJK speaker: don't second-guess CJK
+  // Non-CJK speaker: strip whitespace + punctuation, then measure how much of
+  // what's left is CJK script. A majority means the recogniser heard noise and
+  // guessed Chinese/Japanese/Korean — drop it.
+  let letters, cjk;
+  try {
+    letters = t.replace(/[\s\p{P}\p{S}]/gu, '');
+    if (!letters) return true;              // only punctuation/symbols → not speech
+    cjk = (letters.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu) || []).length;
+  } catch {
+    return false;                           // an engine without \p{} support: never over-drop
+  }
+  return cjk / letters.length > 0.5;
+}

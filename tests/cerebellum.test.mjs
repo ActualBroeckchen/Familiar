@@ -177,16 +177,23 @@ import {
   toolRoundsPerTurn,
   RELAY_TO_WARD_TOOL_NAME,
   RELAY_TO_WARD_TOOL,
+  VOICE_CALL_TOOLS,
 } from '../cerebellum.js';
 
 // Executors that are deliberately NOT in the always-advertised BUILTIN_TOOLS
-// because they are composed per-turn on a specific surface. `relay_to_ward`
-// is the villager→ward hand-off tool: it only ever appears on a Discord
-// villager turn (via RELAY_TO_WARD_TOOL in composeDiscordTools), never on a
-// ward chat turn — advertising it to the ward would be nonsense (they don't
-// relay to themselves). The reverse-parity check below exempts exactly this
-// set, derived from source so a rename keeps the exemption honest.
-const SEPARATELY_COMPOSED_EXECUTORS = new Set([RELAY_TO_WARD_TOOL_NAME]);
+// because they are composed per-turn on a specific surface:
+//   - `relay_to_ward` — the villager→ward hand-off, only on a Discord villager
+//     turn (via RELAY_TO_WARD_TOOL in composeDiscordTools).
+//   - join/leave_voice_call — ward-only, only on a Discord turn (VOICE_CALL_TOOLS
+//     appended in composeDiscordTools).
+// Advertising any of these to a ward web chat would be nonsense. The
+// reverse-parity check below exempts exactly this set, DERIVED FROM SOURCE
+// (not a hand-typed name list) so adding/renaming a per-surface tool keeps the
+// exemption honest instead of silently going stale.
+const SEPARATELY_COMPOSED_EXECUTORS = new Set([
+  RELAY_TO_WARD_TOOL_NAME,
+  ...VOICE_CALL_TOOLS.map((t) => t.function.name),
+]);
 
 test('BUILTIN_TOOLS carries the full registry in OpenAI function format', () => {
   assert.ok(BUILTIN_TOOLS.length >= 20);
@@ -480,6 +487,23 @@ test('dispatchOutboxPush records per-adapter outcomes; a failing adapter never b
   assert.deepEqual(Object.keys(metas[0][1].delivery).sort(), ['broken', 'discord-dm']);
 });
 
+test('dispatchOutboxPush merges an adapter meta (wardPresent) onto the delivery record', async () => {
+  // The voice-call adapter reports whether my human was present when it spoke;
+  // that machine fact must survive onto delivery so contactDeadlineFor can read
+  // it. It rides as data alongside status/at — never overriding them.
+  const { delivery } = await dispatchOutboxPush(
+    { id: 'i1', kind: 'triage', title: 't', body: 'b' },
+    {
+      adapters: [{ name: 'voice-call', deliver: async () => ({ ok: true, meta: { wardPresent: true } }) }],
+      updateMetaFn: async () => {},
+      now: () => 5_000,
+    },
+  );
+  assert.equal(delivery['voice-call'].status, 'delivered');
+  assert.equal(delivery['voice-call'].wardPresent, true);
+  assert.equal(delivery['voice-call'].at, new Date(5_000).toISOString(), 'status/at are not clobbered by meta');
+});
+
 test('dispatchOutboxPush with no adapters is a quiet no-op', async () => {
   const { delivery } = await dispatchOutboxPush(
     { id: 'i1', kind: 'reminder', title: 't' },
@@ -588,6 +612,35 @@ test('contactDeadlineFor: bot-DM delivery starts the clock; earliest delivery wi
     },
   });
   assert.equal(contactDeadlineFor(item, { pushConfigured: true }), botAt + 30 * 60_000);
+});
+
+test('contactDeadlineFor: a spoken voice-call delivery with the ward present SHORTENS the window (§10)', () => {
+  const spokenAt = T0 + 3 * 60_000;
+  const item = newStyleItem({
+    delivery: { 'voice-call': { status: 'delivered', at: new Date(spokenAt).toISOString(), wardPresent: true } },
+  });
+  // 0.5× the 30-min window because they demonstrably heard it in a live call.
+  assert.equal(
+    contactDeadlineFor(item, { pushConfigured: true, voiceEscalationFactor: 0.5 }),
+    spokenAt + 15 * 60_000,
+  );
+});
+
+test('contactDeadlineFor: the escalation factor is clamped to [0.25, 1] — never longer than normal', () => {
+  const item = newStyleItem({ delivery: { 'voice-call': { status: 'delivered', at: new Date(T0).toISOString(), wardPresent: true } } });
+  // A misconfigured 3× would LENGTHEN the window (away from action) — refused.
+  assert.equal(contactDeadlineFor(item, { pushConfigured: true, voiceEscalationFactor: 3 }), T0 + 30 * 60_000);
+  // A 0.05× would be absurdly tight — floored at 0.25×.
+  assert.equal(contactDeadlineFor(item, { pushConfigured: true, voiceEscalationFactor: 0.05 }), T0 + 7.5 * 60_000);
+});
+
+test('contactDeadlineFor: a spoken delivery with the ward NOT present keeps the normal window', () => {
+  const spokenAt = T0 + 3 * 60_000;
+  const item = newStyleItem({
+    delivery: { 'voice-call': { status: 'delivered', at: new Date(spokenAt).toISOString(), wardPresent: false } },
+  });
+  // Spoken into a room the ward wasn't in → no proof they heard → no tightening.
+  assert.equal(contactDeadlineFor(item, { pushConfigured: true, voiceEscalationFactor: 0.5 }), spokenAt + 30 * 60_000);
 });
 
 test('contactDeadlineFor: one channel failing while another is pending holds the clock inside grace', () => {

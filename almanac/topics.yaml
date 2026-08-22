@@ -87,3 +87,7 @@ topics:
     title: Voice
     description: The multi-pass voice milestone -- model supply chain, disk footprint budget, bench tool, and read-aloud text-to-speech
     parents: [architecture]
+  - slug: browser
+    title: Browser
+    description: The opt-in, ward-only click-and-fill web milestone -- SSRF-guarding proxy, ref/generation model, and Stranger-tier page framing
+    parents: [architecture]

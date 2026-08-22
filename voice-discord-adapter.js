@@ -107,20 +107,44 @@ export function monoToStereo48(pcmMono, inRate = 24000) {
  * honest "Discord voice unavailable" instead of a boot crash (graceful
  * degradation — no module may take down the chat path).
  */
+// The encryption libraries @discordjs/voice will try, in ITS order. We probe the
+// same list so we (a) load/warm whichever one works, (b) log which cipher is
+// actually active, and (c) fail the join FAST with a clear message if none load
+// — instead of a doomed connection that stalls at 'signalling' for 30s. Several
+// options with automatic fallback: if libsodium's WASM/ESM is broken on a
+// machine (it is, on some Windows installs), @noble/ciphers — pure-JS, no WASM,
+// no packaging fragility — carries it. libsodium stays first so a machine where
+// it works still uses the faster native path.
+const ENCRYPTION_LIBS = ['sodium-native', 'sodium', 'libsodium-wrappers', '@stablelib/xchacha20poly1305', '@noble/ciphers/chacha'];
+
+/** Probe the encryption libs in @discordjs/voice's order; return the first that
+ *  actually loads (and is `ready`, for libsodium), or null if none work. */
+async function probeEncryption(log) {
+  for (const name of ENCRYPTION_LIBS) {
+    try {
+      const lib = await import(name);
+      if (name === 'libsodium-wrappers') await (lib.ready ?? lib.default?.ready);
+      return name;
+    } catch (err) {
+      log(`encryption lib ${name} unavailable (${err?.message ?? err}) — trying next`);
+    }
+  }
+  return null;
+}
+
 export async function loadDiscordVoiceDeps({ log = () => {} } = {}) {
   const voice = await import('@discordjs/voice');
   const { default: OpusScript } = await import('opusscript');
-  // libsodium is what @discordjs/voice uses for packet encryption. Its WASM must
-  // be READY before the first voice packet, or the connection handshakes and
-  // then silently never reaches Ready (the "joins but join-failed" symptom). We
-  // await it for real and surface a failure — a missing/broken encryption lib is
-  // the single most common cause of a voice connection that won't come up.
-  try {
-    const sodium = await import('libsodium-wrappers');
-    await (sodium.ready ?? sodium.default?.ready);
-  } catch (err) {
-    log(`libsodium not ready — voice packets can't be encrypted: ${err?.message ?? err}`);
+  // A voice connection with no usable encryption library handshakes and then
+  // silently never reaches Ready (the "joins but join-failed" symptom). Probe up
+  // front so a broken encryption stack is a clear, fast failure — not a 30s
+  // stall — and so the log names the cipher actually in play.
+  const cipher = await probeEncryption(log);
+  if (!cipher) {
+    log('NO working encryption library — Discord voice cannot connect. Reinstall deps (npm install) so @noble/ciphers is present.');
+    return null;   // caller degrades to a clear "deps-unavailable", never a doomed join
   }
+  log(`voice encryption via ${cipher}`);
   return {
     joinVoiceChannel: voice.joinVoiceChannel,
     createAudioPlayer: voice.createAudioPlayer,
@@ -164,33 +188,106 @@ export function createDiscordCallAdapter({ hooks, joinSpec, deps, slugId = (s) =
     return slugId(name);
   }
 
-  function openSpeaker(userId) {
+  // Subscribe to a speaker ONCE and keep it open for the whole call. Subscribing
+  // reactively on each speaking-start ate the first ~30–60 ms of every utterance
+  // (the subscription-setup latency) — "Okay" came out "KY". With the stream
+  // always live there is no per-utterance setup gap, and a small PRE-ROLL buffer
+  // catches audio that lands right at onset (before speaking-start fires) so the
+  // first phoneme survives. Discord's speaking start/end still bound the
+  // utterance — they gate whether decoded audio feeds the engine or the pre-roll.
+  const PRE_ROLL_FRAMES = 8;   // ~160 ms of 20 ms Opus frames — enough to cover onset, small enough not to drag noise in
+  // opusscript's WASM input buffer is MAX_PACKET_SIZE (1276·3 = 3828 bytes); a
+  // packet larger than that overflows `inOpus.set(buffer)`. A normal voice frame
+  // is well under 1 KB, so anything bigger isn't decodable audio — skip it rather
+  // than trap. (Belt-and-suspenders; the real culprit is the heap detachment below.)
+  const MAX_OPUS_PACKET = 3828;
+
+  // Decode one Opus packet to 48 kHz stereo PCM, healing the opusscript
+  // shared-heap hazard. opusscript keeps ONE emscripten heap across every decoder
+  // instance and caches heap VIEWS at construction; allocating a new decoder (a
+  // second speaker joining the call — e.g. another Familiar) can GROW that heap,
+  // which detaches the cached views of decoders that already exist. The existing
+  // decoder then throws "memory access out of bounds" on its next packet — which
+  // is why one Familiar went silent the moment a second joined. The cure: rebuild
+  // the decoder on the CURRENT heap and retry the same packet once. After the
+  // roster stops changing the heap stabilises and no more rebuilds happen. A
+  // genuinely bad packet fails the retry too and is skipped — bounded, no flood.
+  function decodeOpus(entry, speakerRef, opusPacket) {
+    try {
+      return entry.decoder.decode(opusPacket);
+    } catch (first) {
+      try {
+        try { entry.decoder.delete?.(); } catch { /* opusscript frees its wasm */ }
+        entry.decoder = deps.makeOpusDecoder();              // fresh views on the current heap
+        const pcm = entry.decoder.decode(opusPacket);
+        if (!entry.rebuilt) { entry.rebuilt = true; log(`opus decoder for ${speakerRef} rebuilt after a heap move — recovered`); }
+        return pcm;
+      } catch (second) {
+        // The retry failed too: a genuinely undecodable packet. Log sparingly
+        // (once per speaker) so a persistently bad stream can't flood the terminal.
+        if (!entry.warned) { entry.warned = true; log(`opus decode failed for ${speakerRef} (skipping bad packets): ${second?.message ?? second}`); }
+        return null;
+      }
+    }
+  }
+
+  function ensureSpeaker(userId) {
     const speakerRef = speakerRefFor(userId);
-    if (decoders.has(speakerRef)) return;   // already subscribed (a second speaking-start)
-    let entry;
+    let entry = decoders.get(speakerRef);
+    if (entry) return { speakerRef, entry };
     try {
       const decoder = deps.makeOpusDecoder();
       const sub = connection.receiver.subscribe(userId, { end: { behavior: deps.EndBehaviorType.Manual } });
-      entry = { decoder, sub };
+      entry = { decoder, sub, active: false, pre: [] };
       decoders.set(speakerRef, entry);
       sub.on('data', (opusPacket) => {
-        try {
-          const pcm48 = decoder.decode(opusPacket);            // 48 kHz stereo s16le
-          if (pcm48?.length) hooks.pushAudio({ callId, speakerRef, pcm: stereo48ToMono16(pcm48) });
-        } catch (err) { log(`opus decode failed for ${speakerRef}: ${err?.message ?? err}`); }
+        if (!opusPacket?.length || opusPacket.length > MAX_OPUS_PACKET) return;
+        const pcm48 = decodeOpus(entry, speakerRef, opusPacket);   // 48 kHz stereo s16le, or null on a bad packet
+        if (!pcm48?.length) return;
+        const pcm = stereo48ToMono16(pcm48);
+        if (entry.warned) entry.warned = false;                    // a clean decode re-arms the (rate-limited) warning
+        if (entry.active) {
+          hooks.pushAudio({ callId, speakerRef, pcm });
+        } else {
+          // Between utterances: keep only the most recent frames, so onset that
+          // arrives just before speaking-start isn't lost.
+          entry.pre.push(pcm);
+          if (entry.pre.length > PRE_ROLL_FRAMES) entry.pre.shift();
+        }
       });
       sub.on('error', (err) => log(`receive stream error for ${speakerRef}: ${err?.message ?? err}`));
-    } catch (err) { log(`subscribe failed for ${userId}: ${err?.message ?? err}`); return; }
+    } catch (err) { log(`subscribe failed for ${userId}: ${err?.message ?? err}`); return null; }
+    return { speakerRef, entry };
   }
 
-  function closeSpeaker(userId) {
+  function startUtterance(userId) {
+    const r = ensureSpeaker(userId);
+    if (!r) return;
+    const { speakerRef, entry } = r;
+    if (entry.active) return;   // a second speaking-start with no end between — already capturing
+    entry.active = true;
+    // Prepend the onset that arrived just before Discord's speaking-start.
+    if (entry.pre.length) { for (const pcm of entry.pre) hooks.pushAudio({ callId, speakerRef, pcm }); entry.pre = []; }
+  }
+
+  function stopUtterance(userId) {
+    const speakerRef = speakerRefFor(userId);
+    const entry = decoders.get(speakerRef);
+    if (!entry || !entry.active) return;
+    entry.active = false;
+    entry.pre = [];
+    // Speaking-end is the utterance boundary (like push-to-talk's release):
+    // finalise now so the engine transcribes it. The subscription STAYS OPEN so
+    // the next utterance loses no onset.
+    try { hooks.endUtterance({ callId, speakerRef }); } catch (err) { log(`endUtterance failed for ${speakerRef}: ${err?.message ?? err}`); }
+  }
+
+  function destroySpeaker(userId) {
     const speakerRef = speakerRefFor(userId);
     const entry = decoders.get(speakerRef);
     if (!entry) return;
+    if (entry.active) stopUtterance(userId);   // flush an in-flight utterance before tearing down
     decoders.delete(speakerRef);
-    // Discord's speaking-end IS the utterance boundary (like push-to-talk's
-    // release): finalise this speaker's stream now so the engine transcribes it.
-    try { hooks.endUtterance({ callId, speakerRef }); } catch (err) { log(`endUtterance failed for ${speakerRef}: ${err?.message ?? err}`); }
     try { entry.sub.destroy(); } catch { /* already gone */ }
     try { entry.decoder.delete?.(); } catch { /* opusscript frees its wasm */ }
   }
@@ -214,15 +311,29 @@ export function createDiscordCallAdapter({ hooks, joinSpec, deps, slugId = (s) =
       // instead of a bare "join-failed" (the failures-that-matter-are-observable
       // rule). One-time dependency report names the encryption/Opus libs in play.
       try { log(`voice deps: ${deps.generateDependencyReport?.() ?? 'n/a'}`); } catch { /* */ }
-      connection.on('stateChange', (oldS, newS) => log(`voice connection: ${oldS?.status} → ${newS?.status}`));
+      connection.on('stateChange', (oldS, newS) => {
+        // A WebSocket-close disconnect carries the code+reason that names the
+        // failure (4006 session invalid, 4014 disconnected, etc.) — surface it.
+        const extra = newS?.closeCode != null ? ` (ws close ${newS.closeCode})` : (newS?.reason != null ? ` (reason ${newS.reason})` : '');
+        log(`voice connection: ${oldS?.status} → ${newS?.status}${extra}`);
+      });
       connection.on('error', (err) => log(`voice connection error: ${err?.message ?? err}`));
+      // The voice handshake (voice WS + UDP IP-discovery + encryption) is a
+      // sub-protocol we can't see from the main gateway. Buffer @discordjs/voice's
+      // own debug trace and flush it ONLY on failure — silent on a healthy call,
+      // but a full post-mortem when it stalls (where connecting → signalling loops
+      // hide the real cause: a ws close code vs a UDP timeout).
+      const trace = [];
+      connection.on('debug', (m) => { trace.push(m); if (trace.length > 120) trace.shift(); });
 
       try {
         await deps.entersState(connection, deps.VoiceConnectionStatus.Ready, 30_000);
       } catch (err) {
         // Name WHERE it stalled — the last state is the clue (stuck in
-        // 'signalling' = no VOICE_SERVER_UPDATE; 'connecting' = UDP/encryption).
+        // 'signalling' = no VOICE_SERVER_UPDATE / voice-ws rejected;
+        // 'connecting' = UDP IP-discovery / encryption).
         const stuckAt = connection?.state?.status ?? 'unknown';
+        if (trace.length) log(`voice handshake trace (newest last):\n  ${trace.slice(-40).join('\n  ')}`);
         try { connection.destroy(); } catch { /* */ }
         connection = null;
         throw new Error(`voice connection never reached Ready (stuck at '${stuckAt}'): ${err?.message ?? err}`);
@@ -231,9 +342,11 @@ export function createDiscordCallAdapter({ hooks, joinSpec, deps, slugId = (s) =
       player = deps.createAudioPlayer({ behaviors: { noSubscriber: deps.NoSubscriberBehavior.Pause } });
       connection.subscribe(player);
 
-      // Per-speaker capture is driven by Discord's speaking events.
-      connection.receiver.speaking.on('start', (userId) => openSpeaker(userId));
-      connection.receiver.speaking.on('end', (userId) => closeSpeaker(userId));
+      // Per-speaker capture: Discord's speaking events bound each utterance, but
+      // the subscription (opened lazily on first speaking-start) stays open for
+      // the whole call so no onset is clipped.
+      connection.receiver.speaking.on('start', (userId) => startUtterance(userId));
+      connection.receiver.speaking.on('end', (userId) => stopUtterance(userId));
 
       callId = `discord-${joinSpec.guildId}-${Date.now()}`;
       log(`joined voice channel ${joinSpec.channelId} in guild ${joinSpec.guildId}`);
@@ -260,8 +373,8 @@ export function createDiscordCallAdapter({ hooks, joinSpec, deps, slugId = (s) =
      * the player. Resolves when playback goes idle (or is barged/stopped).
      */
     async playAudio(_id, reply) {
-      if (reply == null) return;             // nothing to say — Discord just stays quiet
-      if (!player) { log('playAudio with no player — reply dropped'); return; }
+      if (reply == null) return { barged: false };   // nothing to say — Discord just stays quiet
+      if (!player) { log('playAudio with no player — reply dropped'); return { barged: false }; }
       const inRate = reply?.sampleRate || 24000;
       const pass = new PassThrough();
       const resource = deps.createAudioResource(pass, { inputType: deps.StreamType.Raw });
@@ -287,6 +400,9 @@ export function createDiscordCallAdapter({ hooks, joinSpec, deps, slugId = (s) =
       })();
 
       try { await idle; } finally { speaking = false; }
+      // Whether my human talked over it — the engine turns elapsed play time into
+      // the spoken-so-far text (2c `spokenUpTo`).
+      return { barged };
     },
 
     async stopPlayback() {
@@ -306,7 +422,7 @@ export function createDiscordCallAdapter({ hooks, joinSpec, deps, slugId = (s) =
       const present = channelId === joinSpec.channelId;
       const was = roster.has(userId);
       if (present && !was) roster.add(userId);
-      else if (!present && was) { roster.delete(userId); closeSpeaker(userId); }
+      else if (!present && was) { roster.delete(userId); destroySpeaker(userId); }
       else return;
       try { hooks.rosterChanged({ callId, members: [...roster] }); } catch (err) { log(`rosterChanged failed: ${err?.message ?? err}`); }
     },

@@ -24,6 +24,9 @@ sources:
   - id: memorization-js
     type: file
     path: memorization.js
+  - id: phylactery-server
+    type: file
+    path: phylactery/src/phylactery/server.py
 ---
 
 # Phylactery
@@ -81,7 +84,7 @@ from chat sessions is a separate subsystem; see
 
 ## Consolidation: mechanism and scope
 
-Tiered consolidation rolls memories from daily granularity up through weekly, monthly, and significant tiers [@consolidate-module]. The process runs on a schedule (5-minute volume-gated baseline) and sweeps **every past week/month/year holding un-consolidated entries**, oldest-first [@claude-md]. This is important: before 0.8.89, each consolidation pass targeted only a single reference period (e.g., today − 7d), which meant bulk imports of historical memories never fell into that window and stayed at daily granularity forever [@claude-md]. The fix ensures that re-runs catch up on the next scheduled pass (≤6 hours) or via force (`POST /api/entity/lifecycle {force:true}`) [@claude-md]. Consolidation is idempotent: weekly consolidation prunes its daily sources after roll-up; monthly/yearly skip periods that already have a higher-tier row, so they never re-append [@consolidate-module].
+Tiered consolidation rolls memories from daily granularity up through weekly, monthly, and significant tiers [@consolidate-module]. The process runs on a schedule (5-minute volume-gated baseline) and sweeps **every past week/month/year holding un-consolidated entries**, oldest-first [@claude-md]. This is important: before 0.8.89, each consolidation pass targeted only a single reference period (e.g., today − 7d), which meant bulk imports of historical memories never fell into that window and stayed at daily granularity forever [@claude-md]. The fix ensures that re-runs catch up on the next scheduled pass (≤6 hours) or via force (`POST /api/entity/lifecycle {force:true}`) [@claude-md]. Consolidation is idempotent: weekly consolidation prunes its daily sources after roll-up; monthly/yearly skip periods that already have a higher-tier row, so they never re-append [@consolidate-module]. Three hardenings landed after a 2026-08-14 store audit of pre-0.8.89 damage: the once-only guards compare **normalized** date_keys (a migrated monthly keyed `YYYY-MM` or weekly keyed `YYYY-Wnn` now counts as rolled — the raw-key comparison is what let the 0.8.89 sweep duplicate Feb–May 2026); an **empty** rollup row no longer marks its period as rolled (a zero-length July 2026 stub had blocked that month forever) and an empty LLM summary is refused rather than stored; and a re-rolled period now **replaces** its summary instead of appending through `memory_create`'s dedup-merge path, which is how one June 2026 monthly accreted ~24 generations of itself into a 160 KB row.
 
 ## Episodic versus standing: temporality and consolidation strategy
 
@@ -91,7 +94,13 @@ Memories have a temporality marker that determines consolidation behavior [@clau
 
 **Standing** memories are identity-essential facts and relationship declarations that exist outside time: who you are, what you've decided about yourself, registered villagers and their roles [@memorization-js]. Standing facts skip daily granularity and write directly into the significant tier, where they remain accessible on every turn [@claude-md]. They are always injected, never consolidated away.
 
-The distinction is set by the tool that writes the memory: `memory_create` (episodic, date-timestamped) vs `memory_set_standing` (standing, timeless) [@memorization-js]. Standing facts are gated by `resolveRememberGate`, which keys on WHO the fact is about and WHETHER the ward told the Familiar directly (direct channel + about-the-ward → implied consent; third-party subjects still ask) [@memorization-js].
+The distinction is set by a single argument to a single tool, not by two separate tools:
+`memory_create`'s `register` parameter is `episodic` (a lived moment, the default) for the daily
+kind, or `me` / `ward` (a standing truth about the Familiar or about the ward) for the timeless
+kind — granularity and register are separate axes on the same write
+[@phylactery-server]. Standing facts are gated by `resolveRememberGate`, which keys on WHO the
+fact is about and WHETHER the ward told the Familiar directly (direct channel + about-the-ward →
+implied consent; third-party subjects still ask) [@memorization-js].
 
 ## What decides which memory survives consolidation: load-bearing versus decorative
 

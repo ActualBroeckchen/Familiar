@@ -28,6 +28,7 @@
  */
 
 import path from 'node:path';
+import { existsSync, readdirSync } from 'node:fs';
 import { encodeJson, encodePcm, createFrameReader, KIND_JSON, KIND_PCM } from './audio-frame.js';
 import { floatToPcm16, pcm16ToFloat, createSilenceTracker } from './voice-audio-features.js';
 import {
@@ -45,6 +46,7 @@ const threads = {
   asr: Number(process.env.PF_AUDIO_THREADS_ASR) || 2,
   tts: Number(process.env.PF_AUDIO_THREADS_TTS) || 2,
   speaker: Number(process.env.PF_AUDIO_THREADS_SPEAKER) || 1,
+  tagging: Number(process.env.PF_AUDIO_THREADS_TAGGING) || 1,
 };
 
 /**
@@ -210,6 +212,49 @@ function buildVad(modelDir, bufferSizeInSeconds = 30) {
   }, bufferSizeInSeconds);
 }
 
+/**
+ * Build the speaker-embedding extractor (voice spec §8) — a 3D-Speaker /
+ * WeSpeaker onnx that turns a clip into a fixed-length voiceprint vector. Unlike
+ * the recognisers this is a SINGLE onnx, so the model dir holds one `.onnx`; we
+ * accept an explicit `model.onnx` or the sole onnx in the directory.
+ */
+function buildSpeakerExtractor(modelDir) {
+  let model = path.join(modelDir, 'model.onnx');
+  if (!existsSync(model)) {
+    const onnx = readdirSync(modelDir).filter(f => f.endsWith('.onnx'));
+    if (onnx.length) model = path.join(modelDir, onnx[0]);
+  }
+  return new engine.SpeakerEmbeddingExtractor({
+    model, numThreads: threads.speaker, provider: 'cpu', debug: false,
+  });
+}
+
+/**
+ * Build the audio-tagging model (voice spec §8.4) — a zipformer AudioSet tagger
+ * that turns a clip into event probabilities ("Dog", "Television", …). The model
+ * dir holds ONE `.onnx` plus a class-labels file; we accept an explicit
+ * `model.onnx` or the sole onnx in the directory, and the labels CSV by its
+ * conventional name or the sole `.csv` present. A missing labels file is a clear
+ * throw (the tagger can't name events without it), not a silent mislabel.
+ */
+function buildAudioTagger(modelDir) {
+  let model = path.join(modelDir, 'model.onnx');
+  if (!existsSync(model)) {
+    const onnx = readdirSync(modelDir).filter((f) => f.endsWith('.onnx'));
+    if (onnx.length) model = path.join(modelDir, onnx[0]);
+  }
+  let labels = path.join(modelDir, 'class_labels_indices.csv');
+  if (!existsSync(labels)) {
+    const csv = readdirSync(modelDir).filter((f) => f.endsWith('.csv'));
+    if (csv.length) labels = path.join(modelDir, csv[0]);
+  }
+  if (!existsSync(labels)) throw new Error('audio-tagging labels file (class_labels_indices.csv) not found in the model dir');
+  return new engine.AudioTagging({
+    model: { zipformer: { model }, numThreads: threads.tagging, provider: 'cpu', debug: false },
+    labels,
+  });
+}
+
 /** Loaded models, by role. Lazy: nothing loads until something needs it. */
 const loaded = new Map();
 /**
@@ -264,6 +309,52 @@ function reportState() {
  * outward. Never throws into the frame reader: a decode failure ends this one
  * session with an `asr-error` and leaves every other stream untouched.
  */
+/** Concatenate this utterance's buffered Float32 chunks into one clip. */
+function joinUtterance(chunks, total) {
+  const out = new Float32Array(total);
+  let o = 0;
+  for (const c of chunks) { out.set(c, o); o += c.length; }
+  return out;
+}
+
+/**
+ * Emit the utterance's final transcript. With `offlineFinal` on and the offline
+ * model loaded, the streaming recogniser was only for endpointing: re-transcribe
+ * the buffered clip with SenseVoice — punctuation, casing, and far better words
+ * than the 20 M streaming zipformer — and emit THAT. Falls back to the streaming
+ * text if the offline model isn't loaded, the clip is empty, or it errors, so a
+ * hybrid failure degrades to the old behaviour rather than dropping the turn.
+ * `clip` is captured by the caller BEFORE the buffer is cleared, so this can run
+ * async without racing the next utterance.
+ */
+async function emitFinal(streamId, dec, streamingText, clip, meta) {
+  const base = { op: 'asr-final', streamId, text: streamingText, final: true, ...meta };
+  // Why offline was or wasn't used — rides out on the frame so the host can log
+  // it. Blind success/failure here is what made "hybrid isn't engaging"
+  // undiagnosable: we couldn't tell not-loaded from empty-result from a throw.
+  const hasModel = Boolean(loaded.get('asr-offline')?.session);
+  const clipSec = clip ? Number((clip.length / 16000).toFixed(2)) : 0;
+  const offline = dec.offlineFinal ? loaded.get('asr-offline')?.session : null;
+  if (offline && clip && clip.length > 0) {
+    try {
+      const os = offline.createStream();
+      os.acceptWaveform({ samples: clip, sampleRate: 16000 });
+      const r = await offline.decodeAsync(os);
+      const text = (typeof r?.text === 'string' ? r.text : '').trim();
+      if (text) { send({ ...base, text, asrEngine: 'offline', clipSec }); return; }
+      send({ ...base, asrEngine: 'streaming', asrOfflineNote: `offline returned empty on ${clipSec}s clip`, clipSec });
+      return;
+    } catch (err) {
+      send({ ...base, asrEngine: 'streaming', asrOfflineNote: `offline threw: ${String(err?.message ?? err)}`, clipSec });
+      return;
+    }
+  }
+  // Not attempted — say precisely why (flag off, model not loaded, empty clip).
+  const why = !dec.offlineFinal ? (hasModel ? 'flag-off' : 'flag-off,model-not-loaded')
+    : (!hasModel ? 'model-not-loaded' : (!clip || clip.length === 0 ? 'empty-clip' : 'unknown'));
+  send({ ...base, asrEngine: 'streaming', asrOfflineNote: `not attempted: ${why}`, clipSec });
+}
+
 function feedDecoder(streamId, pcmBytes) {
   const dec = decoders.get(streamId);
   if (!dec) return; // audio for a stream that isn't listening — ignore, don't error
@@ -276,6 +367,9 @@ function feedDecoder(streamId, pcmBytes) {
     // otherwise.
     for (let i = 0; i < samples.length; i++) { const a = samples[i] < 0 ? -samples[i] : samples[i]; if (a > dec.peak) dec.peak = a; }
     dec.samples += samples.length;
+    // Buffer this utterance's audio for the offline re-transcription (cheap: a
+    // few seconds of 16 kHz float; cleared on every final).
+    if (dec.offlineFinal) { dec.utterance.push(samples); dec.uSamples += samples.length; }
     dec.stream.acceptWaveform({ samples, sampleRate: 16000 });
     while (dec.recognizer.isReady(dec.stream)) dec.recognizer.decode(dec.stream);
 
@@ -288,7 +382,11 @@ function feedDecoder(streamId, pcmBytes) {
       const finalText = dec.recognizer.getResult(dec.stream).text.trim();
       dec.recognizer.reset(dec.stream);
       dec.lastPartial = '';
-      if (finalText) send({ op: 'asr-final', streamId, text: finalText });
+      // Capture + clear the utterance buffer BEFORE the async offline pass, so
+      // the next utterance starts clean and can't race this clip.
+      const clip = dec.offlineFinal ? joinUtterance(dec.utterance, dec.uSamples) : null;
+      dec.utterance = []; dec.uSamples = 0;
+      if (finalText || clip) emitFinal(streamId, dec, finalText, clip, {}).catch(() => {});
     }
   } catch (err) {
     decoders.delete(streamId);
@@ -318,13 +416,22 @@ const OPS = {
     const e = await ensureEngine();
     if (!e.ok) return send({ reqId, ok: false, reason: e.reason, detail: e.detail });
     if (!role || !modelDir) return send({ reqId, ok: false, reason: 'bad-request', detail: 'role and modelDir are required' });
-    if (loaded.has(role)) return send({ reqId, ok: true, alreadyLoaded: true, role });
+    // Idempotent for the SAME model, but reload when the dir changed — otherwise
+    // switching the speaker model (CAM++ ↔ TitaNet-Large) would keep serving the
+    // old one until a restart, since roles are keyed by name not path.
+    const held = loaded.get(role);
+    if (held) {
+      if (held.modelDir === modelDir) return send({ reqId, ok: true, alreadyLoaded: true, role });
+      loaded.delete(role);
+    }
 
     try {
       if (role === 'tts') loaded.set(role, { session: buildPocketTts(modelDir), modelDir, at: Date.now() });
       else if (role === 'asr-offline') loaded.set(role, { session: buildRecognizer(modelDir), modelDir, at: Date.now() });
       else if (role === 'asr-streaming') loaded.set(role, { session: buildOnlineRecognizer(modelDir), modelDir, at: Date.now() });
       else if (role === 'vad') loaded.set(role, { session: buildVad(modelDir), modelDir, at: Date.now() });
+      else if (role === 'speaker') loaded.set(role, { session: buildSpeakerExtractor(modelDir), modelDir, at: Date.now() });
+      else if (role === 'tagging') loaded.set(role, { session: buildAudioTagger(modelDir), modelDir, at: Date.now() });
       else loaded.set(role, { modelDir, at: Date.now() });   // roles beyond these arrive later
       reportState();
       // The sample rate rides back on the load, because a streaming caller has
@@ -390,6 +497,73 @@ const OPS = {
       });
     } catch (err) {
       send({ reqId, ok: false, reason: 'transcribe-failed', detail: String(err?.message ?? err) });
+    }
+  },
+
+  /**
+   * Compute a speaker-embedding voiceprint (voice spec §8) from either a wav
+   * file (`wavPath` — the enrolment path) or raw float samples + rate
+   * (`samples`/`sampleRate` — a live VAD segment for the watchdog/diarizer).
+   * Returns a plain number[] embedding; the caller compares it (cosine) — the
+   * math lives in voice-embedding.js, not here. The extractor resamples to its
+   * own rate internally, so we pass the audio's native rate. A clip too short to
+   * be ready is an honest `not-ready`, never a fabricated vector.
+   */
+  async embed({ reqId, wavPath, samples, sampleRate }) {
+    const e = await ensureEngine();
+    if (!e.ok) return send({ reqId, ok: false, reason: e.reason, detail: e.detail });
+    const held = loaded.get('speaker');
+    if (!held?.session) return send({ reqId, ok: false, reason: 'not-loaded', detail: 'the speaker model is not loaded' });
+    try {
+      let s = samples, rate = sampleRate;
+      if (!(Array.isArray(s) || s instanceof Float32Array)) {
+        if (!wavPath || typeof wavPath !== 'string') {
+          return send({ reqId, ok: false, reason: 'bad-request', detail: 'wavPath or samples+sampleRate is required' });
+        }
+        const wave = engine.readWave(wavPath);
+        s = wave.samples; rate = wave.sampleRate;
+      }
+      const stream = held.session.createStream();
+      stream.acceptWaveform({ samples: s, sampleRate: Number(rate) || 16000 });
+      stream.inputFinished();
+      if (!held.session.isReady(stream)) {
+        return send({ reqId, ok: false, reason: 'not-ready', detail: 'clip too short to embed' });
+      }
+      const emb = held.session.compute(stream);
+      send({ reqId, ok: true, embedding: Array.from(emb), dim: emb.length });
+    } catch (err) {
+      send({ reqId, ok: false, reason: 'embed-failed', detail: String(err?.message ?? err) });
+    }
+  },
+
+  /**
+   * Audio tagging (voice spec §8.4) — name the salient sounds in a clip, from a
+   * wav (`wavPath`) or raw float samples + rate (`samples`/`sampleRate`, a live
+   * VAD segment). Returns raw AudioSet events (`[{name, prob, index}]`); the
+   * CALLER classifies + phrases them (voice-audio-tags.js) — no judgment lives
+   * here, and nothing about tone/threat is read from them. `topK` bounds the
+   * result; the caller filters by confidence.
+   */
+  async tag({ reqId, wavPath, samples, sampleRate, topK = 8 }) {
+    const e = await ensureEngine();
+    if (!e.ok) return send({ reqId, ok: false, reason: e.reason, detail: e.detail });
+    const held = loaded.get('tagging');
+    if (!held?.session) return send({ reqId, ok: false, reason: 'not-loaded', detail: 'the audio-tagging model is not loaded' });
+    try {
+      let s = samples, rate = sampleRate;
+      if (!(Array.isArray(s) || s instanceof Float32Array)) {
+        if (!wavPath || typeof wavPath !== 'string') {
+          return send({ reqId, ok: false, reason: 'bad-request', detail: 'wavPath or samples+sampleRate is required' });
+        }
+        const wave = engine.readWave(wavPath);
+        s = wave.samples; rate = wave.sampleRate;
+      }
+      const stream = held.session.createStream();
+      stream.acceptWaveform({ samples: s, sampleRate: Number(rate) || 16000 });
+      const events = held.session.compute(stream, Number(topK) || 8);
+      send({ reqId, ok: true, events: Array.isArray(events) ? events.map((ev) => ({ name: ev?.name ?? '', prob: Number(ev?.prob) || 0, index: ev?.index ?? -1 })) : [] });
+    } catch (err) {
+      send({ reqId, ok: false, reason: 'tag-failed', detail: String(err?.message ?? err) });
     }
   },
 
@@ -575,7 +749,7 @@ const OPS = {
    * one is a no-op, not a second decode state, so a stutter in the call setup
    * cannot double-decode a speaker.
    */
-  async asrStream({ reqId, streamId }) {
+  async asrStream({ reqId, streamId, offlineFinal }) {
     const e = await ensureEngine();
     if (!e.ok) return send({ reqId, ok: false, reason: e.reason, detail: e.detail });
     if (!Number.isFinite(streamId)) return send({ reqId, ok: false, reason: 'bad-request', detail: 'streamId is required' });
@@ -584,7 +758,14 @@ const OPS = {
     if (decoders.has(streamId)) return send({ reqId, ok: true, streamId, alreadyOpen: true });
     try {
       const stream = held.session.createStream();
-      decoders.set(streamId, { recognizer: held.session, stream, lastPartial: '', peak: 0, samples: 0 });
+      // `offlineFinal`: re-transcribe each finished utterance with the accurate
+      // offline model (SenseVoice) and emit THAT as asr-final, using the streaming
+      // recogniser only for endpointing. `utterance` buffers this utterance's raw
+      // 16 kHz samples since the last final so the offline pass has the audio.
+      decoders.set(streamId, {
+        recognizer: held.session, stream, lastPartial: '', peak: 0, samples: 0,
+        offlineFinal: offlineFinal === true, utterance: [], uSamples: 0,
+      });
       reportState();
       send({ reqId, ok: true, streamId, sampleRate: 16000 });
     } catch (err) {
@@ -607,14 +788,17 @@ const OPS = {
       const tail = dec.recognizer.getResult(dec.stream).text.trim();
       const peak = Number(dec.peak.toFixed(4));
       const seconds = Number((dec.samples / 16000).toFixed(2));
+      // Capture the utterance clip before dropping the session.
+      const clip = dec.offlineFinal ? joinUtterance(dec.utterance, dec.uSamples) : null;
       decoders.delete(streamId);
       reportState();
       // ALWAYS emit the final, even when empty. A push-to-talk release with no
       // recognised words used to send nothing, so the caller waited forever with
       // no way to know the recogniser had finished with nothing to say. The
       // peak + duration ride along so the host can tell silence from unrecognised
-      // speech in one log line.
-      send({ op: 'asr-final', streamId, text: tail, final: true, peak, seconds });
+      // speech in one log line. With offlineFinal, the accurate SenseVoice text
+      // replaces `tail` (awaited so this stop's asr-final carries it).
+      await emitFinal(streamId, dec, tail, clip, { peak, seconds });
       send({ reqId, ok: true, streamId, wasOpen: true, peak, seconds });
     } catch (err) {
       decoders.delete(streamId);

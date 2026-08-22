@@ -8,7 +8,7 @@ import {
   upsertCategory, deleteCategory,
   upsertVillager, deleteVillager,
   upsertLocation, deleteLocation,
-  findVillagerByAlias, migrateTrustedContacts,
+  findVillagerByAlias, villagerByAlias, migrateTrustedContacts,
   seedDefaultCategories,
   initVillageSync, bootSync,
   migrateCategoryIds,
@@ -197,6 +197,14 @@ test('alias resolution matches platform + stable id, not handle', async () => {
   // Handle alone never matches — display names are spoofable.
   const miss = await findVillagerByAlias({ platform: 'discord', id: 'chen_draws' }, { filePath });
   assert.equal(miss, null);
+
+  // The pure form matches against an already-loaded registry (one read, many ids —
+  // what the voice-call roster builder uses to name several speakers at once).
+  const reg = await getRegistry({ filePath });
+  assert.equal(villagerByAlias(reg, { platform: 'discord', id: '123456789' })?.name, 'Chen');
+  assert.equal(villagerByAlias(reg, { platform: 'Discord', id: '123456789' })?.name, 'Chen');  // platform case-insensitive
+  assert.equal(villagerByAlias(reg, { platform: 'discord', id: 'nope' }), null);
+  assert.equal(villagerByAlias(null, { platform: 'discord', id: '123456789' }), null);          // no registry → null, never throws
 });
 
 test('aliases without a stable id are dropped at sanitization', async () => {

@@ -648,6 +648,15 @@ test('EVERY reason the worker or its supervisor can emit has words for my human'
     'no-speech',       // a cached description, not a returned reason
     'voice-disabled', 'model-missing', 'unreadable-format', 'no-worker',
     'no-listening-engine', 'not-found', 'not-audio', 'transcribe-failed',
+    // Speaker-ID ops (§8.2/§8.3) — enrolment/watchdog/diarize, never a voice note.
+    'not-ready', 'embed-failed',
+    // Audio-tagging op (§8.4) — call-time room-sound annotation, never a voice note.
+    'tag-failed',
+    // Live-call streaming ASR ops (Pass 2) — a call, not an offline voice note.
+    'asr-open-failed', 'asr-stop-failed',
+    // correctTranscript() — the ward editing a transcript by hand, its own
+    // endpoint's answer, never the auto "I couldn't make this out" chip.
+    'empty', 'too-long',
   ]);
 
   const handler = app.slice(app.indexOf('function transcriptProblem('));

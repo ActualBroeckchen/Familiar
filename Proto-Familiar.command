@@ -88,6 +88,7 @@ cat <<EOF
 
   URL:    $URL
   Stop:   press Ctrl-C, then close this window (Cmd-W)
+          (or run ./stop.sh from anywhere)
   Help:   docs/troubleshooting.md
 
   Logs print below. Closing this window
@@ -96,5 +97,13 @@ cat <<EOF
 ========================================
 
 EOF
+
+# Record our PID so stop.sh (and start.sh's stale-instance check) can find us.
+# We're about to `exec` node, which REPLACES this shell with node while keeping
+# the SAME process id ($$) — so $$ IS node's pid once exec runs. Without this,
+# a Finder double-click left no .proto-familiar.pid at all, and stop.sh was
+# reduced to a best-effort pgrep guess — the "stop can't even tell it's running"
+# bug. Cwd is already this script's dir (the `cd` at the top).
+echo $$ > "$(pwd)/.proto-familiar.pid"
 
 PORT="$PORT" TAILSCALE="$TAILSCALE" exec node server.js

@@ -293,6 +293,25 @@ if "!HAVE_UV!"=="1" if exist "%SCRIPT_DIR%\unruh\pyproject.toml" (
   echo [WARN] Skipping Unruh dep sync ^(uv not available^). Temporal context will be disabled until uv is installed.
 )
 
+REM --- Voice provisioning (fresh install only) ---
+REM Front-load everything voice needs so a new user never troubleshoots a
+REM half-set-up engine. Heavy (Kyutai is a ~600 MB torch install), so it runs on
+REM a FRESH install only and is skippable with PF_SKIP_VOICE_INSTALL=1. Non-fatal:
+REM a machine that can't fetch voice still gets a Familiar on the built-in engine.
+REM ensure-voicebox.mjs installs the Visual C++ runtime torch needs, so there is
+REM nothing to troubleshoot after — the whole point on Windows.
+if "!MODE!"=="install" if not "%PF_SKIP_VOICE_INSTALL%"=="1" (
+  echo Setting up voice - a large one-time download ^(skip with PF_SKIP_VOICE_INSTALL=1^)...
+  if "!HAVE_UV!"=="1" (
+    node "%SCRIPT_DIR%\scripts\ensure-voicebox.mjs" --install
+    if errorlevel 1 echo [WARN] Kyutai voice setup didn't finish - the built-in engine still speaks; retry later in Settings ^> Chat ^> Voice.
+  ) else (
+    echo [WARN] Skipping Kyutai voice ^(needs uv^). The built-in engine still speaks.
+  )
+  node "%SCRIPT_DIR%\scripts\ensure-audio-models.mjs"
+  if errorlevel 1 echo [WARN] Listening-model download didn't finish - voice notes will fetch it on first use.
+)
+
 REM --- Shortcuts (idempotent - runs in both modes) ---
 REM Creating .lnk files requires WScript.Shell COM, so delegate the
 REM single block of PowerShell to it. Skip per-shortcut if the .lnk

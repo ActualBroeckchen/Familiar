@@ -6,9 +6,9 @@
  * websearch.js uses:
  *     { rows: [{ title, url, content }, …] }   on success
  *     { error: "<calm first-person string>" }  on any failure
- * so searchWeb can dispatch to them and fall back to the keyless floor on
- * { error } exactly as it does for SearXNG. A missing key, a bad key, or a
- * down provider therefore never leaves my human without search.
+ * so searchWeb can dispatch to them and fall back to the keyless DuckDuckGo
+ * floor on { error }. A missing key, a bad key, or a down provider therefore
+ * never leaves my human without search.
  *
  * Provider hosts are trusted public endpoints (the SSRF guard governs
  * read_webpage, not these sanctioned API calls); they just need the timeout

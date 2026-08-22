@@ -161,6 +161,49 @@ def test_due_nonrecurring_phase_fires_once(conn):
     assert intentions.intentions_due(conn, now="2026-07-16T09:00:00", current_phase_label="morning") == []
 
 
+def test_phase_matches_is_forgiving():
+    # The reported bug: 'evening' vs the routine label 'Evening' never matched.
+    assert intentions.phase_matches("evening", "Evening") is True          # case
+    assert intentions.phase_matches("evening", "Evening wind-down") is True  # generic → specific
+    assert intentions.phase_matches("Evening wind-down", "evening") is True  # specific → generic
+    assert intentions.phase_matches("morning", "evening") is False
+    assert intentions.phase_matches("", "Evening") is False
+    assert intentions.phase_matches("evening", None) is False
+
+
+def test_resolve_phase_canonicalises_to_a_real_label():
+    labels = ["Morning", "Work", "Evening wind-down"]
+    assert intentions.resolve_phase("evening", labels) == ("Evening wind-down", True)   # substring, canonicalised
+    assert intentions.resolve_phase("WORK", labels) == ("Work", True)                    # case-insensitive exact
+    assert intentions.resolve_phase("nap", labels) == ("nap", False)                     # no match → kept, flagged
+    assert intentions.resolve_phase("evening", []) == ("evening", False)                 # no phases defined
+
+
+def test_due_phase_matches_regardless_of_case_and_label_shape(conn):
+    # The exact bug: a round set on 'evening' must fire when the ward's routine
+    # phase is labelled 'Evening wind-down'.
+    i = intentions.set_intention(conn, what="I check in this evening",
+                                 trigger={"kind": "phase", "phase": "evening", "recurring": True})["id"]
+    due = intentions.intentions_due(conn, now="2026-07-15T20:00:00", current_phase_label="Evening wind-down")
+    assert [d["id"] for d in due] == [i]
+
+
+def test_set_phase_canonicalises_against_routine_and_warns(conn):
+    # With the ward's real phases supplied, a typed word is canonicalised…
+    r = intentions.set_intention(conn, what="evening check-in",
+                                 trigger={"kind": "phase", "phase": "evening", "recurring": True},
+                                 available_phases=["Morning", "Evening wind-down"])
+    assert r["ok"] is True and "warning" not in r
+    stored = intentions.get_by_id(conn, id=r["id"])
+    assert stored["trigger"]["phase"] == "Evening wind-down"   # stored against the real label
+    # …and a phase that matches nothing is created but flagged, not silently dead.
+    r2 = intentions.set_intention(conn, what="midnight snack reminder",
+                                  trigger={"kind": "phase", "phase": "midnight", "recurring": True},
+                                  available_phases=["Morning", "Evening wind-down"])
+    assert r2["ok"] is True
+    assert "warning" in r2 and "midnight" in r2["warning"]
+
+
 def test_due_excludes_contact_and_none_triggers(conn):
     intentions.set_intention(conn, what="a", trigger={"kind": "on_next_contact"})
     intentions.set_intention(conn, what="b", trigger={"kind": "none"})

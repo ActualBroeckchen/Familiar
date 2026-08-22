@@ -8,6 +8,30 @@ sources:
   - id: app-js
     type: file
     path: public/app.js
+  - id: audit-mcp-script
+    type: file
+    path: scripts/audit-mcp-contracts.mjs
+  - id: cerebellum-js
+    type: file
+    path: cerebellum.js
+  - id: mcp-contracts-test
+    type: file
+    path: tests/mcp-contracts.test.mjs
+  - id: thalamus
+    type: file
+    path: thalamus.js
+  - id: phylactery-result
+    type: file
+    path: phylactery-result.js
+  - id: mcp-smoke-test
+    type: file
+    path: tests/mcp-smoke.test.mjs
+  - id: llm-call-js
+    type: file
+    path: llm-call.js
+  - id: voice-transcribe-js
+    type: file
+    path: voice-transcribe.js
 ---
 
 # Engineering Conventions
@@ -197,6 +221,41 @@ open the browser console before touching the reported button, even when the cons
 unrelated to what the user described. A single early throw in `init()` is a more common cause of
 "several unrelated buttons stopped working" than a defect in each button individually.
 
+## Three named rules from a five-incident postmortem
+
+CLAUDE.md promotes three point-fixes to standing rules, named A/B/C, after the same shape of
+bug shipped on a new surface five times because each earlier fix was recorded as a fact about
+one call site instead of a law about every call site [@claude-md].
+
+**RULE A — every LLM call site goes through `callProviderChat`, or replicates both of its
+guarantees**: a generous `max_tokens` (≥4000, since a thinking model bills its reasoning against
+the same cap) and `extractContent` at the reply boundary, which falls back to
+`reasoning_content`/`reasoning` when `content` comes back empty [@claude-md] [@llm-call-js]. A
+new raw provider fetch is a review flag; grep for `max_tokens` when touching one. This was paid
+for twice: triage (0.8.82), then the Discord turn path (0.9.7, empty turns and tool calls cut
+mid-JSON), because the first fix lived in `llm-call.js` alone and Discord's own raw fetch never
+got the memo [@claude-md].
+
+**RULE B — budget exhaustion is never silence.** Every cap, limit, timeout, or retry ceiling
+must define, before it is built: what the ward sees, what the Familiar is told (its own tool
+result must record that an action did not run — a dropped cutoff manufactures confident
+confabulation, not an honest gap), and the log line [@claude-md]. The round-cap closing text
+round (0.9.7, tuned per-surface in 0.9.8) is the reference implementation: on tool-round budget
+exhaustion, force one closing text round with tools stripped, plus a first-person note that the
+pending calls did not run [@claude-md].
+
+**RULE C — a capability lands in the shared turn path, or the spec carries a surface matrix.**
+Turn-machinery features must live in code every surface shares; where per-surface wiring is
+unavoidable, the build spec must contain an explicit matrix (web live turn / web tool rounds /
+Discord ward / Discord villager+ambient / background loops), each cell marked wired-or-N/A, in
+the same commit as the feature [@claude-md]. The incident: Discord shipped without the
+synchronous-describe wiring [Vision and media](../architecture/vision-and-media) gave the web
+path (0.9.6) — web got `ensureDescribed`, Discord silently didn't, and the Familiar described
+images on Discord it had never actually looked at [@claude-md]. `ensureDescribed`'s sibling for
+voice notes, `ensureTranscribed` in `voice-transcribe.js`, was built with the lesson already
+applied: both surfaces gained it in the same change, and its own doc comment names
+`ensureDescribed` as the reason it exists [@voice-transcribe-js].
+
 ## Safety-critical sign-off
 
 Behavioral changes (not relocations, comments, or renames) to `crisis-signals.js`,
@@ -236,3 +295,137 @@ for keyboard users), and text-muted foreground at ~2:1 contrast (text readabilit
 ratios are documented inline in `style.css` with precise values so future changes can be
 verified without manual testing. The conventions are recorded in `CLAUDE.md` with "hold the
 WCAG line" as the operating principle.
+
+## Cross-language MCP contracts: a silent-failure bug class and its gate
+
+Thalamus (JS) calls [Phylactery](../architecture/phylactery) and [Unruh](../architecture/unruh)
+(Python) MCP tools with `callTool({ name, arguments })`, and `arguments` is an opaque object —
+nothing in the JS toolchain checks its keys against the Python tool's `@mcp.tool` parameter
+names [@audit-mcp-script]. That gap produces three distinct failure shapes, and all three fail
+**silently**: invisible to `node --check` and to every JS-only wiring audit (imports, exports,
+endpoints, loops), because the mismatch only exists at the JS↔Python argument boundary
+[@audit-mcp-script].
+
+- **Wrong/misnamed arg.** Pydantic drops the unknown key and the tool's actually-required
+  parameter is now missing, so FastMCP returns an `isError` result the JS wrapper often never
+  inspects — the HTTP layer answers `{ok:true}` while nothing was written.
+- **Extra arg the tool doesn't accept.** Pydantic silently drops it, so a filter or flag the
+  caller believes it is passing does nothing.
+- **A tool name that doesn't exist.** The call throws; if the caller wraps it in a
+  swallow-and-log `try`/`catch`, the feature goes inert with only a log line as evidence.
+
+Four instances shipped before the gate below existed [@audit-mcp-script]: `identity_update_section`
+sent `heading` where the tool wanted `section` (silent no-op write, HTTP still reported
+`{ok:true}`); `graph_node_search` sent `type`, which the tool did not accept, so a
+type-filtered graph search silently returned every type (`graph_node_list` did support the
+filter — only `search` was missing it, fixed by adding the filter to Phylactery);
+`interest_report_surfacing_outcome` — the Unruh tool did not exist at all, see below; and
+`graph_node_delete` sent a dead `permanent` flag that Phylactery's delete tool does not
+accept — it only hard-deletes a node and its edges — removed end-to-end from thalamus's call
+site [@thalamus].
+
+**The gate.** `scripts/audit-mcp-contracts.mjs` (`npm run audit:mcp`) parses every thalamus MCP
+call site and every Phylactery/Unruh `@mcp.tool` signature, then flags UNKNOWN tool names,
+BAD-ARG keys that are not a parameter of the tool, and MISSING-REQ parameters a call never
+sends [@audit-mcp-script]. `tests/mcp-contracts.test.mjs` asserts the check returns no findings,
+so a future mismatch fails CI instead of reaching a ward's data [@mcp-contracts-test]. It
+catches all four instances above.
+
+**Its limit, stated so nobody over-trusts it:** the gate checks argument names, tool existence,
+and required-parameter presence only — **not** types and **not** semantics
+[@audit-mcp-script]. A call that sends a correctly-named argument with the wrong type (a string
+where the tool wants a list), or the right name and type with the wrong meaning (a
+local-naive timestamp where the tool expects UTC — the class behind the 0.7.84 reminder bug,
+see [Unruh](../architecture/unruh)), still passes. Static name-checking cannot decide either
+case: the call sites are untyped JS, and meaning is not decidable from syntax alone. Catching
+those classes needs a cross-process integration test that actually spawns the peer and asserts
+behavior, not a static contract check — see the smoke test below for the coverage that fills
+this gap.
+
+**Checker precision fix (0.10.109-alpha).** The gate originally resolved `arguments: someVar`
+by a global first match of `const/let/var someVar = {...}`, but variable names like `args` are
+reused across many call sites, so a global first match could resolve the wrong assignment
+entirely. It now resolves to the NEAREST-PRECEDING assignment above the call site and folds in
+any incremental `someVar.key = …` assignments between that point and the call
+[@audit-mcp-script]. This mattered concretely: `temporal_context`'s `mode` argument (see
+[Unruh](../architecture/unruh)) was assembled into a separate `const unruhArgs` object, so the
+old resolver validated only that the tool existed, never that `mode` was one of its keys.
+Removing `mode` from the Python tool now correctly flags `BAD-ARG unruh.temporal_context`.
+
+## The isError-swallow class: a runtime gap the static gate can't catch
+
+The contract gate above checks argument *names* against the Python signature; it says nothing
+about whether a caller correctly reads the *result* of a call. `callTool` from
+`@modelcontextprotocol/sdk` does not throw when a Python tool raises — a pydantic validation
+error from a bad or missing argument, or any other exception, comes back as a **resolved**
+result with `isError: true` [@phylactery-result]. A wrapper that only reads
+`content[].text` and falls through to a `{ ok: true }` fallback when that text does not parse
+as the tool's normal JSON reports success on a failed write — the error text isn't the tool's
+JSON payload, so the fallback wins silently. This is the exact class behind the
+`identity_update_section` bug, which had previously been fixed at only that one call site.
+
+A 0.10.108-alpha audit found the fix had not generalized: **28 mutating Unruh wrappers** in
+`thalamus.js` returned `parseToolText(r, { ok: true })`, plus 2 more returned `true`
+unconditionally, so all 30 reported success on any Unruh raise. The root-cause fix is two
+pieces:
+
+- `phylacteryToolError` was generalized into server-agnostic `mcpToolError(result)` in
+  `phylactery-result.js`: `isError` is set by both Phylactery and Unruh on a raise, and the
+  "Failed:" prefix check is Phylactery's own deliberate-failure convention layered on top — a
+  harmless no-op check against Unruh, whose success payloads are JSON starting with `{`
+  [@phylactery-result].
+- `unruhResult(result, fallback)` in `thalamus.js` calls `mcpToolError` first: an error result
+  becomes honest `{ ok: false, error }`; a success result returns the tool's own JSON payload
+  (which already carries `ok`) [@thalamus]. All 28 write wrappers plus the original
+  `identity_update_section` site now route through it.
+
+Reads are deliberately **not** routed through `unruhResult` — they still degrade to an empty
+payload on failure (absence renders as absence), which is this page's own Graceful degradation
+rule's intended behavior for a peer being down. Only the write class, where a silent success is
+the dangerous outcome, is made honest. The general lesson: the static contract checker matches
+argument *names*, and structurally cannot see whether a caller reads a raised error as success
+— that is runtime error-handling behavior, not a naming mismatch, and it needs a different kind
+of check.
+
+## Cross-process MCP smoke test
+
+`tests/mcp-smoke.test.mjs` closes the gap the previous two sections both point at: it spawns the
+**real** Phylactery and Unruh MCP children through thalamus (not stubs) and round-trips
+representative tools, asserting actual behavior and actual return shapes — catching type or
+semantic mismatches that neither the static gate nor a pure-function unit test can
+[@mcp-smoke-test]. Its cases include `saveBookmark` → `listBookmarks` (the M8 write side,
+exercised cross-process, see [Unruh](../architecture/unruh)); a call with a missing required
+argument, asserting the resulting pydantic `isError` surfaces as an honest `{ ok: false }`
+through `unruhResult` against a real raise rather than a stub; `bumpInterest` →
+`listInterests`; and Phylactery's `getMemoryHealth`. The suite self-skips when `uv` or the
+Python venvs are absent (CI without Python), so a missing toolchain never reddens the suite
+[@mcp-smoke-test].
+
+Isolating the test from dev data required a store override: `UNRUH_DB_PATH` and
+`PHYLACTERY_DB_PATH` relocate each server's sqlite file, read in `default_db_path()` on both the
+Unruh and Phylactery sides, and forwarded into the spawned child's environment by
+`thalamus.js` only when set [@mcp-smoke-test] [@thalamus]. The forwarding is explicit because
+these variables are not in the MCP SDK's inherited-environment allowlist — the SDK's stdio
+transport merges only its own default environment plus `serverParams.env`, so an unlisted
+variable never reaches the child unless the caller adds it itself. Production spawns are
+unaffected when the variables are unset, and the same override lets an install relocate its
+data directory generally, not just under test.
+
+**The meta-lesson.** A JS-internal wiring audit has a structural blind spot at every
+language/process boundary. "Thorough audit" must explicitly include cross-boundary contract
+checks, boundary-crossing tests for the type/semantic classes a static check can't decide, and a
+check on runtime error-handling at the boundary — not just intra-language imports, exports,
+endpoints, and argument names. See [Unruh](../architecture/unruh) for the concrete feature
+(bookmark resurfacing) this blind spot hid pieces of across two consecutive audit passes.
+
+## Sibling tool names must be prefix-distinct
+
+An LLM selecting a tool by name is misled when two sibling tools share a prefix: reaching for
+the shorter name gets railroaded into the longer one. This shipped as a live bug — the Familiar
+trying to call `intention_set` was routed into `intention_set_rounds_visibility`, so it couldn't
+set intentions at all. The fix (0.11.16) was to rename the longer tool to `intention_visibility`
+so the names no longer collide on the `intention_set` prefix; only the model-facing name changed
+(the tool definition, its executor key, and the surfacing-module map), while the internal Unruh
+MCP call kept its own name [@cerebellum-js]. The convention: when two Familiar-facing tools are
+siblings, make sure neither name is a prefix of the other — the model picks by name, and a
+shared prefix is a selection hazard, not just a cosmetic overlap.

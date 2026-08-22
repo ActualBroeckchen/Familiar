@@ -20,6 +20,7 @@
  * consent menu must be exact, so it is code, not judgment.
  */
 import { REMEMBER_CATEGORIES, setVillagerRemember, standingConsentActive } from './village.js';
+import { EMBED_COLOR, btn, row } from './discord-menu-kit.js';
 
 // Plain-language names per category — shown in the menu and accepted as
 // command aliases alongside the raw keys.
@@ -152,11 +153,9 @@ export function consentHelpText(error) {
 // trusted from a custom_id).
 
 export const CONSENT_CID = 'pfconsent';
-const EMBED_COLOR = 0x89b4fa;   // the app's accent blue
+// EMBED_COLOR, btn, row now come from discord-menu-kit.js (shared with the
+// ward console menus) so there's one copy of the component idiom.
 
-const btn = (customId, label, style = 2, disabled = false) =>
-  ({ type: 2, style, label, custom_id: customId, disabled });
-const row = (...components) => ({ type: 1, components });
 const shortCat = (cat) => CATEGORY_LABELS[cat].split(' (')[0];
 
 /** Home view: settings at a glance + a dropdown to change one + browse buttons. */

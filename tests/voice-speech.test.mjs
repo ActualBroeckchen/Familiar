@@ -1,10 +1,26 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { speakableText, splitForSpeech, prepareForSpeech, capSentenceLength, splitForUtterances
+import { speakableText, splitForSpeech, prepareForSpeech, capSentenceLength, splitForUtterances,
+  normalizeTranscriptCase,
 } from '../voice-speech.js';
 import { MAX_CHAR_IN_SENTENCE, MIN_CHAR_IN_SENTENCE } from '../voice-generation.js';
 import { encodeWav, parseWav, wavHeader, floatToPcm16, WAV_STREAMING_LENGTH } from '../voice-audio-features.js';
+
+// ── ASR case rescue — the streaming zipformer shouts; un-shout it ────────
+test('normalizeTranscriptCase: ALL CAPS → sentence case, and "i" → "I"', () => {
+  assert.equal(normalizeTranscriptCase('WISH ME LUCK'), 'Wish me luck');
+  assert.equal(normalizeTranscriptCase('I CAN NOT DO THIS ANYMORE'), 'I can not do this anymore');
+  assert.equal(normalizeTranscriptCase('CALL MOM. THEN GO OUT.'), 'Call mom. Then go out.');
+  assert.equal(normalizeTranscriptCase("I'M FINE"), "I'm fine");
+});
+
+test('normalizeTranscriptCase leaves already-cased text ALONE (SenseVoice / corrections)', () => {
+  assert.equal(normalizeTranscriptCase('Wish me luck at the interview.'), 'Wish me luck at the interview.');
+  assert.equal(normalizeTranscriptCase('I said HELLO to the API team'), 'I said HELLO to the API team', 'mixed case is untouched');
+  assert.equal(normalizeTranscriptCase(''), '');
+  assert.equal(normalizeTranscriptCase('12:30'), '12:30', 'no cased letters → unchanged');
+});
 
 // ── Markdown that was written to be read, said instead ───────────────────
 

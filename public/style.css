@@ -3039,6 +3039,11 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
   border-bottom: 1px dashed var(--border-light);
   margin-bottom: 8px;
 }
+
+/* Prompt-inspector surface tabs: the annotated web view vs. the verbatim
+   payload each server surface actually sent. */
+.pi-surface-tabs { margin-bottom: 12px; }
+.pi-tab-content { display: block; }
 .pi-chip {
   font-size: 0.68rem;
   font-weight: 600;
@@ -3839,7 +3844,16 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
   gap: 7px;
 }
 .vl-knocks.hidden { display: none; }
+.vl-servers.hidden { display: none; }
 .vl-knocks-head { font-size: 0.82rem; font-weight: 600; }
+/* Server-name subheader that groups a run of channel knocks. */
+.vl-knock-group + .vl-knock-group { margin-top: 8px; }
+.vl-knock-group-head {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin: 4px 0 2px;
+}
 .vl-knock {
   display: flex;
   align-items: center;
