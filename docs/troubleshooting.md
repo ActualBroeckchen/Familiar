@@ -479,6 +479,7 @@ is not an off-switch.
 | `PROTO_FAMILIAR_VOICE_DISABLED` | all of voice — reading aloud, voice notes, the worker |
 | `PROTO_FAMILIAR_VOICE_PRESENCE_DISABLED` | group-call awareness — who's present, who joined/left, and per-speaker labels (falls back to the old unlabelled transcript) |
 | `PROTO_FAMILIAR_VOICE_GREETINGS_DISABLED` | the spoken hello when someone joins a group call (presence/labels stay on) |
+| `PROTO_FAMILIAR_VOICE_BARGE_DISABLED` | barge-in — the Familiar stopping when someone speaks over it in a call (falls back to the web browser's own barge; disables the noise-robust partial-driven interrupt) |
 | `PROTO_FAMILIAR_VISION_DISABLED` | seeing images |
 | `PROTO_FAMILIAR_VISION_THREAT_DISABLED` | an image raising your Familiar's concern |
 | `PROTO_FAMILIAR_ZAI_VISION_DISABLED` | the z.ai Coding-Plan vision route |

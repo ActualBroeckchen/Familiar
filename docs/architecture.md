@@ -2812,6 +2812,24 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   runner is an injected `onTurn` seam server.js wires to the chat path. Hard
   off-switch `PROTO_FAMILIAR_VOICE_CALL_DISABLED=1`. The web adapter + the real
   `onTurn` wiring are the next 2b slice.
+  - **Barge-in is engine-level and noise-robust (0.11.53).** The engine handles
+    `asr-partial` in `onWorkerFrame`: while it's `speaking`, a recognised partial
+    that clears a 2-char floor AND passes the same `transcriptFilter`
+    (`isLikelyNoiseTranscript`) the finals use → `adapter.stopPlayback()` (once per
+    playback, `bargeSent` guard). Barging on *recognised words* (not raw audio
+    onset) is what rejects coughs/keyboard/fans/music — non-speech never decodes to
+    words. Transport-neutral: it's the trigger the Discord adapter had been missing
+    entirely (nothing called its `stopPlayback` before), and an additive backstop
+    to the web adapter's instant browser-driven `{t:'barge'}`. Off-switch
+    `PROTO_FAMILIAR_VOICE_BARGE_DISABLED=1` (default ON). The `{barged:true}` return
+    → `onReplyInterrupted` recording is unchanged.
+  - **Non-fatal group joins (0.11.53).** The Discord adapter's `sub.on('data')`
+    handler is now fully wrapped in try/catch: the opusscript shared-heap move a
+    second speaker's decoder triggers (detaching an existing decoder's buffer) can
+    throw in the resample *after* the guarded `decode()`, and that used to escape
+    the stream event and crash the whole voice stack on a subsequent join. Now a
+    bad frame is logged (rate-limited) and skipped; the call continues for everyone
+    else (graceful degradation).
   - **Hybrid ASR (ward-configurable, default ON).** The streaming 20 M zipformer
     is lossy (uppercase, no punctuation, weak on hard words). Since a call
     utterance has an explicit boundary (Discord speaking-end / web release), the

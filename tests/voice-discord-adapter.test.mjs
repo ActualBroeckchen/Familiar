@@ -287,6 +287,36 @@ test('an oversized packet is skipped before it can overflow the decoder input bu
   assert.equal(decoded, 1);
 });
 
+test('a post-decode error never escapes the data handler (non-fatal join)', async () => {
+  // The reported "crash when someone new joins": a second speaker's decoder grows
+  // the shared WASM heap and detaches an existing decoder's buffer, so the RESAMPLE
+  // after a (retried) decode throws inside the stream 'data' handler. decodeOpus'
+  // own retry only guards the decode() call; here decode "succeeds" but returns a
+  // buffer the resample chokes on — modelling the detached-buffer throw downstream.
+  // Pre-fix that threw straight out of the EventEmitter and took the voice stack
+  // down; the whole handler is now wrapped, so the bad frame is skipped and logged.
+  const deps = makeFakeDeps();
+  const logs = [];
+  // decode returns a "buffer" whose backing ArrayBuffer is too small for its
+  // claimed length — so asInt16()'s `new Int16Array(buffer, offset, len)` throws a
+  // RangeError, exactly as a detached/moved heap buffer would downstream of decode.
+  deps.makeOpusDecoder = () => ({ decode: () => ({ length: 3840, buffer: new ArrayBuffer(2), byteOffset: 0 }), delete() {} });
+  const { hooks, calls } = makeHooks();
+  const { adapter } = createDiscordCallAdapter({ hooks, joinSpec: joinSpec(), deps, log: (m) => logs.push(m) });
+  await adapter.joinCall();
+
+  deps._receiver.speaking.emit('start', 'wardU');
+  const { stream } = deps._receiver.subscribed[0];
+  assert.doesNotThrow(
+    () => { for (let i = 0; i < 10; i++) stream.emit('data', Buffer.from([i])); },
+    'a post-decode throw must not escape the stream data handler',
+  );
+  assert.equal(calls.pushAudio.length, 0, 'the bad frames are skipped, not pushed');
+  assert.equal(stream.destroyed, undefined, 'the call stays live — the speaker is not torn down');
+  const warn = logs.filter((m) => /inbound frame dropped/.test(m));
+  assert.equal(warn.length, 1, 'the drop is logged once (rate-limited), not once per packet');
+});
+
 test('leaveCall destroys the connection and clears open speakers', async () => {
   const deps = makeFakeDeps();
   const { hooks } = makeHooks();
