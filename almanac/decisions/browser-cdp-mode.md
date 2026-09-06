@@ -17,6 +17,9 @@ sources:
   - id: browser-build-spec
     type: file
     path: docs/browser-build-spec.md
+  - id: cdp-launcher-js
+    type: file
+    path: cdp-launcher.js
 ---
 
 # CDP Mode: Driving the Ward's Own Chrome
@@ -86,6 +89,21 @@ driver seam the owned-profile launch uses, via a dedicated `ensureCdpContext()` 
   auto-submit powers). The hard invariant is enforced in `closeBrowser`'s `cdp` branch:
   it closes only the dedicated tab it opened, then **disconnects** — it never calls
   `browser.close()` on the ward's real Chrome [@browser-driver-js].
+
+## Amendment: the shipped one-click setup uses a dedicated profile, not the ward's everyday Chrome
+
+The design above assumes CDP attaches to the ward's *already-running, already-logged-in*
+Chrome — their real, everyday profile, with its own bank and email sessions. The one-click
+"Set up my Chrome" launcher shipped afterward (`cdp-launcher.js`) deliberately does not do
+that: it points the launched Chrome's `--user-data-dir` at a separate, dedicated profile
+(`~/.proto-familiar/cdp-chrome`) that starts logged out, so the debug port this whole mode
+depends on is never a path to the ward's real profile [@cdp-launcher-js]. This is a ward-approved deviation from
+the build spec's premise, made because it is strictly safer, not a reversal of any of the
+settled decisions above — the arm gate, the forced single-domain allowlist, and the
+disconnect-not-close invariant all still apply unchanged to whatever profile is attached. A
+ward who wants the original, everyday-Chrome behavior can still bypass the launcher and start
+their own Chrome with the debug flag by hand. See [Browser: click-and-fill web
+access](../architecture/browser) for the one-click launcher's mechanics.
 
 See [Browser: click-and-fill web access](../architecture/browser) for how this engine backing
 fits alongside the owned-profile driver it can swap with, and for the desktop-shakeout testing

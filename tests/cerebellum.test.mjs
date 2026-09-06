@@ -293,6 +293,16 @@ test('read_memory_by_id: a missing id is caught before any store call', async ()
   assert.match(out, /need the memory id/i);
 });
 
+test('search_sessions: refuses when someone else is present (ward-private gate)', async () => {
+  const out = await executeToolCall('search_sessions', JSON.stringify({ query: 'dentist' }), { wardPrivate: false });
+  assert.match(out, /Someone else is here/i);
+});
+
+test('search_sessions: an empty query is caught before any file scan', async () => {
+  const out = await executeToolCall('search_sessions', JSON.stringify({ query: '   ' }), { wardPrivate: true });
+  assert.match(out, /something to look for/i);
+});
+
 test('move_memory_date: a missing id and a bad date are each caught before any store call', async () => {
   assert.match(await executeToolCall('move_memory_date', JSON.stringify({ date: '2026-01-01' })), /need the memory id/i);
   assert.match(await executeToolCall('move_memory_date', JSON.stringify({ id: 'abc', date: 'june 22' })), /YYYY-MM-DD/);

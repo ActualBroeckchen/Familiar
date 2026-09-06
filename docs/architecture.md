@@ -159,7 +159,7 @@ ponderings injection, care-check framing) and as background loops
 ├── surface-context.js       Consumer pipeline — hard gates + candidate selection + block format. Consequence-aware scoring reads schedule edges (summarizeConsequences: requires/depends_on/blocks/causes → priority pressure + plain "why"). Stewardship Pass 2a (0.8.19) adds an obstacle-radar nudge: a task whose `payload.obstacle_tags` names a real barrier (e.g. "outside") gets +1 pressure and a "worth keeping on the radar" reason, so an outside-the-house errand doesn't slide under the easier tasks
 ├── surface-events.js        Event store (offers + outcomes) + pure-code tagger + reflection inputs
 ├── village.js               Village registry (V1) — categories/grant sets, villagers (name/pronouns/aliases/relation/stance/comm-style/notes/privateNotes/remember consent map/graphNodeId), locations; local mirror + Phylactery write-through sync (see docs/village-support-design.md). The Familiar reaches it via the village_lookup / village_upsert tools (privateNotes field-gated to ward-private turns)
-├── own-files.js             Sandboxed read-only access to the Familiar's own checkout — resolves repo-relative paths inside the root, denies secrets (settings.json, .env) + build noise (node_modules/.git/.venv), size-caps + text-only. Backs the list_files / read_file tools (ward-private only)
+├── own-files.js             Sandboxed read-only access to the Familiar's own checkout — resolves repo-relative paths inside the root, denies secrets (settings.json, .env) + build noise (node_modules/.git/.venv), size-caps + text-only. Backs the list_files / read_file tools AND `searchSessions` (content search across `logs/*.json`, recency-ranked snippets + the log path to read next; same denylist) behind the search_sessions tool — all ward-private only
 ├── websearch.js             Web access (opt-in, 0.7.0) — backs the look_up / web_search / read_webpage tools. look_up (0.7.19) answers definitions/facts/overviews from keyless official reference APIs (Wikipedia action API + DuckDuckGo Instant Answer API), no scraping/no setup. web_search finds pages; searchWeb resolves the human-chosen backend: webSearchBackend ∈ {basic → in-box keyless DuckDuckGo HTML scrape (no setup); api → a provider adapter (Marginalia/Tavily/Brave/Google) via webSearchApiProvider+key}. ANY backend failing falls through to the keyless floor — a wrong key / down provider never leaves the human without search. Each search logs which backend actually served (`[websearch] "q" — served via …` / `… failed […]; fell back to built-in keyless search`) so a silent fallback is visible (0.7.28). Owns the SSRF guard (scheme allow-list + resolved-IP block of loopback/private/link-local/metadata + redirect re-validation), the fetch timeout, and the linkedom→@mozilla/readability→turndown extraction with provenance stamping — the html→framed-markdown half is `extractReadable(html,{url,maxChars})`, SHARED with the browser read path (browser.js) so live-DOM and static reads produce byte-identical output. cerebellum registers the defs + delegates; gated by webSearchEnabled / PROTO_FAMILIAR_WEBSEARCH_DISABLED=1. (The managed local engines — SearXNG/4get/LibreY — were removed in 0.7.38; Marginalia + APIs + the floor cover the same ground without the install/spawn machinery.)
 ├── reddit-reader.js         Reddit via its JSON API (0.11.29). Reddit's anti-bot wall 403s automated BROWSER traffic before render (and the datacenter-IP `.json` too), so `read_webpage` routes any reddit URL here BEFORE the browser/static path. `redditApiPath` normalises a front-end URL to its `.json` endpoint (bounded `limit`, `raw_json=1`); `fetchRedditJson` fetches it through websearch.js's `guardedFetch` (SSRF guard reused; a `headers`/`method`/`body` override was added there for a descriptive UA + JSON Accept + the OAuth POST). Two tiers: **public `.json`** (default, zero setup — works from a residential IP where the browser fingerprint is blocked) and, when `redditCredentials` is complete, the **sanctioned OAuth API** (script-app password grant → bearer on `oauth.reddit.com`, token cached in-memory, never persisted) which never touches the anti-bot wall. `parseRedditReadable` renders a comments page (post + threaded top comments) or a listing (numbered posts) into clean text, then `readReddit` runs it through injection-guard (comment bodies are user-authored) and returns `{ok,text,hard}` — a definitive block/auth outcome (`hard`) is surfaced honestly instead of falling through to the also-walled browser. Credentials + UA come from env FIRST (`PROTO_FAMILIAR_REDDIT_CLIENT_ID` / `PROTO_FAMILIAR_REDDIT_CLIENT_SECRET` / `PROTO_FAMILIAR_REDDIT_USERNAME` / `PROTO_FAMILIAR_REDDIT_PASSWORD` / `PROTO_FAMILIAR_REDDIT_USER_AGENT`) then Settings (`reddit*` keys, synced); off-switch `redditReaderEnabled` (default ON) + `PROTO_FAMILIAR_REDDIT_DISABLED=1`. **Browser-session tier (0.11.30):** Reddit also blocks server-side `.json` at the network layer (not just by IP), so `fetchRedditJson` inserts an authenticated **`browser-session`** backend between OAuth and public — `deps.contextFetch` (→ `browser-driver.contextRequest`, the ward's real browser fingerprint + logged-in session) fetches the `.json`, trusted only if it returns real JSON; `read_webpage` wires `contextFetch` on the ward's own turn only (the session is theirs).
 ├── reader-router.js / reader-doctor.js  Gated-site reading (0.11.30, docs/reader-router-build-spec.md). The durable answer to "AI can't read this site" is per-site "primary + fallback" backends off the ward's authenticated browser, plus a way to SEE what's open. `reader-router` is the site REGISTRY (`READER_SITES`: hosts + ordered backend chain + the one-line unlock; `readerSiteFor`, `runReaderChain`). `reader-doctor` runs bounded live probes and renders "🟢 reachable / ⚫ blocked (+ what unlocks it)" — the `reader_doctor` tool (first-person) + `GET /api/reader-doctor`. Reddit is the first wired site (oauth → browser-session → public-json); LinkedIn/Quora/Medium/Twitter are follow-up passes via `browser-session`/`browser-read` off the logged-in profile.
@@ -522,6 +522,16 @@ Currently owns:
   docs) so it can look things up on purpose. Sandbox + secret denylist
   in `own-files.js`; ward-private only (file contents are shared
   history, not for gated rooms).
+- **`search_sessions` (0.11.50)** — the "let me glance back and find
+  where that was said" capability: a content search across every session
+  log (`logs/*.json`, web + Discord, DMs + group rooms), so in a DM the
+  Familiar can locate a moment the ward mentioned elsewhere without
+  already knowing which log holds it. `searchSessions` in `own-files.js`
+  (same sandbox/denylist; recency-ranked, snippets carry the speaker, and
+  each hit names the log path to open next with `read_file`). Ward-private
+  only — the executor refuses when anyone else is present, and it's absent
+  from `villagerToolNames` so a villager can never reach it. Surfaces via
+  the `files` module (glance-back trigger phrasing).
 - **`relay_message` (Village V6, 0.6.15-alpha)** — carries a message from
   the ward to a villager (DM) or a Discord location. Resolves the target
   against the registry, runs the composed text through the
@@ -1657,6 +1667,23 @@ re-appending every pass. The weekly range query is date-range based
 Apr 5) still collects all seven days. Each period is guarded independently — one bad
 period never aborts the sweep. Existing installs catch up automatically on the next
 scheduled pass (≤6 h); `POST /api/entity/lifecycle {force:true}` triggers it now.
+
+**Fold-on-re-consolidate (0.11.50).** Ingesting a *past* session mints a
+past-dated `daily` into a span the ladder had already rolled up (and whose original
+dailies were pruned). Two failures used to follow: a single late daily never
+re-qualified (the ≥2 floor) → it sat orphaned at `daily` forever; and ≥2 late
+dailies regenerated the weekly from **only the newcomers** and *replaced* the row
+→ the original week's summary was clobbered. Fixed by folding, not replacing:
+`consolidate_to_weekly` feeds the existing weekly summary back into the LLM as the
+prior summary (`_consolidation_prompt`'s fold branch) so nothing it held is lost,
+and `_distinct_past_weeks` re-qualifies a week off even **one** new daily when a
+rollup already exists. Monthly/yearly never prune their sources, so they regenerate
+completely (no fold needed); they instead re-roll a period when a source is newer
+than the rollup — `_distinct_past_periods` compares each source's
+`max(updated_at, created_at)` against the rollup's `updated_at` (`_rollup_updated_at`).
+This terminates: a re-roll bumps the rollup's `updated_at` above all its sources, so
+the next pass sees nothing newer. Weekly still prunes the folded newcomers, so it
+never re-enumerates the same week.
 
 **Recall tracking** (`memory.search` → `_touch_recall`) — pure observability:
 bumps `recall_count` + `last_recalled_at` for everything surfaced.

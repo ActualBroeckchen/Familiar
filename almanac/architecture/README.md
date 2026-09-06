@@ -212,7 +212,9 @@ If you're asking yourself... go to:
   continued past them through 0.11.30 (open shadow-DOM piercing, the `browse_open` Reddit
   reader mirror, page watches, JS-render settling, and a Reddit JSON-API reader that routes
   `read_webpage` around Reddit's anti-bot wall entirely), and the CDP-mode alternate engine
-  that attaches to the ward's own logged-in Chrome (0.11.31-alpha, pending a desktop shakeout).
+  (0.11.31-alpha, pending a desktop shakeout) that attaches over the Chrome DevTools Protocol to
+  a Chrome the ward launches themselves — a dedicated, one-click-set-up profile by default,
+  or their own everyday logged-in Chrome if they set the debug flag by hand.
 - [Reader router](reader-router) — the 0.11.30 gated-site registry and reachability doctor
   that generalizes the Reddit fix above: a `browser-driver.contextRequest` primitive fetches
   through the ward's own authenticated browser session for any site a plain server-side

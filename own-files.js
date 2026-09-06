@@ -20,6 +20,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { sessionLocationLabel } from './session-log.js';
+
 // This file sits at the repo root, so its dir IS the root.
 export const REPO_ROOT = path.dirname(fileURLToPath(import.meta.url));
 
@@ -133,4 +135,95 @@ export async function readOwnFile(relPath, { root = REPO_ROOT, maxBytes = MAX_RE
   } catch { /* ignore */ }
 
   return { ok: true, path: rel, content: buf.toString('utf8'), truncated };
+}
+
+// ── Searching my own session logs ─────────────────────────────────────
+// The "let me glance back and find where that was said" capability. A content
+// search across logs/*.json — every past conversation, web or Discord, DM or
+// group room — so I can locate a moment without already knowing which log holds
+// it. Read-only; the same denylist applies (a secret file can never surface).
+// The audience gate (ward-private only) lives in cerebellum's executor, like
+// read_file — this is the pure searcher so it can be unit-tested in isolation.
+
+const MAX_SNIPPET_LEN = 240;
+
+function _msTime(iso) {
+  const t = iso ? Date.parse(iso) : NaN;
+  return Number.isNaN(t) ? -Infinity : t;
+}
+
+// A short window of the message around the first matched term, whitespace
+// collapsed, with ellipses where it's clipped — enough to recognise the moment.
+function _snippet(content, terms) {
+  const flat = String(content).replace(/\s+/g, ' ').trim();
+  const lc = flat.toLowerCase();
+  let at = -1;
+  for (const t of terms) { const i = lc.indexOf(t); if (i !== -1 && (at === -1 || i < at)) at = i; }
+  if (at === -1) return flat.slice(0, MAX_SNIPPET_LEN) + (flat.length > MAX_SNIPPET_LEN ? '…' : '');
+  const half = Math.floor((MAX_SNIPPET_LEN - 40) / 2);
+  const start = Math.max(0, at - half);
+  const end = Math.min(flat.length, at + (MAX_SNIPPET_LEN - half));
+  return (start > 0 ? '…' : '') + flat.slice(start, end) + (end < flat.length ? '…' : '');
+}
+
+/**
+ * Search my session logs for where something was said.
+ * @param {string} query  plain words; all whitespace-separated terms must appear
+ *   in the same message (case-insensitive) for it to match.
+ * @returns {Promise<{ok:true, hits:Array, truncated:boolean}|{ok:false,error}>}
+ *   hits (newest-first): { path, sessionId, locationLabel, when, snippets:[{role,speaker,when,text}] }.
+ *   `path` is the log to open next with read_file. Never throws.
+ */
+export async function searchSessions(query, {
+  root = REPO_ROOT, logsDir = 'logs', limit = 12, maxSnippetsPerFile = 3,
+} = {}) {
+  const q = String(query ?? '').trim();
+  if (!q) return { ok: false, error: 'I need something to look for' };
+  const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+
+  const abs = safeResolve(root, logsDir);
+  if (abs == null) return { ok: false, error: 'that path is outside my own folder' };
+
+  let files;
+  try { files = await fs.readdir(abs); }
+  catch { return { ok: true, hits: [], truncated: false }; }  // no logs yet — not an error
+
+  const results = [];
+  for (const f of files) {
+    if (!f.endsWith('.json')) continue;
+    if (denied(`${logsDir}/${f}`)) continue;   // never surface a secret, even here
+    let log;
+    try { log = JSON.parse(await fs.readFile(path.join(abs, f), 'utf8')); }
+    catch { continue; }                         // corrupt/unreadable — skip, never throw
+    if (!log || !Array.isArray(log.messages)) continue;
+
+    const snippets = [];
+    for (const m of log.messages) {
+      const content = typeof m?.content === 'string' ? m.content : '';
+      if (!content) continue;
+      const lc = content.toLowerCase();
+      if (!terms.every((t) => lc.includes(t))) continue;
+      snippets.push({
+        role: m.role || 'unknown',
+        speaker: m.speaker || null,
+        when: m.timestamp || null,
+        text: _snippet(content, terms),
+      });
+      if (snippets.length >= maxSnippetsPerFile) break;
+    }
+    if (!snippets.length) continue;
+
+    const when = log.updatedAt || log.endedAt || log.startedAt ||
+      snippets[snippets.length - 1].when || null;
+    results.push({
+      path: `${logsDir}/${f}`,
+      sessionId: log.sessionId || f.replace(/\.json$/, ''),
+      locationLabel: sessionLocationLabel(log.location, log.origin),
+      when,
+      snippets,
+    });
+  }
+
+  results.sort((a, b) => _msTime(b.when) - _msTime(a.when));
+  return { ok: true, hits: results.slice(0, limit), truncated: results.length > limit };
 }

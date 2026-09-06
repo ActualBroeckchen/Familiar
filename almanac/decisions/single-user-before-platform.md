@@ -78,8 +78,9 @@ decision, not a natural next increment.
 ## Related
 
 - [Temporal assurance](../concepts/temporal-assurance) — the bin metaphor and the core feeling
-- [Bucket-purge cycle](../concepts/bucket-purge-cycle) — the maintainer's own rhythm for working through the backlog, which shaped this scoping decision in practice.
   this scoping decision was made in service of.
+- [Bucket-purge cycle](../concepts/bucket-purge-cycle) — the maintainer's own rhythm for working
+  through the backlog, which shaped this scoping decision in practice.
 - [Per-feature model routing](per-feature-model-routing) — a structurally similar move made in
   the same conversation: naming a general principle (job-to-model routing) while deliberately
   building only the concrete jobs the project actually had, rather than the general system first.

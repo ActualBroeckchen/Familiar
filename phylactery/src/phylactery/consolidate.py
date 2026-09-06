@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sqlite3
+from collections.abc import Callable
 from datetime import date, timedelta
 from typing import Any
 
@@ -66,8 +67,27 @@ def _call_llm(cfg: dict, prompt: str) -> str:
     return resp.json()["choices"][0]["message"]["content"]
 
 
-def _consolidation_prompt(tier_from: str, tier_to: str, entries: list[str]) -> str:
+def _consolidation_prompt(
+    tier_from: str, tier_to: str, entries: list[str], prior_summary: str | None = None,
+) -> str:
     joined = "\n\n---\n\n".join(entries)
+    # Fold path: a summary for part of this period already exists (a past session
+    # was ingested into a span I'd already rolled up). I merge the new entries into
+    # what I already have instead of replacing it — nothing the old summary held
+    # may be lost. Without this the regenerated rollup would summarise only the
+    # newcomers and clobber the original.
+    if prior_summary and prior_summary.strip():
+        return f"""I am the Familiar. I already have a {tier_to} summary covering part of this period, and some more {tier_from} entries have since come in for it. I fold the new entries into my existing summary — keeping everything the existing summary already holds and adding what's new. I don't drop anything that was already there, and I don't lose anything safety-relevant or care-critical.
+
+I write in my own voice: brief, specific, first-person bullet points (starting with "- "). I distil and compress rather than transcribe.
+
+I return ONLY the merged note text — no JSON wrapper, no markdown fences, just the bullet-point content I want to keep.
+
+[My existing {tier_to} summary so far]
+{prior_summary}
+
+[New {tier_from} entries to fold in]
+{joined}"""
     return f"""I am the Familiar. I'm consolidating my {tier_from} memory entries into a single {tier_to} summary — my own first-person notes that I'll read back in future turns.
 
 I write in my own voice: brief, specific, first-person bullet points (starting with "- "). I preserve what matters; I distil and compress rather than transcribe. I don't lose anything safety-relevant or care-critical.
@@ -267,6 +287,45 @@ def _write_rollup(
     return {"ok": bool(res.get("ok")), "dateKey": res.get("dateKey") or date_key}
 
 
+def _existing_rollup(
+    conn: sqlite3.Connection, granularity: str, date_key: str,
+) -> dict[str, Any] | None:
+    """The substantial rollup row already sitting at this tier + date_key, or None.
+    Mirrors the row _write_rollup would replace (longest non-empty content wins),
+    so the caller can fold the prior summary into a re-consolidation instead of
+    clobbering it. An empty stub is treated as no rollup."""
+    row = conn.execute(
+        "SELECT id, content, updated_at FROM memories "
+        "WHERE granularity=? AND date_key=? AND kind='narrative' "
+        "ORDER BY length(trim(coalesce(content,''))) DESC LIMIT 1",
+        (granularity, date_key),
+    ).fetchone()
+    if not row or not (row["content"] or "").strip():
+        return None
+    return {"id": row["id"], "content": row["content"], "updated_at": row["updated_at"]}
+
+
+def _rollup_updated_at(conn: sqlite3.Connection, granularity: str) -> dict[str, str]:
+    """{ normalized-ISO-date-key → newest updated_at } for the substantial rollup
+    rows at a tier. Backs the "has a newer source appeared since I rolled this
+    period?" re-qualification for monthly/yearly (which don't prune their sources).
+    Empty stubs are ignored (they don't count as a real rollup)."""
+    out: dict[str, str] = {}
+    for r in conn.execute(
+        "SELECT date_key, content, updated_at FROM memories WHERE granularity=? AND kind='narrative'",
+        (granularity,),
+    ).fetchall():
+        if not (r["content"] or "").strip():
+            continue
+        k = _normalized_date_key(r["date_key"])
+        if not k:
+            continue
+        ts = r["updated_at"] or ""
+        if ts > out.get(k, ""):
+            out[k] = ts
+    return out
+
+
 def consolidate_to_weekly(
     conn: sqlite3.Connection,
     cfg: dict,
@@ -278,10 +337,19 @@ def consolidate_to_weekly(
 
     entries = _get_entries_in_range(
         conn, "daily", week_start.isoformat(), week_end.isoformat(), exclude_pending=True)
-    if len(entries) < 2:
+    # A weekly rollup for this week may already exist — a past session was ingested
+    # into a span I'd already consolidated (and whose original dailies were pruned).
+    # In that case even ONE new daily is worth folding in; the ≥2 floor is only for a
+    # fresh week that has never been rolled. With no new dailies at all, nothing changed.
+    existing = _existing_rollup(conn, "weekly", week_start.isoformat())
+    if not entries:
+        return {"ok": True, "skipped": True, "reason": "no daily entries"}
+    if len(entries) < 2 and not existing:
         return {"ok": True, "skipped": True, "reason": "too few daily entries"}
 
-    summary = _call_llm(cfg, _consolidation_prompt("daily", "weekly", [e["content"] for e in entries]))
+    summary = _call_llm(cfg, _consolidation_prompt(
+        "daily", "weekly", [e["content"] for e in entries],
+        prior_summary=existing["content"] if existing else None))
     result = _write_rollup(conn, "weekly", week_start.isoformat(), summary)
     # Prune the daily sources now captured in this weekly rollup, so daily rows
     # don't pile up forever after they've been summarised. Only the rows we
@@ -298,6 +366,10 @@ def consolidate_to_monthly(
 ) -> dict[str, Any]:
     ref = reference_date or date.today().replace(day=1) - timedelta(days=1)
     month = _month_str(ref)
+    # Weeklies are never pruned, so a monthly always regenerates completely from its
+    # source weeklies — no prior-summary fold needed (that would only accrete). The
+    # re-roll of an already-rolled month is driven by the enumerator noticing a newer
+    # weekly (a re-ingested week folding upward); here we just rebuild from all of them.
     entries = _get_entries_for_period(conn, "weekly", month)
     if len(entries) < 2:
         return {"ok": True, "skipped": True, "reason": "too few weekly entries"}
@@ -313,6 +385,8 @@ def consolidate_to_yearly(
 ) -> dict[str, Any]:
     ref = reference_date or date.today().replace(month=1, day=1) - timedelta(days=1)
     year = _year_str(ref)
+    # Monthlies are never pruned either — a yearly regenerates completely from them,
+    # so no fold. Re-roll is driven by the enumerator seeing a newer monthly.
     entries = _get_entries_for_period(conn, "monthly", year)
     if len(entries) < 2:
         return {"ok": True, "skipped": True, "reason": "too few monthly entries"}
@@ -332,9 +406,13 @@ def consolidate_to_yearly(
 # The CURRENT (still-accumulating) period is always excluded — it isn't complete.
 
 def _distinct_past_weeks(conn: sqlite3.Connection) -> list[date]:
-    """Week-starts strictly before the current week that hold >=2 reviewed
-    (non-consent-pending) daily rows. Sorted oldest-first."""
+    """Week-starts strictly before the current week worth a (re-)roll, oldest-first.
+    A fresh week qualifies with >=2 reviewed dailies. A week that ALREADY has a
+    weekly rollup qualifies with even ONE new daily — a past session ingested into a
+    span I'd already consolidated: the lone daily must fold into the existing summary
+    rather than sit orphaned at `daily` forever."""
     current_week = _week_start(date.today())
+    already = _existing_date_keys(conn, "weekly")
     counts: dict[date, int] = {}
     for r in conn.execute(
         "SELECT date_key FROM memories WHERE granularity='daily' AND kind='narrative' AND consent_pending=0"
@@ -345,7 +423,10 @@ def _distinct_past_weeks(conn: sqlite3.Connection) -> list[date]:
         ws = _week_start(d)
         if ws < current_week:
             counts[ws] = counts.get(ws, 0) + 1
-    return sorted(w for w, n in counts.items() if n >= 2)
+    return sorted(
+        w for w, n in counts.items()
+        if n >= 2 or (n >= 1 and w.isoformat() in already)
+    )
 
 
 def _existing_date_keys(conn: sqlite3.Connection, granularity: str) -> set[str]:
@@ -371,41 +452,62 @@ def _existing_date_keys(conn: sqlite3.Connection, granularity: str) -> set[str]:
     return keys
 
 
-def _distinct_past_months(conn: sqlite3.Connection) -> list[date]:
-    """First-of-month dates strictly before the current month that hold >=2
-    weekly rows (weeks grouped by the month of their Monday) and have NOT already
-    been rolled into a monthly. Oldest-first."""
-    current_month = date.today().replace(day=1)
-    already = _existing_date_keys(conn, "monthly")
+def _distinct_past_periods(
+    conn: sqlite3.Connection, source_granularity: str, rollup_granularity: str,
+    period_first: Callable[[date], date], current_first: date,
+) -> list[date]:
+    """Shared enumerator for monthly/yearly (which don't prune their sources):
+    a past period qualifies when it either has >=2 source rows and has NOT been
+    rolled yet, OR it HAS a rollup but a source in it is newer than that rollup —
+    i.e. a re-ingested/re-folded lower tier landed after the period was summarised,
+    so it must be re-rolled to fold the newcomer in. `period_first` maps a source's
+    date to the first-of-period date. Oldest-first; terminating (a re-roll bumps the
+    rollup's updated_at above all its sources, so the next pass sees nothing newer)."""
+    rolled_at = _rollup_updated_at(conn, rollup_granularity)
     counts: dict[date, int] = {}
+    newest_src: dict[date, str] = {}
     for r in conn.execute(
-        "SELECT date_key FROM memories WHERE granularity='weekly' AND kind='narrative'"
+        "SELECT date_key, created_at, updated_at FROM memories "
+        "WHERE granularity=? AND kind='narrative'", (source_granularity,),
     ).fetchall():
         d = _parse_date_key(r["date_key"])
         if d is None:
             continue
-        month_first = d.replace(day=1)
-        if month_first < current_month and month_first.isoformat() not in already:
-            counts[month_first] = counts.get(month_first, 0) + 1
-    return sorted(m for m, n in counts.items() if n >= 2)
+        pf = period_first(d)
+        if pf >= current_first:
+            continue
+        counts[pf] = counts.get(pf, 0) + 1
+        ts = max(r["updated_at"] or "", r["created_at"] or "")
+        if ts > newest_src.get(pf, ""):
+            newest_src[pf] = ts
+    out = []
+    for pf, n in counts.items():
+        key = pf.isoformat()
+        rolled = rolled_at.get(key)
+        if rolled is None:
+            if n >= 2:
+                out.append(pf)          # fresh period, enough sources to roll
+        elif newest_src.get(pf, "") > rolled:
+            out.append(pf)              # already rolled, but a newer source appeared
+    return sorted(out)
+
+
+def _distinct_past_months(conn: sqlite3.Connection) -> list[date]:
+    """First-of-month dates strictly before the current month worth a (re-)roll —
+    a fresh month with >=2 weeklies, or a rolled month with a weekly newer than its
+    monthly rollup (a re-ingested week folding upward). Oldest-first."""
+    return _distinct_past_periods(
+        conn, "weekly", "monthly",
+        lambda d: d.replace(day=1), date.today().replace(day=1))
 
 
 def _distinct_past_years(conn: sqlite3.Connection) -> list[date]:
-    """First-of-year dates strictly before the current year that hold >=2 monthly
-    rows and have NOT already been rolled into a yearly. Oldest-first."""
-    current_year = date.today().replace(month=1, day=1)
-    already = _existing_date_keys(conn, "yearly")
-    counts: dict[date, int] = {}
-    for r in conn.execute(
-        "SELECT date_key FROM memories WHERE granularity='monthly' AND kind='narrative'"
-    ).fetchall():
-        d = _parse_date_key(r["date_key"])
-        if d is None:
-            continue
-        year_first = d.replace(month=1, day=1)
-        if year_first < current_year and year_first.isoformat() not in already:
-            counts[year_first] = counts.get(year_first, 0) + 1
-    return sorted(y for y, n in counts.items() if n >= 2)
+    """First-of-year dates strictly before the current year worth a (re-)roll —
+    a fresh year with >=2 monthlies, or a rolled year with a monthly newer than its
+    yearly rollup. Oldest-first."""
+    return _distinct_past_periods(
+        conn, "monthly", "yearly",
+        lambda d: d.replace(month=1, day=1), date.today().replace(month=1, day=1))
 
 
 def run_consolidation(

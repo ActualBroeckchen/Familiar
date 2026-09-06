@@ -147,7 +147,7 @@ import {
   findOrCreateSessionMemoriesTome,
 } from './memorization.js';
 import { computeCoverage, collectDateSlices } from './memory-coverage.js';
-import { writeSessionLog as persistSessionLog } from './session-log.js';
+import { writeSessionLog as persistSessionLog, sessionLocationLabel } from './session-log.js';
 import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY } from './session-bindings.js';
 import { parseImport, dateFromFilename, applyFallbackDate } from './log-import.js';
 import { segmentByDay } from './day-segments.js';
@@ -2392,23 +2392,8 @@ app.post('/api/log', async (req, res) => {
 });
 
 // A short, human "where did this session happen" label from a log's `location`
-// (web chat, a Discord DM / channel, a voice call). One place so the listing and
-// any future consumer read it the same way. Never throws.
-function sessionLocationLabel(location, origin) {
-  if (!location || typeof location !== 'object') {
-    // Older logs predate the `location` field — infer from `origin` when we can.
-    if (origin === 'voice-call') return 'Voice call';
-    return 'Web chat';
-  }
-  const { platform, label, kind } = location;
-  if (platform === 'web')   return label || 'Web chat';
-  if (platform === 'voice') return label || 'Voice call';
-  if (platform === 'discord') {
-    if (label) return label;
-    return kind === 'dm' ? 'Discord DM' : 'Discord';
-  }
-  return label || 'Web chat';
-}
+// (web chat, a Discord DM / channel, a voice call) — the label helper now lives in
+// session-log.js (sessionLocationLabel), shared with the Familiar's session search.
 
 // GET /api/logs — list all sessions (metadata only)
 app.get('/api/logs', async (_req, res) => {

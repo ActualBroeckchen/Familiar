@@ -21,7 +21,7 @@ sources:
 
 # Unified Ward Sessions
 
-As of 0.12.1, the ward's web private chat and their Discord DM are one continuous
+As of 0.11.47, the ward's web private chat and their Discord DM are one continuous
 conversation instead of two independently-logged sessions: a message sent on Discord shows
 up in the web app's open chat, and vice versa, because both surfaces resolve the same
 session id rather than each minting its own [@session-bindings-js]. This auto-unify behavior

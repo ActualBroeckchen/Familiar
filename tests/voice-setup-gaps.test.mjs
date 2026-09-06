@@ -110,8 +110,14 @@ test('voice notes are reachable end to end, with no terminal step for a user', (
 
   // The store must take audio at all. It accepted `image/*` only until Pass 1,
   // so a voice note would have been rejected by the body parser before any
-  // code of ours ran.
-  assert.match(srv, /express\.raw\(\{ type: \['image\/\*', 'audio\/\*'\]/, 'the upload endpoint does not accept audio');
+  // code of ours ran. Behaviour, not exact syntax: the /api/media raw parser's
+  // type list must include 'audio/*' (siblings like 'video/*' may be present too —
+  // pinning the exact array broke on the video work, which is the source-text-
+  // assertion anti-pattern this repo has already paid for).
+  assert.match(
+    srv,
+    /app\.post\('\/api\/media', express\.raw\(\{ type: \[[^\]]*'audio\/\*'[^\]]*\]/,
+    'the /api/media upload endpoint does not accept audio');
   assert.ok(srv.includes('/transcribe'), 'nothing can ask for a transcript');
 
   // The button, its handler, and the conversion the handler depends on.

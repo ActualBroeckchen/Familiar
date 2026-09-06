@@ -62,6 +62,9 @@ sources:
   - id: browser-cdp-arm-test
     type: file
     path: tests/browser-cdp-arm.test.mjs
+  - id: cdp-launcher-js
+    type: file
+    path: cdp-launcher.js
   - id: reddit-reader-js
     type: file
     path: reddit-reader.js
@@ -783,17 +786,35 @@ what it is actually driving and never claims a logged-in result it no longer has
 [@browser-driver-js] [@browser-js]. `engineMode()` and `browserStatus()` surface the current
 mode and armed domain for the audit trail and the Settings UI [@browser-driver-js].
 
-**Ward-only surface, nothing the model can trigger.** The ward turns CDP mode on in Settings
-(`cdpModeEnabled`, default off) and arms it from a collapsed "Drive my own Chrome (advanced)"
-panel — a domain field, a minutes selector, and Arm/Disarm buttons hitting
-`POST /api/browser/cdp-arm` and `/api/browser/cdp-disarm`, gated on `cdpModeEnabled` plus the
-hard env off-switch `PROTO_FAMILIAR_BROWSER_CDP_DISABLED=1` [@browser-cdp-arm-js]. The model has
-no tool that can call either endpoint; `cerebellum.js`'s `browse_open` description only tells
-the Familiar it may **ask** the ward to arm a domain for a logged-in task, never that it can arm
-one itself, so a hostile page can never talk the Familiar into self-arming. Every `browse_open`
-and `browse_act` audit entry stamps `mode` and, under CDP, `cdpDomain`, so a review of
-`logs/browser-actions.jsonl` can tell at a glance which actions ran against the ward's own
-Chrome [@browser-js].
+**One-click setup, then arm: a two-step ward flow.** The ward turns CDP mode on in Settings
+(`cdpModeEnabled`, default off) inside a collapsed "Drive my own Chrome (advanced)" panel, which
+now walks through two steps rather than arming directly. Step ① "Set up my Chrome…" hits
+`POST /api/browser/cdp-setup`, which `cdp-launcher.js` serves: it locates the ward's installed
+Chrome/Edge/Chromium (`findWardChrome`), then writes a double-clickable Desktop launcher that
+opens that browser with `--remote-debugging-port=9222` — the ward still performs the actual
+launch; the app only lays down the shortcut [@cdp-launcher-js]. Step ② "Arm for this site" is
+the existing domain field and Arm/Disarm buttons hitting `POST /api/browser/cdp-arm` and
+`/api/browser/cdp-disarm`, gated on `cdpModeEnabled` plus the hard env off-switch
+`PROTO_FAMILIAR_BROWSER_CDP_DISABLED=1` [@browser-cdp-arm-js]. The model has
+no tool that can call any of these three endpoints; `cerebellum.js`'s `browse_open` description
+only tells the Familiar it may **ask** the ward to arm a domain for a logged-in task, never that
+it can set up or arm one itself, so a hostile page can never talk the Familiar into self-arming.
+Every `browse_open` and `browse_act` audit entry stamps `mode` and, under CDP, `cdpDomain`, so a
+review of `logs/browser-actions.jsonl` can tell at a glance which actions ran under CDP
+[@browser-js].
+
+**The launcher deviates from the original spec on purpose: a dedicated profile, not the ward's
+everyday Chrome.** The build spec's premise (and this page's own framing above) is attaching to
+the ward's *already-running, already-logged-in* Chrome — their real, everyday profile. The
+shipped one-click launcher does not do that: `cdp-launcher.js` points `--user-data-dir` at a
+separate, dedicated profile (`~/.proto-familiar/cdp-chrome`) that starts logged out, rather than
+the ward's real profile with bank and email logins already in it. The module's own header
+records this as a ward-approved deviation, made because it is strictly safer — the
+Familiar-drivable Chrome only ever holds whatever sites the ward deliberately signs into inside
+that dedicated profile, so the debug port is never a path to the ward's actual banking or email
+session [@cdp-launcher-js]. A ward who wants CDP to reach an *already*-logged-in everyday
+session can still skip the launcher and start their own Chrome with the debug flag by hand; the
+one-click path trades that convenience for the narrower blast radius by default.
 
 **What is shipped versus what is still unverified.** All of the above is built and the arm-gate
 logic is fully unit-tested, but the live attach-and-drive against a real Chrome instance cannot
