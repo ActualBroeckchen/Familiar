@@ -112,6 +112,28 @@ export async function writeSessionLog(data, { logsDir, merge = false } = {}) {
 }
 
 /**
+ * A human-readable label for where a session happened (web chat, a Discord DM /
+ * channel, a voice call), from a log's `location` (and legacy `origin`). One
+ * place so the Sessions listing, session search, and any future consumer read it
+ * the same way. Never throws.
+ */
+export function sessionLocationLabel(location, origin) {
+  if (!location || typeof location !== 'object') {
+    // Older logs predate the `location` field — infer from `origin` when we can.
+    if (origin === 'voice-call') return 'Voice call';
+    return 'Web chat';
+  }
+  const { platform, label, kind } = location;
+  if (platform === 'web')   return label || 'Web chat';
+  if (platform === 'voice') return label || 'Voice call';
+  if (platform === 'discord') {
+    if (label) return label;
+    return kind === 'dm' ? 'Discord DM' : 'Discord';
+  }
+  return label || 'Web chat';
+}
+
+/**
  * Ensure every turn has the `id` + `timestamp` a reviewable log renders from,
  * leaving all other fields (speaker, targets, attachments, …) intact. A safety
  * net: turns are now stamped at accumulation time (`turnMessages`), so this is

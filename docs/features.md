@@ -154,6 +154,7 @@ See [Sessions & Memorization](sessions.md) for the full reference.
 | Memorize now | **Chat sidebar** button that enqueues memorization of the current session on demand without ending it |
 | Session browser | **☰ → Logs** — view, load, or delete any past session |
 | Per-session Memorize | Each row in the Logs modal has a **Memorize** button offering **Auto-summarize** (run the worker over the session and save to **Session Memories**) or **Manual topics** (open the session read-only, mark topic ranges by hand, review each entry) |
+| Familiar session search | In a private moment with you, the Familiar can glance back through past sessions itself (`search_sessions`) to find where something was said — across web and Discord, DMs and group rooms — so "let me have a look… ah, that's where you mentioned it" works even when it wasn't in the current chat. Ward-private only. |
 
 ---
 

@@ -25,7 +25,7 @@ const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 3;
+export const MANUAL_TOME_VERSION = 4;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -105,6 +105,12 @@ export function buildManualTome() {
     ['remember', 'memory', 'what do you remember', 'forget', 'consent', 'memories', 'stop remembering', 'delete a memory'],
     `[Manual: Memory & consent] I remember things across our conversations. Some memories — things from a group room, or about someone else's private life — wait for {{user}}'s OK before I keep them; they show in the web app's Knowledge panel, and on Discord {{user}} can review them with \`!queue\`. {{user}} can ask me to remember or forget something directly, and per-topic "remember" settings (keep / ask / never) live under People / Knowledge in Settings.`,
     { comment: 'Memory & consent' },
+  );
+
+  add(
+    ['find where I said', 'search our chats', 'past conversations', 'where did I mention', 'look back', 'earlier conversation', 'which chat', 'glance back'],
+    `[Manual: Finding earlier conversations] When it's just {{user}} and me, I can look back through our past sessions — web and Discord, our DMs and the group rooms I'm in — to find where something was said, even if it wasn't in our current chat. So if {{user}} mentioned something in a group room, in a DM I can go "let me have a glance… ah, that's where." I search by plain words, get back the rooms and times it came up and who said it, and can open any of those logs in full. I only do this in private with {{user}} — our history isn't for other rooms. {{user}} can also browse and search every session themselves in Knowledge → Sessions.`,
+    { comment: 'Session search / glance-back' },
   );
 
   add(

@@ -38,7 +38,7 @@ import { promises as fsp, readFileSync, mkdirSync } from 'fs';
 
 import { PROVIDER_URLS } from './providers.js';
 import { callProviderChat } from './llm-call.js';
-import { listOwnFiles, readOwnFile } from './own-files.js';
+import { listOwnFiles, readOwnFile, searchSessions } from './own-files.js';
 import { readCalendarCache, resolveAttribution, normalizeAttributionEntry } from './gcal-attribution.js';
 import { computeAvailability, formatAvailabilityLines } from './schedule-availability.js';
 import { isSensitiveNode } from './spine-states.js';
@@ -2306,6 +2306,21 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'search_sessions',
+      description: "I glance back through our past conversations — every session log, web or Discord, our DMs and the group rooms I'm in — to find where something was said, so I can go \"let me have a look… ah, that's where {{user}} mentioned it.\" I pass what I'm looking for in plain words (all the words have to turn up in the same message). I get back the rooms and times it came up, who said it, and a snippet — plus the exact log path so I can open the whole thing with read_file if I want the fuller picture. Newest conversations come first. I only do this when it's just {{user}} and me — our history isn't for other rooms.",
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'What I\'m looking for, in plain words (e.g. "the dentist appointment", "the book she recommended"). Every word must appear in the same message for it to match, so I keep it to the distinctive words.' },
+          limit: { type: 'number', description: 'Optional. How many sessions to bring back at most (default 12, newest first).' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'village_lookup',
       description: "I look up my human's Village — both the people in their life I help them stay close to AND the places I'm present in (Discord rooms, DMs). I use this to see who exists, recall how someone relates to {{user}} and how they like to be spoken to, check who belongs to a category, or see which rooms I can reach. Unless I'm searching for one person by name, the answer also lists my Places — each room's label, its presence mode, and whether I can post there — so I always know exactly who and where I can relay a message to. I can filter by category (e.g. \"Family\"), by location (e.g. a Discord channel), or by a name to pull up one person. When {{user}} and I are alone I see everything I've noted about each person, including private things; when anyone else is present, the sensitive private notes are held back automatically so I can't spill them into the room. Each villager comes with their id (so I can edit them or link them to the graph), whether they're reachable on Discord, and the knowledge-graph node I've connected to them, if any — that's how the Village and {{user}}'s relational graph stay one picture.",
       parameters: {
@@ -3982,6 +3997,34 @@ export const TOOL_EXECUTORS = {
     if (!r.ok) return `I couldn't read that: ${r.error}.`;
     const note = r.truncated ? `\n…(truncated — the file is longer than I read)` : '';
     return `${r.path}:\n${r.content}${note}`;
+  },
+
+  search_sessions: async ({ query, limit } = {}, ctx = {}) => {
+    if (ctx.wardPrivate === false) {
+      return 'Someone else is here, so I won\'t go looking back through our past conversations right now — they hold {{user}}\'s and my history. I can search once it\'s just us.';
+    }
+    if (!query || typeof query !== 'string' || !query.trim()) {
+      return 'I need something to look for — a few plain words from what I\'m trying to find.';
+    }
+    const cap = Number.isFinite(limit) ? Math.max(1, Math.min(50, Math.floor(limit))) : 12;
+    const r = await searchSessions(query.trim(), { limit: cap });
+    if (!r.ok) return `I couldn't search my sessions: ${r.error}.`;
+    if (!r.hits.length) return `I looked back through our conversations but couldn't find where "${query.trim()}" came up.`;
+    const when = (iso) => {
+      if (!iso) return 'undated';
+      const d = new Date(iso);
+      return Number.isNaN(d.getTime()) ? 'undated' : d.toISOString().slice(0, 10);
+    };
+    const lines = r.hits.map((h) => {
+      const head = `• ${h.locationLabel} · ${when(h.when)} · ${h.path}`;
+      const snips = h.snippets.map((s) => {
+        const who = s.speaker ? s.speaker : (s.role === 'assistant' ? 'me' : 'my human');
+        return `    ${who}: ${s.text}`;
+      }).join('\n');
+      return `${head}\n${snips}`;
+    });
+    const more = r.truncated ? `\n(there were more — I showed the ${r.hits.length} most recent. I can read any of these in full with read_file.)` : '\n(I can open any of these in full with read_file.)';
+    return `Here's where "${query.trim()}" came up, most recent first:\n${lines.join('\n')}${more}`;
   },
 
   // ── Village ───────────────────────────────────────────────────────

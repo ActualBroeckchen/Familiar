@@ -83,7 +83,7 @@ export const TOOL_MODULES = {
   // villager can never read my private ponderings through it.
   read_pondering: 'core',
 
-  list_files: 'files', read_file: 'files',
+  list_files: 'files', read_file: 'files', search_sessions: 'files',
 
   convert_ids_to_slugs: 'maintenance',
 
@@ -124,7 +124,7 @@ export const MODULE_INDEX =
   'web (search, read pages, look up facts), ' +
   'weather (the sky over my human\'s day today/tomorrow, and moving between their saved places), ' +
   'acks (inspect/file/snooze/drop my own pending deferred intents & tells, confirm/drop memory consent, graduation notices), ' +
-  'files (list/read my own folder), ' +
+  'files (list/read my own folder, search back through my past sessions), ' +
   'maintenance (id tidy-up), ' +
   'stewardship (set the day-start time I open my human\'s day on), ' +
   'intentions (my own forward commitments and rounds: set/list/drop/complete, keep my rounds legible to my human or private), ' +
@@ -198,7 +198,9 @@ const TRIGGERS = {
     blocks: ['[Deferred intents from my free time]', '[PENDING MEMORY CONSENT', '[GRADUATION NOTICE'],
   },
   files: {
-    text: /\b(your (files|folder|logs?)|session log|our (conversation|chat|talk) (on|from|about)|read (the|your) \w+ (file|log|tome))\b/i,
+    // list/read my own folder + search my past sessions. The glance-back intent
+    // ("where did I say that", "in the group chat") surfaces search_sessions.
+    text: /\b(your (files|folder|logs?)|session logs?|our (conversation|chat|talk|sessions?) (on|from|about)|read (the|your) \w+ (file|log|tome)|where (did|do) (i|we|you) (say|mention|talk|bring (it|that) up)|find (that|the|our|where) (conversation|chat|session|thread)|search (my|our|your|the|back through) (logs?|sessions?|chats?|conversations?)|in the (group|other) (chat|room|server)|glance back)\b/i,
     blocks: [],
   },
   maintenance: {
