@@ -4,7 +4,10 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { listOwnFiles, readOwnFile, searchSessions } from '../own-files.js';
+import {
+  listOwnFiles, readOwnFile, searchSessions,
+  isSessionLogPath, renderSessionMarkdown, readSessionLog,
+} from '../own-files.js';
 
 // Build a throwaway "repo root" so tests don't depend on the real tree.
 async function makeRoot() {
@@ -191,4 +194,77 @@ test('searchSessions: empty query is refused; missing logs dir is empty not an e
   const r = await searchSessions('anything', { root: noLogs });
   assert.equal(r.ok, true);
   assert.equal(r.hits.length, 0);
+});
+
+// ── Session logs read as a compact transcript, not raw JSON ─────────
+
+test('isSessionLogPath: only plain logs/<id>.json qualify', () => {
+  assert.equal(isSessionLogPath('logs/s-abc.json'), true);
+  assert.equal(isSessionLogPath('logs\\s-abc.json'), true);
+  assert.equal(isSessionLogPath('tomes/ponderings.json'), false);
+  assert.equal(isSessionLogPath('logs/sub/x.json'), false);
+  assert.equal(isSessionLogPath('logs/s-abc.md'), false);
+});
+
+test('renderSessionMarkdown: compact transcript with speakers, no JSON scaffolding', () => {
+  const { markdown } = renderSessionMarkdown({
+    sessionId: 's-1', location: { platform: 'discord', kind: 'guild', label: '#general' },
+    messages: [
+      { id: 'uuid-aaaa-bbbb', role: 'user', speaker: 'Chen', content: 'hi there', timestamp: '2026-06-14T14:03:00Z' },
+      { id: 'uuid-cccc-dddd', role: 'assistant', content: 'hello Chen', timestamp: '2026-06-14T14:04:00Z' },
+      { id: 'uuid-eeee', role: 'user', content: 'next day', timestamp: '2026-06-15T09:00:00Z' },
+    ],
+  });
+  assert.match(markdown, /Session s-1 · #general · 2026-06-14 → 2026-06-15 · 3 messages/);
+  assert.match(markdown, /\[14:03\] Chen: hi there/);
+  assert.match(markdown, /\[14:04\] me: hello Chen/);      // assistant → "me"
+  assert.match(markdown, /— 2026-06-15 —/);                 // day divider on change
+  assert.ok(!markdown.includes('uuid-aaaa'), 'per-message UUIDs must not appear');
+  assert.ok(!markdown.includes('"role"') && !markdown.includes('{'), 'no JSON scaffolding');
+});
+
+test('renderSessionMarkdown: attachments show as brief markers', () => {
+  const { markdown } = renderSessionMarkdown({
+    sessionId: 's-2', location: { platform: 'web' },
+    messages: [{ role: 'user', content: 'look at this', timestamp: '2026-06-14T10:00:00Z',
+      attachments: [{ id: 'x', kind: 'image', mime: 'image/png' }] }],
+  });
+  assert.match(markdown, /my human: look at this \[image\]/);
+});
+
+test('renderSessionMarkdown: keeps the most recent part when over budget, and flags it', () => {
+  const messages = [];
+  for (let i = 0; i < 400; i++) {
+    messages.push({ role: i % 2 ? 'assistant' : 'user', content: `line number ${i} `.repeat(6),
+      timestamp: `2026-06-14T10:${String(i % 60).padStart(2, '0')}:00Z` });
+  }
+  const { markdown, trimmed } = renderSessionMarkdown({ sessionId: 's-3', messages }, { maxChars: 2000 });
+  assert.equal(trimmed, true);
+  assert.ok(markdown.length <= 2000 + 200, 'stays near the budget');
+  // The LAST line is kept; an early one is dropped.
+  assert.ok(markdown.includes('line number 399'), 'most recent kept');
+  assert.ok(!markdown.includes('line number 0 '), 'oldest dropped when over budget');
+});
+
+test('readSessionLog: renders a real log file to markdown through the sandbox', async () => {
+  const root = await makeLogsRoot();
+  const r = await readSessionLog('logs/s-old.json', { root });
+  assert.equal(r.ok, true);
+  assert.match(r.content, /Session s-old/);
+  assert.match(r.content, /my human: I have a dentist appointment next week/);
+  assert.ok(!r.content.includes('{'), 'no raw JSON');
+});
+
+test('readSessionLog: a corrupt log falls back rather than throwing', async () => {
+  const root = await makeLogsRoot();
+  const r = await readSessionLog('logs/s-bad.json', { root });
+  assert.equal(r.ok, false);
+  assert.equal(r.fallback, true);
+});
+
+test('readSessionLog: refuses a secret file even at a logs path', async () => {
+  const root = await makeLogsRoot();
+  const r = await readSessionLog('logs/settings.json', { root });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /off-limits/);
 });
