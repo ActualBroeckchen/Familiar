@@ -2124,12 +2124,20 @@ function _buildApiMessagesInner(userInput) {
 }
 
 // ── Markdown rendering ───────────────────────────────────────────
+// A complete HTML escaper — the five characters that carry meaning in HTML
+// markup. `'` is included so a value placed in a SINGLE-quoted attribute can't
+// break out either (today every attribute here is double-quoted, so it's
+// belt-and-suspenders; a proper escaper covers both quote styles so a future
+// single-quoted attribute is safe by default). Used only to build HTML strings
+// (never .textContent), so the entities are decoded back on parse — a value
+// round-trips unchanged through an input/textarea in every browser.
 function esc(str) {
   return str
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /**
