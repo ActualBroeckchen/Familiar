@@ -41,7 +41,7 @@ Here is the journey a fact takes from conversation to durable memory:
 ### Episodic facts (time-bounded events)
 
 1. **Chat turn**: The Familiar and ward talk. The session is logged (git-ignored `logs/`). Earlier logs from other platforms or formats can be imported via [Data ingestion](data-ingestion) and fed through this same pipeline.
-2. **Session end**: The browser or Discord fires an [autonomous memorization job](session-memorization) with `POST /api/memorize`, enqueuing one or more summary tasks.
+2. **Session end**: [When a session ends](session-lifecycle) — normally, or via the manual close-out for a session that never received an `endedAt` — the browser or Discord fires an [autonomous memorization job](session-memorization) with `POST /api/memorize`, enqueuing one or more summary tasks.
 3. **Job processes**: The memorization worker (a 5-second-tick background loop) picks up jobs and calls the LLM to summarize a conversation slice into lorebook entries. Entries are written to the [Session Memories](tomes-and-lore) Tome.
 4. **Consolidation**: [Phylactery's consolidation pipeline](phylactery) sweeps the daily-granularity memories and rolls them up weekly, monthly, and yearly as they age. The ward-configured "load-bearing versus decorative" criterion decides what survives.
 5. **Retrieval**: On the next turn, [Phylactery's vector retrieval](phylactery) searches the knowledge graph and surfaces the rolled-up memory if it's relevant to the current context.

@@ -144,7 +144,7 @@ Both paths (day-anchored segmentation and consent gating) extend the same queue 
 ### Coverage status: making 'shared-room' transient, not sticky
 
 `memory-coverage.js`'s per-day ledger backs the coverage view the ward sees for past months
-(memorized/uncertain/unmemorized, with uncertain rendering purple). Before 0.12.1,
+(memorized/uncertain/unmemorized, with uncertain rendering purple). Before 0.11.47,
 `memorization.js`'s success path flagged *every* day that touched a non-ward-private slice
 (a Discord group room, any shared-audience session) with a permanent `'shared-room'` status
 flag, and `deriveStatus` turns any flag on a day into `'uncertain'` regardless of whether that
@@ -191,6 +191,6 @@ and the audience floor at recall time.
   that shipped instead.
 - [Ward Discord console](ward-console) — the `!queue` command, a Discord twin of the pending
   memory-consent queue this page describes.
-- [Unified Ward Sessions](session-unification) — the 0.12.1 mechanism that makes the ward's
+- [Unified Ward Sessions](session-unification) — the 0.11.47 mechanism that makes the ward's
   web chat and Discord DM one continuous session; a different subsystem from this page's job
   queue, but the source of the shared-room coverage fix described above.

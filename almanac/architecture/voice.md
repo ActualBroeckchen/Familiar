@@ -345,19 +345,22 @@ stdio protocol defined in `audio-frame.js`, so `audio-worker-host.js` supervises
 identically — parking, backoff, and idle unload were written once rather than per backend
 [@voice-backend] [@architecture-doc]:
 
-| | `sherpa` (default) | `pocket` (opt-in) |
+| | `pocket` (default) | `sherpa` (fallback) |
 |---|---|---|
-| worker process | `audio-worker.mjs` | `voicebox/` (Python) |
-| install cost | ships with the app; ~216 MB | ~600 MB installed |
-| model | `2026-01` (the only ONNX export available) | `english_2026-04` |
-| continuity across turns | resets per utterance | `copy_state=False` carries the KV cache forward |
+| worker process | `voicebox/` (Python) | `audio-worker.mjs` |
+| install cost | ~600 MB installed | ships with the app; ~216 MB |
+| model | `english_2026-04` | `2026-01` (the only ONNX export available) |
+| continuity across turns | `copy_state=False` carries the KV cache forward | resets per utterance |
 
-`sherpa` stays the default because 600 MB is real cost on the hardware this project targets.
-Choosing `pocket` without it installed falls back to `sherpa` and says so — in the log and on
-`GET /api/voice/status` — carrying the exact command that fixes it [@architecture-doc]
-[@server]. The `pocket` worker is built on first use rather than at boot, because voice engine
-is a per-ward setting, not a fixed install; the running engine is stopped before a new one
-starts so two engines never hold models in memory at once [@architecture-doc]. Installation is
+`pocket` (`voice-backend.js`'s `DEFAULT_BACKEND`) is the configured default, consistent with
+the design-spec framing above that prosody is part of identity rather than a quality setting
+[@voice-backend]. `sherpa` is the built-in fallback: it ships with the app, needs no install,
+and is what a ward transparently gets when `pocket` is chosen but not yet installed — the
+fallback says so, in the log and on `GET /api/voice/status`, carrying the exact command that
+fixes it [@architecture-doc] [@server]. The `pocket` worker is built on first use rather than at
+boot, because voice engine is a per-ward setting, not a fixed install; the running engine is
+stopped before a new one starts so two engines never hold models in memory at once
+[@architecture-doc]. Installation is
 `node scripts/ensure-voicebox.mjs --install`, deliberately **not** wired into the prestart
 hook the way [Phylactery](phylactery) is — unlike Phylactery, `pocket` is optional, and
 downloading 600 MB because someone ran `npm start` would be hostile on a nearly-full laptop
