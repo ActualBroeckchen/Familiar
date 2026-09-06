@@ -241,18 +241,33 @@ export function createDiscordCallAdapter({ hooks, joinSpec, deps, slugId = (s) =
       entry = { decoder, sub, active: false, pre: [] };
       decoders.set(speakerRef, entry);
       sub.on('data', (opusPacket) => {
-        if (!opusPacket?.length || opusPacket.length > MAX_OPUS_PACKET) return;
-        const pcm48 = decodeOpus(entry, speakerRef, opusPacket);   // 48 kHz stereo s16le, or null on a bad packet
-        if (!pcm48?.length) return;
-        const pcm = stereo48ToMono16(pcm48);
-        if (entry.warned) entry.warned = false;                    // a clean decode re-arms the (rate-limited) warning
-        if (entry.active) {
-          hooks.pushAudio({ callId, speakerRef, pcm });
-        } else {
-          // Between utterances: keep only the most recent frames, so onset that
-          // arrives just before speaking-start isn't lost.
-          entry.pre.push(pcm);
-          if (entry.pre.length > PRE_ROLL_FRAMES) entry.pre.shift();
+        // The WHOLE handler is guarded: decodeOpus heals the opusscript heap-move
+        // (a second speaker joining detaches an existing decoder's cached views),
+        // but the resample after it (stereo48ToMono16) touches the decoded buffer
+        // too, and a detached-buffer/WASM throw HERE would escape into the stream
+        // 'data' event and take the whole voice stack down — the reported "crash
+        // when someone joins". Isolate it: a bad frame is logged (rate-limited) and
+        // skipped, the call continues for everyone else (graceful degradation — one
+        // speaker's packet never crashes the call).
+        try {
+          if (!opusPacket?.length || opusPacket.length > MAX_OPUS_PACKET) return;
+          const pcm48 = decodeOpus(entry, speakerRef, opusPacket);   // 48 kHz stereo s16le, or null on a bad packet
+          if (!pcm48?.length) return;
+          const pcm = stereo48ToMono16(pcm48);
+          if (entry.warned) entry.warned = false;                    // a clean decode re-arms the (rate-limited) warning
+          if (entry.frameWarned) entry.frameWarned = false;          // …and the handler-level one
+          if (entry.active) {
+            hooks.pushAudio({ callId, speakerRef, pcm });
+          } else {
+            // Between utterances: keep only the most recent frames, so onset that
+            // arrives just before speaking-start isn't lost.
+            entry.pre.push(pcm);
+            if (entry.pre.length > PRE_ROLL_FRAMES) entry.pre.shift();
+          }
+        } catch (err) {
+          // Rate-limited (once per speaker until a clean frame), same as decodeOpus'
+          // own warning, so a persistently bad stream can't flood the terminal.
+          if (!entry.frameWarned) { entry.frameWarned = true; log(`inbound frame dropped for ${speakerRef} (recovering): ${err?.message ?? err}`); }
         }
       });
       sub.on('error', (err) => log(`receive stream error for ${speakerRef}: ${err?.message ?? err}`));

@@ -645,6 +645,136 @@ test('a barge records how far the reply got (onReplyInterrupted)', async () => {
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
+// ── Barge on a recognised partial (noise-robust, engine-level) ─────────────
+//
+// A fake adapter whose playAudio BLOCKS until stopPlayback is called models a
+// reply streaming out. While it's blocked, `speaking` is true, so an asr-partial
+// can barge it. `transcriptFilter` distinguishes real speech from ambient noise.
+
+/** An adapter whose playAudio blocks until stopPlayback (a barge) releases it. */
+function blockingAdapterFactory(rec) {
+  return (hooks) => {
+    rec.hooks = hooks;
+    let release = null;
+    return {
+      id: 'fake', capabilities: { perSpeakerStreams: true },
+      joinCall: async () => ({ callId: 'c1' }),
+      leaveCall: async () => { release?.(); },
+      playAudio: async (_id, reply) => {
+        if (reply == null) return { barged: false };
+        await new Promise((r) => { release = r; rec.release = r; });
+        return { barged: rec.barged === true };
+      },
+      stopPlayback: async () => { rec.stopped = (rec.stopped || 0) + 1; rec.barged = true; release?.(); },
+    };
+  };
+}
+
+async function startPlaying(engine, worker, rec) {
+  await rec.hooks.pushAudio({ callId: 'c1', speakerRef: 'ward', pcm: Buffer.alloc(320) });
+  const open = worker.calls.requests.find((r) => r.op === 'asrStream');
+  worker.emit({ op: 'asr-final', streamId: open.streamId, text: 'tell me a long story' });
+  await tick();   // runOneTurn → onTurn → playAudio (now blocked; speaking=true)
+  return open.streamId;
+}
+
+test('barge: a recognised partial during playback stops the reply, once per playback', async () => {
+  const dir = await tmp();
+  try {
+    const worker = fakeWorker();
+    const rec = { played: [] };
+    const interrupts = [];
+    const engine = createCallEngine({
+      worker,
+      onTurn: async () => ({ text: 'a long spoken reply that gets cut off partway' }),
+      onReplyInterrupted: (_ctx, info) => interrupts.push(info),
+      transcriptFilter: (t) => t !== 'noise',   // "noise" = ambient; anything else = speech
+      streamingModelDir: '', tomesDir: dir,
+    });
+    engine.registerCallAdapter(blockingAdapterFactory(rec));
+    await engine.startCall('fake');
+    const streamId = await startPlaying(engine, worker, rec);
+
+    // Two real partials in the SAME synchronous batch (before playAudio unblocks):
+    // the first barges, the second is guarded by bargeSent → stopPlayback once.
+    worker.emit({ op: 'asr-partial', streamId, text: 'wait hold on' });
+    worker.emit({ op: 'asr-partial', streamId, text: 'stop please' });
+    await tick();
+    assert.equal(rec.stopped, 1, 'a real partial stops playback exactly once per playback');
+    assert.equal(interrupts.length, 1, 'the barge was recorded (onReplyInterrupted)');
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('barge: an ambient-noise partial does NOT stop the reply', async () => {
+  const dir = await tmp();
+  try {
+    const worker = fakeWorker();
+    const rec = { played: [] };
+    const engine = createCallEngine({
+      worker,
+      onTurn: async () => ({ text: 'a reply' }),
+      transcriptFilter: (t) => t !== 'noise',
+      streamingModelDir: '', tomesDir: dir,
+    });
+    engine.registerCallAdapter(blockingAdapterFactory(rec));
+    await engine.startCall('fake');
+    const streamId = await startPlaying(engine, worker, rec);
+
+    worker.emit({ op: 'asr-partial', streamId, text: 'noise' });   // filtered → not speech
+    worker.emit({ op: 'asr-partial', streamId, text: 'a' });       // below the 2-char floor
+    await tick();
+    assert.ok(!rec.stopped, 'ambient noise / a stray syllable never barges');
+    rec.release?.();   // let the blocked playAudio finish so teardown is clean
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('barge: a partial when nothing is playing is ignored', async () => {
+  const dir = await tmp();
+  try {
+    const worker = fakeWorker();
+    const rec = { played: [] };
+    const engine = createCallEngine({
+      worker, onTurn: async () => ({ text: 'x' }),
+      transcriptFilter: () => true, streamingModelDir: '', tomesDir: dir,
+    });
+    engine.registerCallAdapter(blockingAdapterFactory(rec));
+    await engine.startCall('fake');
+    // No playback in flight → speaking is false → a partial must not call stopPlayback.
+    worker.emit({ op: 'asr-partial', streamId: 1, text: 'hello there' });
+    await tick();
+    assert.ok(!rec.stopped, 'no barge when not speaking');
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('barge: the off-switch disables partial-barge', async () => {
+  const dir = await tmp();
+  const prev = process.env.PROTO_FAMILIAR_VOICE_BARGE_DISABLED;
+  process.env.PROTO_FAMILIAR_VOICE_BARGE_DISABLED = '1';
+  try {
+    const worker = fakeWorker();
+    const rec = { played: [] };
+    const engine = createCallEngine({
+      worker, onTurn: async () => ({ text: 'a reply' }),
+      transcriptFilter: () => true, streamingModelDir: '', tomesDir: dir,
+    });
+    engine.registerCallAdapter(blockingAdapterFactory(rec));
+    await engine.startCall('fake');
+    const streamId = await startPlaying(engine, worker, rec);
+    worker.emit({ op: 'asr-partial', streamId, text: 'wait hold on' });
+    await tick();
+    assert.ok(!rec.stopped, 'barge disabled → a real partial does not stop playback');
+    rec.release?.();
+    await engine.endCall();
+  } finally {
+    if (prev === undefined) delete process.env.PROTO_FAMILIAR_VOICE_BARGE_DISABLED;
+    else process.env.PROTO_FAMILIAR_VOICE_BARGE_DISABLED = prev;
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('a reply that plays to the end does NOT fire onReplyInterrupted', async () => {
   const dir = await tmp();
   try {

@@ -55,6 +55,15 @@ export function callsDisabled() {
     || process.env.PROTO_FAMILIAR_VOICE_DISABLED === '1';
 }
 
+/**
+ * The barge off-switch — gates the partial-driven interrupt only, not the call.
+ * A ward can keep voice calls but turn barge off if it ever mis-fires in their
+ * room. Default ON. Read live (per partial) so it can be toggled mid-session.
+ */
+export function bargeDisabled() {
+  return process.env.PROTO_FAMILIAR_VOICE_BARGE_DISABLED === '1';
+}
+
 // Speech runs at roughly this many characters per second — the same order the
 // voicebox worker's runaway cap uses (`_CHARS_PER_SECOND`). Used ONLY to
 // estimate, in code, how much of a reply was heard before a barge.
@@ -111,6 +120,7 @@ export function createCallEngine({
   // or threat logic lives here; this only adds a delivery channel.
   const proactiveQueue = [];   // { makeReply, resolve }
   let speaking = false;        // a turn reply OR a proactive item is playing right now
+  let bargeSent = false;       // barged the CURRENT playback already — don't re-stop on every partial
   let lastUserAudioAt = 0;     // last inbound audio frame — tells us my human is mid-utterance
   let proactiveTimer = null;
   const PROACTIVE_QUIET_MS = 1500;   // this much quiet from my human before it counts as a gap
@@ -135,7 +145,7 @@ export function createCallEngine({
     }
     const c = call;
     const { makeReply, resolve } = proactiveQueue.shift();
-    speaking = true;
+    speaking = true; bargeSent = false;
     (async () => {
       let spoken = false;
       try {
@@ -201,8 +211,35 @@ export function createCallEngine({
     if (!msg || !call) return;
     if (msg.op === 'asr-final') {
       asrChain = asrChain.then(() => handleAsrFinal(msg)).catch((e) => log(`asr-final handling failed: ${e?.message ?? e}`));
+    } else if (msg.op === 'asr-partial') {
+      maybeBargeOnPartial(msg);
     }
-    // asr-partial is reserved for live captions + barge-in (Pass 2c / web adapter).
+  }
+
+  /**
+   * Barge-in on RECOGNISED speech — not raw audio onset. A partial carries words
+   * the streaming recogniser actually decoded, so this is inherently noise-robust:
+   * a cough, keyboard, fan, or music never decodes into words, and anything the
+   * recogniser hallucinates from noise is caught by the SAME `transcriptFilter`
+   * the finals trust. When my human (or anyone in a group call) starts saying
+   * words while I'm talking, I stop.
+   *
+   * Engine-level so every transport gets it: the web adapter also has its own
+   * instant browser-driven barge (`{t:'barge'}`), and this is the noise-robust
+   * backstop that the Discord adapter had NO trigger for at all. Idempotent —
+   * `stopPlayback` just sets the adapter's barged flag, breaking the in-flight
+   * `playAudio` pump → `{barged:true}` → `onReplyInterrupted`. Off-switch:
+   * PROTO_FAMILIAR_VOICE_BARGE_DISABLED=1.
+   */
+  function maybeBargeOnPartial(msg) {
+    if (bargeDisabled()) return;
+    if (!speaking || bargeSent) return;            // only while I'm speaking, and once per playback
+    const text = String(msg?.text ?? '').trim();
+    if (text.length < 2) return;                   // guard a spurious single syllable
+    if (!transcriptFilter(text)) return;           // ambient noise the recogniser guessed as words
+    bargeSent = true;
+    log(`barge: recognised "${text}" over my reply — stopping`);
+    try { call?.adapter?.stopPlayback?.(); } catch (e) { log(`stopPlayback on barge failed: ${e?.message ?? e}`); }
   }
 
   /**
@@ -435,7 +472,7 @@ export function createCallEngine({
     // timeout) hangs the UI forever, which is the "thinks and never answers" bug.
     let res = null;
     const t0 = now();
-    try { speaking = true; res = await c.adapter.playAudio(c.callId, reply); }
+    try { speaking = true; bargeSent = false; res = await c.adapter.playAudio(c.callId, reply); }
     catch (err) { log(`playAudio failed: ${err?.message ?? err}`); }
     finally { speaking = false; }
     // A barge cut the reply short: record how far it got (2c). Real-time
