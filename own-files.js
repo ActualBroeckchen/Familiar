@@ -227,3 +227,124 @@ export async function searchSessions(query, {
   results.sort((a, b) => _msTime(b.when) - _msTime(a.when));
   return { ok: true, hits: results.slice(0, limit), truncated: results.length > limit };
 }
+
+// ── Reading a session log as a token-economical transcript ────────────
+// A raw session log is JSON: per-message UUIDs, quoted keys, full ISO
+// timestamps, braces — heavy to read and, worse, the byte cap truncates it
+// mid-JSON into something malformed. When the Familiar opens one, it wants the
+// CONVERSATION, not the wire format. So a `logs/*.json` read is rendered to a
+// compact markdown transcript instead: a one-line header, a date divider only
+// when the day changes, then `[HH:MM] speaker: text` lines. Markdown is far
+// denser, so the same budget carries much more of the actual talk, and a trim
+// keeps the MOST RECENT part (what a glance-back usually wants).
+
+const MAX_SESSION_MD = 48 * 1024;
+
+// Session-log paths only — a plain `logs/<id>.json`. Other files (tomes, docs)
+// keep the raw read.
+export function isSessionLogPath(rel) {
+  return /^logs\/[^/\\]+\.json$/.test(String(rel ?? '').replace(/\\/g, '/'));
+}
+
+// Wall-clock fields pulled straight from the ISO string (no timezone maths — the
+// same value the raw JSON already showed, just far cheaper). Tolerant of legacy
+// forms; returns null when there's nothing clock-like.
+function _isoDate(ts) { const m = /^(\d{4}-\d{2}-\d{2})/.exec(String(ts ?? '')); return m ? m[1] : null; }
+function _isoHM(ts)   { const m = /[T ](\d{2}:\d{2})/.exec(String(ts ?? ''));    return m ? m[1] : null; }
+
+function _speakerFor(m) {
+  if (m?.speaker) return m.speaker;
+  if (m?.role === 'assistant') return 'me';
+  if (m?.role === 'user') return 'my human';
+  return m?.role || 'unknown';
+}
+
+/**
+ * Render a parsed session log to a compact markdown transcript. Pure; keeps the
+ * most recent messages when the rendered text would exceed `maxChars`, and
+ * reports whether it trimmed. Never throws on odd shapes.
+ */
+export function renderSessionMarkdown(log, { maxChars = MAX_SESSION_MD } = {}) {
+  const msgs = Array.isArray(log?.messages) ? log.messages : [];
+  const dates = msgs.map((m) => _isoDate(m?.timestamp)).filter(Boolean);
+  const first = dates[0], last = dates[dates.length - 1];
+  const range = !first ? '' : (first === last ? first : `${first} → ${last}`);
+  const loc = sessionLocationLabel(log?.location, log?.origin);
+  const sid = log?.sessionId || '';
+  const header = ['Session', sid, '·', loc, range ? `· ${range}` : '', `· ${msgs.length} message${msgs.length === 1 ? '' : 's'}`]
+    .filter(Boolean).join(' ');
+
+  // Build per-message lines, keyed with their date so the trimmer can re-emit a
+  // day divider if it drops the one a kept block belonged under.
+  const rows = [];
+  for (const m of msgs) {
+    const content = typeof m?.content === 'string' ? m.content.trim() : '';
+    const attach = Array.isArray(m?.attachments) && m.attachments.length
+      ? ' ' + m.attachments.map((a) => `[${a?.kind || 'file'}]`).join(' ')
+      : '';
+    if (!content && !attach) continue;
+    const hm = _isoHM(m?.timestamp);
+    rows.push({
+      date: _isoDate(m?.timestamp),
+      text: `${hm ? `[${hm}] ` : ''}${_speakerFor(m)}: ${content}${attach}`,
+    });
+  }
+
+  // Emit newest-kept-first budget: walk from the end, keep rows until the budget
+  // is spent, then restore chronological order. A date divider is inserted
+  // whenever the day changes across kept rows.
+  let used = header.length + 1;
+  const keptReversed = [];
+  let trimmed = false;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const cost = rows[i].text.length + 1;
+    if (used + cost > maxChars && keptReversed.length) { trimmed = true; break; }
+    used += cost;
+    keptReversed.push(rows[i]);
+  }
+  const kept = keptReversed.reverse();
+
+  const lines = [header, ''];
+  let curDate = null;
+  for (const r of kept) {
+    if (r.date && r.date !== curDate) { lines.push(`— ${r.date} —`); curDate = r.date; }
+    lines.push(r.text);
+  }
+  return { markdown: lines.join('\n'), trimmed };
+}
+
+/**
+ * Read a session log and return it as a compact markdown transcript. Goes
+ * through the same sandbox + secret denylist as readOwnFile (via a larger byte
+ * read so the JSON parses whole), then renders. If the file isn't a parseable
+ * session log (corrupt, or not session-shaped), returns { ok:false, fallback:true }
+ * so the caller can fall back to the raw read. Never throws.
+ * @returns {Promise<{ok:true, path, content, truncated}|{ok:false, fallback?:boolean, error}>}
+ */
+export async function readSessionLog(relPath, { root = REPO_ROOT, maxBytes = 4 * 1024 * 1024, maxChars = MAX_SESSION_MD } = {}) {
+  const abs = safeResolve(root, relPath);
+  if (abs == null) return { ok: false, error: 'that path is outside my own folder' };
+  const rel = relFromRoot(root, abs);
+  if (rel === '.' || denied(rel)) return { ok: false, error: 'that file is off-limits (secrets or build noise) or not a file' };
+
+  let raw;
+  try {
+    const st = await fs.stat(abs);
+    if (st.isDirectory()) return { ok: false, error: 'that is a folder — use list_files' };
+    if (st.size > maxBytes) return { ok: false, fallback: true, error: 'session log too large to render' };
+    raw = await fs.readFile(abs, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return { ok: false, error: 'no such file' };
+    return { ok: false, error: err.message };
+  }
+
+  let log;
+  try { log = JSON.parse(raw); }
+  catch { return { ok: false, fallback: true, error: 'not parseable as a session log' }; }
+  if (!log || typeof log !== 'object' || !Array.isArray(log.messages)) {
+    return { ok: false, fallback: true, error: 'not a session log' };
+  }
+
+  const { markdown, trimmed } = renderSessionMarkdown(log, { maxChars });
+  return { ok: true, path: rel, content: markdown, truncated: trimmed };
+}

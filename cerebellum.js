@@ -38,7 +38,7 @@ import { promises as fsp, readFileSync, mkdirSync } from 'fs';
 
 import { PROVIDER_URLS } from './providers.js';
 import { callProviderChat } from './llm-call.js';
-import { listOwnFiles, readOwnFile, searchSessions } from './own-files.js';
+import { listOwnFiles, readOwnFile, searchSessions, isSessionLogPath, readSessionLog } from './own-files.js';
 import { readCalendarCache, resolveAttribution, normalizeAttributionEntry } from './gcal-attribution.js';
 import { computeAvailability, formatAvailabilityLines } from './schedule-availability.js';
 import { isSensitiveNode } from './spine-states.js';
@@ -2293,7 +2293,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'read_file',
-      description: "I read one of my own files — a Tome, a session log, a doc — when I want to find or recall something specific on purpose, beyond what's already in my context. I pass the file path relative to my root (I find it with list_files first). Read-only, text only, size-capped; my human's secret files (settings, API keys) are off-limits. I only read my files in a private moment with {{user}} — they hold our shared history, which I don't pull into rooms where others are present.",
+      description: "I read one of my own files — a Tome, a session log, a doc — when I want to find or recall something specific on purpose, beyond what's already in my context. I pass the file path relative to my root (I find it with list_files first, or from a search_sessions result). A session log comes back as a clean, compact transcript of the conversation (not raw data); a long one shows its most recent part. Read-only, text only, size-capped; my human's secret files (settings, API keys) are off-limits. I only read my files in a private moment with {{user}} — they hold our shared history, which I don't pull into rooms where others are present.",
       parameters: {
         type: 'object',
         properties: {
@@ -3993,6 +3993,18 @@ export const TOOL_EXECUTORS = {
       return 'Someone else is here, so I won\'t open my own files right now — they hold {{user}}\'s and my history. I can read it once we\'re alone.';
     }
     if (!relPath || typeof relPath !== 'string') return 'I need the path of the file I want to read (I find it with list_files).';
+    // A session log comes back as a compact markdown transcript, not raw JSON —
+    // the conversation, not the wire format (far cheaper to read, and it degrades
+    // to the most-recent part instead of truncating mid-JSON). Anything that isn't
+    // a parseable session log falls through to the plain raw read.
+    if (isSessionLogPath(relPath)) {
+      const s = await readSessionLog(relPath);
+      if (s.ok) {
+        const note = s.truncated ? `\n…(earlier messages not shown — this is the most recent part; I can search within it with search_sessions)` : '';
+        return `${s.path}:\n${s.content}${note}`;
+      }
+      // not a session-shaped file (corrupt / too large) → raw read below
+    }
     const r = await readOwnFile(relPath);
     if (!r.ok) return `I couldn't read that: ${r.error}.`;
     const note = r.truncated ? `\n…(truncated — the file is longer than I read)` : '';

@@ -521,7 +521,14 @@ Currently owns:
   Familiar sandboxed read-only access to its own checkout (tomes, logs,
   docs) so it can look things up on purpose. Sandbox + secret denylist
   in `own-files.js`; ward-private only (file contents are shared
-  history, not for gated rooms).
+  history, not for gated rooms). **`read_file` on a session log
+  (`logs/*.json`) returns a compact markdown transcript, not raw JSON
+  (0.11.51)** — `readSessionLog`/`renderSessionMarkdown` render a
+  one-line header + `[HH:MM] speaker: text` lines (day dividers on
+  change), dropping per-message UUIDs and JSON scaffolding (~70%+ fewer
+  chars) and, when over budget, keeping the MOST RECENT part rather than
+  truncating mid-JSON. Non-session files keep the raw read; a corrupt or
+  non-session-shaped file falls back to raw.
 - **`search_sessions` (0.11.50)** — the "let me glance back and find
   where that was said" capability: a content search across every session
   log (`logs/*.json`, web + Discord, DMs + group rooms), so in a DM the
