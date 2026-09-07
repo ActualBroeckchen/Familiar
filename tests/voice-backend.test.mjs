@@ -239,3 +239,20 @@ test('placeMsvcRuntimeBesideTorch never throws on a bad venv path', async () => 
   assert.equal(r.libDir, null);
   assert.deepEqual(r.copied, []);
 });
+
+// The sherpa worker ships inside the package (src/voice/audio-worker.mjs), so
+// its resolved path must exist on disk — not just match a string shape. The
+// src/ reorg moved the file but left voice-backend.js joining the REPO ROOT,
+// so the spawned child pointed at a nonexistent script and died with exit 1
+// ("[voice] worker exited (1)") after sherpa reported it was listening. The
+// path is resolved relative to voice-backend.js's own dir, so it holds no
+// matter what rootDir the caller passes.
+test('the resolved sherpa worker actually exists on disk (reorg regression)', async () => {
+  const { existsSync } = await import('node:fs');
+  for (const rootDir of [process.cwd(), '/some/unrelated/path', undefined]) {
+    const r = await resolveBackend({ rootDir, settings: {} });
+    assert.equal(r.backend, 'sherpa');
+    assert.match(r.workerScript, /audio-worker\.mjs$/);
+    assert.ok(existsSync(r.workerScript), `worker script missing: ${r.workerScript}`);
+  }
+});

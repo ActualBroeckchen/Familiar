@@ -42,6 +42,12 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+// This file's own directory (src/voice/). The sherpa worker ships beside
+// it here, so its path is resolved relative to HERE — NOT the repo root,
+// which is where audio-worker.mjs used to live before the src/ reorg.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 export const BACKENDS = Object.freeze({
   SHERPA: 'sherpa',
@@ -147,7 +153,7 @@ export async function resolveBackend({ rootDir = process.cwd(), settings = {} } 
   const sherpa = {
     backend: BACKENDS.SHERPA,
     command: process.execPath,
-    workerScript: path.join(root, 'audio-worker.mjs'),
+    workerScript: path.join(HERE, 'audio-worker.mjs'),
     fellBackFrom: null,
     reason: null,
   };

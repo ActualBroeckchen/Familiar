@@ -23,12 +23,12 @@ sources:
   - id: ponder-research-js
     type: file
     path: src/pondering/ponder-research.js
-  - id: interest-py
+  - id: unruh-interest-py
     type: file
     path: unruh/src/unruh/interest.py
-  - id: server-js
+  - id: unruh-server-py
     type: file
-    path: server.js
+    path: unruh/src/unruh/server.py
 ---
 
 # Pondering
@@ -63,25 +63,29 @@ The pondering loop runs on a tiered cadence, NOT a fixed interval [@autonomous-l
 
 The cadence tiers are: 30 minutes (high interest), 1 hour, 2 hours, and 6 hours (low interest, background noise). A topic with very low interest still ponders, but only every 6 hours [@autonomous-loops-doc].
 
-## Following its own threads (0.11.76–0.11.77)
+## Threads: wandering to a related topic (0.11.76)
 
-Until the 2026 audit the interest layer the cadence samples from was a *mirror of the human*:
-its only automatic writer was the browser's open chat topics, so a "free-cycle" ponder was
-always about what the ward had been talking about. Two changes made pondering self-originating —
-see [Self-originated interest and the `me` register](../decisions/self-originated-interest-and-me-register)
-for the full rationale:
+Left alone, `runOneTick()`'s weighted pick makes every ponder an island: whichever interest
+currently has the most weight wins, tick after tick, with no sense that one curiosity grew out
+of another. Threads give the loop a way to wander instead. After the weighted pick, the loop
+rolls a `threadChance` — a ward-configurable dial (`ponderThreadChance` in settings, default
+0.35) clamped to `[0,1]` by `clampChance` so an invalid setting falls back to the default rather
+than disabling threading or hopping unconditionally [@pondering-loop-js]. On a hit, it calls
+`getRelated(picked.id)`, weighted-picks among the neighbours the same way it picked the original
+interest, and ponders that neighbour instead of the original pick, carrying the original topic's
+label through as `threadFrom` so the resulting thought can ground itself — "I got here from
+thinking about X" — instead of appearing to change subject at random [@pondering-loop-js].
 
-- **A ponder can plant its own curiosity.** The ponder JSON now carries an optional `drawn_to`
-  list (short tag-like labels); `server.js` records each into the interest layer with
-  `source:'pondering'` [@server-js], linked `related_to` the topic it grew from
-  (`interest_record`'s new `related_to` arg, idempotent either direction) [@interest-py].
-  Naming the pull *is* the whole action, so code consumes it — no deferred intent.
-- **The loop sometimes walks a thread instead of the weighted pick.** After the weighted draw,
-  `runOneTick` rolls `threadChance` (a ward dial, `ponderThreadChance`, default 0.35, read
-  through `clampChance`); on a hit it hops one `related_to` edge (`interest_related` →
-  `relatedInterests`) to a neighbour and ponders that instead, and the grounding block opens
-  with "I got here from thinking about X" [@pondering-loop-js] [@pondering-js]. Standing values
-  and bookmarks are never hops — a thread wanders between curiosities, not into always-on values.
+The edges a hop can follow are the `related_to` edges [Unruh](../architecture/unruh) writes: `interest_record`
+accepts a `related_to` label naming the topic a new curiosity grew out of, and when that label
+resolves to an existing node the two are linked with an idempotent `related_to` edge (either
+direction already counts as linked, so re-recording the same pair is a no-op); `interest_related`
+returns the topics one hop from a given node, decay-weighted [@unruh-interest-py]
+[@unruh-server-py]. Only `drawn_to` curiosities (see
+[Self-originated interest and the `me` register](../decisions/self-originated-interest-and-me-register))
+are ever linked this way — standing values and bookmarks never get `related_to` edges, so a
+thread always wanders through the Familiar's own accumulated curiosities, never through facts
+it is holding on the ward's behalf.
 
 ## The `read_pondering` tool
 
@@ -125,3 +129,5 @@ Ponderings are not written to Phylactery, the canonical store, because they are 
   with.
 - [Browser milestone: guardrails in code, not prompts](../decisions/browser-guardrails-in-code) —
   why Pass 4's research loop hands the model no tool surface, only the ability to name a lookup.
+- [Self-originated interest and the `me` register](../decisions/self-originated-interest-and-me-register) —
+  why `drawn_to` curiosities exist, and the `related_to` threading behavior detailed above.
