@@ -41,11 +41,26 @@ Additive, near-zero risk; delivers most of the felt improvement:
 - **This plan.**
 - Tidied the clearest stray root doc (`Tome Mechanic.md` → `docs/`).
 
-## Stage 1 — the structural fix (IN PROGRESS): move root modules into `src/<domain>/`
+## Stage 1 — the structural fix (COMPLETE): root modules moved into `src/<domain>/`
 
-**Done so far:** `src/weather/` (5 files, the pilot) and **`src/voice/` (37 files
-— voice + audio + call-engine)**. Both green (full suite + `audit:wiring`, zero
-stale refs). A reusable migration script lives at `scripts/migrate-domain.mjs` — it
+**Done — all 16 domains** (root went from ~151 `.js`/`.mjs` files to ~21):
+`voice` (37), `browser` (14), `schedule` (10), `safety` (10), `pondering` (9),
+`memory` (8), `gcal` (6), `tomes` (6), `vision` (6), `sessions` (5), `village` (5),
+`weather` (5, the pilot), `discord` (3), `warmth` (3), `ward` (2), `search` (2).
+Every slice was a pure move, shipped as its own PR, each with the full suite +
+`audit:wiring` green and zero stale refs.
+
+**The ~21 files still at the root are the app core, by design** — the entry point
+(`server.js`), the connective tissue (`thalamus.js`, `cerebellum.js`, `organs.js`),
+and cross-cutting helpers (`macros.js`, `providers.js`, `provider-models.js`,
+`llm-call.js`, `injection-guard.js`, `tool-surfacing.js`, `core-prompts.js`,
+`slug-ids.js`, `relative-time.js`, `settings-merge.js`, `entity-ref.js`,
+`phylactery-result.js`, `message-sanitize.mjs`, `updater.js`, `guide-chat.js`,
+`repo-root.js`, `own-files.js`). They stay with `server.js` (which the launchers +
+`package.json` `main` pin) rather than churn every importer for little gain. If a
+future pass wants a `src/core/`, the same recipe applies — but it is not required.
+
+**The recipe (reusable for any future move):** `scripts/migrate-domain.mjs`
 resolves every relative specifier (`from`, `import()`, `export … from`,
 `new URL(…, import.meta.url)`) against the old layout and recomputes it for the new
 location, so dynamic imports are handled too. Run it, then `git mv` the files and
