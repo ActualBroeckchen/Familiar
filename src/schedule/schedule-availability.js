@@ -14,7 +14,7 @@
  * Pure. Times are ward-local-naive (Unruh's model); lexical/naive comparison,
  * no timezone math here.
  */
-import { relativeTime } from './relative-time.js';
+import { relativeTime } from '../../relative-time.js';
 
 // Day-parts. Outside 06:00–22:00 is "night" — not offered for coordination.
 export const DAY_PARTS = [

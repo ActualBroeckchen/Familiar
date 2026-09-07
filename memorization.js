@@ -177,7 +177,7 @@ import { getRegistry, standingConsentActive } from './village.js';
 import { deriveMemoryAudience, deriveNodeAudience, mostRestrictiveAudience } from './audience.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC } from './graph-vocab.js';
 import { CONTENT_TOPICS, normalizeTag, categoryToTag } from './content-tags.js';
-import { segmentByDay, dayDelta } from './day-segments.js';
+import { segmentByDay, dayDelta } from './src/schedule/day-segments.js';
 import { recordSegmentRun, isSegmentMemorized, segmentMemorizedThrough } from './memory-coverage.js';
 import { readSettingsSync } from './cerebellum.js';
 import { substituteMacros } from './macros.js';

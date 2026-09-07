@@ -5,7 +5,7 @@ import {
   isRoutineReviewDue,
   buildRoutineReviewSection,
   routineReviewHardDisabled,
-} from '../routine-review.js';
+} from '../src/schedule/routine-review.js';
 
 const DAY_MS = 24 * 3600 * 1000;
 

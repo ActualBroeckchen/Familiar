@@ -21,7 +21,7 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, promises as fsp } from 'fs';
-import { segmentByDay } from './day-segments.js';
+import { segmentByDay } from './src/schedule/day-segments.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOMES_DIR = path.join(__dirname, 'tomes');

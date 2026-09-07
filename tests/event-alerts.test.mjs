@@ -5,8 +5,8 @@ import {
   clampLeadMinutes, ALERT_GRACE_MS, DEFAULT_LEAD_MINUTES,
   clampElapsedStampHours, DEFAULT_ELAPSED_STAMP_HOURS,
   effectiveLeadMs,
-} from '../event-alerts.js';
-import { runOneReminderTick } from '../reminders-loop.js';
+} from '../src/schedule/event-alerts.js';
+import { runOneReminderTick } from '../src/schedule/reminders-loop.js';
 
 // A fixed "now" in the shared ward-local-as-server-local frame.
 const NOW = new Date('2026-07-04T14:00:00').getTime();

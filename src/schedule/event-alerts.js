@@ -23,8 +23,8 @@
  */
 
 import { expandOccurrences, localDateKey } from './recurrence.js';
-import { relativeTime } from './relative-time.js';
-import { forecastAtHour, isAdverseHour, formatItemWeather } from './src/weather/weather-format.js';
+import { relativeTime } from '../../relative-time.js';
+import { forecastAtHour, isAdverseHour, formatItemWeather } from '../weather/weather-format.js';
 
 // How long past its start an event may still alert (covers a server that
 // was asleep when the lead window opened). Past this, the moment is gone

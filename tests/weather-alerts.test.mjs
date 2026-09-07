@@ -3,8 +3,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { selectDueWeatherAlerts, formatWeatherAlert } from '../event-alerts.js';
-import { runOneReminderTick } from '../reminders-loop.js';
+import { selectDueWeatherAlerts, formatWeatherAlert } from '../src/schedule/event-alerts.js';
+import { runOneReminderTick } from '../src/schedule/reminders-loop.js';
 
 const NOW = Date.parse('2026-07-11T12:00:00');
 const LEAD = 3 * 3600e3;   // 3h default lead

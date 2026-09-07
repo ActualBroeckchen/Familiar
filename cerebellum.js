@@ -40,7 +40,7 @@ import { PROVIDER_URLS } from './providers.js';
 import { callProviderChat } from './llm-call.js';
 import { listOwnFiles, readOwnFile, searchSessions, isSessionLogPath, readSessionLog } from './own-files.js';
 import { readCalendarCache, resolveAttribution, normalizeAttributionEntry } from './src/gcal/gcal-attribution.js';
-import { computeAvailability, formatAvailabilityLines } from './schedule-availability.js';
+import { computeAvailability, formatAvailabilityLines } from './src/schedule/schedule-availability.js';
 import { isSensitiveNode } from './spine-states.js';
 import {
   enrich, getScheduleWindow,

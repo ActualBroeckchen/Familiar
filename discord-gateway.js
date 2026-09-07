@@ -36,7 +36,7 @@ import { randomUUID } from 'crypto';
 import { sessionSlugId } from './slug-ids.js';
 
 import { enrich, withLock, getScheduleWindow, getMemoriesBySubject, confirmConsentMemories, dropPendingMemories } from './thalamus.js';
-import { buildAvailabilityBlock } from './schedule-availability.js';
+import { buildAvailabilityBlock } from './src/schedule/schedule-availability.js';
 import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC, locationCallMode, DEFAULT_CALL_MODE, upsertLocation } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom } from './audience.js';
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from './cerebellum.js';
