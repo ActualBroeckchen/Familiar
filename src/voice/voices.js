@@ -45,7 +45,7 @@ import { DEFAULT_VOICE, VOICE_PROVENANCE, sourceByKey } from './voice-catalogue.
 import { loadCatalogue, clipKey } from './voice-clips.js';
 import { isSafeSegment } from './voice-fetch.js';
 
-export const VOICES_SUBDIR = 'voices';
+const VOICES_SUBDIR = 'voices';
 export const BUNDLED_SUBDIR = path.join(VOICES_SUBDIR, 'bundled');
 export const INSTALLED_SUBDIR = path.join(VOICES_SUBDIR, 'installed');
 export const WARD_SUBDIR = path.join(VOICES_SUBDIR, 'ward');

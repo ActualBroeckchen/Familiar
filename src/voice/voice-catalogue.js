@@ -131,35 +131,24 @@ export const DEFAULT_VOICE = Object.freeze({
   key: 'vctk/p255_023/enhanced',
   source: 'vctk',
   id: 'p255_023',
+  // Why ENHANCED and not the original my human auditioned: upstream is explicit
+  // ("we recommend cleaning the sample before using it with Pocket TTS, because
+  // THE AUDIO QUALITY OF THE SAMPLE IS ALSO REPRODUCED"), and Kyutai's own
+  // curated voice list uses the `_enhanced` variant for every VCTK voice in it,
+  // without exception. Measured, rather than taken on faith — same clip, both
+  // variants: original 48 kHz/145 Hz/59% voiced/zero-crossing 2662, enhanced
+  // 32 kHz/145 Hz/59% voiced/zero-crossing 3271. Identical pitch, duration and
+  // voiced fraction — the same person saying the same words — but ~23% more
+  // high-frequency energy, which is what "less muffled" measures as. The lower
+  // sample rate is not a loss here: the model resamples to 24 kHz regardless,
+  // so the only thing 48 kHz bought was room noise at frequencies nothing
+  // keeps. This does NOT change which voice my human chose — it changes which
+  // recording of it the clone is built from.
   variant: 'enhanced',
   label: 'The voice I start with',
   why: 'Clear and androgynous — a reasonable thing to sound like before my human has an opinion about it.',
   measuredF0Hz: 145,
 });
-
-/**
- * Why ENHANCED and not the original my human auditioned.
- *
- * Upstream is explicit: "we recommend cleaning the sample before using it with
- * Pocket TTS, because THE AUDIO QUALITY OF THE SAMPLE IS ALSO REPRODUCED."
- * Kyutai's own curated voice list uses the `_enhanced` variant for every VCTK
- * voice in it, without exception.
- *
- * Measured, rather than taken on faith — same clip, both variants:
- *
- *     original   48 kHz   145 Hz   59% voiced   zero-crossing 2662
- *     enhanced   32 kHz   145 Hz   59% voiced   zero-crossing 3271
- *
- * Identical pitch, duration and voiced fraction: it is the same person saying
- * the same words. But ~23% more high-frequency energy, which is what "less
- * muffled" measures as. The lower sample rate is not a loss here — the model
- * resamples to 24 kHz regardless, so the only thing 48 kHz bought was room
- * noise at frequencies nothing keeps.
- *
- * This does NOT change which voice my human chose. It changes which recording
- * of it the clone is built from.
- */
-export const DEFAULT_VOICE_VARIANT = 'enhanced';
 
 /**
  * The curated shortlist — the voices offered first.

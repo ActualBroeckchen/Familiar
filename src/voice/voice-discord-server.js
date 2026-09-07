@@ -53,7 +53,7 @@ import { MODELS_SUBDIR } from './voice-fetch.js';
 import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs } from './voice-transcribe.js';
 
 /** Hard off-switch — same pattern as every other loop/feature. */
-export function discordVoiceDisabled() {
+function discordVoiceDisabled() {
   return process.env.PROTO_FAMILIAR_DISCORD_VOICE_DISABLED === '1';
 }
 

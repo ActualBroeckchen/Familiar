@@ -76,13 +76,13 @@ index names what each does and the architecture doc section that owns it.
 | `GET/POST /api/temporal/schedule` · `PATCH/DELETE …/:id` | Schedule node CRUD |
 | `POST /api/temporal/schedule/:id/resolve` | Whole-node resolve (recurring needs `series:true` — fail-closed) |
 | `POST /api/temporal/schedule/:id/resolve_occurrence` | Resolve ONE occurrence of a recurring node |
-| `POST /api/temporal/schedule/edge` · `PATCH/DELETE …/edge/:id` | Consequence-graph edges |
+| `POST/PATCH/DELETE /api/temporal/schedule/edge(/:id)` | Consequence-graph edge CRUD |
 | `GET /api/schedule/:id/export.ics` | Deterministic `.ics` export for any node |
 | `GET /api/temporal/phases` | Daily routine phases |
 | `GET /api/temporal/bookmarks` | Idle-surfaceable bookmarks |
 | `GET /api/temporal/handoff` · `POST …/:id/consume` | Session handoff notes |
 | `GET /api/temporal/interests` · `POST …/bump` · `POST …/:id/demote` · `POST …/set-standing` | Interest weights |
-| `GET /api/temporal/ponderings` · `DELETE …/:uid` | Pondering entries |
+| `GET /api/temporal/ponderings` · `DELETE …/:uid` | Pondering entries (read / delete) |
 | `GET /api/temporal/reminders/health` | Reminders scheduler observability |
 | `GET /api/rounds` | Pondering rounds view |
 | `POST /api/ponderings/intents/acted-on` | Mark a deferred intent consumed |
@@ -96,6 +96,45 @@ index names what each does and the architecture doc section that owns it.
 | `GET /api/gcal/sync-status` · `POST /api/gcal/sync-now` | Last outcome / clear the cadence gate |
 | `GET /api/gcal/google/auth-url` · `GET /api/gcal/oauth/callback` | Native OAuth sign-in flow |
 | `POST /api/gcal/google/credentials` · `POST …/token` · `POST …/disconnect` · `GET …/status` | Native-account credential management |
+
+### Voice
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/voice/plan` | Download plan for given engine + ASR languages (size, consent, installed state) |
+| `GET /api/voice/footprint` | Current disk usage (machine vs. user artifacts) |
+| `GET /api/voice/status` | Engine status and config (which engine installed, which languages) |
+| `GET /api/voice/models` | Models available to install for a given engine |
+| `POST /api/voice/install-models` | Begin download-and-install of voice models |
+| `GET /api/voice/install-sidecar` | Installation progress (running/pending/idle state) |
+| `POST /api/voice/install-sidecar` | Begin installing the sidecar audio runtime |
+| `DELETE /api/voice/install-sidecar` | Cancel a running sidecar installation |
+| `GET /api/voice/fix-kyutai` | Repair attempt progress (running/pending/idle state) |
+| `POST /api/voice/fix-kyutai` | Begin diagnosing and repairing audio runtime |
+| `POST /api/voice/unpark` | Resume audio worker (after suspend) |
+| `POST /api/voice/speech-plan` | Prepare text for TTS (word count, char budget, id for synthesis) |
+| `GET /api/voice/tts/:id` | Retrieve synthesized speech audio (stream or base64) |
+| `GET /api/voice/clips` | List voice-note recordings (with descriptions, timestamps) |
+| `GET /api/voice/clips/summary` | Summary stats and retention policy |
+| `POST /api/voice/clips/measure` | Measure / trim an audio clip |
+| `POST /api/voice/choose` | Select a voice from the catalogue |
+| `GET /api/voice/voiceprints` | List enrolled speaker voices (for later identification) |
+| `POST /api/voice/enroll` | Record a new speaker voice for identification |
+| `DELETE /api/voice/voiceprint` | Delete a speaker voiceprint |
+| `POST /api/voice/install-speaker-model` | Download speaker-identification models |
+| `POST /api/voice/ward-voice` | Record/update the ward's own voice |
+
+### Browser
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/browser/status` | Browser session state (running, capabilities, active domain) |
+| `GET /api/browser-actions` | Audit log of recent Familiar browser actions |
+| `POST /api/browser/confirm` | Ward approval/rejection of a held browser action (`[CONFIRM]` flow) |
+| `POST /api/browser/cdp-arm` | Begin CDP (Chrome DevTools Protocol) session on given domain |
+| `POST /api/browser/cdp-disarm` | Suspend CDP session |
+| `POST /api/browser/cdp-setup` | Generate desktop launcher for driveable Chrome instance |
+| `POST /api/browser/handback` | Request live browser session hand-back (return to interactive browsing) |
 
 ### Safety & care
 
@@ -114,10 +153,10 @@ index names what each does and the architecture doc section that owns it.
 | `GET /api/village` | Villagers + categories + locations snapshot |
 | `POST/PATCH/DELETE /api/village/villagers(/:id)` | Villager registry CRUD |
 | `POST/PATCH/DELETE /api/village/categories(/:id)` | Audience categories CRUD |
-| `POST/PATCH/DELETE /api/village/locations` | Location (channel) presence config |
+| `GET/POST/PATCH/DELETE /api/village/locations` | Location (channel) presence config read / create / update / delete |
 | `GET /api/village/knocks` · `DELETE …/:platform/:id` | Unknown-DM knocks (list / dismiss) |
-| `GET/DELETE /api/village/location-knocks` | Unconfigured-channel knocks |
-| `GET/DELETE /api/village/servers` | Saved server list (Discord guilds, derived from knocks + GUILD_CREATE; naming only, grants nothing) |
+| `GET/DELETE /api/village/location-knocks` | Unconfigured-channel knocks (list / clear) |
+| `GET/DELETE /api/village/servers` | Saved server list (Discord guilds; read / delete) |
 | `GET /api/discord/status` · `POST /api/discord/apply` | Gateway status / apply settings now |
 | `GET /api/discord-writes` | Audit log of villager-initiated writes |
 
@@ -130,13 +169,63 @@ index names what each does and the architecture doc section that owns it.
 | `GET /api/tomes/session-memories` | The session-memories runtime tome |
 | `POST /api/import-logs` · `POST /api/import-logs-batch` | Foreign chat-log import (ChatGPT, SillyTavern, OpenClaw…) |
 
-### Places & weather
+### Places & media
 
 | Endpoint | What it does |
 |---|---|
-| `GET/POST /api/locations` · `DELETE /api/locations/:id` | Saved places |
+| `GET/POST /api/locations` · `DELETE /api/locations/:id` | Saved places (read / create / delete) |
 | `POST /api/locations/current` | Set the current place |
 | `POST /api/locations/geocode` | Name → coordinates lookup |
+| `GET/POST /api/media` | Media files list / upload (image, audio, video) |
+| `GET /api/media/:id` | Retrieve media file by id |
+| `DELETE /api/media/:id` | Delete a media file |
+| `POST /api/media/:id/link` | Link media to a knowledge-graph node |
+| `DELETE /api/media/:id/link/:nodeId` | Unlink media from a node |
+| `POST /api/media/:id/transcribe` | Transcribe audio to text |
+| `POST /api/media/:id/transcript` | Store or update media transcript |
+
+### Diagnostics & observability
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/memory-granularity` | Supported memory granularity levels |
+| `GET /api/reader-doctor` | Diagnostic report on reader health (exports, embeddings) |
+| `GET /api/page-watch-events` | Audit log of page-watch trigger events |
+| `POST /api/diagnostics/voice-bench` | Begin voice system benchmark |
+| `GET /api/diagnostics/voice-bench` | Benchmark progress (running/pending/idle) |
+| `POST /api/diagnostics/voice-bench/cancel` | Cancel running benchmark |
+| `POST /api/diagnostics/voice-bench/reset` | Reset benchmark results |
+
+### Sessions & web
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/session/active` | Metadata for the currently active session (which one is being written to now) |
+| `POST /api/session/active` | Set or switch the active session |
+| `POST /api/logs/:id/close` | Mark a session log as closed (archive) |
+
+### Network access
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/tailscale/https` | HTTPS state for Tailscale access (enabled/disabled) |
+| `POST /api/tailscale/https` | Toggle HTTPS for Tailscale (enable/disable) |
+
+### OpenAI-compatible endpoints
+
+| Endpoint | What it does |
+|---|---|
+| `GET /v1/models` · `GET /v1/model` | Model list (routed to `/api/models` internally) |
+| `POST /v1/models` | POST variant for model discovery (compatibility layer) |
+
+### Utility
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/entity/ward/remember` | The ward's remember-consent map (read) |
+| `PUT /api/entity/ward/remember` · `PUT …/standing` | Update remember settings / standing consent |
+| `POST /api/outbox/:id/acknowledge` | Mark an outbox message as seen |
+| `POST /api/outbox/clear-acknowledged` | Purge acknowledged outbox items |
 
 ---
 
@@ -996,6 +1085,290 @@ Stores a session-end handoff in Unruh (Milestone 6) so the next session resumes 
 A handoff with neither intent nor threads is a no-op (no hollow "Last session:" header). Writing a new handoff supersedes any prior unconsumed one. The next session's first `/api/chat` surfaces it at the top of `[Temporal Context]` and marks it consumed so it doesn't repeat.
 
 **Response:** `{ "ok": true }` (`ok: false` when Unruh was down).
+
+---
+
+## Voice
+
+The voice subsystem manages text-to-speech (TTS) synthesis, automatic speech recognition (ASR), voice-note recording and transcription, speaker identification, and the audio runtime sidecar.
+
+### `GET /api/voice/plan`
+
+Returns a download plan for voice models given a capability tier, TTS engine, and ASR languages.
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `tier` | string | Capability tier (e.g., `"offline"`, `"cloud"`) |
+| `voice` | string | TTS engine name (e.g., `"pocketTts"`, `"kyutai"`) |
+| `lang` | string | Comma-separated ISO language codes (e.g., `"en-US,es-ES"`) |
+
+**Response:**
+
+```json
+{
+  "ok": true,
+  "plan": {
+    "capabilityTier": "offline",
+    "voiceEngine": "pocketTts",
+    "asrLangs": ["en-US"]
+  },
+  "size": {
+    "totalBytes": 1572864,
+    "totalDiskBytes": 2097152,
+    "peakBytes": 3145728,
+    "pretty": "2.0 MB",
+    "withinBudget": true,
+    "violations": []
+  },
+  "choices": {
+    "tiers": ["offline", "cloud"],
+    "engines": ["pocketTts", "kyutai"],
+    "languages": ["en-US", "en-GB", "es-ES", "fr-FR"]
+  },
+  "consent": {
+    "text": "Download and install 42 MB of voice models?",
+    "canProceed": true,
+    "preflight": []
+  },
+  "installed": { "tier": "cloud", "engine": "pocketTts", "langs": ["en-US"] }
+}
+```
+
+### `GET /api/voice/status`
+
+Returns the current voice engine status and configuration.
+
+**Response:**
+
+```json
+{
+  "ok": true,
+  "engine": "pocketTts",
+  "tier": "offline",
+  "installed": ["en-US", "es-ES"],
+  "unavailable": [],
+  "sidecarReady": true
+}
+```
+
+### `POST /api/voice/install-models`
+
+Begins downloading and installing voice models for a given engine.
+
+**Request body:**
+
+```json
+{
+  "what": "pocketTts",
+  "langs": ["en-US", "es-ES"]
+}
+```
+
+**Response:**
+
+```json
+{ "ok": true }
+```
+
+### `GET /api/voice/install-sidecar` · `POST /api/voice/install-sidecar` · `DELETE /api/voice/install-sidecar`
+
+Manage the audio sidecar installation. **GET** returns progress; **POST** begins installation; **DELETE** cancels it.
+
+**Response (GET):**
+
+```json
+{
+  "ok": true,
+  "running": false,
+  "progress": { "current": 42, "total": 100, "percent": 42 }
+}
+```
+
+### `GET /api/voice/fix-kyutai` · `POST /api/voice/fix-kyutai`
+
+Diagnose and repair the audio runtime. **GET** returns repair progress; **POST** begins repair attempt.
+
+### `POST /api/voice/unpark`
+
+Resume the audio worker (after suspension). Used to wake the audio runtime back up.
+
+### `POST /api/voice/speech-plan`
+
+Prepare text for synthesis. Parses the text and returns a synthesis job id.
+
+**Request body:**
+
+```json
+{ "text": "Hello, world!" }
+```
+
+**Response:**
+
+```json
+{
+  "ok": true,
+  "id": "synth-2026-0614-abc123",
+  "chars": 13,
+  "tokens": 4,
+  "empty": false
+}
+```
+
+### `GET /api/voice/tts/:id`
+
+Retrieve synthesized audio for a given synthesis job id.
+
+**Response:** Audio stream (binary content-type) or base64 JSON depending on query params.
+
+### `GET /api/voice/clips`
+
+List all voice-note recordings with transcriptions and metadata.
+
+**Response:**
+
+```json
+[
+  {
+    "id": "clip-2026-0614-abc",
+    "recordedAt": "2026-06-14T10:30:00.000Z",
+    "durationMs": 5420,
+    "transcript": "I was thinking about the project deadlines",
+    "description": "Project thoughts (auto)",
+    "keep": false
+  }
+]
+```
+
+### `POST /api/voice/clips/measure`
+
+Measure or trim an audio clip.
+
+**Request body:**
+
+```json
+{
+  "clipId": "clip-2026-0614-abc",
+  "trimStart": 0,
+  "trimEnd": 5000
+}
+```
+
+### `GET /api/voice/voiceprints`
+
+List enrolled speaker voices for identification.
+
+**Response:**
+
+```json
+{
+  "ok": true,
+  "voiceprints": [
+    { "id": "vp-alice-001", "name": "Alice", "enrolledAt": "2026-05-11T…" }
+  ]
+}
+```
+
+### `POST /api/voice/enroll` · `DELETE /api/voice/voiceprint`
+
+Enroll a speaker voiceprint for later identification, or delete an existing one.
+
+---
+
+## Browser
+
+The browser subsystem enables the Familiar to open a web browser and interact with websites — reading pages, following links, filling forms, and reading the results back to inform decisions.
+
+### `GET /api/browser/status`
+
+Returns the current browser session state.
+
+**Response:**
+
+```json
+{
+  "running": true,
+  "domain": "example.com",
+  "capabilities": ["screenshot", "interact", "read"],
+  "cdpMode": false
+}
+```
+
+### `GET /api/browser-actions`
+
+Returns recent browser actions the Familiar has taken (audit log).
+
+**Response:**
+
+```json
+[
+  {
+    "id": "action-2026-0614-xyz",
+    "domain": "example.com",
+    "action": "navigate",
+    "target": "/search?q=test",
+    "timestamp": "2026-06-14T10:30:00.000Z",
+    "result": "success"
+  }
+]
+```
+
+### `POST /api/browser/confirm`
+
+Ward approval or rejection of a browser action held in the `[CONFIRM]` flow.
+
+**Request body:**
+
+```json
+{
+  "id": "action-2026-0614-xyz",
+  "approve": true
+}
+```
+
+**Response:**
+
+```json
+{ "ok": true }
+```
+
+### `POST /api/browser/cdp-arm` · `POST /api/browser/cdp-disarm`
+
+Begin or suspend a Chrome DevTools Protocol session on a given domain.
+
+**Request body (arm):**
+
+```json
+{
+  "domain": "example.com",
+  "minutes": 30
+}
+```
+
+### `POST /api/browser/cdp-setup`
+
+Generate a desktop launcher for a driveable Chrome instance (Windows/Mac/Linux).
+
+**Response:**
+
+```json
+{
+  "ok": true,
+  "path": "~/Desktop/FamiliarBrowser.bat",
+  "instructions": "Double-click to launch Chrome in debug mode"
+}
+```
+
+### `POST /api/browser/handback`
+
+Request a live browser session hand-back (return control to interactive browsing).
+
+**Response:**
+
+```json
+{ "ok": true, "message": "Browser control handed back to you" }
+```
 
 ---
 

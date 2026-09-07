@@ -242,6 +242,9 @@ const state = {
   // PROTO_FAMILIAR_PONDERING_DISABLED=1 env var on the server.
   ponderingEnabled:        true,
   ponderingIntervalScale:  1,
+  // Chance [0,1] a free-cycle ponder hops to a related topic (a thread edge)
+  // instead of staying on its weighted pick — Settings → "Wander chance".
+  ponderThreadChance:      0.35,
   // Unattended web research on a ponder tick (§8.5). When on, the Familiar can
   // look a few things up mid-ponder instead of only recombining what it holds —
   // model NAMES what to look up, code does the bounded reads. Default ON; the
@@ -510,7 +513,7 @@ const SERVER_SYNCED_KEYS = [
   'browseSiteMode', 'browseSiteList', 'browseConfirmDomains', 'browseConfirmMode',
   'phylacteryConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
-  'ponderingEnabled', 'ponderingIntervalScale', 'followupsEnabled',
+  'ponderingEnabled', 'ponderingIntervalScale', 'ponderThreadChance', 'followupsEnabled',
   'ponderWebEnabled', 'ponderWebRoundsPerTick', 'ponderWebReadsPerDay',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
   'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'weatherEnabled', 'weatherUnit',
@@ -1016,6 +1019,11 @@ function loadPersisted() {
       || state.ponderingIntervalScale < 1
       || state.ponderingIntervalScale > 10) {
     state.ponderingIntervalScale = 1;
+  }
+  if (typeof state.ponderThreadChance !== 'number'
+      || state.ponderThreadChance < 0
+      || state.ponderThreadChance > 1) {
+    state.ponderThreadChance = 0.35;
   }
   if (typeof state.warmthEnabled !== 'boolean') state.warmthEnabled = true;
   if (typeof state.contactBaselinesEnabled !== 'boolean') state.contactBaselinesEnabled = true;
@@ -4211,6 +4219,10 @@ function readSettingsFromUI() {
     const n = parseFloat($('pondering-scale').value);
     state.ponderingIntervalScale = Number.isFinite(n) && n >= 1 && n <= 10 ? n : 1;
   }
+  if ($('pondering-thread-chance')) {
+    const n = parseInt($('pondering-thread-chance').value, 10);
+    state.ponderThreadChance = Number.isFinite(n) && n >= 0 && n <= 100 ? n / 100 : 0.35;
+  }
   if ($('ponder-web-toggle')) state.ponderWebEnabled = $('ponder-web-toggle').checked;
   if ($('ponder-web-reads')) {
     const n = parseInt($('ponder-web-reads').value, 10);
@@ -4409,6 +4421,11 @@ function writeSettingsToUI() {
   if ($('handoff-toggle')) setIfNotFocused($('handoff-toggle'), 'checked', state.handoffEnabled !== false);
   if ($('pondering-toggle')) setIfNotFocused($('pondering-toggle'), 'checked', state.ponderingEnabled !== false);
   if ($('pondering-scale'))  setIfNotFocused($('pondering-scale'),  'value',   state.ponderingIntervalScale ?? 1);
+  if ($('pondering-thread-chance')) {
+    const pct = Math.round((state.ponderThreadChance ?? 0.35) * 100);
+    setIfNotFocused($('pondering-thread-chance'), 'value', pct);
+    if ($('pondering-thread-chance-val')) $('pondering-thread-chance-val').textContent = `${pct}%`;
+  }
   if ($('ponder-web-toggle')) setIfNotFocused($('ponder-web-toggle'), 'checked', state.ponderWebEnabled !== false);
   if ($('ponder-web-reads'))  setIfNotFocused($('ponder-web-reads'),  'value',   state.ponderWebReadsPerDay ?? 12);
   if ($('warmth-toggle'))      setIfNotFocused($('warmth-toggle'),      'checked', state.warmthEnabled !== false);
@@ -5893,7 +5910,7 @@ function init() {
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
     'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle',
-    'pondering-toggle', 'pondering-scale', 'ponder-web-toggle', 'ponder-web-reads',
+    'pondering-toggle', 'pondering-scale', 'pondering-thread-chance', 'ponder-web-toggle', 'ponder-web-reads',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
     'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle', 'browse-toggle', 'page-watch-toggle',
     'browse-site-mode', 'browse-site-list', 'browse-confirm-domains', 'browse-confirm-mode',
@@ -5935,6 +5952,9 @@ function init() {
     el.addEventListener('input',  () => {
       if (id === 'temperature') {
         $('temp-display').textContent = parseFloat(el.value).toFixed(2);
+      }
+      if (id === 'pondering-thread-chance' && $('pondering-thread-chance-val')) {
+        $('pondering-thread-chance-val').textContent = `${el.value}%`;
       }
       readSettingsFromUI();
     });
@@ -6299,6 +6319,23 @@ function init() {
     } catch { alert('Copy failed — select and copy manually.'); }
   });
   $('diagnostics-download').addEventListener('click', downloadDiagnosticReport);
+
+  // Loops & logs ("Is my Familiar alive?")
+  $('loops-health-btn')?.addEventListener('click', openLoopsHealthModal);
+  $('loops-health-close')?.addEventListener('click', closeLoopsHealthModal);
+  $('loops-health-done')?.addEventListener('click', closeLoopsHealthModal);
+  $('loops-health-modal')?.addEventListener('click', e => {
+    if (e.target === $('loops-health-modal')) closeLoopsHealthModal();
+  });
+  $('loops-health-refresh')?.addEventListener('click', () => loadLoopsHealth({ force: true }));
+  document.querySelectorAll('[data-loops-tab]').forEach(el => {
+    el.addEventListener('click', () => loopsSwitchTab(el.dataset.loopsTab));
+  });
+  $('loops-search-noticing')?.addEventListener('input',  () => renderLoopsLog('noticing'));
+  $('loops-search-reachout')?.addEventListener('input',  () => renderLoopsLog('reachout'));
+  $('loops-search-triage')?.addEventListener('input',    () => renderLoopsLog('triage'));
+  $('loops-search-pagewatch')?.addEventListener('input', () => renderLoopsLog('pagewatch'));
+  $('loops-search-discord')?.addEventListener('input',   () => renderLoopsLog('discord'));
 
   // Trigger tracer (regex/keyword diagnostic)
   $('trace-surfacing-btn')?.addEventListener('click', () => openTraceModal({ surfacingOnly: true, autoRun: true }));
@@ -12479,6 +12516,168 @@ async function teLoadRounds() {
   } catch (err) {
     el.innerHTML = `<p class="logs-empty">Failed to load rounds: ${teEscapeHtml(err.message)}</p>`;
   }
+}
+
+// ── Loops & logs ("Is my Familiar alive?") ──────────────────────────
+// A ward-facing console: which background loops are actually running
+// (GET /api/health), plus their own decision logs, so a quiet Familiar
+// and a stuck one don't look the same from here. Each log's raw fetch is
+// cached so a per-log filter box re-renders instantly on every keystroke
+// instead of re-fetching (the shared list-search pattern).
+const LOOPS_TABS = ['noticing', 'reachout', 'triage', 'pagewatch', 'discord'];
+const LOOPS_LOG_ENDPOINTS = {
+  noticing:  '/api/noticing-events',
+  reachout:  '/api/reachout-events',
+  triage:    '/api/triage-events',
+  pagewatch: '/api/page-watch-events',
+  discord:   '/api/discord-writes',
+};
+// kind -> array (loaded) | null (failed — distinct from "loaded, empty") | undefined (not yet loaded)
+let _loopsLogCache = {};
+
+function openLoopsHealthModal() {
+  $('loops-health-modal')?.classList.remove('hidden');
+  loopsSwitchTab('noticing');
+  loadLoopsHealth();
+}
+function closeLoopsHealthModal() {
+  $('loops-health-modal')?.classList.add('hidden');
+}
+
+function loopsSwitchTab(name) {
+  if (!LOOPS_TABS.includes(name)) return;
+  for (const t of LOOPS_TABS) {
+    const btn  = document.querySelector(`[data-loops-tab="${t}"]`);
+    const pane = $(`loops-pane-${t}`);
+    if (btn)  btn.classList.toggle('ke-tab-active',  t === name);
+    if (pane) pane.classList.toggle('ke-pane-active', t === name);
+  }
+  if (!(name in _loopsLogCache)) loadLoopsLog(name);
+}
+
+async function loadLoopsHealth({ force = false } = {}) {
+  await Promise.all([
+    loadLoopsStatus(),
+    ...LOOPS_TABS.filter(t => force || !(t in _loopsLogCache)).map(t => loadLoopsLog(t)),
+  ]);
+}
+
+// Names shown for each GET /api/health loops.* key — see server.js's
+// health route for the canonical key set.
+const LOOPS_STATUS_NAMES = {
+  pondering: 'Pondering', noticing: 'Noticing', reachout: 'Warm reach-out',
+  memorySweep: 'Memory sweep', gcalSync: 'Google Calendar sync', pageWatch: 'Page watch',
+};
+
+async function loadLoopsStatus() {
+  const el = $('loops-status-row');
+  if (!el) return;
+  el.innerHTML = '<p class="logs-empty">Loading…</p>';
+  try {
+    const r = await fetch('/api/health');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    const loops = (data?.loops && typeof data.loops === 'object') ? data.loops : {};
+    const keys = Object.keys(LOOPS_STATUS_NAMES).filter(k => k in loops);
+    if (!keys.length) { el.innerHTML = '<p class="logs-empty">No loop status reported by /api/health.</p>'; return; }
+    el.innerHTML = keys.map(k => {
+      const up   = !!loops[k];
+      const word = up ? 'up' : 'down';
+      const name = teEscapeHtml(LOOPS_STATUS_NAMES[k]);
+      return `<span class="loops-status-item">
+        <span class="loops-dot ${up ? 'ok' : 'err'}" role="img" aria-label="${name}: ${word}" title="${name}: ${word}">●</span>
+        ${name} <span class="loops-status-word">(${word})</span>
+      </span>`;
+    }).join('');
+  } catch {
+    el.innerHTML = '<p class="logs-empty">Couldn’t reach /api/health — loop status unavailable right now.</p>';
+  }
+}
+
+async function loadLoopsLog(kind) {
+  const list = $(`loops-list-${kind}`);
+  if (list) list.innerHTML = '<p class="logs-empty">Loading…</p>';
+  try {
+    const r = await fetch(LOOPS_LOG_ENDPOINTS[kind]);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    _loopsLogCache[kind] = Array.isArray(data) ? data : [];
+  } catch {
+    // A failed fetch degrades only THIS log — the other four render fine.
+    _loopsLogCache[kind] = null;
+  }
+  renderLoopsLog(kind);
+}
+
+// Each log carries different fields (see cerebellum.js's appendXEventLog
+// call sites and discord-write-log.js) — this is the one place that reads
+// them into a common { at, label, meta, reason } shape for rendering.
+function loopsRowSummary(kind, e) {
+  const at = e.loggedAt || e.at || e.ts || null;
+  if (kind === 'noticing') {
+    const label = e.acted ? 'acted' : (e.reason || 'looked');
+    const bits = [];
+    if (Array.isArray(e.toolsCalled) && e.toolsCalled.length) bits.push(`tools: ${e.toolsCalled.join(', ')}`);
+    if (e.threatTier) bits.push(`threat: ${e.threatTier}`);
+    if (e.error) bits.push(`error: ${e.error}`);
+    const reason = Array.isArray(e.wakeConditions) && e.wakeConditions.length
+      ? `Woken by: ${e.wakeConditions.join(', ')}` : '';
+    return { at, label, meta: bits.join(' · '), reason };
+  }
+  if (kind === 'reachout') {
+    const REASONS = {
+      reached_ward: 'reached out to my human', reached_villager: `reached out to ${e.villager || 'a villager'}`,
+      llm_said_wait: 'considered, chose to wait', delivery_failed: 'delivery failed',
+      unknown_villager: 'unknown villager', rate_limited: 'rate limited',
+      ward_active: 'stood down — my human is active',
+    };
+    return { at, label: REASONS[e.reason] || (e.reason || '—'), meta: e.error ? `error: ${e.error}` : '', reason: e.messagePreview || '' };
+  }
+  if (kind === 'triage') {
+    const label = e.acted ? 'reached out' : (e.reason === 'llm_said_wait' ? 'considered, chose to wait' : (e.reason || '—'));
+    const bits = [];
+    if (e.threat?.tier) bits.push(`threat: ${e.threat.tier}`);
+    if (Number.isFinite(e.silenceMs)) bits.push(`silence: ${Math.round(e.silenceMs / 60000)}min`);
+    return { at, label, meta: bits.join(' · '), reason: e.decision?.message || '' };
+  }
+  if (kind === 'pagewatch') {
+    return {
+      at, label: `checked ${e.checked ?? 0}, changed ${e.changed ?? 0}, surfaced ${e.surfaced ?? 0}`,
+      meta: e.failed ? `${e.failed} failed` : '', reason: '',
+    };
+  }
+  if (kind === 'discord') {
+    return { at, label: `${e.villager || 'someone'} → ${e.tool || 'a tool'}`, meta: e.locationKey || '', reason: e.args || '' };
+  }
+  return { at, label: '—', meta: '', reason: '' };
+}
+
+function renderLoopsLog(kind) {
+  const list = $(`loops-list-${kind}`);
+  if (!list) return;
+  const raw = _loopsLogCache[kind];
+  if (raw === null) {
+    list.innerHTML = '<p class="logs-empty">Couldn’t reach this log right now — the other logs above are unaffected.</p>';
+    return;
+  }
+  if (!Array.isArray(raw)) { list.innerHTML = '<p class="logs-empty">Loading…</p>'; return; }
+  if (!raw.length) { list.innerHTML = '<p class="logs-empty">Nothing logged yet — this loop hasn’t reached a decision.</p>'; return; }
+  const q = ($(`loops-search-${kind}`)?.value || '').trim().toLowerCase();
+  const rows = raw.map(e => loopsRowSummary(kind, e))
+    .filter(s => !q || `${s.label} ${s.meta} ${s.reason}`.toLowerCase().includes(q));
+  if (!rows.length) { list.innerHTML = `<p class="logs-empty">Nothing matches “${teEscapeHtml(q)}”.</p>`; return; }
+  list.innerHTML = rows.map(s => {
+    const when = teEscapeHtml(teIsoToLocalFriendly(s.at));
+    const abs  = teEscapeHtml(s.at || '');
+    return `
+    <div class="log-row">
+      <div class="log-info">
+        <div class="log-date" title="${abs}">${when} <span class="log-meta">${teEscapeHtml(s.label)}</span></div>
+        ${s.meta ? `<div class="log-meta">${teEscapeHtml(s.meta)}</div>` : ''}
+        ${s.reason ? `<p class="field-hint">${teEscapeHtml(s.reason)}</p>` : ''}
+      </div>
+    </div>`;
+  }).join('');
 }
 
 async function teEditPhase(id, phase) {

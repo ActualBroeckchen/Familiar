@@ -24,8 +24,11 @@
 
 import { createAudioWorker } from './audio-worker-host.js';
 import { resolveBackend, BACKENDS } from './voice-backend.js';
+import { voiceHardDisabled } from './voice-transcribe.js';
 
-export const VOICE_HARD_DISABLED = process.env.PROTO_FAMILIAR_VOICE_DISABLED === '1';
+// Read once at module load — same value voiceHardDisabled() computes live,
+// captured here because callers below (and server.js) treat it as a constant.
+export const VOICE_HARD_DISABLED = voiceHardDisabled();
 
 let worker = null;
 let backend = null;

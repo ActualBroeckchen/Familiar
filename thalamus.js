@@ -2432,7 +2432,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
             `[GRADUATION NOTICE — I recently filed ${gradItems.length} piece(s) of detail about my human off my always-injected surface into my recalled-when-relevant memory. Nothing is lost; I can pull any of it back. This is mine to mention in my own voice when a natural moment opens — non-blocking, never a reason to stall, and never the thing I lead with.]`,
             'Filed away:',
             ...gradItems.map((x, i) => `  ${i + 1}. ${x.summary ?? ''}  [id: ${x.id}]`),
-            'When I have mentioned these (or judged they need no mention), I call graduation_acknowledge with the id(s) so I do not re-raise them.',
+            'When I have mentioned these (or judged they need no mention), I call acknowledge_graduation with the id(s) so I do not re-raise them.',
           ];
           graduationBlock = lines.join('\n');
         }
@@ -2456,7 +2456,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
             `[DISCLOSURE NOTICE — reviewing my own private notes, I opened ${notices.length} fact(s) about my human so they're now governed by my content-sharing rules (only the people they've trusted with each topic could ever see them; the rest stays as it was). Nothing is forced — this is mine to raise in my own voice when a natural moment opens, and any of it reverts to strictly-private on their word. Never the thing I lead with.]`,
             'Opened:',
             ...notices.map((n, i) => `  ${i + 1}. ${n.brief ?? ''} [${n.topic ?? 'general:sensitive'}]${n.date ? ` (${n.date})` : ''}  [id: ${n.id}]`),
-            'When I have mentioned these (or judged they need no mention), I call disclosure_acknowledge with the id(s). If my human wants any kept strictly between us, I call keep_memory_private with the id.',
+            'When I have mentioned these (or judged they need no mention), I call acknowledge_disclosure with the id(s). If my human wants any kept strictly between us, I call keep_memory_private with the id.',
           ];
           disclosureBlock = lines.join('\n');
         }

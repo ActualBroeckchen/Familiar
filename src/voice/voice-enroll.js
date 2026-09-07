@@ -26,8 +26,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // speaker model is CAM++ (BASE_MODELS id `speaker-embed`); the optional "swanky"
 // upgrade is NeMo TitaNet-Large (`speaker-embed-large`). Whichever the ward has
 // active is loaded — the extractor just finds the sole .onnx in the dir.
-export const SPEAKER_MODEL_DIR       = path.join(REPO_ROOT, 'models', 'audio', 'speaker-embed');
-export const SPEAKER_MODEL_DIR_LARGE = path.join(REPO_ROOT, 'models', 'audio', 'speaker-embed-large');
+const SPEAKER_MODEL_DIR       = path.join(REPO_ROOT, 'models', 'audio', 'speaker-embed');
+const SPEAKER_MODEL_DIR_LARGE = path.join(REPO_ROOT, 'models', 'audio', 'speaker-embed-large');
 
 /** The active speaker-model directory for these settings (default = CAM++). */
 export function speakerModelDir(settings = {}) {

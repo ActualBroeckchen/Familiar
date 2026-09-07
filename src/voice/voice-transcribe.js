@@ -74,7 +74,7 @@ export function voiceCallSettleMs(settings) {
 }
 
 /** Is the offline recogniser actually unpacked on disk (not just the dir)? */
-export function offlineModelPresent() {
+function offlineModelPresent() {
   return existsSync(path.join(ASR_MODEL_DIR, 'model.int8.onnx'));
 }
 

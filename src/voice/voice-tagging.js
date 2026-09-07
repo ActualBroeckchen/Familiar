@@ -26,19 +26,19 @@ import { classifyRoomSounds } from './voice-audio-tags.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const TAGGING_MODEL_DIR = path.join(REPO_ROOT, 'models', 'audio', 'tagging-audioset');
+const TAGGING_MODEL_DIR = path.join(REPO_ROOT, 'models', 'audio', 'tagging-audioset');
 
 const LOAD_TIMEOUT_MS = 180_000;   // a cold onnx load off laptop disk
 const TAG_TIMEOUT_MS  = 30_000;    // one short clip
 
 /** The hard off-switch, checked wherever tagging would run. */
-export function audioTaggingDisabled() {
+function audioTaggingDisabled() {
   return process.env.PROTO_FAMILIAR_AUDIO_TAGGING_DISABLED === '1'
     || process.env.PROTO_FAMILIAR_VOICE_DISABLED === '1';
 }
 
 /** Is the tagging model actually unpacked (an .onnx present), not just the dir? */
-export function taggingModelPresent(dir = TAGGING_MODEL_DIR) {
+function taggingModelPresent(dir = TAGGING_MODEL_DIR) {
   try {
     if (existsSync(path.join(dir, 'model.onnx'))) return true;
     return readdirSync(dir).some((f) => f.endsWith('.onnx'));
@@ -85,7 +85,7 @@ export function createTagSegment({ getWorkerThen, readSettings, taggingEnabled, 
  * time isn't re-announced every utterance. `note(events)` returns a string to
  * inject into the next turn's context (as a system line, never stored), or null.
  */
-export function createRoomListener() {
+function createRoomListener() {
   const seen = new Set();
   return {
     note(events) {

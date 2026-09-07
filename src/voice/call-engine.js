@@ -61,7 +61,7 @@ export function callsDisabled() {
  * A ward can keep voice calls but turn barge off if it ever mis-fires in their
  * room. Default ON. Read live (per partial) so it can be toggled mid-session.
  */
-export function bargeDisabled() {
+function bargeDisabled() {
   return process.env.PROTO_FAMILIAR_VOICE_BARGE_DISABLED === '1';
 }
 
