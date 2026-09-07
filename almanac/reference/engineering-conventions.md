@@ -31,10 +31,10 @@ sources:
     path: llm-call.js
   - id: voice-transcribe-js
     type: file
-    path: voice-transcribe.js
+    path: src/voice/voice-transcribe.js
   - id: tome-macros-js
     type: file
-    path: tome-macros.js
+    path: src/tomes/tome-macros.js
 ---
 
 # Engineering Conventions
@@ -42,7 +42,12 @@ sources:
 This page is a lookup reference for the repo-wide operating rules recorded in `CLAUDE.md`
 that apply across every component, not just one subsystem. Use it to check a specific
 convention before making a change; use [Architecture](../architecture) for how the
-components these rules govern actually fit together.
+components these rules govern actually fit together. Some rules below name a file by its bare
+basename (`cerebellum.js`, `thalamus.js`, `llm-call.js`) because those files still live at the
+repository root; others (`voice-transcribe.js`, `tome-macros.js`) moved under `src/<domain>/`
+during the Stage 1 reorganization — see
+[Domain folder layout](../decisions/domain-folder-layout) for which files stayed and which
+moved.
 
 ## Versioning
 

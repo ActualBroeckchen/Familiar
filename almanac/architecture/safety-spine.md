@@ -13,16 +13,16 @@ sources:
     path: docs/unruh-design.md
   - id: crisis-signals
     type: file
-    path: crisis-signals.js
+    path: src/safety/crisis-signals.js
   - id: threat-tracker
     type: file
-    path: threat-tracker.js
+    path: src/safety/threat-tracker.js
   - id: cerebellum
     type: file
     path: cerebellum.js
   - id: vision-js
     type: file
-    path: vision.js
+    path: src/vision/vision.js
   - id: engagement-conversation
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/9736413b-Temporal_core_engagementweighted_k.txt
@@ -40,10 +40,10 @@ sources:
     path: docs/future-features.md
   - id: voice-audio-tags
     type: file
-    path: voice-audio-tags.js
+    path: src/voice/voice-audio-tags.js
   - id: voice-tagging
     type: file
-    path: voice-tagging.js
+    path: src/voice/voice-tagging.js
 ---
 
 # Safety Spine

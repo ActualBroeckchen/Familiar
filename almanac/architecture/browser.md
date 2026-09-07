@@ -4,22 +4,22 @@ topics: [architecture, browser, safety]
 sources:
   - id: browser-lens-js
     type: file
-    path: browser-lens.js
+    path: src/browser/browser-lens.js
   - id: browser-proxy-js
     type: file
-    path: browser-proxy.js
+    path: src/browser/browser-proxy.js
   - id: browser-driver-js
     type: file
-    path: browser-driver.js
+    path: src/browser/browser-driver.js
   - id: browser-js
     type: file
-    path: browser.js
+    path: src/browser/browser.js
   - id: browser-grants-js
     type: file
-    path: browser-grants.js
+    path: src/browser/browser-grants.js
   - id: browser-audit-js
     type: file
-    path: browser-audit.js
+    path: src/browser/browser-audit.js
   - id: cerebellum-js
     type: file
     path: cerebellum.js
@@ -34,19 +34,19 @@ sources:
     path: tests/browser-tools.test.mjs
   - id: ponder-research-js
     type: file
-    path: ponder-research.js
+    path: src/pondering/ponder-research.js
   - id: ponder-web-budget-js
     type: file
-    path: ponder-web-budget.js
+    path: src/pondering/ponder-web-budget.js
   - id: browser-driver-test
     type: file
     path: tests/browser-driver.test.mjs
   - id: page-watch-js
     type: file
-    path: page-watch.js
+    path: src/browser/page-watch.js
   - id: page-watch-loop-js
     type: file
-    path: page-watch-loop.js
+    path: src/browser/page-watch-loop.js
   - id: browser-server-js
     type: file
     path: server.js
@@ -58,22 +58,22 @@ sources:
     path: docs/browser-cdp-mode-build-spec.md
   - id: browser-cdp-arm-js
     type: file
-    path: browser-cdp-arm.js
+    path: src/browser/browser-cdp-arm.js
   - id: browser-cdp-arm-test
     type: file
     path: tests/browser-cdp-arm.test.mjs
   - id: cdp-launcher-js
     type: file
-    path: cdp-launcher.js
+    path: src/browser/cdp-launcher.js
   - id: reddit-reader-js
     type: file
-    path: reddit-reader.js
+    path: src/browser/reddit-reader.js
   - id: reddit-reader-test
     type: file
     path: tests/reddit-reader.test.mjs
   - id: websearch-js
     type: file
-    path: websearch.js
+    path: src/search/websearch.js
 ---
 
 # Browser: Click-and-Fill Web Access

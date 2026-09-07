@@ -7,7 +7,7 @@ sources:
     path: core-prompts.js
   - id: prompt-capture-js
     type: file
-    path: prompt-capture.js
+    path: src/sessions/prompt-capture.js
   - id: architecture-doc
     type: file
     path: docs/architecture.md
@@ -16,7 +16,7 @@ sources:
     path: public/app.js
   - id: discord-gateway-js
     type: file
-    path: discord-gateway.js
+    path: src/discord/discord-gateway.js
 ---
 
 # Core Prompts and Multi-Surface Assembly

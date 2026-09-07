@@ -4,13 +4,13 @@ topics: [architecture, vision]
 sources:
   - id: media-js
     type: file
-    path: media.js
+    path: src/vision/media.js
   - id: vision-js
     type: file
-    path: vision.js
+    path: src/vision/vision.js
   - id: zai-vision-js
     type: file
-    path: zai-vision.js
+    path: src/vision/zai-vision.js
   - id: slug-ids-js
     type: file
     path: slug-ids.js
@@ -19,13 +19,13 @@ sources:
     path: server.js
   - id: memorization-js
     type: file
-    path: memorization.js
+    path: src/memory/memorization.js
   - id: cerebellum-js
     type: file
     path: cerebellum.js
   - id: discord-gateway-js
     type: file
-    path: discord-gateway.js
+    path: src/discord/discord-gateway.js
   - id: providers-js
     type: file
     path: providers.js
@@ -34,7 +34,7 @@ sources:
     path: CLAUDE.md
   - id: gemini-file-api-js
     type: file
-    path: gemini-file-api.js
+    path: src/vision/gemini-file-api.js
   - id: video-build-spec
     type: file
     path: docs/video-build-spec.md

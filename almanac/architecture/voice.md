@@ -16,34 +16,34 @@ sources:
     path: PR-voice-pass-0.md
   - id: voice-models
     type: file
-    path: voice-models.js
+    path: src/voice/voice-models.js
   - id: voice-footprint
     type: file
-    path: voice-footprint.js
+    path: src/voice/voice-footprint.js
   - id: voice-fetch
     type: file
-    path: voice-fetch.js
+    path: src/voice/voice-fetch.js
   - id: voice-extract
     type: file
-    path: voice-extract.js
+    path: src/voice/voice-extract.js
   - id: voice-catalogue
     type: file
-    path: voice-catalogue.js
+    path: src/voice/voice-catalogue.js
   - id: voice-bench
     type: file
-    path: voice-bench.js
+    path: src/voice/voice-bench.js
   - id: voice-speech
     type: file
-    path: voice-speech.js
+    path: src/voice/voice-speech.js
   - id: voice-generation
     type: file
-    path: voice-generation.js
+    path: src/voice/voice-generation.js
   - id: voice-backend
     type: file
-    path: voice-backend.js
+    path: src/voice/voice-backend.js
   - id: media
     type: file
-    path: media.js
+    path: src/vision/media.js
   - id: server
     type: file
     path: server.js
@@ -52,37 +52,37 @@ sources:
     path: CLAUDE.md
   - id: audio-worker-current
     type: file
-    path: audio-worker-current.js
+    path: src/voice/audio-worker-current.js
   - id: app-js
     type: file
     path: public/app.js
   - id: voice-audio-tags
     type: file
-    path: voice-audio-tags.js
+    path: src/voice/voice-audio-tags.js
   - id: voice-tagging
     type: file
-    path: voice-tagging.js
+    path: src/voice/voice-tagging.js
   - id: voice-presence-js
     type: file
-    path: voice-presence.js
+    path: src/voice/voice-presence.js
   - id: voice-discord-server-js
     type: file
-    path: voice-discord-server.js
+    path: src/voice/voice-discord-server.js
   - id: voice-discord-adapter-js
     type: file
-    path: voice-discord-adapter.js
+    path: src/voice/voice-discord-adapter.js
   - id: call-engine-js
     type: file
-    path: call-engine.js
+    path: src/voice/call-engine.js
   - id: discord-gateway-js
     type: file
-    path: discord-gateway.js
+    path: src/discord/discord-gateway.js
   - id: village-js
     type: file
-    path: village.js
+    path: src/village/village.js
   - id: media-retention-loop
     type: file
-    path: media-retention-loop.js
+    path: src/vision/media-retention-loop.js
 ---
 
 # Voice

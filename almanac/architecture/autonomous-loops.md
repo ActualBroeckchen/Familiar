@@ -10,10 +10,10 @@ sources:
     path: docs/architecture.md
   - id: content-regate-loop
     type: file
-    path: content-regate-loop.js
+    path: src/memory/content-regate-loop.js
   - id: media-retention-loop
     type: file
-    path: media-retention-loop.js
+    path: src/vision/media-retention-loop.js
 ---
 
 # Autonomous Loops

@@ -14,7 +14,7 @@ sources:
     path: docs/tomes.md
   - id: tome-graduation-loop
     type: file
-    path: tome-graduation-loop.js
+    path: src/tomes/tome-graduation-loop.js
 ---
 
 # Bucket-Purge Cycle

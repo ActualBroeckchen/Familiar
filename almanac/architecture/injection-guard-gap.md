@@ -16,7 +16,7 @@ sources:
     path: docs/architecture.md
   - id: reddit-reader-js
     type: file
-    path: reddit-reader.js
+    path: src/browser/reddit-reader.js
 ---
 
 # Injection Guard: From Documented-but-Unwired to Two Wired Boundaries

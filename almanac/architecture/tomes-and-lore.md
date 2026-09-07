@@ -4,19 +4,19 @@ topics: [architecture, tomes]
 sources:
   - id: tome-lore-js
     type: file
-    path: tome-lore.js
+    path: src/tomes/tome-lore.js
   - id: tome-store-js
     type: file
-    path: tome-store.js
+    path: src/tomes/tome-store.js
   - id: tome-macros-js
     type: file
-    path: tome-macros.js
+    path: src/tomes/tome-macros.js
   - id: manual-tome-js
     type: file
-    path: manual-tome.js
+    path: src/tomes/manual-tome.js
   - id: discord-gateway-js
     type: file
-    path: discord-gateway.js
+    path: src/discord/discord-gateway.js
   - id: app-js
     type: file
     path: public/app.js

@@ -4,7 +4,7 @@ topics: [decisions, memorization]
 sources:
   - id: memorization-js
     type: file
-    path: memorization.js
+    path: src/memory/memorization.js
   - id: sessions-doc
     type: file
     path: docs/sessions.md

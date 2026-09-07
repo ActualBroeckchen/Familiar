@@ -14,7 +14,7 @@ implemented**, or **proposed**. A "proposed" or "not yet implemented" status is 
 the page's honest record of how far the decision has actually traveled from conversation into
 code.
 
-Twenty-three decisions live here. Grouped by the question each one answers:
+Twenty-four decisions live here. Grouped by the question each one answers:
 
 ## Naming and module identity
 
@@ -119,6 +119,9 @@ and of what is normal for its bond with the ward:
 - [Local process over VM/Docker sandboxing](local-process-over-vm-sandboxing) — why every
   autonomous loop runs inside one continuously-running Node process instead of a sandboxed or
   lazily-woken alternative.
+- [Domain folder layout](domain-folder-layout) — why domain-specific modules moved from a flat
+  repository root into `src/<domain>/` folders one domain at a time, and which cross-cutting
+  files were deliberately left at the root.
 
 ## How the decisions connect
 

@@ -4,16 +4,16 @@ topics: [architecture, browser]
 sources:
   - id: reader-router-js
     type: file
-    path: reader-router.js
+    path: src/browser/reader-router.js
   - id: reader-doctor-js
     type: file
-    path: reader-doctor.js
+    path: src/browser/reader-doctor.js
   - id: reddit-reader-js
     type: file
-    path: reddit-reader.js
+    path: src/browser/reddit-reader.js
   - id: browser-driver-js
     type: file
-    path: browser-driver.js
+    path: src/browser/browser-driver.js
   - id: cerebellum-js
     type: file
     path: cerebellum.js

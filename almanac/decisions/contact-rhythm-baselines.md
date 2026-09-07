@@ -4,13 +4,13 @@ topics: [decisions, autonomous-loops, armature]
 sources:
   - id: contact-baselines
     type: file
-    path: contact-baselines.js
+    path: src/safety/contact-baselines.js
   - id: contact-baselines-test
     type: file
     path: tests/contact-baselines.test.mjs
   - id: reachout
     type: file
-    path: reachout.js
+    path: src/warmth/reachout.js
   - id: reachout-test
     type: file
     path: tests/reachout.test.mjs

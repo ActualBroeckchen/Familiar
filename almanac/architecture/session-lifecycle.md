@@ -10,7 +10,7 @@ sources:
     path: public/app.js
   - id: session-log-js
     type: file
-    path: session-log.js
+    path: src/sessions/session-log.js
 ---
 
 # Session Lifecycle

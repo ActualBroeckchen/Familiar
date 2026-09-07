@@ -4,7 +4,7 @@ topics: [decisions, vision]
 sources:
   - id: vision-js
     type: file
-    path: vision.js
+    path: src/vision/vision.js
 ---
 
 # Vision capability defaults to BLIND; prove capability via allowlist
