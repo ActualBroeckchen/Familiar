@@ -5,7 +5,7 @@ import os from 'os';
 import { promises as fsp, mkdtempSync, rmSync } from 'fs';
 import { randomUUID } from 'crypto';
 
-import { ponderOnce, PONDERINGS_TOME_NAME } from '../pondering.js';
+import { ponderOnce, PONDERINGS_TOME_NAME } from '../src/pondering/pondering.js';
 import { getRecentPonderings, formatPonderingsForPrompt, readPonderingByUid, getUnactedIntents } from '../recent-ponderings.js';
 
 function tempDir() {

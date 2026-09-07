@@ -68,7 +68,7 @@ export const OUTCOMES = Object.freeze({
 // tomesDir per test (mkdtempSync) — different key, no contention
 // with production traffic.
 
-import { withLock } from './thalamus.js';
+import { withLock } from '../../thalamus.js';
 
 // ── File I/O ─────────────────────────────────────────────────────
 

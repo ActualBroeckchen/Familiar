@@ -19,7 +19,7 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { promises as fsp } from 'fs';
-import { PONDERINGS_TOME_NAME, shortPonderUid, findOrCreatePonderingsTome } from './pondering.js';
+import { PONDERINGS_TOME_NAME, shortPonderUid, findOrCreatePonderingsTome } from './src/pondering/pondering.js';
 import { withLock, modifyTomeFile } from './thalamus.js';
 import { relativeTime } from './relative-time.js';
 

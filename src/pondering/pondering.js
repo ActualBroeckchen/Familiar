@@ -17,10 +17,11 @@
 
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { callProviderChat } from './llm-call.js';
+import { callProviderChat } from '../../llm-call.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
+const DEFAULT_TOMES_DIR = path.join(REPO_ROOT, 'tomes');
 
 // Short pondering uid ("ponder-x7k2m3") — 0.8.x id overhaul. Same lookalike-free
 // alphabet as the Unruh/Phylactery slug ids; 6 chars ≈ 887M combinations,
@@ -48,8 +49,8 @@ const PONDERINGS_TOME_DESC =
 // or server.js writeTome on the same file serialises against this
 // write rather than clobbering it.
 
-import { findOrCreateTomeByName, modifyTomeFile } from './thalamus.js';
-import { substituteMacros } from './macros.js';
+import { findOrCreateTomeByName, modifyTomeFile } from '../../thalamus.js';
+import { substituteMacros } from '../../macros.js';
 
 export async function findOrCreatePonderingsTome(tomesDir = DEFAULT_TOMES_DIR) {
   return findOrCreateTomeByName(tomesDir, PONDERINGS_TOME_NAME, {

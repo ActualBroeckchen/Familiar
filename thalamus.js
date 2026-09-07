@@ -1630,12 +1630,12 @@ import { getThreat } from './threat-tracker.js';
 import {
   selectSurfaceCandidates,
   formatSurfaceCandidatesBlock,
-} from './surface-context.js';
+} from './src/pondering/surface-context.js';
 import {
   recordSurfaceOffers,
   getRecentOfferInfo,
   tagOutcomes,
-} from './surface-events.js';
+} from './src/pondering/surface-events.js';
 import { WARD_PRIVATE, isGranted, stripGatedSections, fetchEligibility } from './audience.js';
 import { syncSpineState, stripSensitiveScheduleNodes } from './spine-states.js';
 

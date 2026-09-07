@@ -82,17 +82,17 @@ import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta, rekeyOutboxIds } from './outbox.js';
 import { buildTimeAnchorBlock, relativeTime, plainInterval, wardLocalNowISO } from './relative-time.js';
 import { substituteMacros } from './macros.js';
-import { selectSurfaceCandidates } from './surface-context.js';
+import { selectSurfaceCandidates } from './src/pondering/surface-context.js';
 import { rekeyCueState } from './src/gcal/gcal-projection.js';
 import { TOOL_MODULES, CORE, MODULE_INDEX, normalizeRequestedModules } from './tool-surfacing.js';
-import { rekeyPonderingUids } from './pondering.js';
+import { rekeyPonderingUids } from './src/pondering/pondering.js';
 import { pushIcsViaCli, resolveWriteCommand } from './src/gcal/gcal-source.js';
 import {
   readToken as readGoogleToken, writeToken as writeGoogleToken,
   getFreshAccessToken as getGoogleAccessToken, buildEventResource, insertEvent as insertGoogleEvent,
   isConnected as googleConnected,
 } from './src/gcal/gcal-google.js';
-import { getRecentOfferInfo, rekeySurfaceEventIds } from './surface-events.js';
+import { getRecentOfferInfo, rekeySurfaceEventIds } from './src/pondering/surface-events.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 

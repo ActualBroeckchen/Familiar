@@ -16,8 +16,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { promises as fsp, mkdirSync } from 'fs';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const LOGS_DIR = path.join(__dirname, 'logs');
+const LOGS_DIR = path.join(REPO_ROOT, 'logs');
 mkdirSync(LOGS_DIR, { recursive: true });
 
 export const REFLECTION_LOG_FILE = path.join(LOGS_DIR, 'reflection-events.jsonl');

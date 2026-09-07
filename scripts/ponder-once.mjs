@@ -16,7 +16,7 @@
  * read the actual thought.
  */
 
-import { ponderOnce } from '../pondering.js';
+import { ponderOnce } from '../src/pondering/pondering.js';
 
 function parseArgs(argv) {
   const args = {};

@@ -11,7 +11,7 @@ import {
   parsePondering,
   findOrCreatePonderingsTome,
   PONDERINGS_TOME_NAME,
-} from '../pondering.js';
+} from '../src/pondering/pondering.js';
 
 import {
   getUnactedIntents,

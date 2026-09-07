@@ -16,9 +16,9 @@
  * query. Returns provenance-stamped sources for the ponder to cite.
  */
 
-import { searchWeb, lookUp, readWebpage } from './src/search/websearch.js';
+import { searchWeb, lookUp, readWebpage } from '../search/websearch.js';
 import { readsRemaining, recordReads } from './ponder-web-budget.js';
-import { logBrowserAction } from './browser-audit.js';
+import { logBrowserAction } from '../../browser-audit.js';
 
 function clampRounds(settings) {
   const n = Number(settings?.ponderWebRoundsPerTick);
