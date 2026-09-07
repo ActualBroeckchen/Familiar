@@ -23,12 +23,6 @@ sources:
   - id: ponder-research-js
     type: file
     path: src/pondering/ponder-research.js
-  - id: interest-py
-    type: file
-    path: unruh/src/unruh/interest.py
-  - id: server-js
-    type: file
-    path: server.js
 ---
 
 # Pondering
@@ -62,26 +56,6 @@ The pondering loop runs on a tiered cadence, NOT a fixed interval [@autonomous-l
 2. **Threat level** — the scalar from [Unruh](../architecture/unruh) that drives urgency [@autonomous-loops-doc]. When threat reaches moderate or higher, pondering stands down entirely (along with warmth and needs-tracking) to defer to [silence triage](../architecture/safety-spine).
 
 The cadence tiers are: 30 minutes (high interest), 1 hour, 2 hours, and 6 hours (low interest, background noise). A topic with very low interest still ponders, but only every 6 hours [@autonomous-loops-doc].
-
-## Following its own threads (0.11.76–0.11.77)
-
-Until the 2026 audit the interest layer the cadence samples from was a *mirror of the human*:
-its only automatic writer was the browser's open chat topics, so a "free-cycle" ponder was
-always about what the ward had been talking about. Two changes made pondering self-originating —
-see [Self-originated interest and the `me` register](../decisions/self-originated-interest-and-me-register)
-for the full rationale:
-
-- **A ponder can plant its own curiosity.** The ponder JSON now carries an optional `drawn_to`
-  list (short tag-like labels); `server.js` records each into the interest layer with
-  `source:'pondering'` [@server-js], linked `related_to` the topic it grew from
-  (`interest_record`'s new `related_to` arg, idempotent either direction) [@interest-py].
-  Naming the pull *is* the whole action, so code consumes it — no deferred intent.
-- **The loop sometimes walks a thread instead of the weighted pick.** After the weighted draw,
-  `runOneTick` rolls `threadChance` (a ward dial, `ponderThreadChance`, default 0.35, read
-  through `clampChance`); on a hit it hops one `related_to` edge (`interest_related` →
-  `relatedInterests`) to a neighbour and ponders that instead, and the grounding block opens
-  with "I got here from thinking about X" [@pondering-loop-js] [@pondering-js]. Standing values
-  and bookmarks are never hops — a thread wanders between curiosities, not into always-on values.
 
 ## The `read_pondering` tool
 

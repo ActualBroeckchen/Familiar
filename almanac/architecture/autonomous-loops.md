@@ -139,25 +139,9 @@ weekday-class from session logs and reports nothing until roughly two weeks of h
 see [Contact-rhythm baselines](../decisions/contact-rhythm-baselines) for the conservative
 ward-contact signal and the honesty rule that gates it.
 
-## Seeing the loops from the app (0.11.77)
-
-Every decision-reaching tick of the self-observing loops lands in a JSONL event log —
-`logs/noticing-events.jsonl`, `reachout-events.jsonl`, `triage-events.jsonl`,
-`page-watch-events.jsonl`, `discord-writes.jsonl` — each exposed at a `GET /api/*-events`
-endpoint. The design intent is that **a dead loop reads as stale entries, not as calm
-silence**. Those endpoints were curl-only until the audit; now Sidebar → Diagnostics →
-**"Is my Familiar alive?"** reads all five, plus `GET /api/health`'s `loops` object (one
-status dot per worker), so the ward can tell a quiet Familiar from a stopped one without a
-terminal. This is the "user-accessible" leg of the robust-over-cheap rule applied to the
-loops' own observability.
-
 ## Related
 
-- [Pondering](pondering) — the autonomous thought loop, its cadence, the `read_pondering` tool,
-  and how a ponder now follows its own threads.
-- [Self-originated interest and the `me` register](../decisions/self-originated-interest-and-me-register)
-  — why the interest and memory layers now carry the Familiar's own curiosities and views, and
-  the diagnostics pane that makes the loops legible to the ward.
+- [Pondering](pondering) — the autonomous thought loop, its cadence, and the `read_pondering` tool.
 - [Safety spine](safety-spine) — the crisis-detection and escalation machinery
   silence-triage sits on top of.
 - [Content-based memory gating](content-gating) — the sensitivity scheme content re-gate
