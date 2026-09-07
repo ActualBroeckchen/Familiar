@@ -30,7 +30,7 @@ import {
   discordResizeUrl,
   attributeUserContent,
   availabilityBlockFor,
-} from '../discord-gateway.js';
+} from '../src/discord/discord-gateway.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────
 
@@ -943,7 +943,7 @@ describe('discordChannelIdFromKey — channel resolution for revisits', () => {
 //  2. the ward's own words are NEVER altered (threat scoring reads them raw);
 //  3. sanitization is span-surgical, so a villager relaying genuine distress
 //     passes byte-identical — the guard can never swallow a crisis signal.
-import { inboundContent } from '../discord-gateway.js';
+import { inboundContent } from '../src/discord/discord-gateway.js';
 
 describe('inboundContent (injection guard, Village boundary)', () => {
   const base = { botUserId: 'bot1', charName: 'Eury', villagers: [] };

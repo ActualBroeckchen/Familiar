@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-import { EMBED_COLOR, btn, row, expiredView } from '../discord-menu-kit.js';
+import { EMBED_COLOR, btn, row, expiredView } from '../src/discord/discord-menu-kit.js';
 import {
   isQueueCommand, QUEUE_CID,
   buildQueueHomeView, buildQueueItemView, buildQueueDoneView, buildQueueText,

@@ -12,7 +12,7 @@
  * write) and gates the whole surface to the ward. No LLM call — a routing
  * choice must be exact, so it is code, not judgment.
  */
-import { EMBED_COLOR, btn, row } from '../../discord-menu-kit.js';
+import { EMBED_COLOR, btn, row } from '../discord/discord-menu-kit.js';
 
 export const CONN_CID = 'pfconn';
 // Sentinel value in the assign-connection dropdown meaning "clear the override,

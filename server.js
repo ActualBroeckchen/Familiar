@@ -166,7 +166,7 @@ import { normalizeTag } from './src/memory/content-tags.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, AUDIO_MAX_BYTES, IMAGE_MIME_EXT, MEDIA_KINDS, mediaKindFor, MAX_IMAGES_PER_MESSAGE } from './src/vision/media.js';
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './src/vision/vision.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
-import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw } from './discord-gateway.js';
+import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw } from './src/discord/discord-gateway.js';
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
 import { substituteMacros } from './macros.js';
 import { withCorePrompts } from './core-prompts.js';
@@ -2658,7 +2658,7 @@ app.get('/api/reflection-events', async (req, res) => {
 // villager-driven write is auditable, not silent.
 app.get('/api/discord-writes', async (_req, res) => {
   try {
-    const { readDiscordWrites } = await import('./discord-write-log.js');
+    const { readDiscordWrites } = await import('./src/discord/discord-write-log.js');
     res.json(await readDiscordWrites({ limit: 200 }));
   } catch {
     res.json([]);
@@ -5397,7 +5397,7 @@ const httpServer = app.listen(PORT, HOST, async () => {
     // time across both transports. Failure here never blocks web calls or chat.
     try {
       const { attachDiscordVoice } = await import('./src/voice/voice-discord-server.js');
-      const { setDiscordVoiceController } = await import('./discord-gateway.js');
+      const { setDiscordVoiceController } = await import('./src/discord/discord-gateway.js');
       const discordVoice = attachDiscordVoice({
         rootDir: __dirname, port: PORT,
         readSettings: readSettingsSync,
