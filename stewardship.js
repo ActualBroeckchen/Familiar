@@ -25,8 +25,8 @@ import path from 'path';
 import { promises as fsp } from 'fs';
 import { fileURLToPath } from 'url';
 import { wardLocalNowISO } from './relative-time.js';
-import { readWeatherMirrorSync } from './weather-mirror.js';
-import { forecastAtHour, isAdverseHour, formatItemWeather } from './weather-format.js';
+import { readWeatherMirrorSync } from './src/weather/weather-mirror.js';
+import { forecastAtHour, isAdverseHour, formatItemWeather } from './src/weather/weather-format.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');

@@ -64,9 +64,9 @@ import {
   addLocation, listLocations, getCurrentLocation, setCurrentLocation, deleteLocation,
   weatherLocationsPrivate, ingestWeather, readWeather,
 } from './thalamus.js';
-import { geocode, fetchForecast } from './weather-source.js';
-import { readWeatherNowLine, readWeatherVagueLine, readWeatherMirrorSync, writeWeatherMirror, clearWeatherMirror } from './weather-mirror.js';
-import { WEATHER_STALE_MS } from './weather-format.js';
+import { geocode, fetchForecast } from './src/weather/weather-source.js';
+import { readWeatherNowLine, readWeatherVagueLine, readWeatherMirrorSync, writeWeatherMirror, clearWeatherMirror } from './src/weather/weather-mirror.js';
+import { WEATHER_STALE_MS } from './src/weather/weather-format.js';
 import { selectReadiness } from './stewardship.js';
 import {
   shouldReflectNow,

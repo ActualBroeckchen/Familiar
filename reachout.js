@@ -35,7 +35,7 @@ import { substituteMacros } from './macros.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { buildWaitStreakLine } from './wait-streak.js';
 import { getContactBaseline, buildRhythmLine } from './contact-baselines.js';
-import { readWeatherNowLine } from './weather-mirror.js';
+import { readWeatherNowLine } from './src/weather/weather-mirror.js';
 
 // ── Warm-villager selection ──────────────────────────────────────
 //

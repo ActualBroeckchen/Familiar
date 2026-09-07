@@ -9,9 +9,9 @@ oriented you.
 > **Why the root looks busy:** the runtime is a single Node process, so most
 > modules live at the repo root as flat files today. They are *not* an
 > undifferentiated bag — they cluster into the domains below, and a staged move
-> into `src/<domain>/` is planned in
-> [`docs/repo-organization-plan.md`](docs/repo-organization-plan.md). Until that
-> lands, use the map here instead of scrolling the file list.
+> into `src/<domain>/` is underway (`src/weather/` done first; see
+> [`docs/repo-organization-plan.md`](docs/repo-organization-plan.md)). Until it
+> completes, use the map here instead of scrolling the file list.
 
 ## What Proto-Familiar is (in one breath)
 

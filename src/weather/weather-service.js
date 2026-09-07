@@ -12,9 +12,9 @@
  * toward the model. Callers get code-formatted words + the ward's own label.
  */
 
-import { weatherLocationsPrivate, readWeather, ingestWeather } from './thalamus.js';
+import { weatherLocationsPrivate, readWeather, ingestWeather } from '../../thalamus.js';
 import { fetchForecast } from './weather-source.js';
-import { wardLocalNowISO } from './relative-time.js';
+import { wardLocalNowISO } from '../../relative-time.js';
 import { WEATHER_STALE_MS } from './weather-format.js';
 
 const DAY_MS = 24 * 60 * 60_000;

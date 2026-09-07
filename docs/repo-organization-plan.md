@@ -41,7 +41,25 @@ Additive, near-zero risk; delivers most of the felt improvement:
 - **This plan.**
 - Tidied the clearest stray root doc (`Tome Mechanic.md` → `docs/`).
 
-## Stage 1 — the structural fix (TODO): move root modules into `src/<domain>/`
+## Stage 1 — the structural fix (IN PROGRESS): move root modules into `src/<domain>/`
+
+**Done so far:** `src/weather/` (5 files) — the pilot that proved the recipe and
+the guardrails end-to-end (full suite + `audit:wiring` green, zero stale refs). A
+reusable migration script lives at
+`scripts/migrate-domain.mjs` — it resolves every relative specifier (`from`,
+`import()`, `export … from`, `new URL(…, import.meta.url)`) against the old layout
+and recomputes it for the new location, so dynamic imports are handled too. Run it,
+then `git mv` the files and fix `__dirname` repo-root paths (below).
+
+**The `__dirname` lesson (do NOT skip this on the next domain):** a moved file's
+`path.join(__dirname, 'tomes' | 'models/…' | 'voice-model-pins.json')` still points
+*beside the file*, which after the move is `src/<domain>/tomes` — a silent runtime
+break that import audits and many tests will NOT catch. After moving, grep the moved
+files for `__dirname` / `import.meta.url` and add the depth hop
+(`path.join(__dirname, '..', '..', …)` for a 2-deep `src/<domain>/`), or switch them
+to a shared repo-root helper. The voice cluster has **seven** such files
+(`call-engine.js`, `voiceprints.js`, `voice-enroll/models/pin/tagging/transcribe.js`)
+plus a worker-spawn path in `audio-worker-host.js` — budget for fixing every one.
 
 The target layout is the domain map in `ARCHITECTURE.md`. Suggested folders:
 `src/core`, `src/safety`, `src/memory`, `src/voice`, `src/discord`, `src/schedule`,
