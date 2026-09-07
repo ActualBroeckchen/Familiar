@@ -5,7 +5,7 @@ import {
   formatAvailabilityLines,
   buildAvailabilityBlock,
   DAY_PARTS,
-} from '../schedule-availability.js';
+} from '../src/schedule/schedule-availability.js';
 
 // Fixed local "now" anchoring all test fixtures. Tests build nodes on the
 // same local day so date comparisons are deterministic.

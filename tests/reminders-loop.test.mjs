@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runOneReminderTick } from '../reminders-loop.js';
+import { runOneReminderTick } from '../src/schedule/reminders-loop.js';
 
 function makeFakeFireReminder() {
   const fired = [];

@@ -67,7 +67,7 @@ import {
 import { geocode, fetchForecast } from './src/weather/weather-source.js';
 import { readWeatherNowLine, readWeatherVagueLine, readWeatherMirrorSync, writeWeatherMirror, clearWeatherMirror } from './src/weather/weather-mirror.js';
 import { WEATHER_STALE_MS } from './src/weather/weather-format.js';
-import { selectReadiness } from './stewardship.js';
+import { selectReadiness } from './src/schedule/stewardship.js';
 import {
   shouldReflectNow,
   getNewOutcomesSinceLastReflection,
@@ -75,12 +75,12 @@ import {
   tagRaisedOutcomes,
 } from './src/pondering/surface-events.js';
 import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedIntents } from './recent-ponderings.js';
-import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
+import { startRemindersLoop, stopRemindersLoop } from './src/schedule/reminders-loop.js';
 import {
   selectDueEventAlerts, formatEventAlert, alertWindowBounds,
   selectDueWeatherAlerts, formatWeatherAlert,
   clampLeadMinutes, clampElapsedStampHours, ALERT_GRACE_MS, MAX_LEAD_MS,
-} from './event-alerts.js';
+} from './src/schedule/event-alerts.js';
 import { startGcalSyncLoop, stopGcalSyncLoop, resetGcalSyncCadence } from './src/gcal/gcal-sync-loop.js';
 import { recordSyncOutcome, readSyncStatus } from './src/gcal/gcal-sync-status.js';
 import { fetchIcal, fetchViaCli, cliPresetHint } from './src/gcal/gcal-source.js';
@@ -102,9 +102,9 @@ import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './s
 import { startMemorySweepLoop, stopMemorySweepLoop } from './memory-sweep-loop.js';
 import { startTomeGraduationLoop, stopTomeGraduationLoop } from './src/tomes/tome-graduation-loop.js';
 import { startContentRegateLoop, stopContentRegateLoop } from './content-regate-loop.js';
-import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './needs-tracking-loop.js';
+import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './src/schedule/needs-tracking-loop.js';
 import { startMediaRetentionLoop, stopMediaRetentionLoop } from './media-retention-loop.js';
-import { isNeedWindow } from './needs-tracking.js';
+import { isNeedWindow } from './src/schedule/needs-tracking.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './src/warmth/reachout.js';
 import { recordReachOut } from './src/warmth/reach-out-log.js';
 import { appendReflectionEvent, readReflectionEvents } from './src/pondering/reflection-events.js';
@@ -133,10 +133,10 @@ import {
   // Discord webhook) and records per-channel delivery state.
   enqueueAndDispatch, formatDeliveryNote, activePushAdapters,
 } from './cerebellum.js';
-import { expandWindow } from './recurrence.js';
+import { expandWindow } from './src/schedule/recurrence.js';
 import { selectModules, explainSelection, stickyModulesFor, tickSticky, TOOL_MODULES } from './tool-surfacing.js';
-import { readStewardshipState, recordRoutineReview } from './stewardship.js';
-import { buildNeedsLedger, isRoutineReviewDue, buildRoutineReviewSection, routineReviewHardDisabled } from './routine-review.js';
+import { readStewardshipState, recordRoutineReview } from './src/schedule/stewardship.js';
+import { buildNeedsLedger, isRoutineReviewDue, buildRoutineReviewSection, routineReviewHardDisabled } from './src/schedule/routine-review.js';
 import {
   enqueueMemorization,
   enqueueSessionByDay,
@@ -150,7 +150,7 @@ import { computeCoverage, collectDateSlices } from './memory-coverage.js';
 import { writeSessionLog as persistSessionLog, sessionLocationLabel } from './src/sessions/session-log.js';
 import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY } from './src/sessions/session-bindings.js';
 import { parseImport, dateFromFilename, applyFallbackDate } from './src/sessions/log-import.js';
-import { segmentByDay } from './day-segments.js';
+import { segmentByDay } from './src/schedule/day-segments.js';
 import {
   getRegistry as getVillageRegistry,
   upsertCategory as upsertVillageCategory, deleteCategory as deleteVillageCategory,

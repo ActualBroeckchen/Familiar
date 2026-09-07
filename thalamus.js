@@ -1612,13 +1612,13 @@ function wrapFile(filename, content, promptLabel) {
 // triggering thalamus.js's startup-time MCP child spawns. We only
 // import here for enrich()'s internal use; everything else imports
 // from temporal-format.js directly.
-import { formatTemporalContext } from './temporal-format.js';
-import { buildStewardshipBlock } from './stewardship.js';
+import { formatTemporalContext } from './src/schedule/temporal-format.js';
+import { buildStewardshipBlock } from './src/schedule/stewardship.js';
 import { nextProjectionCue, gatherProjectionCandidates } from './src/gcal/gcal-projection.js';
 import { weatherEnabled } from './src/weather/weather-mirror.js';
 import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
-import { expandWindow } from './recurrence.js';
-import { summarizeNeedsForDay, isNeedWindow } from './needs-tracking.js';
+import { expandWindow } from './src/schedule/recurrence.js';
+import { summarizeNeedsForDay, isNeedWindow } from './src/schedule/needs-tracking.js';
 import { resolveEntityCoreRef, identityHasContent } from './entity-ref.js';
 import {
   getRecentPonderings,

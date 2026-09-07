@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { expandOccurrences, expandWindow, localDateKey } from '../recurrence.js';
+import { expandOccurrences, expandWindow, localDateKey } from '../src/schedule/recurrence.js';
 
 // All test anchors use local-TZ Date construction so the tests are
 // deterministic regardless of where the runner lives — recurrence

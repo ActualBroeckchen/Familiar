@@ -1,4 +1,4 @@
-import { relativeTime } from './relative-time.js';
+import { relativeTime } from '../../relative-time.js';
 
 /**
  * Pure renderer for Unruh's temporal_context payload.

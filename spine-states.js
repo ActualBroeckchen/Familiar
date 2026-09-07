@@ -37,7 +37,7 @@ import { fileURLToPath } from 'url';
 import { promises as fsp, mkdirSync } from 'fs';
 import { THREAT_TIERS, DEFAULT_TAU_DAYS } from './threat-tracker.js';
 import { wardLocalNowISO } from './relative-time.js';
-import { expandOccurrences } from './recurrence.js';
+import { expandOccurrences } from './src/schedule/recurrence.js';
 
 const DAY_MS = 24 * 3600 * 1000;
 

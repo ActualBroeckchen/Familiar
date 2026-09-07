@@ -20,10 +20,10 @@
  * consequence edges — see needs-tracking.js.
  */
 
-import { listRecurring, resolveScheduleOccurrence } from './thalamus.js';
-import { getThreat } from './threat-tracker.js';
-import { isCallActiveFromFile } from './src/voice/call-engine.js';
-import { readSettingsSync } from './cerebellum.js';
+import { listRecurring, resolveScheduleOccurrence } from '../../thalamus.js';
+import { getThreat } from '../../threat-tracker.js';
+import { isCallActiveFromFile } from '../voice/call-engine.js';
+import { readSettingsSync } from '../../cerebellum.js';
 import { selectMissedOccurrences, isNeedWindow } from './needs-tracking.js';
 
 const DEFAULT_TICK_MS = 30 * 60_000;   // 30 min — bookkeeping wants no urgency
