@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { readGrants, readVaultEntry, ACK_SENTENCE } from '../browser-grants.js';
+import { readGrants, readVaultEntry, ACK_SENTENCE } from '../src/browser/browser-grants.js';
 
 // browser-grants reads fixed files under browser/. These tests write them, then
 // ALWAYS clean up — browser/ is git-ignored, so nothing leaks into the repo.

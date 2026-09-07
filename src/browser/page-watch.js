@@ -22,10 +22,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { slugifyLabel } from './slug-ids.js';
+import { slugifyLabel } from '../../slug-ids.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
+const DEFAULT_TOMES_DIR = path.join(REPO_ROOT, 'tomes');
 const FILENAME = '.page-watches.json';
 
 export const DEFAULT_WATCH_INTERVAL_MS = 6 * 60 * 60 * 1000;   // check a watched page every ~6h by default

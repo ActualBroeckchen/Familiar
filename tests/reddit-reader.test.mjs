@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   isRedditUrl, redditApiPath, parseRedditReadable, fetchRedditJson, readReddit,
   redditCredentials, _resetRedditTokenCache,
-} from '../reddit-reader.js';
+} from '../src/browser/reddit-reader.js';
 
 // A public IP so the SSRF guard passes without real DNS.
 const lookupFn = async () => [{ address: '151.101.1.140' }];

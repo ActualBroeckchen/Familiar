@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { browseOpen, browseAct, browseScreenshot, browseTabs, readerMirrorUrl, _setDriverForTest } from '../browser.js';
+import { browseOpen, browseAct, browseScreenshot, browseTabs, readerMirrorUrl, _setDriverForTest } from '../src/browser/browser.js';
 import { TOOL_EXECUTORS, BUILTIN_TOOLS } from '../cerebellum.js';
 
 const ward = { settings: { browseEnabled: true }, sessionId: 's-test' };
@@ -185,8 +185,8 @@ test('the Pass-2 browse tools are gated ward-only and fully wired', async () => 
 });
 
 // ── read_webpage re-backing (browser route + static fallback) ──────────────
-import { browseRead, shouldBrowserRead } from '../browser.js';
-import { findChromium } from '../browser-driver.js';
+import { browseRead, shouldBrowserRead } from '../src/browser/browser.js';
+import { findChromium } from '../src/browser/browser-driver.js';
 
 test('shouldBrowserRead: off when disabled or pinned static, on when auto+enabled+browser', () => {
   assert.equal(shouldBrowserRead({ browseEnabled: false }), false);
@@ -222,7 +222,7 @@ test('browseRead degrades to ok:false when the live read throws (→ static floo
 });
 
 // ── Pass 3a: site modes ────────────────────────────────────────────────────
-import { siteModeAllows } from '../browser.js';
+import { siteModeAllows } from '../src/browser/browser.js';
 
 test('siteModeAllows: open allows all; blocklist/allowlist gate by domain (+subdomains)', () => {
   assert.equal(siteModeAllows('https://anything.example/x', { browseSiteMode: 'open' }), true);
@@ -256,8 +256,8 @@ test('browseRead returns a distinct blocked signal for a site-blocked URL (no st
 });
 
 // ── Pass 3b: submit-shape detection, handoff ───────────────────────────────
-import { isSubmitShaped } from '../browser-driver.js';
-import { browseHandoff } from '../browser.js';
+import { isSubmitShaped } from '../src/browser/browser-driver.js';
+import { browseHandoff } from '../src/browser/browser.js';
 
 test('isSubmitShaped flags buy/pay/submit clicks and Enter, not plain clicks', () => {
   assert.equal(isSubmitShaped('click', { type: 'submit', name: 'Go' }), true);
@@ -292,8 +292,8 @@ test('browseAct refuses a vault fill when no grant/vault entry exists', async ()
 });
 
 // ── [CONFIRM] approve-resume ('ask' mode) ──────────────────────────────────
-import { resolveConfirm } from '../browser.js';
-import { resolvePendingConfirm } from '../browser-driver.js';
+import { resolveConfirm } from '../src/browser/browser.js';
+import { resolvePendingConfirm } from '../src/browser/browser-driver.js';
 
 test("browseAct 'ask' mode surfaces a held submit, never claims it acted", async () => {
   _setDriverForTest({ act: async () => ({ held: true, confirmId: 'cf-abc123', host: 'mybank.example', action: 'click' }) });
@@ -331,7 +331,7 @@ test('resolvePendingConfirm on an unknown id fails safely (no browser open)', as
 });
 
 // ── Headed handoff hand-back-and-resume ────────────────────────────────────
-import { browseHandback } from '../browser.js';
+import { browseHandback } from '../src/browser/browser.js';
 
 test('browseHandoff opens a headed window when a display exists', async () => {
   let opened = null;

@@ -18,7 +18,7 @@
 
 import { searchWeb, lookUp, readWebpage } from '../search/websearch.js';
 import { readsRemaining, recordReads } from './ponder-web-budget.js';
-import { logBrowserAction } from '../../browser-audit.js';
+import { logBrowserAction } from '../browser/browser-audit.js';
 
 function clampRounds(settings) {
   const n = Number(settings?.ponderWebRoundsPerTick);

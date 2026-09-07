@@ -8,7 +8,7 @@ import {
   addWatch, listWatches, removeWatch, readWatches,
   normalizeForHash, hashText, dueWatches, runOnePageWatchTick,
   buildPageWatchPrompt, parsePageWatchDecision, DEFAULT_WATCH_INTERVAL_MS,
-} from '../page-watch.js';
+} from '../src/browser/page-watch.js';
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'pagewatch-'));

@@ -51,8 +51,8 @@ import {
 import { scoreMessage } from './crisis-signals.js';
 import { foldReasoningIntoContent, callProviderChat } from './llm-call.js';
 import { fetchReadable } from './src/search/websearch.js';
-import { startPageWatchLoop, stopPageWatchLoop } from './page-watch-loop.js';
-import { buildPageWatchPrompt, parsePageWatchDecision } from './page-watch.js';
+import { startPageWatchLoop, stopPageWatchLoop } from './src/browser/page-watch-loop.js';
+import { buildPageWatchPrompt, parsePageWatchDecision } from './src/browser/page-watch.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
 import { ponderOnce } from './src/pondering/pondering.js';
 import { startPonderingLoop, stopPonderingLoop } from './src/pondering/pondering-loop.js';
@@ -2671,7 +2671,7 @@ app.get('/api/browser/status', async (_req, res) => {
     return res.json({ running: false, disabled: true, reason: 'PROTO_FAMILIAR_BROWSE_DISABLED=1' });
   }
   try {
-    const { browserStatus } = await import('./browser.js');
+    const { browserStatus } = await import('./src/browser/browser.js');
     res.json(browserStatus());
   } catch (err) {
     res.json({ running: false, error: err?.message ?? String(err) });
@@ -2683,7 +2683,7 @@ app.get('/api/reader-doctor', async (_req, res) => {
   // rest. The endpoint is the ward's own surface, so the browser-session backend
   // is allowed (wardTurn:true).
   try {
-    const { runReaderDoctor } = await import('./reader-doctor.js');
+    const { runReaderDoctor } = await import('./src/browser/reader-doctor.js');
     const report = await runReaderDoctor({ settings: readSettingsSync(), wardTurn: true });
     res.json(report);
   } catch (err) {
@@ -2693,7 +2693,7 @@ app.get('/api/reader-doctor', async (_req, res) => {
 
 app.get('/api/browser-actions', async (_req, res) => {
   try {
-    const { readBrowserActions } = await import('./browser-audit.js');
+    const { readBrowserActions } = await import('./src/browser/browser-audit.js');
     res.json(await readBrowserActions({ limit: 200 }));
   } catch {
     res.json([]);
@@ -2707,7 +2707,7 @@ app.post('/api/browser/confirm', async (req, res) => {
   if (process.env.PROTO_FAMILIAR_BROWSE_DISABLED === '1') return res.status(403).json({ ok: false, error: 'browsing disabled' });
   try {
     const { id, approve } = req.body || {};
-    const { resolveConfirm } = await import('./browser.js');
+    const { resolveConfirm } = await import('./src/browser/browser.js');
     res.json(await resolveConfirm(id, approve === true));
   } catch (err) {
     res.status(500).json({ ok: false, error: err?.message ?? String(err) });
@@ -2723,7 +2723,7 @@ app.post('/api/browser/cdp-arm', async (req, res) => {
   const s = (() => { try { return readSettingsSync(); } catch { return {}; } })();
   if (s?.cdpModeEnabled !== true) return res.status(403).json({ ok: false, error: 'Turn on “Drive my own Chrome (CDP)” in Settings first.' });
   try {
-    const { armCdp } = await import('./browser-cdp-arm.js');
+    const { armCdp } = await import('./src/browser/browser-cdp-arm.js');
     const r = armCdp({ domain: req.body?.domain, minutes: req.body?.minutes });
     res.status(r.ok ? 200 : 400).json(r);
   } catch (err) {
@@ -2732,7 +2732,7 @@ app.post('/api/browser/cdp-arm', async (req, res) => {
 });
 app.post('/api/browser/cdp-disarm', async (_req, res) => {
   try {
-    const { disarmCdp } = await import('./browser-cdp-arm.js');
+    const { disarmCdp } = await import('./src/browser/browser-cdp-arm.js');
     res.json(disarmCdp('ward'));
   } catch (err) {
     res.status(500).json({ ok: false, error: err?.message ?? String(err) });
@@ -2746,7 +2746,7 @@ app.post('/api/browser/cdp-disarm', async (_req, res) => {
 app.post('/api/browser/cdp-setup', async (_req, res) => {
   if (process.env.PROTO_FAMILIAR_BROWSER_CDP_DISABLED === '1') return res.status(403).json({ ok: false, error: 'CDP mode is turned off by env.' });
   try {
-    const { launcherPlan, launcherInstructions, findWardChrome, cdpChromeProfileDir, desktopDir } = await import('./cdp-launcher.js');
+    const { launcherPlan, launcherInstructions, findWardChrome, cdpChromeProfileDir, desktopDir } = await import('./src/browser/cdp-launcher.js');
     const chromePath = findWardChrome();
     if (!chromePath) return res.json({ ok: false, error: "I couldn't find Chrome (or Edge/Chromium) on this computer. Install Google Chrome, then try this again." });
     const profileDir = cdpChromeProfileDir();
@@ -2766,7 +2766,7 @@ app.post('/api/browser/cdp-setup', async (_req, res) => {
 app.post('/api/browser/handback', async (_req, res) => {
   if (process.env.PROTO_FAMILIAR_BROWSE_DISABLED === '1') return res.status(403).json({ ok: false, error: 'browsing disabled' });
   try {
-    const { browseHandback } = await import('./browser.js');
+    const { browseHandback } = await import('./src/browser/browser.js');
     const s = (() => { try { return readSettingsSync(); } catch { return {}; } })();
     res.json(await browseHandback({ settings: s }));
   } catch (err) {

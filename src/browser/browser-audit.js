@@ -8,8 +8,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, promises as fsp } from 'fs';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const LOG_DIR  = path.join(__dirname, 'logs');
+const LOG_DIR  = path.join(REPO_ROOT, 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'browser-actions.jsonl');
 
 /** Record one browse action. Best-effort; never throws. */
