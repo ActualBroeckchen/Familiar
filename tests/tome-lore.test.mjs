@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   matchKeyword, testSecondaryLogic, buildScanText, applyGroupLogic,
   activateLore, foldLoreForPrompt, hasLore, normEntryPos,
-} from '../tome-lore.js';
+} from '../src/tomes/tome-lore.js';
 
 const entry = (o) => ({ uid: o.uid ?? Math.random().toString(36).slice(2), enabled: true, keys: [], ...o });
 const tome  = (...entries) => ({ enabled: true, entries });

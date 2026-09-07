@@ -15,7 +15,7 @@
  * `PROTO_FAMILIAR_*_DISABLED` env off-switches, which the browser can't see) —
  * so web and server agree, and the manual reflects the toggle the ward can flip.
  */
-import { substituteMacros } from './macros.js';
+import { substituteMacros } from '../../macros.js';
 
 const onoff = (v) => (v ? 'on' : 'off');
 

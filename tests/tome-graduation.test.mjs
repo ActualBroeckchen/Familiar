@@ -7,7 +7,7 @@ import {
   routeDecision,
   tidyEntry,
   runOneGraduationTick,
-} from '../tome-graduation.js';
+} from '../src/tomes/tome-graduation.js';
 
 const entry = (over = {}) => ({ uid: over.uid ?? 'u1', content: 'a fact', enabled: true, ...over });
 

@@ -6,9 +6,9 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-import { resolveTomeMacros, TOME_MACROS, TOME_MACRO_NAMES } from '../tome-macros.js';
-import { buildManualTome, ensureManualTome, MANUAL_TOME_ID, MANUAL_TOME_NAME, MANUAL_TOME_VERSION } from '../manual-tome.js';
-import { foldLoreForPrompt } from '../tome-lore.js';
+import { resolveTomeMacros, TOME_MACROS, TOME_MACRO_NAMES } from '../src/tomes/tome-macros.js';
+import { buildManualTome, ensureManualTome, MANUAL_TOME_ID, MANUAL_TOME_NAME, MANUAL_TOME_VERSION } from '../src/tomes/manual-tome.js';
+import { foldLoreForPrompt } from '../src/tomes/tome-lore.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
