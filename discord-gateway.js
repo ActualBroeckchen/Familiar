@@ -52,9 +52,9 @@ import {
 } from './villager-consent.js';
 import { findVillagerByAlias } from './village.js';
 import { mergeSettings } from './settings-merge.js';
-import { readAllTomes } from './tome-store.js';
-import { activateLore, foldLoreForPrompt } from './tome-lore.js';
-import { resolveTomeMacros } from './tome-macros.js';
+import { readAllTomes } from './src/tomes/tome-store.js';
+import { activateLore, foldLoreForPrompt } from './src/tomes/tome-lore.js';
+import { resolveTomeMacros } from './src/tomes/tome-macros.js';
 import {
   isQueueCommand, QUEUE_CID,
   buildQueueHomeView, buildQueueItemView, buildQueueDoneView, buildQueueText,

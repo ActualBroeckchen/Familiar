@@ -14,21 +14,22 @@
 
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { isCallActiveFromFile } from './src/voice/call-engine.js';
+import { isCallActiveFromFile } from '../voice/call-engine.js';
 import { promises as fsp } from 'fs';
 
 import {
   modifyTomeFile, appendIdentity, createMemoryFull, searchMemory, enrich,
   searchGraphNodes, createGraphNode, createGraphEdge, getGraphSubgraph,
-} from './thalamus.js';
-import { readSettingsSync, primaryConnectionFrom, connectionForFeature } from './cerebellum.js';
-import { PROVIDER_URLS } from './providers.js';
-import { callProviderChat } from './llm-call.js';
-import { substituteMacros } from './macros.js';
+} from '../../thalamus.js';
+import { readSettingsSync, primaryConnectionFrom, connectionForFeature } from '../../cerebellum.js';
+import { PROVIDER_URLS } from '../../providers.js';
+import { callProviderChat } from '../../llm-call.js';
+import { substituteMacros } from '../../macros.js';
 import { runOneGraduationTick, EXCLUDED_TOME_NAMES } from './tome-graduation.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TOMES_DIR = path.join(__dirname, 'tomes');
+const TOMES_DIR = path.join(REPO_ROOT, 'tomes');
 
 const DEFAULT_TICK_MS = 30 * 60_000;   // 30 min — draining a backlog wants no urgency
 

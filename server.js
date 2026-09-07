@@ -100,7 +100,7 @@ import { listOutbox, acknowledgeOutbox, clearAcknowledged, acknowledgePendingByK
 import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
 import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';
 import { startMemorySweepLoop, stopMemorySweepLoop } from './memory-sweep-loop.js';
-import { startTomeGraduationLoop, stopTomeGraduationLoop } from './tome-graduation-loop.js';
+import { startTomeGraduationLoop, stopTomeGraduationLoop } from './src/tomes/tome-graduation-loop.js';
 import { startContentRegateLoop, stopContentRegateLoop } from './content-regate-loop.js';
 import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './needs-tracking-loop.js';
 import { startMediaRetentionLoop, stopMediaRetentionLoop } from './media-retention-loop.js';
@@ -267,7 +267,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // share them when it builds the env block for Phylactery. See that file
 // for the rationale and how to add a new provider.
 import { PROVIDER_URLS, resolveReasoningEffort } from './providers.js';
-import { ensureManualTome } from './manual-tome.js';
+import { ensureManualTome } from './src/tomes/manual-tome.js';
 import { listProviderModels } from './provider-models.js';
 import { startBenchmark, statusOf, cancelBenchmark, resetBenchmark, reportPathsRelative } from './src/voice/voice-bench-run.js';
 import { composePlan, evaluatePlan, availableAsrLangs, CAPABILITY_TIERS, VOICE_ENGINES, formatBytes } from './src/voice/voice-models.js';
