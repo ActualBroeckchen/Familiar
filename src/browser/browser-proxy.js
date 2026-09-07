@@ -26,7 +26,7 @@ import http from 'node:http';
 import net from 'node:net';
 import dns from 'node:dns/promises';
 
-import { isBlockedIp } from './src/search/websearch.js';
+import { isBlockedIp } from '../search/websearch.js';
 
 const defaultLookup = (host) => dns.lookup(host, { all: true });
 

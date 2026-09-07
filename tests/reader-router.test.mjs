@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readerSiteFor, runReaderChain, READER_SITES } from '../reader-router.js';
+import { readerSiteFor, runReaderChain, READER_SITES } from '../src/browser/reader-router.js';
 
 test('readerSiteFor: Reddit hosts resolve; others are null', () => {
   assert.equal(readerSiteFor('https://www.reddit.com/r/x')?.id, 'reddit');

@@ -4,7 +4,7 @@ import {
   normalizeArmDomain, isPrivateOrLoopbackHost, armCdp, disarmCdp, cdpArmActive,
   cdpArmState, armAllowsHost, consumeCdpExpiryNote, _resetCdpArm,
   DEFAULT_ARM_MINUTES, ARM_CEILING_MINUTES, CDP_ENDPOINT,
-} from '../browser-cdp-arm.js';
+} from '../src/browser/browser-cdp-arm.js';
 
 function fresh() { _resetCdpArm(); }
 

@@ -18,7 +18,7 @@
  * until my human (or the Familiar on their behalf) actually registers a watch.
  */
 
-import { isCallActiveFromFile } from './src/voice/call-engine.js';
+import { isCallActiveFromFile } from '../voice/call-engine.js';
 import { runOnePageWatchTick } from './page-watch.js';
 
 const BASE_TICK_MS = 5 * 60_000;   // wake every 5 min; per-watch intervalMs gates actual reads

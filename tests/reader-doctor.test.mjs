@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readerConfigStatus, buildReaderReport, formatReaderReport } from '../reader-doctor.js';
+import { readerConfigStatus, buildReaderReport, formatReaderReport } from '../src/browser/reader-doctor.js';
 
 test('readerConfigStatus: Reddit configured iff full credentials present', () => {
   assert.equal(readerConfigStatus({}).reddit.configured, false);

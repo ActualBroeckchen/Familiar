@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { findChromium, status, extractPageData, settlePage } from '../browser-driver.js';
-import { buildRefTable, isProtectedField } from '../browser-lens.js';
+import { findChromium, status, extractPageData, settlePage } from '../src/browser/browser-driver.js';
+import { buildRefTable, isProtectedField } from '../src/browser/browser-lens.js';
 
 test('status() before any launch reports not running, never throws', () => {
   const s = status();
@@ -151,7 +151,7 @@ live('extractPageData pierces OPEN shadow DOM (nodes, css that resolves + acts, 
 });
 
 // ── Auto-fetch state machine (injected spawn — no real download) ───────────
-import { startChromiumFetch, chromiumInstallState, systemBrowserCandidates } from '../browser-driver.js';
+import { startChromiumFetch, chromiumInstallState, systemBrowserCandidates } from '../src/browser/browser-driver.js';
 import { EventEmitter } from 'node:events';
 
 test('systemBrowserCandidates finds Windows Chrome AND Edge (why the download was forced on Windows)', () => {

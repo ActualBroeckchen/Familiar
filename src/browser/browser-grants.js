@@ -25,9 +25,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const GRANTS_FILE = path.join(__dirname, 'browser', 'autonomy-grants.json');
-const VAULT_FILE  = path.join(__dirname, 'browser', 'credentials-vault.json');
+const GRANTS_FILE = path.join(REPO_ROOT, 'browser', 'autonomy-grants.json');
+const VAULT_FILE  = path.join(REPO_ROOT, 'browser', 'credentials-vault.json');
 
 // The consent sentence. Must match the file byte-for-byte (after trim) or every
 // grant is false. Documented ONLY in the spec/security notes — a ward finds it

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { launcherPlan, launcherInstructions, findWardChrome, CDP_PORT } from '../cdp-launcher.js';
+import { launcherPlan, launcherInstructions, findWardChrome, CDP_PORT } from '../src/browser/cdp-launcher.js';
 
 const base = { chromePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', profileDir: '/home/ward/.proto-familiar/cdp-chrome' };
 

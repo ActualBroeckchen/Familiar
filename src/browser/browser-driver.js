@@ -29,9 +29,10 @@ import { buildRefTable, evaluateFill, resolveTarget } from './browser-lens.js';
 import { readGrants } from './browser-grants.js';
 import { cdpArmActive, cdpArmState, consumeCdpExpiryNote, armAllowsHost, CDP_ENDPOINT } from './browser-cdp-arm.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PROFILE_DIR = path.join(__dirname, 'browser', 'profile');
-const PW_BROWSERS_DIR = path.join(__dirname, 'browser', 'pw-browsers');
+const PROFILE_DIR = path.join(REPO_ROOT, 'browser', 'profile');
+const PW_BROWSERS_DIR = path.join(REPO_ROOT, 'browser', 'pw-browsers');
 
 export const BROWSE_MAX_TABS_DEFAULT = 3;
 const NAV_TIMEOUT_MS = 15000;
@@ -46,7 +47,7 @@ export function findChromium() {
   if (envExe && fs.existsSync(envExe)) return envExe;
   const caches = [
     process.env.PLAYWRIGHT_BROWSERS_PATH,
-    path.join(__dirname, 'browser', 'pw-browsers'),
+    path.join(REPO_ROOT, 'browser', 'pw-browsers'),
   ].filter(Boolean);
   for (const base of caches) {
     let entries = [];
@@ -105,7 +106,7 @@ export function systemBrowserCandidates() {
 // browse call kicks it off and returns a calm "setting up" line; status()
 // surfaces progress; a later call finds the browser ready. The `browseEnabled`
 // toggle already gated us here, so the fetch is consented.
-const INSTALL_LOG = path.join(__dirname, 'browser', 'chromium-install.log');
+const INSTALL_LOG = path.join(REPO_ROOT, 'browser', 'chromium-install.log');
 // A real chromium fetch (chromium + its helpers, a few hundred MB) is a few
 // minutes; past this it has STALLED (dead mirror, hung socket) and must be
 // killed and reported, not left saying "setting up" forever. Env-overridable for

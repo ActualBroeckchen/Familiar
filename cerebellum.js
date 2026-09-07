@@ -3763,7 +3763,7 @@ export const TOOL_EXECUTORS = {
   reader_doctor: async (_args = {}, ctx = {}) => {
     const s = readSettingsSync();
     try {
-      const rd = await import('./reader-doctor.js');
+      const rd = await import('./src/browser/reader-doctor.js');
       const wardTurn = !ctx?.audienceTag || ctx.audienceTag === 'ward-private';
       const report = await rd.runReaderDoctor({ settings: s, wardTurn });
       return rd.formatReaderReport(report);
@@ -4297,7 +4297,7 @@ export const TOOL_EXECUTORS = {
     // outcome is surfaced honestly; only an unrecognised page falls through.
     if (process.env.PROTO_FAMILIAR_REDDIT_DISABLED !== '1' && s?.redditReaderEnabled !== false) {
       try {
-        const rr = await import('./reddit-reader.js');
+        const rr = await import('./src/browser/reddit-reader.js');
         if (rr.isRedditUrl(url)) {
           // On the ward's own turn, offer the authenticated-browser-context fetch
           // (their real browser fingerprint + logged-in Reddit session) — the door
@@ -4307,9 +4307,9 @@ export const TOOL_EXECUTORS = {
           const wardTurn = !ctx?.audienceTag || ctx.audienceTag === 'ward-private';
           if (wardTurn) {
             try {
-              const b = await import('./browser.js');
+              const b = await import('./src/browser/browser.js');
               if (b.browseEnabled(s)) {
-                const drv = await import('./browser-driver.js');
+                const drv = await import('./src/browser/browser-driver.js');
                 deps.contextFetch = (u, o) => drv.contextRequest(u, o);
               }
             } catch { /* no browser → public/OAuth only */ }
@@ -4324,7 +4324,7 @@ export const TOOL_EXECUTORS = {
     // (browser off/unavailable, a bad read) falls through to the static floor —
     // reading never depends on the browser being up.
     try {
-      const b = await import('./browser.js');
+      const b = await import('./src/browser/browser.js');
       if (b.shouldBrowserRead(s)) {
         const res = await b.browseRead({ url }, { settings: s, sessionId: ctx?.sessionInfo?.sessionId ?? null });
         if (res?.ok) return res.text;
@@ -4388,27 +4388,27 @@ export const TOOL_EXECUTORS = {
   // server boots fine without playwright-core installed.
   browse_open: async ({ url, reader } = {}, ctx = {}) => {
     if (discordReadAudiences(ctx) !== undefined) return 'I only browse the web on my human\'s own turns.';
-    const b = await import('./browser.js');
+    const b = await import('./src/browser/browser.js');
     return b.browseOpen({ url, reader: reader === true }, { settings: readSettingsSync(), sessionId: ctx?.sessionInfo?.sessionId ?? null });
   },
   browse_see: async ({ level, scope } = {}, ctx = {}) => {
     if (discordReadAudiences(ctx) !== undefined) return 'I only browse the web on my human\'s own turns.';
-    const b = await import('./browser.js');
+    const b = await import('./src/browser/browser.js');
     return b.browseSee({ level, scope }, { settings: readSettingsSync(), sessionId: ctx?.sessionInfo?.sessionId ?? null });
   },
   browse_act: async ({ ref, target, role, action, value, on_dialog, vault } = {}, ctx = {}) => {
     if (discordReadAudiences(ctx) !== undefined) return 'I only browse the web on my human\'s own turns.';
-    const b = await import('./browser.js');
+    const b = await import('./src/browser/browser.js');
     return b.browseAct({ ref, target, role, action, value, on_dialog, vault }, { settings: readSettingsSync(), sessionId: ctx?.sessionInfo?.sessionId ?? null });
   },
   browse_close: async (_args = {}, ctx = {}) => {
     if (discordReadAudiences(ctx) !== undefined) return 'I only browse the web on my human\'s own turns.';
-    const b = await import('./browser.js');
+    const b = await import('./src/browser/browser.js');
     return b.browseClose({}, { sessionId: ctx?.sessionInfo?.sessionId ?? null });
   },
   browse_screenshot: async ({ scope } = {}, ctx = {}) => {
     if (discordReadAudiences(ctx) !== undefined) return 'I only browse the web on my human\'s own turns.';
-    const b = await import('./browser.js');
+    const b = await import('./src/browser/browser.js');
     const res = await b.browseScreenshot({ scope }, { settings: readSettingsSync(), sessionId: ctx?.sessionInfo?.sessionId ?? null });
     // Ride the shot into the SAME turn on a vision-capable connection (the
     // view_image mechanism). browse_screenshot is only offered on capable turns
@@ -4421,23 +4421,23 @@ export const TOOL_EXECUTORS = {
   },
   browse_tabs: async ({ op, id } = {}, ctx = {}) => {
     if (discordReadAudiences(ctx) !== undefined) return 'I only browse the web on my human\'s own turns.';
-    const b = await import('./browser.js');
+    const b = await import('./src/browser/browser.js');
     return b.browseTabs({ op, id }, { settings: readSettingsSync(), sessionId: ctx?.sessionInfo?.sessionId ?? null });
   },
   browse_history: async ({ query } = {}, ctx = {}) => {
     if (discordReadAudiences(ctx) !== undefined) return 'I only browse the web on my human\'s own turns.';
-    const b = await import('./browser.js');
+    const b = await import('./src/browser/browser.js');
     return b.browseHistory({ query }, { settings: readSettingsSync() });
   },
   browse_handoff: async ({ reason } = {}, ctx = {}) => {
     if (discordReadAudiences(ctx) !== undefined) return 'I only browse the web on my human\'s own turns.';
-    const b = await import('./browser.js');
+    const b = await import('./src/browser/browser.js');
     return b.browseHandoff({ reason }, { settings: readSettingsSync(), sessionId: ctx?.sessionInfo?.sessionId ?? null });
   },
   watch_page: async ({ url, label, note } = {}, ctx = {}) => {
     if (discordReadAudiences(ctx) !== undefined) return 'I only watch pages on my human\'s own turns.';
     if (readSettingsSync()?.pageWatchEnabled === false) return "Page watches are switched off in my settings, so I can't start one right now.";
-    const pw = await import('./page-watch.js');
+    const pw = await import('./src/browser/page-watch.js');
     const r = pw.addWatch({ url, label, note, createdBy: 'familiar' });
     if (!r.ok) return `I couldn't watch that: ${r.error}.`;
     const w = r.watch;
@@ -4445,7 +4445,7 @@ export const TOOL_EXECUTORS = {
   },
   list_page_watches: async (_args = {}, ctx = {}) => {
     if (discordReadAudiences(ctx) !== undefined) return 'I only manage my page watches on my human\'s own turns.';
-    const pw = await import('./page-watch.js');
+    const pw = await import('./src/browser/page-watch.js');
     const list = pw.listWatches({});
     if (!list.length) return "I'm not watching any pages right now.";
     return 'Pages I\'m watching:\n' + list.map(w => {
@@ -4456,7 +4456,7 @@ export const TOOL_EXECUTORS = {
   },
   unwatch_page: async ({ id } = {}, ctx = {}) => {
     if (discordReadAudiences(ctx) !== undefined) return 'I only manage my page watches on my human\'s own turns.';
-    const pw = await import('./page-watch.js');
+    const pw = await import('./src/browser/page-watch.js');
     const r = pw.removeWatch(String(id ?? '').trim());
     return r.ok ? "Done — I've stopped watching that page." : `I couldn't stop that watch: ${r.error}.`;
   },

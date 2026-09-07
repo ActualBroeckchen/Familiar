@@ -35,7 +35,7 @@
  * on navigation (§3.2).
  */
 
-import { slugifyLabel } from './slug-ids.js';
+import { slugifyLabel } from '../../slug-ids.js';
 
 // Hard token caps per level (§3.1). Caps are enforced by code — truncation is
 // explicit, never a silent drop. Tokens are estimated cheaply (≈4 chars/token);
