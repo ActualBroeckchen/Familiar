@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { initCerebellumTools, executeToolCall } from '../cerebellum.js';
-import { normalizeRegistry, upsertVillager } from '../village.js';
+import { normalizeRegistry, upsertVillager } from '../src/village/village.js';
 
 // ── village.js: privateNotes field round-trips ──────────────────────
 

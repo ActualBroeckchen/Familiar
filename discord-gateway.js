@@ -37,8 +37,8 @@ import { sessionSlugId } from './slug-ids.js';
 
 import { enrich, withLock, getScheduleWindow, getMemoriesBySubject, confirmConsentMemories, dropPendingMemories } from './thalamus.js';
 import { buildAvailabilityBlock } from './src/schedule/schedule-availability.js';
-import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC, locationCallMode, DEFAULT_CALL_MODE, upsertLocation } from './village.js';
-import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom } from './audience.js';
+import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC, locationCallMode, DEFAULT_CALL_MODE, upsertLocation } from './src/village/village.js';
+import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom } from './src/village/audience.js';
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from './cerebellum.js';
 import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, VIDEO_MIME_EXT, VIDEO_MAX_BYTES, MAX_IMAGES_PER_MESSAGE } from './src/vision/media.js';
 import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from './src/vision/vision.js';
@@ -49,8 +49,8 @@ import { enqueueSessionByDay, readConsentPending, pruneConsentPending } from './
 import {
   isConsentCommand, parseConsentCommand, buildConsentMenu, applyConsentSet, consentHelpText,
   CONSENT_CID, buildConsentHomeView, buildCategoryView, buildMemoriesView, buildPendingView, buildDoneView,
-} from './villager-consent.js';
-import { findVillagerByAlias } from './village.js';
+} from './src/village/villager-consent.js';
+import { findVillagerByAlias } from './src/village/village.js';
 import { mergeSettings } from './settings-merge.js';
 import { readAllTomes } from './src/tomes/tome-store.js';
 import { activateLore, foldLoreForPrompt } from './src/tomes/tome-lore.js';
@@ -69,7 +69,7 @@ import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
 import { recordUserActivity } from './src/sessions/last-activity.js';
 import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';
-import { recordKnock, recordLocationKnock, recordServer } from './knocks.js';
+import { recordKnock, recordLocationKnock, recordServer } from './src/village/knocks.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { enqueueOutbox, acknowledgePendingByKind } from './outbox.js';
 import { writeSessionLog as writeSessionLogShared } from './src/sessions/session-log.js';

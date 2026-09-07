@@ -13,7 +13,7 @@ import {
   fetchEligibility,
   audienceTagFor,
   AUDIENCE_TAG_WARD_PRIVATE,
-} from '../audience.js';
+} from '../src/village/audience.js';
 
 // ── resolveAudience helpers ───────────────────────────────────────
 

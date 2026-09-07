@@ -66,7 +66,7 @@ import {
   probeOrgans,
 } from './thalamus.js';
 import { formatOrganStatus } from './organs.js';
-import { audienceTagFor, deriveNodeAudience } from './audience.js';
+import { audienceTagFor, deriveNodeAudience } from './src/village/audience.js';
 import { getAssetMeta, addAssetLink, removeAssetLink, drainPendingImages } from './src/vision/media.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './src/memory/graph-vocab.js';
 import { searchWeb, readWebpage, lookUp } from './src/search/websearch.js';

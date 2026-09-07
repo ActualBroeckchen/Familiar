@@ -1636,7 +1636,7 @@ import {
   getRecentOfferInfo,
   tagOutcomes,
 } from './src/pondering/surface-events.js';
-import { WARD_PRIVATE, isGranted, stripGatedSections, fetchEligibility } from './audience.js';
+import { WARD_PRIVATE, isGranted, stripGatedSections, fetchEligibility } from './src/village/audience.js';
 import { syncSpineState, stripSensitiveScheduleNodes } from './spine-states.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */

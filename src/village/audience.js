@@ -9,7 +9,7 @@
 // Sign-off: 2026-06-11 (human-approved V3 gate semantics)
 
 import { CATEGORY_STRANGERS } from './village.js';
-import { unionTopicGrants, intersectTopicGrants, sanitizeTopicGrants } from './src/memory/content-tags.js';
+import { unionTopicGrants, intersectTopicGrants, sanitizeTopicGrants } from '../memory/content-tags.js';
 
 // ── Sentinel ──────────────────────────────────────────────────────
 // WARD_PRIVATE is returned when no audience is set — today's behavior,
