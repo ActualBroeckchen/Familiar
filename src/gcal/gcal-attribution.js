@@ -18,8 +18,9 @@ import path from 'path';
 import { promises as fsp } from 'fs';
 import { fileURLToPath } from 'url';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
+const DEFAULT_TOMES_DIR = path.join(REPO_ROOT, 'tomes');
 const CAL_CACHE = '.gcal-calendars.json';
 
 export const ATTRIBUTION_KINDS = ['ward', 'villager', 'phylactery', 'unassigned', 'ignore'];

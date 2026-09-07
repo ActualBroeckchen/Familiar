@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   resolveAttribution, isIgnored, wardCalendarId, normalizeAttributionEntry,
   ATTRIBUTION_KINDS,
-} from '../gcal-attribution.js';
+} from '../src/gcal/gcal-attribution.js';
 
 test('ATTRIBUTION_KINDS includes expected values', () => {
   assert.ok(ATTRIBUTION_KINDS.includes('ward'));
