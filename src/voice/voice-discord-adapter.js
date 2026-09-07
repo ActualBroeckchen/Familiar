@@ -238,7 +238,7 @@ export function createDiscordCallAdapter({ hooks, joinSpec, deps, slugId = (s) =
     try {
       const decoder = deps.makeOpusDecoder();
       const sub = connection.receiver.subscribe(userId, { end: { behavior: deps.EndBehaviorType.Manual } });
-      entry = { decoder, sub, active: false, pre: [] };
+      entry = { decoder, sub, active: false, pre: [], rawPackets: 0, sawPacket: false, silentWarned: false };
       decoders.set(speakerRef, entry);
       sub.on('data', (opusPacket) => {
         // The WHOLE handler is guarded: decodeOpus heals the opusscript heap-move
@@ -250,6 +250,13 @@ export function createDiscordCallAdapter({ hooks, joinSpec, deps, slugId = (s) =
         // skipped, the call continues for everyone else (graceful degradation — one
         // speaker's packet never crashes the call).
         try {
+          // A raw packet reaching here means @discordjs/voice DECRYPTED and
+          // delivered it — so a speaker whose subscription never fires this is a
+          // delivery/decrypt problem UPSTREAM of the adapter (receive perms, or
+          // Discord's DAVE end-to-end layer refusing passthrough), not a decode
+          // bug here. Count them so "released after 0 frames" can say which.
+          entry.rawPackets++;
+          if (!entry.sawPacket) { entry.sawPacket = true; log(`receive is live — first inbound audio packet from ${speakerRef}`); }
           if (!opusPacket?.length || opusPacket.length > MAX_OPUS_PACKET) return;
           const pcm48 = decodeOpus(entry, speakerRef, opusPacket);   // 48 kHz stereo s16le, or null on a bad packet
           if (!pcm48?.length) return;
@@ -291,6 +298,10 @@ export function createDiscordCallAdapter({ hooks, joinSpec, deps, slugId = (s) =
     if (!entry || !entry.active) return;
     entry.active = false;
     entry.pre = [];
+    if (entry.rawPackets === 0 && !entry.silentWarned) {
+      entry.silentWarned = true;
+      log(`${speakerRef}: 0 inbound audio packets delivered — Discord sent no decrypted audio for this speaker. This is upstream of me (voice-receive or the DAVE end-to-end handshake), not opus decoding. If EVERY speaker reads 0, the receive/DAVE path is the thing to look at, not the adapter wiring.`);
+    }
     // Speaking-end is the utterance boundary (like push-to-talk's release):
     // finalise now so the engine transcribes it. The subscription STAYS OPEN so
     // the next utterance loses no onset.
