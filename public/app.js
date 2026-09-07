@@ -11374,15 +11374,6 @@ function teIsoToLocalHhMm(iso) {
   return `${hh}:${mm}`;
 }
 
-// Stored timestamp → "YYYY-MM-DDTHH:MM" for pre-filling a datetime-local
-// input from an existing schedule node.
-function teIsoToDatetimeLocal(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const pad = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 
 // Stored timestamp → friendly local datetime string for list rows ("today 22:00",
 // "tomorrow 09:30", "Mon 10:00", "May 30 14:00"). Keeps the timezone

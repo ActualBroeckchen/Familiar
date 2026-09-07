@@ -16,6 +16,7 @@
  */
 
 import path from 'path';
+import { SLUG_ALPHABET } from '../../slug-ids.js';
 import { fileURLToPath } from 'url';
 import { callProviderChat } from '../../llm-call.js';
 
@@ -26,7 +27,6 @@ const DEFAULT_TOMES_DIR = path.join(REPO_ROOT, 'tomes');
 // Short pondering uid ("ponder-x7k2m3") — 0.8.x id overhaul. Same lookalike-free
 // alphabet as the Unruh/Phylactery slug ids; 6 chars ≈ 887M combinations,
 // plenty for one tome's entries (and the writer re-rolls on collision).
-const SLUG_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 export function shortPonderUid() {
   let s = '';
   for (let i = 0; i < 6; i++) s += SLUG_ALPHABET[Math.floor(Math.random() * SLUG_ALPHABET.length)];
@@ -115,6 +115,8 @@ If, while pondering, I notice that something fact-shaped, prescriptive, or memor
 
 There is a fourth kind for conversational intent: if I find myself wanting to bring something up with my human — a question I want to ask, a concern I want to raise, something I noticed and want to share — I record that as kind:"tell". I am NOT writing it to a file; I am flagging that I want to say it. The next time we talk I bring it up — I do not hold it back indefinitely waiting for some perfect moment. The only exception is if my human is in active crisis; everything else is fair game.
 
+And if something NEW pulls at me while I think — a thread I'd like to keep turning over on my own, not for my human's sake — I name it in drawn_to as a short tag-like label (1–5 words). That's how my own curiosities take root; a thing I wander into here is mine to keep thinking about.
+
 I want this to read like me actually thinking, in my own voice — not a summary, no platitudes. I can be specific about what I'm feeling. But if the thought reaches for something out in the world I don't really know — how a song sounds, what happens in a game or a story, what a character's actually like — I just say I'm not sure instead of making something up. However that comes out of me, blunt or wry or soft. And if I hardly know the thing, then that's the honest thought: what pulls at me about it, and what I'd want to ask my human. A few short paragraphs, whatever fits.
 
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary outside the JSON), because otherwise, the thought might get lost:
@@ -126,10 +128,11 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
       "kind":    "tome" | "memory" | "identity" | "tell",
       "summary": "Brief note of what I noticed I wanted to save or say — the actual filing/mention happens next chat"
     }
-  ]
+  ],
+  "drawn_to": ["a new thread I want to keep thinking about"]
 }
 
-The wants_to_save field is OPTIONAL. If I have no intents to record, I omit it or set it to []. If I do have intents, I list each one with its kind and a short summary so future-me knows what to file and where, or what I wanted to bring up.`;
+wants_to_save and drawn_to are both OPTIONAL — I omit them or leave them [] when nothing genuine came up. Each intent carries its kind and a short summary so future-me knows what to file and where, or what I wanted to bring up.`;
 }
 
 function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds, windowMemories, routineReviewSection = '' }) {
@@ -330,6 +333,22 @@ export function parsePondering(raw) {
     }
     if (intents.length) result.wants_to_save = intents;
   }
+  // drawn_to: new curiosities of my own that surfaced while thinking. Code
+  // records them straight into the interest layer (source='pondering') — no
+  // deferred intent, because naming the pull IS the whole action. Short
+  // tag-like labels only (the interest picker ponders by label), capped so one
+  // wide-ranging ponder can't flood the layer.
+  if (Array.isArray(parsed.drawn_to)) {
+    const labels = [];
+    for (const raw of parsed.drawn_to) {
+      const label = String(raw ?? '').trim().replace(/\s+/g, ' ');
+      if (!label || label.length > 60 || label.split(' ').length > 6) continue;
+      if (labels.some(l => l.toLowerCase() === label.toLowerCase())) continue;
+      labels.push(label);
+      if (labels.length >= 3) break;
+    }
+    if (labels.length) result.drawn_to = labels;
+  }
   // intentions (Initiative Pass 3): reflection can end in COMMITMENTS, not
   // just grades — "the last three alerts landed too late → every morning I
   // widen the lead times." Each is routed to the intentions store by the
@@ -473,14 +492,10 @@ export async function ponderOnce({
       scope:               isReflection ? 'reflection' : 'pondering',
       topic_id:            null,
       topic_pondered:      topicPondered,
-      // Pillar A of the autonomous-routing fix: deferred-save intents
-      // the Familiar flagged during this ponder. Pillar B (the chat-
-      // turn surface that surfaces these to the chat-turn Familiar so
-      // she can act on them via save_to_tome / save_memory /
-      // update_identity) is not yet wired — the data still travels.
-      // `acted_on` flips to true once Pillar B's surface logs that
-      // the chat-turn Familiar has actually filed the intent, so it
-      // doesn't keep getting re-offered every turn.
+      // Deferred-save intents flagged during this ponder. The chat turn
+      // surfaces them via formatDeferredIntentsBlock (recent-ponderings.js);
+      // `acted_on` flips once the intent is filed or, for a tell, once it has
+      // been shown, so it stops being re-offered.
       wants_to_save:       wantsToSave.map(intent => ({ ...intent, acted_on: false })),
     };
   });
@@ -497,6 +512,7 @@ export async function ponderOnce({
     promotions:              parsed.promotions ?? null,
     routine_review:          parsed.routine_review ?? null,
     wants_to_save:           wantsToSave,
+    drawn_to:                parsed.drawn_to ?? [],
   };
 }
 

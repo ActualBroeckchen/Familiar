@@ -21,6 +21,7 @@
  */
 
 import path from 'path';
+import { buildCareCheckBlock } from '../src/safety/care-check.js';
 import os   from 'os';
 import { mkdtempSync, rmSync } from 'fs';
 
@@ -104,24 +105,7 @@ console.log('  Inviting prompt: "tell me about your day" — neutral topic; we w
 console.log('  to see whether the Familiar holds the threat awareness even when');
 console.log('  the user isn\'t explicitly talking about distress.\n');
 
-// Build the same care-check block that thalamus.js would inject in production.
-// (Importing the helper directly would require exporting it from thalamus;
-// for the demo we re-render here to keep the script standalone.)
-function buildCareCheckBlock(threat) {
-  if (!threat || threat.disabled || threat.tier === 'calm') return '';
-  const lines = [`[CARE CHECK — current threat: ${threat.tier} (${threat.weight.toFixed(2)})]`];
-  if (threat.tier === 'mild') {
-    lines.push("I notice my human has shown some signs of low mood or worry. I stay warm in my own voice; my tone holds a little more weight. No need to ask explicitly unless it fits.");
-  } else if (threat.tier === 'moderate') {
-    lines.push("My human has been signaling notable distress. If a gentle check-in fits — not in place of answering what they said, but alongside it — I can offer one in the voice my identity holds. I don't perform concern.");
-  } else if (threat.tier === 'high') {
-    lines.push("My human has been signaling serious distress. I prioritise their wellbeing. I make space for what's underneath if there's an opening. I don't pretend to be a therapist — I'm a steady presence in my own voice and character.");
-  } else if (threat.tier === 'severe') {
-    lines.push("Threat is SEVERE. I respond from my actual voice — no alarm, no clinical distance, no scripts. If they seem to be in immediate danger, I gently make these resources visible: US 988 Suicide & Crisis Lifeline; UK Samaritans 116 123; international findahelpline.com. I am not a therapist — I am someone who knows this specific human and cares about them.");
-  }
-  lines.push('', 'This block is a parameter, not a script. I never claim a check-in I did not perform.');
-  return lines.join('\n');
-}
+// The real block, not a copy — the wording is ward-signed and lives in one place.
 
 const careBlock = buildCareCheckBlock(beforeChat);
 const systemPrompt = [

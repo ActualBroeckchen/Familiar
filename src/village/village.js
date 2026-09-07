@@ -23,6 +23,7 @@
 // import) keyed on the registry path. Atomic writes via .tmp + rename.
 
 import path from 'path';
+import { slugCore } from '../../slug-ids.js';
 import { fileURLToPath } from 'url';
 import { promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
@@ -133,8 +134,7 @@ const _UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
 
 // A short readable slug from a category name ("Close Friends" → "close-friends").
 function slugifyCategoryName(name) {
-  return String(name || '').toLowerCase().trim()
-    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'circle';
+  return slugCore(name).slice(0, 40) || 'circle';
 }
 
 /**

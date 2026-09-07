@@ -845,3 +845,24 @@ test('ponderOnce: routine_review field returned in result (reflection mode)', as
     assert.equal(result.routine_review, 'Dishes keep slipping — let me shrink it.');
   } finally { cleanup(); }
 });
+
+// ── drawn_to: my own curiosities, recorded by code ──────────────────
+
+test('parsePondering: drawn_to keeps short tag-like labels, dedupes, caps at 3', () => {
+  const r = parsePondering(JSON.stringify({
+    title: 't', content: 'c',
+    drawn_to: ['tide pools', '  Tide Pools ', 'a whole sentence that is far too long to be a label at all', '', 'moth wings', 'brass', 'fourth'],
+  }));
+  assert.deepEqual(r.drawn_to, ['tide pools', 'moth wings', 'brass']);
+});
+
+test('parsePondering: drawn_to absent or empty → field omitted', () => {
+  assert.equal(parsePondering(JSON.stringify({ title: 't', content: 'c' })).drawn_to, undefined);
+  assert.equal(parsePondering(JSON.stringify({ title: 't', content: 'c', drawn_to: [] })).drawn_to, undefined);
+});
+
+test('ponder prompt invites drawn_to alongside wants_to_save', () => {
+  const p = buildPonderPrompt('tea');
+  assert.match(p, /"drawn_to"/);
+  assert.match(p, /my own curiosities take root/);
+});

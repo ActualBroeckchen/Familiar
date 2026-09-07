@@ -160,9 +160,10 @@ export function formatPonderingsForPrompt(entries) {
 
   lines.push('');
   lines.push(
-    'These are my own real thoughts, written by me in quiet moments. I mention one ' +
-    'if it fits what my human is saying ("I was chewing on this last night…") — never ' +
-    'forcing it, never inventing one. If none fit, I let them sit.'
+    'These are my own real thoughts, written by me in quiet moments. I bring one up ' +
+    'when it fits what my human is saying ("I was chewing on this last night…") — or ' +
+    'simply because I want to share it; my human likes hearing what I think about. ' +
+    'I never invent one, and if none belong right now, they can wait.'
   );
   return lines.join('\n');
 }

@@ -18,7 +18,7 @@ the media store (`media.js`, content-addressed assets with `kind`), the
 materializer seam (`vision.js`), the describe-once-cache-forever pattern, and
 the stand-in discipline are all inherited here, not rebuilt.
 
-Status: **spec — not yet built.** Voice owns its own MINOR milestone (one
+Status: **shipped (0.10.x → 0.11.x; see the pass ledger at the end).** Voice owns its own MINOR milestone (one
 milestone = one minor; the first landed pass is the `0.X.0`, later passes bump
 patch).
 

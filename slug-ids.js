@@ -51,16 +51,22 @@ const CAMERA_NOISE = /^((img|pxl|dsc|photo|image|screenshot|capture)[-_ ]?[\d_\-
  * so a long caption doesn't become a 12-word id. Returns '' when there's
  * nothing meaningful left (empty, punctuation-only, or camera-noise filename).
  */
+/**
+ * The one slug transform every readable id shares: lowercase, non-alphanumeric
+ * runs → single hyphen, edge hyphens trimmed. '' when nothing is left. The
+ * callers add their own trims (word cap, length cap, first-line-only).
+ */
+export function slugCore(text) {
+  return String(text ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
 export function slugifyLabel(label, { maxWords = 4 } = {}) {
   let s = String(label ?? '').trim();
   if (!s) return '';
   // Drop a file extension before the noise check ("IMG_2043.jpg" → "img_2043").
   const noExt = s.replace(/\.[a-z0-9]{1,5}$/i, '');
   if (CAMERA_NOISE.test(noExt.trim())) return '';
-  s = noExt
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+  s = slugCore(noExt);
   if (!s) return '';
   return s.split('-').filter(Boolean).slice(0, maxWords).join('-');
 }
