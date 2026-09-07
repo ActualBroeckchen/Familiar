@@ -8,7 +8,7 @@ import path from 'path';
 import {
   writeWeatherMirror, clearWeatherMirror, readWeatherMirrorSync, readWeatherNowLine,
   readWeatherVagueLine, weatherEnabled,
-} from '../weather-mirror.js';
+} from '../src/weather/weather-mirror.js';
 import { buildTimeAnchorBlock } from '../relative-time.js';
 
 let dir;

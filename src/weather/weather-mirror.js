@@ -20,7 +20,7 @@ import { promises as fsp, readFileSync, mkdirSync } from 'fs';
 import { buildNowWeatherLine, formatWeatherVague, WEATHER_STALE_MS } from './weather-format.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
+const DEFAULT_TOMES_DIR = path.join(__dirname, '..', '..', 'tomes');
 const FILENAME = '.weather-now.json';
 
 function file(tomesDir) { return path.join(tomesDir, FILENAME); }
