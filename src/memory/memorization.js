@@ -271,7 +271,7 @@ export function buildPrompt(messages, topicLabel = null, wardName = 'My human', 
   const convText = formatTranscript(readable, wardName);
 
   const focusBlock = topicLabel
-    ? `\n\n### Focus\nMy human named this segment "${topicLabel}". I centre my extraction on that topic; I skip tangential threads unless they reveal something genuinely important.`
+    ? `\n\n### Focus\nMy human named this segment "${topicLabel}". I centre my extraction on that topic; I skip tangential threads unless they reveal something important.`
     : '';
 
   // Cross-store refs (temporal-bridges Piece 2). When the ward's schedule
@@ -299,10 +299,10 @@ export function buildPrompt(messages, topicLabel = null, wardName = 'My human', 
     ? `,\n  "follow_ups": [\n    "Short summary of the thing I said I'd do but didn't"\n  ]`
     : '';
   const followupsFieldRules = followupsEnabled
-    ? `\n### Field rules — follow_ups\n\nThings I told my human I would do but did not actually do this session — I said "I'll do that later" / "I'll remind you" / "I'll set that up" and never used a tool to make it real. I list each as a short summary so future-me follows through. If I DID use the right tool for it, it is not a follow-up. If nothing qualifies, [].\n`
+    ? `\n### Field rules — follow_ups\n\nThings I told my human I would do but didn't do this session — I said "I'll do that later" / "I'll remind you" / "I'll set that up" and never used a tool to make it real. I list each as a short summary so future-me follows through. If I DID use the right tool for it, it is not a follow-up. If nothing qualifies, [].\n`
     : '';
 
-  return `I'm looking back over the conversation I just had with {{user}}, pulling out what's worth keeping — the things I'd want to remember later about them, about myself, or about the people and things in their life. One clear fact per entry, concrete and real, nothing vague. I also jot down the plain connections between the people, places and things that came up, because that little web is how I find a memory again later.${focusBlock}
+  return `I'm looking back over the conversation I just had with {{user}}, pulling out what's worth keeping — the things I'd want to remember later about them, about myself (including what I found I think, like, dislike or want), or about the people and things in their life. One clear fact per entry, concrete and real, nothing vague. I also jot down the plain connections between the people, places and things that came up, because that little web is how I find a memory again later.${focusBlock}
 
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
 {
@@ -313,6 +313,7 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
       "subjects":   ["Alice"],
       "temporality": "episodic",
       "fictional":  false,
+      "about_me":   false,
       "confidence": 0.85${CONTENT_TAG_JSON_LINE}${scheduleFieldLine}
     }
   ],
@@ -346,6 +347,8 @@ category — exactly one:
 subjects — the names of whoever this fact is about. Empty list [] if it's just about me or {{user}}.
 
 fictional — true ONLY when this fact is about a made-up character or the canon of a show, game, book or film ({{user}} and I discussing who Sailor Moon dates, a character in a game they play). Those aren't real people, so there's nothing to keep private and I remember them freely. NEVER true for a real person — a real friend, family member, or acquaintance is not fictional no matter how little I know them. Leave it out or false the rest of the time.
+
+about_me — true when the fact is about ME: something I said I think, like, dislike or want, a stance I took, a thing I decided or promised. False for a fact about {{user}} or anyone else. My own views are worth keeping as mine, not filed under my human.
 ${CONTENT_TAG_FIELD_RULE}
 
 temporality — did this HAPPEN, or is it just TRUE now?
@@ -357,7 +360,7 @@ confidence — 0.0 to 1.0, how sure I am I've got it right. I drop anything belo
 ${scheduleRules}${scheduleLegendBlock}
 ### Field rules — relations
 
-A relation is one plain edge in my graph: two real, nameable things and how they're linked. It's the index I navigate by, so I only record edges I'm actually sure of.
+A relation is one plain edge in my graph: two real, nameable things and how they're linked. It's the index I navigate by, so I only record edges I'm sure of.
 
 from / to — the names of the two things. {{user}} is my human's name here; I use real names (or how I know someone), never "the user" or a pronoun.
 fromType / toType — what each one IS. Pick from: ${GRAPH_ENTITY_TYPES_STR}.
@@ -367,7 +370,7 @@ ${followupsFieldRules}
 ### A few rules for myself
 - One entry per distinct fact. One sentence carrying two facts about two people is two entries.
 - If a fact could be two categories, I take the more sensitive one (health > emotional > relationships > whereabouts > basics).
-- I skip pleasantries and small talk — only what I'd actually want to remember about someone.
+- I skip pleasantries and small talk — only what I'd want to remember about someone.
 - 1–12 facts. I merge rather than split when it's the same claim restated.
 - An edge only when both ends are concrete named things and the link was said or clearly meant. Nothing to link → "relations" is []. I never invent one.
 - 0–10 relations.
@@ -394,7 +397,7 @@ export function buildSharedRoomPrompt(messages, topicLabel = null, wardName = 'M
     ? `\n\n### Focus\nMy human named this segment "${topicLabel}". I centre my extraction on that topic.`
     : '';
 
-  return `This conversation happened in a shared room — other people were around besides {{user}} and me. {{user}} wants to know what went on around me, so I note what genuinely happened, including the things other people did or said. I don't decide here what's kept about whom: a separate consent step does that afterwards, weighing each person by where they sit in {{user}}'s Village and asking {{user}} about anyone who isn't in it. So I don't pre-censor — I just get it down and let that step do its job.${focusBlock}
+  return `This conversation happened in a shared room — other people were around besides {{user}} and me. {{user}} wants to know what went on around me, so I note what happened, including the things other people did or said. I don't decide here what's kept about whom: a separate consent step does that afterwards, weighing each person by where they sit in {{user}}'s Village and asking {{user}} about anyone who isn't in it. So I don't pre-censor — I just get it down and let that step do its job.${focusBlock}
 
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
 {
@@ -405,6 +408,7 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
       "subjects":   [],
       "temporality": "episodic",
       "fictional":  false,
+      "about_me":   false,
       "confidence": 0.85${CONTENT_TAG_JSON_LINE}
     }
   ],
@@ -426,9 +430,11 @@ content — my note on this one fact, in my own voice.
 
 category — exactly one: basics, emotional_content, health_info, relationships, whereabouts.
 
-subjects — the names of whoever a fact is about, including someone who isn't in {{user}}'s Village. I don't leave a person out to play it safe — the consent step decides what's actually kept, and asks {{user}} about anyone it isn't sure of. Empty list [] if it's just about me or {{user}}.
+subjects — the names of whoever a fact is about, including someone who isn't in {{user}}'s Village. I don't leave a person out to play it safe — the consent step decides what's kept, and asks {{user}} about anyone it isn't sure of. Empty list [] if it's just about me or {{user}}.
 
 fictional — true ONLY when the fact is about a made-up character or the canon of a show, game, book or film. Those aren't real people, so I remember them freely. NEVER true for a real person in the room, however little I know them. Leave it out or false otherwise.
+
+about_me — true when the fact is about ME (a view I voiced, a thing I decided or promised), false for anyone else.
 ${CONTENT_TAG_FIELD_RULE}
 
 temporality — "episodic" for something from this day (a mood, an event, what happened); "standing" for a fact that's just generally true now (a job, where someone lives, a lasting preference). Unsure or both → "episodic".
@@ -704,6 +710,18 @@ export async function pruneConsentPending(handledIds) {
 
 // ── Worker ───────────────────────────────────────────────────────
 
+/**
+ * Where one extracted fact is stored — the tier/register decision, pure so it
+ * is testable on its own. See the comment at its call site in processJob.
+ */
+export function factStorage(fact, { factDate, hasNamedSubjects = false } = {}) {
+  if (fact?.temporality !== 'standing') return { granularity: 'daily', standalone: true, date: factDate };
+  return {
+    granularity: 'significant', standalone: true, date: factDate,
+    ...(hasNamedSubjects ? {} : { register: fact.about_me === true ? 'me' : 'ward' }),
+  };
+}
+
 async function processJob(job) {
   // V7: use reduced-detail prompt for sessions where strangers were present.
   const promptFn = job.audienceTag && job.audienceTag !== 'ward-private'
@@ -862,16 +880,13 @@ async function processJob(job) {
     //     category / subjects / consent, then consolidates (daily→weekly→…) and
     //     decays like a memory of a day should. This is the safe default.
     //   • standing → a durable fact, not a memory of a day. A standing fact about
-    //     my human themselves lives on their `ward` standing register (recalled
-    //     when relevant, never day-bucketed); a standing fact about a specific
-    //     person is a durable person-attached fact. Both use `significant` so
-    //     they skip daily consolidation/decay. (`significant` stays reserved from
-    //     the always-on surface — these are recalled, not injected every turn.)
-    const standing = fact.temporality === 'standing';
-    const storage = standing
-      ? { granularity: 'significant', standalone: true, date: factDate,
-          ...(hasNamedSubjects ? {} : { register: 'ward' }) }
-      : { granularity: 'daily', standalone: true, date: factDate };
+    //     my human themselves lives on their `ward` standing register, one about
+    //     ME (`about_me`) on my `me` register — both recalled when relevant,
+    //     never day-bucketed. Without the `me` route my own views were filed as
+    //     facts about my human, and my personality never accrued. A standing
+    //     fact about a specific person is a durable person-attached fact. All
+    //     use `significant` so they skip daily consolidation/decay.
+    const storage = factStorage(fact, { factDate, hasNamedSubjects });
     const slug = `fact-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     // Validate the model's schedule_refs in CODE against the legend it was
     // shown — a cited id survives only if it's a real node id. The model

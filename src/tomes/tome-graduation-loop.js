@@ -65,7 +65,7 @@ async function loadTomes() {
 // ── The judgment prompt (first-person; reuses the Phase 3 rubric) ──
 function buildGraduationPrompt({ identityContext, items }) {
   const rubric =
-`I'm tidying knowledge that's been sitting in my tomes, moving anything durable into its right home in my canonical self. For each entry I decide where it truly belongs:
+`I'm tidying knowledge that's been sitting in my tomes, moving anything durable into its right home in my canonical self. For each entry I decide where it belongs:
 - A standing fact about who I am, as I grow and change → my self identity (home "self").
 - A standing fact about who {{user}} is → their identity (home "ward"). About our bond → our relationship (home "relationship").
 - A person, place, or thing and HOW IT CONNECTS to others — a relationship between entities → my knowledge graph (home "graph"). I give the relationship(s) as subject → edge → object, using the entities' canonical labels as I already know them.

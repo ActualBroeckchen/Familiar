@@ -51,12 +51,12 @@ import {
 import { scoreMessage } from './src/safety/crisis-signals.js';
 import { foldReasoningIntoContent, callProviderChat } from './llm-call.js';
 import { fetchReadable } from './src/search/websearch.js';
-import { startPageWatchLoop, stopPageWatchLoop } from './src/browser/page-watch-loop.js';
+import { startPageWatchLoop, stopPageWatchLoop, isRunning as pageWatchRunning } from './src/browser/page-watch-loop.js';
 import { buildPageWatchPrompt, parsePageWatchDecision } from './src/browser/page-watch.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './src/safety/threat-tracker.js';
 import { ponderOnce } from './src/pondering/pondering.js';
-import { startPonderingLoop, stopPonderingLoop } from './src/pondering/pondering-loop.js';
-import { startNoticingLoop, stopNoticingLoop, resetNoticingCooldown } from './src/safety/noticing-loop.js';
+import { startPonderingLoop, stopPonderingLoop, isRunning as ponderingRunning } from './src/pondering/pondering-loop.js';
+import { startNoticingLoop, stopNoticingLoop, resetNoticingCooldown, isRunning as noticingRunning } from './src/safety/noticing-loop.js';
 import { buildNoticingPrompt, AGING_INTENT_MS, AGING_TASK_MS, OVERDUE_EVENT_GRACE_MS } from './src/safety/noticing.js';
 import { getContactBaseline, weekdayClass } from './src/safety/contact-baselines.js';
 import { getWaitStreak, recordWait, recordProactive } from './src/safety/wait-streak.js';
@@ -81,7 +81,7 @@ import {
   selectDueWeatherAlerts, formatWeatherAlert,
   clampLeadMinutes, clampElapsedStampHours, ALERT_GRACE_MS, MAX_LEAD_MS,
 } from './src/schedule/event-alerts.js';
-import { startGcalSyncLoop, stopGcalSyncLoop, resetGcalSyncCadence } from './src/gcal/gcal-sync-loop.js';
+import { startGcalSyncLoop, stopGcalSyncLoop, resetGcalSyncCadence, isRunning as gcalSyncRunning } from './src/gcal/gcal-sync-loop.js';
 import { recordSyncOutcome, readSyncStatus } from './src/gcal/gcal-sync-status.js';
 import { fetchIcal, fetchViaCli, cliPresetHint } from './src/gcal/gcal-source.js';
 import {
@@ -98,8 +98,8 @@ import {
 } from './src/gcal/gcal-attribution.js';
 import { listOutbox, acknowledgeOutbox, clearAcknowledged, acknowledgePendingByKind } from './src/safety/outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './src/safety/silence-triage-loop.js';
-import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './src/warmth/reachout-loop.js';
-import { startMemorySweepLoop, stopMemorySweepLoop } from './src/memory/memory-sweep-loop.js';
+import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId, isRunning as reachoutRunning } from './src/warmth/reachout-loop.js';
+import { startMemorySweepLoop, stopMemorySweepLoop, isRunning as memorySweepRunning } from './src/memory/memory-sweep-loop.js';
 import { startTomeGraduationLoop, stopTomeGraduationLoop } from './src/tomes/tome-graduation-loop.js';
 import { startContentRegateLoop, stopContentRegateLoop } from './src/memory/content-regate-loop.js';
 import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './src/schedule/needs-tracking-loop.js';
@@ -2916,7 +2916,12 @@ app.post('/api/media/:id/transcript', async (req, res) => {
 });
 
 // Health check
-app.get('/api/health',  (_req, res) => res.json({ ok: true, version: PKG_VERSION }));
+// `loops` names which self-pacing background workers are actually up — a
+// dead loop reads as `false` here instead of as calm silence.
+app.get('/api/health',  (_req, res) => res.json({ ok: true, version: PKG_VERSION, loops: {
+  pondering: ponderingRunning(), noticing: noticingRunning(), reachout: reachoutRunning(),
+  memorySweep: memorySweepRunning(), gcalSync: gcalSyncRunning(), pageWatch: pageWatchRunning(),
+} }));
 app.get('/api/version', (_req, res) => res.json({ version: PKG_VERSION }));
 
 // ── Self-update (updater.js) ────────────────────────────────────────
@@ -5722,6 +5727,17 @@ function startAutonomousPondering() {
         settings: s,
         grounding,
       });
+      // A curiosity of my own that surfaced while pondering takes root in the
+      // interest layer right here, in code — the only self-originated route
+      // into a layer that otherwise mirrors what my human talks about. Small
+      // delta: a passing pull decays away unless later ponders keep landing on it.
+      if (result?.mode === 'pondering') {
+        for (const label of (result.drawn_to ?? [])) {
+          recordInterest({ topic: label, delta: 1.0, source: 'pondering' })
+            .then(ok => console.log(`[pondering] drawn to "${label}" → ${ok ? 'recorded' : 'not recorded'}`))
+            .catch(err => console.error('[pondering] drawn_to record failed:', err?.message ?? err));
+        }
+      }
       // Reflection follow-through: if the LLM proposed an
       // identity-layer update, write it. Mark the reflection so
       // future shouldReflectNow() calls measure freshness from

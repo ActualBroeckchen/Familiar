@@ -503,7 +503,7 @@ export function formatTemporalContext(payload) {
     blocks.push([
       'Recently past, not yet examined — forecasts whose moment has come:',
       ...hindsightLines,
-      "  Before I ask how one of these went, I check my recent memories and what we've said lately — if my human already told me, I do NOT re-ask like I forgot; I grade the forecast with schedule_calibrate_link (the edge id above): observed if it really happened, certainty up or down. Only if I genuinely don't know yet is asking natural, while it's still fresh.",
+      "  Before I ask how one of these went, I check my recent memories and what we've said lately — if my human already told me, I do NOT re-ask like I forgot; I grade the forecast with schedule_calibrate_link (the edge id above): observed if it really happened, certainty up or down. Only if I don't know yet is asking natural, while it's still fresh.",
     ].join('\n'));
   }
 
@@ -578,7 +578,7 @@ export function formatTemporalContext(payload) {
       const why  = it.why ? ` — because ${it.why}` : '';
       dueLines.push(`  (${it.id}) ${it.what}${why}${cond ? ` [only if ${cond}]` : ''}`);
     }
-    dueLines.push('  When I\'ve seen to one this occurrence, I mark it (intention_mark_fired); when it\'s genuinely done for good, intention_done. Marking without doing is erasing, not acting.');
+    dueLines.push('  When I\'ve seen to one this occurrence, I mark it (intention_mark_fired); when it\'s done for good, intention_done. Marking without doing is erasing, not acting.');
     blocks.push(dueLines.join('\n'));
   }
 

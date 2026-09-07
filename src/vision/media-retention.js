@@ -55,7 +55,7 @@ export async function selectRetentionCandidates({
 }
 
 const JUDGMENT_PROMPT = (list) =>
-  `I'm going back through some voice clips {{user}} and others sent me that are now a couple of weeks old. The words in each are already safe — I keep every transcript no matter what. The only question is whether I keep the actual SOUND of each clip, which costs disk, or let it go and keep just the words.\n\n` +
+  `I'm going back through some voice clips {{user}} and others sent me that are now a couple of weeks old. The words in each are already safe — I keep every transcript no matter what. The only question is whether I keep the SOUND of each clip, which costs disk, or let it go and keep just the words.\n\n` +
   `I keep the sound only when the sound itself is the point: a voice I'd want to hear again, a laugh, a moment where how it was said carried more than what was said. A plain "don't forget the milk" is fine as text — I let that sound go. When unsure, I let it go; the words stay either way.\n\n` +
   `The clips:\n${list}\n\n` +
   `I answer with ONLY a JSON object, no prose, no fences:\n{ "keep": ["<ref of a clip whose sound I keep>", ...] }\nEverything I don't list is let go to transcript-only. If I keep none, "keep" is [].`;

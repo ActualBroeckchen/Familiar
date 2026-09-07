@@ -32,8 +32,8 @@ ${found.length ? `What I've already pulled:\n${found.map((s, i) => `${i + 1}. ${
 What (if anything) do I want to look up NEXT to think about this more honestly? I answer ONLY with JSON, no prose:
 {"searches": ["a web search query", …], "reads": ["https://a-url-i-already-know-or-just-found"], "done": false}
 - searches: 0–2 web searches (leave empty if none).
-- reads: 0–2 URLs to actually read (only URLs I already have — from what I pulled, or ones I'm certain of).
-- done: true if I've got enough to write, or I don't actually need to look anything up.
+- reads: 0–2 URLs to read (only URLs I already have — from what I pulled, or ones I'm certain of).
+- done: true if I've got enough to write, or I don't need to look anything up.
 Keep it small — I don't need to read the whole internet to have a thought.`;
 
 function parsePlan(raw) {
@@ -116,5 +116,5 @@ export async function researchForPonder({ topic, provider, apiKey, model, callLL
 export function sourcesBlock(sources) {
   if (!sources?.length) return '';
   const lines = sources.map((s, i) => `[${i + 1}] (${s.kind}) ${s.ref}\n    ${String(s.excerpt).replace(/\s+/g, ' ').slice(0, 400)}`);
-  return `\n\nBefore writing, I looked into this. Here's what I actually found — I lean on THIS, not a confident guess, and I cite what shaped a thought (the source url), plainly:\n${lines.join('\n')}`;
+  return `\n\nBefore writing, here's what I looked up. I use this instead of guessing, and cite the source (the url) for whatever shaped what I think:\n${lines.join('\n')}`;
 }

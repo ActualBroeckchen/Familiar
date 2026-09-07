@@ -917,14 +917,14 @@ function presenceBlock({ kind, locationLabel, speakerName, participants, setting
       if (aimedAt) {
         lines.push(
           `The recent messages are an exchange between ${aimedAt} — not pointed at me. ` +
-          'I read whether this scene has a natural place for me: is there something here that would genuinely move me to speak, given who I am, or is this theirs to have? ' +
+          'I read whether this scene has a natural place for me: is there something here that would move me to speak, given who I am, or is this theirs to have? ' +
           'My options: I can speak; reply [pass] to stay out; or reply [later:…] to check back — ' +
           'e.g. [later:soon] (~15min), [later:20m], [later:22:30] — useful if the exchange might wrap up soon and I\'d rather see how it lands.',
         );
       } else {
         lines.push(
           'No one named me just now. Before I decide, I read the room: if two or more people are clearly in a back-and-forth with each other, that exchange is theirs even without a tag — I do not read an unaddressed line as an opening meant for me. ' +
-          'If the room is genuinely open — idle, scattered, or a remark anyone could pick up — I ask whether this scene has a natural place for me, given who I am. ' +
+          'If the room is open — idle, scattered, or a remark anyone could pick up — I ask whether this scene has a natural place for me, given who I am. ' +
           'My options: I can speak; reply [pass] to stay quiet; or reply [later:…] to revisit — ' +
           '[later:soon] (~15min), [later:later] (~45min), [later:much-later] (~1h), or [later:20m] / [later:22:30]. ' +
           'A revisit is for "not right now but I\'d like to see where this goes," not a default fallback.',

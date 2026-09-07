@@ -1003,7 +1003,7 @@ A handoff with neither intent nor threads is a no-op (no hollow "Last session:" 
 
 ### `GET /api/health`
 
-Returns `{ "ok": true, "version": "<package.json version>" }`. Useful for uptime checks or confirming the server is running.
+Returns `{ "ok": true, "version": "<package.json version>", "loops": { pondering, noticing, reachout, memorySweep, gcalSync, pageWatch } }` — each loop flag is a boolean from that worker's `isRunning()`, so a worker that never started (or crashed out) reads as `false` here instead of as calm silence. Useful for uptime checks or confirming the server is running.
 
 ### `GET /api/version`
 

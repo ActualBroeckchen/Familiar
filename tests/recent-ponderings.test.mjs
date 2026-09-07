@@ -136,8 +136,8 @@ test('formatPonderingsForPrompt frames the entries as the Familiar\'s own real t
     { uid: 'a', title: 'x', content: 'y', created_at: '2026-05-30T10:00:00.000Z' },
   ]);
   assert.match(out, /my own real thoughts/i);
-  assert.match(out, /never inventing one/i);
-  assert.match(out, /never forcing it/i);
+  assert.match(out, /never invent/i);
+  assert.match(out, /because I want to share it/i);
 });
 
 test('formatPonderingsForPrompt renders only the latest in full; the rest are a one-line index', () => {

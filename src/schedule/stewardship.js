@@ -121,7 +121,7 @@ export function buildOpeningBrief({ items = [], nowMs = Date.now(), lookaheadDay
     return `My human's just arrived. Nothing's on the calendar for the next ${lookaheadDays} days that I can see — a clear stretch.`;
   }
   const lines = dated.map(it => `  - ${it.w.slice(0, 10)} ${it.w.slice(11, 16)} — ${it.label} [${it.type}]`);
-  return `My human's just arrived. The shape of their next days:\n${lines.join('\n')}`;
+  return `My human's just arrived. Here's what's coming up over the next ${lookaheadDays} days:\n${lines.join('\n')}`;
 }
 
 /** Approaching events/tasks whose `requires` / `depends_on` prerequisites
@@ -281,7 +281,7 @@ export async function buildStewardshipBlock(opts = {}) {
   if (state.docketOfferedOn !== today && slots > 0) {
     const picks = selectDocket({ items: scheduleItems, nowMs, minAgeDays, offeredAt: state.offeredAt ?? {}, max: slots });
     for (const f of picks) {
-      bullets.push(`"${f.label}" has been floating without a time for ${f.ageDays} day${f.ageDays === 1 ? '' : 's'}. Today I offer it a place — or find out what's in the way.`);
+      bullets.push(`"${f.label}" has been floating without a time for ${f.ageDays} day${f.ageDays === 1 ? '' : 's'}. Today I either give it a time or find out what's in the way.`);
     }
     slots -= picks.length;
     if (picks.length && liveTurn) {
@@ -312,7 +312,7 @@ export async function buildStewardshipBlock(opts = {}) {
     const observed = medianHHMM(state.firstContactSamples);
     const drift = observed != null ? Math.abs((parseHHMM(observed) ?? 0) - (parseHHMM(anchor) ?? 0)) : 0;
     if (observed && drift >= ANCHOR_DRIFT_MIN) {
-      bullets.push(`My human's mornings actually start near ${observed}; the day-start I open on is ${anchor}. If that's their rhythm now, I set it with set_day_start_anchor.`);
+      bullets.push(`My human's mornings start near ${observed}; the day-start I open on is ${anchor}. If that's their rhythm now, I set it with set_day_start_anchor.`);
       if (liveTurn) { state.anchorSuggestedOn = today; dirty = true; }
     }
   }
@@ -322,7 +322,7 @@ export async function buildStewardshipBlock(opts = {}) {
   if (!brief && !bullets.length) return '';
   const parts = [
     `[My stewardship — what I'm holding for my human right now]`,
-    `I raise these in my own voice, at whatever point in our talk fits — but I do raise them; letting them quietly slide is its own cost.`,
+    `I raise these in my own voice, whenever it fits in our talk — but I do raise them; letting them slide has a cost too.`,
   ];
   if (brief) parts.push(brief);
   if (bullets.length) parts.push(bullets.map(s => `- ${s}`).join('\n'));

@@ -38,7 +38,7 @@ export const TOOL_MODULES = {
   schedule_export: 'schedule-read',
   schedule_add_event: 'schedule-write', schedule_add_task: 'schedule-write',
   schedule_add_reminder: 'schedule-write', schedule_add_phase: 'schedule-write',
-  schedule_add_need: 'schedule-write', schedule_assign_time: 'schedule-write',
+  schedule_add_need: 'schedule-write', schedule_assign_time: 'schedule-write', schedule_edit: 'schedule-write',
   schedule_snooze_task: 'schedule-write', schedule_resolve: 'schedule-write',
   schedule_delete: 'schedule-write', schedule_link: 'schedule-write',
   schedule_push_to_google: 'schedule-write',  // keeps its gcalWriteEnabled gate too

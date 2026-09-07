@@ -101,3 +101,17 @@ def test_read_memory_carries_register():
         res = memory.create("Alice is a nurse", "significant", register="ward", conn=c)
         out = memory.read_memory("significant", res["dateKey"], conn=c)
         assert out["ok"] and out["register"] == "ward"
+
+
+
+def test_list_memories_register_filter():
+    """`register='me'` returns only my own standing views — the read-back the
+    chat turn relies on."""
+    c = _conn()
+    with patch("phylactery.embed.embed_text", _fake_embed):
+        memory.create("I think cricket is dull", "significant", register="me", conn=c)
+        memory.create("Alice is a nurse", "significant", register="ward", conn=c)
+        memory.create("a plain day", "daily", conn=c)
+        me = memory.list_memories(conn=c, register="me")
+        assert [m["content"] for m in me] == ["I think cricket is dull"]
+        assert len(memory.list_memories(conn=c)) == 3

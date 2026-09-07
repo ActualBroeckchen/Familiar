@@ -762,21 +762,26 @@ def list_memories(
     limit: int = 50,
     offset: int = 0,
     conn: sqlite3.Connection | None = None,
+    register: str | None = None,
 ) -> list[dict]:
+    """Newest-first browse. `register` narrows to one register — e.g. 'me', the
+    standing truths I hold about myself, which the chat turn reads back so what
+    I've come to think actually reaches me."""
     own_conn = conn is None
     if own_conn:
         conn = get_conn()
     try:
+        where = ["kind='narrative'"]
+        params: list = []
         if granularity:
-            rows = conn.execute(
-                "SELECT id,granularity,register,date_key,content,audience,content_tag,care_weight FROM memories WHERE granularity=? AND kind='narrative' ORDER BY date_key DESC LIMIT ? OFFSET ?",
-                (granularity, limit, offset),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT id,granularity,register,date_key,content,audience,content_tag,care_weight FROM memories WHERE kind='narrative' ORDER BY date_key DESC LIMIT ? OFFSET ?",
-                (limit, offset),
-            ).fetchall()
+            where.append("granularity=?"); params.append(granularity)
+        if register:
+            where.append("register=?"); params.append(register)
+        rows = conn.execute(
+            "SELECT id,granularity,register,date_key,content,audience,content_tag,care_weight FROM memories "
+            f"WHERE {' AND '.join(where)} ORDER BY date_key DESC, rowid DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        ).fetchall()
         return [_row_to_list_item(r) for r in rows]
     finally:
         if own_conn:

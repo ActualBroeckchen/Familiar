@@ -137,7 +137,7 @@ ${circlesSummary}
 
 How I decide, honestly:
 - If I'm not sure, it STAYS private. This is my human's private life; erring toward keeping it between us is the safe direction, and I do.
-- I only open a fact when I genuinely believe my human would be fine with the people who'd then be able to see it (per the rules above) knowing it. A mundane fact is usually fine; something tender, medical, or about their inner life I keep private unless I'm confident it belongs with a circle they'd want to have it.
+- I only open a fact when I believe my human would be fine with the people who'd then be able to see it (per the rules above) knowing it. A mundane fact is usually fine; something tender, medical, or about their inner life I keep private unless I'm confident it belongs with a circle they'd want to have it.
 - I can also fix a fact's topic tag if the current one is wrong or missing — that's what decides who could ever see it, so getting it right matters.
 
 The facts:

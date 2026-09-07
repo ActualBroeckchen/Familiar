@@ -35,6 +35,10 @@ The safety cluster records both the incidents that shaped Proto-Familiar's appro
 intervention, and the structural defenses built to prevent those failure modes from
 reoccurring.
 
+- [Self-originated interest and the `me` register](self-originated-interest-and-me-register) —
+  why the Familiar's individuality read as generic assistant-friendliness: the interest layer
+  mirrored the human's chat topics and the Familiar's own standing views were filed under the
+  human; a ponder can now plant its own curiosity (`drawn_to`) and self-facts route to `me`.
 - [Proactivity over caution](proactivity-over-caution) — the incident where caution-biased
   language in a safety prompt reproduced dangerous passivity at the worst possible moment,
   producing a standing rule against "bias toward staying quiet" in every prompt that decides
