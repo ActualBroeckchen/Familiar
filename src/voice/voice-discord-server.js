@@ -46,7 +46,7 @@ import { voiceThreatEnabled } from './voice-call-server.js';
 import { speakableText, isLikelyNoiseTranscript } from './voice-speech.js';
 import { scoreMessage } from '../../crisis-signals.js';
 import { recordThreat, getThreat, THREAT_TIERS } from '../../threat-tracker.js';
-import { enqueueSessionByDay } from '../../memorization.js';
+import { enqueueSessionByDay } from '../memory/memorization.js';
 import { writeSessionLog, stampMessages, turnMessages } from '../sessions/session-log.js';
 import { slugifyLabel, sessionSlugId } from '../../slug-ids.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';

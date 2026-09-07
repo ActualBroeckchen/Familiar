@@ -28,10 +28,11 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { promises as fsp, mkdirSync } from 'fs';
 import { normalizeTag } from './content-tags.js';
-import { AUDIENCE_TAG_WARD_OPEN, AUDIENCE_TAG_WARD_PRIVATE } from './audience.js';
+import { AUDIENCE_TAG_WARD_OPEN, AUDIENCE_TAG_WARD_PRIVATE } from '../../audience.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TOMES_DIR = path.join(__dirname, 'tomes');
+const TOMES_DIR = path.join(REPO_ROOT, 'tomes');
 mkdirSync(TOMES_DIR, { recursive: true });
 
 // Ids the Familiar has already judged (kept OR opened), so a batch is never

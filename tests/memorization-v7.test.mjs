@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildSharedRoomPrompt, buildPrompt } from '../memorization.js';
+import { buildSharedRoomPrompt, buildPrompt } from '../src/memory/memorization.js';
 
 const MESSAGES = [
   { role: 'user',      content: 'Hi, feeling really stressed today.' },

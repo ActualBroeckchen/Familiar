@@ -17,13 +17,14 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, promises as fsp } from 'fs';
-import { isCallActiveFromFile } from './src/voice/call-engine.js';
+import { isCallActiveFromFile } from '../voice/call-engine.js';
 import { randomUUID } from 'crypto';
-import { PROVIDER_URLS } from './providers.js';
-import { extractContent } from './llm-call.js';
+import { PROVIDER_URLS } from '../../providers.js';
+import { extractContent } from '../../llm-call.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TOMES_DIR  = path.join(__dirname, 'tomes');
+const TOMES_DIR  = path.join(REPO_ROOT, 'tomes');
 const QUEUE_FILE = path.join(TOMES_DIR, '.memorization-queue.json');
 
 // Local file tracking consent-pending memory IDs so thalamus.js can inject
@@ -172,16 +173,16 @@ async function persistQueue() {
 // memorization tick serialise against each other through the same
 // per-path key, which they couldn't before.
 
-import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap, getStandingConsent, graphRelate, getScheduleWindow } from './thalamus.js';
-import { getRegistry, standingConsentActive } from './village.js';
-import { deriveMemoryAudience, deriveNodeAudience, mostRestrictiveAudience } from './audience.js';
+import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap, getStandingConsent, graphRelate, getScheduleWindow } from '../../thalamus.js';
+import { getRegistry, standingConsentActive } from '../../village.js';
+import { deriveMemoryAudience, deriveNodeAudience, mostRestrictiveAudience } from '../../audience.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC } from './graph-vocab.js';
 import { CONTENT_TOPICS, normalizeTag, categoryToTag } from './content-tags.js';
-import { segmentByDay, dayDelta } from './src/schedule/day-segments.js';
+import { segmentByDay, dayDelta } from '../schedule/day-segments.js';
 import { recordSegmentRun, isSegmentMemorized, segmentMemorizedThrough } from './memory-coverage.js';
-import { readSettingsSync } from './cerebellum.js';
-import { substituteMacros } from './macros.js';
-import { contentWithStandins, getAssetMeta } from './media.js';
+import { readSettingsSync } from '../../cerebellum.js';
+import { substituteMacros } from '../../macros.js';
+import { contentWithStandins, getAssetMeta } from '../../media.js';
 import { createSessionFollowup } from './recent-ponderings.js';
 
 // Vision (§7): fold image stand-ins into a slice's transcript so an image-
@@ -196,7 +197,7 @@ async function foldImageStandins(messages, settings) {
   const list = Array.isArray(messages) ? messages : [];
   if (!list.some(m => Array.isArray(m?.attachments) && m.attachments.length)) return list;
   let describeAsset = null;
-  try { ({ describeAsset } = await import('./vision.js')); } catch { /* describe optional */ }
+  try { ({ describeAsset } = await import('../../vision.js')); } catch { /* describe optional */ }
   const out = [];
   for (const m of list) {
     if (!Array.isArray(m?.attachments) || !m.attachments.length) { out.push(m); continue; }

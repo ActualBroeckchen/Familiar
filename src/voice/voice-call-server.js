@@ -32,7 +32,7 @@ import { scoreMessage } from '../../crisis-signals.js';
 import { recordThreat } from '../../threat-tracker.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
 import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs } from './voice-transcribe.js';
-import { enqueueSessionByDay } from '../../memorization.js';
+import { enqueueSessionByDay } from '../memory/memorization.js';
 import { writeSessionLog, stampMessages, turnMessages } from '../sessions/session-log.js';
 import { sessionSlugId } from '../../slug-ids.js';
 import { registerPushAdapterFactory, formatItemForPush } from '../../cerebellum.js';

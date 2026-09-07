@@ -18,7 +18,7 @@ import {
   markIntentActedOn,
   dropIntent,
   formatDeferredIntentsBlock,
-} from '../recent-ponderings.js';
+} from '../src/memory/recent-ponderings.js';
 
 function tempTomesDir() {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'ponder-test-'));

@@ -17,7 +17,7 @@
  */
 
 import { PROVIDER_URLS } from '../providers.js';
-import { getRecentPonderings, formatPonderingsForPrompt } from '../recent-ponderings.js';
+import { getRecentPonderings, formatPonderingsForPrompt } from '../src/memory/recent-ponderings.js';
 
 function parseArgs(argv) {
   const args = {};

@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { GRAPH_ENTITY_TYPES, GRAPH_ENTITY_TYPES_STR } from '../graph-vocab.js';
+import { GRAPH_ENTITY_TYPES, GRAPH_ENTITY_TYPES_STR } from '../src/memory/graph-vocab.js';
 import { BUILTIN_TOOLS } from '../cerebellum.js';
-import { buildPrompt, buildSharedRoomPrompt } from '../memorization.js';
+import { buildPrompt, buildSharedRoomPrompt } from '../src/memory/memorization.js';
 
 // The whole point of graph-vocab.js: ONE rubric, every surface. These pin that
 // the chat-path graph tools and the autonomous memorization prompts now teach the

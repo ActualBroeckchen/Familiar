@@ -1625,7 +1625,7 @@ import {
   formatPonderingsForPrompt,
   getUnactedIntents,
   formatDeferredIntentsBlock,
-} from './recent-ponderings.js';
+} from './src/memory/recent-ponderings.js';
 import { getThreat } from './threat-tracker.js';
 import {
   selectSurfaceCandidates,
@@ -2501,7 +2501,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     let disclosureBlock = '';
     if (!staticOnly && !gated) {
       try {
-        const { readDisclosureNotices } = await import('./content-regate.js');
+        const { readDisclosureNotices } = await import('./src/memory/content-regate.js');
         const notices = await readDisclosureNotices();
         if (Array.isArray(notices) && notices.length > 0) {
           const lines = [

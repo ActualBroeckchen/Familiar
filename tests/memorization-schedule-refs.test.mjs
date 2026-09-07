@@ -10,7 +10,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPrompt } from '../memorization.js';
+import { buildPrompt } from '../src/memory/memorization.js';
 
 const MSGS = [
   { role: 'user', content: 'I had my therapy session with Kleinschmidt today and it went badly.' },

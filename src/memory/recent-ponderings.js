@@ -19,9 +19,9 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { promises as fsp } from 'fs';
-import { PONDERINGS_TOME_NAME, shortPonderUid, findOrCreatePonderingsTome } from './src/pondering/pondering.js';
-import { withLock, modifyTomeFile } from './thalamus.js';
-import { relativeTime } from './relative-time.js';
+import { PONDERINGS_TOME_NAME, shortPonderUid, findOrCreatePonderingsTome } from '../pondering/pondering.js';
+import { withLock, modifyTomeFile } from '../../thalamus.js';
+import { relativeTime } from '../../relative-time.js';
 
 // Routing hints for the deferred-intents block. Storage kinds map to a
 // filing tool; 'tell' is a conversational intent — no tool, just a prompt
@@ -33,8 +33,9 @@ const KIND_TOOL = {
   tell:     null,
 };
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
+const DEFAULT_TOMES_DIR = path.join(REPO_ROOT, 'tomes');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

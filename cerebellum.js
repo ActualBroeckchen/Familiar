@@ -68,17 +68,17 @@ import {
 import { formatOrganStatus } from './organs.js';
 import { audienceTagFor, deriveNodeAudience } from './audience.js';
 import { getAssetMeta, addAssetLink, removeAssetLink, drainPendingImages } from './media.js';
-import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './graph-vocab.js';
+import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './src/memory/graph-vocab.js';
 import { searchWeb, readWebpage, lookUp } from './src/search/websearch.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
-import { markIntentActedOn, snoozeIntent, dropIntent, getUnactedIntents, readPonderingByUid } from './recent-ponderings.js';
+import { markIntentActedOn, snoozeIntent, dropIntent, getUnactedIntents, readPonderingByUid } from './src/memory/recent-ponderings.js';
 import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';
 import { readWeatherNowLine, weatherEnabled } from './src/weather/weather-mirror.js';
 import { resolveLocation, getForecast, dayDatesFor } from './src/weather/weather-service.js';
 import { weatherArc, formatWeatherVague } from './src/weather/weather-format.js';
 import { flagDistress } from './threat-tracker.js';
 import { resetTriageCooldown } from './silence-triage-loop.js';
-import { pruneConsentPending } from './memorization.js';
+import { pruneConsentPending } from './src/memory/memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta, rekeyOutboxIds } from './outbox.js';
 import { buildTimeAnchorBlock, relativeTime, plainInterval, wardLocalNowISO } from './relative-time.js';
 import { substituteMacros } from './macros.js';
@@ -2818,7 +2818,7 @@ export const TOOL_EXECUTORS = {
   disclosure_acknowledge: async ({ ids } = {}) => {
     const arr = Array.isArray(ids) ? ids : (ids ? [ids] : []);
     if (!arr.length) return 'ids must be a non-empty array of disclosure notice ids.';
-    const { clearDisclosureNotice } = await import('./content-regate.js');
+    const { clearDisclosureNotice } = await import('./src/memory/content-regate.js');
     for (const id of arr) { await clearDisclosureNotice(id).catch(() => {}); }
     return quietOk(`Marked ${arr.length} disclosure notice(s) as surfaced.`);
   },
@@ -2827,7 +2827,7 @@ export const TOOL_EXECUTORS = {
     if (!id || typeof id !== 'string') return 'I need the id of the memory to keep private.';
     const r = await updateMemoryById({ id, audience: 'ward-private' });
     if (r?.ok === false) return `I couldn't set that back to private: ${r.error ?? 'update failed'}.`;
-    const { clearDisclosureNotice } = await import('./content-regate.js');
+    const { clearDisclosureNotice } = await import('./src/memory/content-regate.js');
     await clearDisclosureNotice(id).catch(() => {});
     return quietOk('Kept between us — I set that memory back to strictly private.');
   },

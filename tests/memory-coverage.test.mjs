@@ -6,7 +6,7 @@ import os from 'node:os';
 import {
   recordSegmentRun, isSegmentMemorized, segmentMemorizedThrough, computeCoverage,
   incompleteDates, deriveStatus, collectDateSlices,
-} from '../memory-coverage.js';
+} from '../src/memory/memory-coverage.js';
 
 const at = (y, mo, d, h = 12) => new Date(y, mo - 1, d, h).toISOString();
 const msg = (content, ts, role = 'user') => ({ role, content, timestamp: ts });

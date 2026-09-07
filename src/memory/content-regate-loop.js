@@ -12,13 +12,13 @@
  * the tome-graduation loop shape. Never on the chat path.
  */
 
-import { listContentGateCandidates, updateMemoryById, enrich } from './thalamus.js';
-import { getRegistry } from './village.js';
-import { isCallActiveFromFile } from './src/voice/call-engine.js';
-import { readSettingsSync, connectionForFeature } from './cerebellum.js';
-import { PROVIDER_URLS } from './providers.js';
-import { callProviderChat } from './llm-call.js';
-import { substituteMacros } from './macros.js';
+import { listContentGateCandidates, updateMemoryById, enrich } from '../../thalamus.js';
+import { getRegistry } from '../../village.js';
+import { isCallActiveFromFile } from '../voice/call-engine.js';
+import { readSettingsSync, connectionForFeature } from '../../cerebellum.js';
+import { PROVIDER_URLS } from '../../providers.js';
+import { callProviderChat } from '../../llm-call.js';
+import { substituteMacros } from '../../macros.js';
 import { runOneRetagTick, DEFAULT_BATCH_SIZE } from './content-regate.js';
 
 const DEFAULT_TICK_MS = 30 * 60_000;   // 30 min — draining a backlog wants no urgency
