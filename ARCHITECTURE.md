@@ -6,12 +6,14 @@ component-level depth (data flow, prompt-assembly order, every loop and
 endpoint) read [`docs/architecture.md`](docs/architecture.md) once this page has
 oriented you.
 
-> **Why the root looks busy:** the runtime is a single Node process, so most
-> modules live at the repo root as flat files today. They are *not* an
-> undifferentiated bag — they cluster into the domains below, and a staged move
-> into `src/<domain>/` is underway (`src/weather/` and `src/voice/` moved so far;
-> see [`docs/repo-organization-plan.md`](docs/repo-organization-plan.md)). Until it
-> completes, use the map here instead of scrolling the file list.
+> **Layout:** the domain modules live under **`src/<domain>/`** — one folder per
+> domain in the map below (`src/voice/`, `src/browser/`, `src/schedule/`,
+> `src/safety/`, …). The **~20 files still at the repo root are the app core**:
+> the entry point (`server.js`), the connective tissue (`thalamus.js`,
+> `cerebellum.js`), and cross-cutting helpers (`macros.js`, `providers.js`,
+> `llm-call.js`, `tool-surfacing.js`, `slug-ids.js`, `relative-time.js`,
+> `repo-root.js`, `own-files.js`, …). That split is deliberate — root = the app
+> spine, `src/` = the domains. (History of the move: [`docs/repo-organization-plan.md`](docs/repo-organization-plan.md).)
 
 ## What Proto-Familiar is (in one breath)
 
