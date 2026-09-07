@@ -11,7 +11,7 @@ import {
   buildConsentMenu,
   consentHelpText,
   CATEGORY_LABELS,
-} from '../villager-consent.js';
+} from '../src/village/villager-consent.js';
 
 describe('isConsentCommand', () => {
   it('matches !consent with and without arguments', () => {

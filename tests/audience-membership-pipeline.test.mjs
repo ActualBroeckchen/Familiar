@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { visibleAudiences } from '../audience.js';
+import { visibleAudiences } from '../src/village/audience.js';
 import { discordReadAudiences } from '../cerebellum.js';
 
 // Pipeline test: pins the real gated-Discord seam end to end — the exact

@@ -174,8 +174,8 @@ async function persistQueue() {
 // per-path key, which they couldn't before.
 
 import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap, getStandingConsent, graphRelate, getScheduleWindow } from '../../thalamus.js';
-import { getRegistry, standingConsentActive } from '../../village.js';
-import { deriveMemoryAudience, deriveNodeAudience, mostRestrictiveAudience } from '../../audience.js';
+import { getRegistry, standingConsentActive } from '../village/village.js';
+import { deriveMemoryAudience, deriveNodeAudience, mostRestrictiveAudience } from '../village/audience.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC } from './graph-vocab.js';
 import { CONTENT_TOPICS, normalizeTag, categoryToTag } from './content-tags.js';
 import { segmentByDay, dayDelta } from '../schedule/day-segments.js';

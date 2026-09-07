@@ -20,7 +20,7 @@
  * consent menu must be exact, so it is code, not judgment.
  */
 import { REMEMBER_CATEGORIES, setVillagerRemember, standingConsentActive } from './village.js';
-import { EMBED_COLOR, btn, row } from './discord-menu-kit.js';
+import { EMBED_COLOR, btn, row } from '../../discord-menu-kit.js';
 
 // Plain-language names per category — shown in the menu and accepted as
 // command aliases alongside the raw keys.

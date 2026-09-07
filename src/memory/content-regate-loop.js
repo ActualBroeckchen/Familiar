@@ -13,7 +13,7 @@
  */
 
 import { listContentGateCandidates, updateMemoryById, enrich } from '../../thalamus.js';
-import { getRegistry } from '../../village.js';
+import { getRegistry } from '../village/village.js';
 import { isCallActiveFromFile } from '../voice/call-engine.js';
 import { readSettingsSync, connectionForFeature } from '../../cerebellum.js';
 import { PROVIDER_URLS } from '../../providers.js';

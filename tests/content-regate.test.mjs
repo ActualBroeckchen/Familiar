@@ -4,7 +4,7 @@ import {
   selectBatch, parseRetagDecision, summarizeCircles, buildRetagPrompt,
   runOneRetagTick,
 } from '../src/memory/content-regate.js';
-import { AUDIENCE_TAG_WARD_OPEN } from '../audience.js';
+import { AUDIENCE_TAG_WARD_OPEN } from '../src/village/audience.js';
 
 // ── selectBatch ──────────────────────────────────────────────────────
 

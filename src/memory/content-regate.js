@@ -28,7 +28,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { promises as fsp, mkdirSync } from 'fs';
 import { normalizeTag } from './content-tags.js';
-import { AUDIENCE_TAG_WARD_OPEN, AUDIENCE_TAG_WARD_PRIVATE } from '../../audience.js';
+import { AUDIENCE_TAG_WARD_OPEN, AUDIENCE_TAG_WARD_PRIVATE } from '../village/audience.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

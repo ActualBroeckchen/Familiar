@@ -21,10 +21,11 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { promises as fsp } from 'fs';
-import { withLock } from './thalamus.js';
+import { withLock } from '../../thalamus.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_KNOCKS_PATH = path.join(__dirname, 'tomes', '.village-knocks.json');
+const DEFAULT_KNOCKS_PATH = path.join(REPO_ROOT, 'tomes', '.village-knocks.json');
 
 export const KNOCKS_CAP = 50;
 
@@ -135,7 +136,7 @@ export async function dismissKnock({ platform, id }, { filePath = DEFAULT_KNOCKS
 // Same privacy discipline: metadata only, no message content. Capped
 // and evicting-oldest so a flood of new channels can't grow the file.
 
-const DEFAULT_LOCATION_KNOCKS_PATH = path.join(__dirname, 'tomes', '.village-location-knocks.json');
+const DEFAULT_LOCATION_KNOCKS_PATH = path.join(REPO_ROOT, 'tomes', '.village-location-knocks.json');
 
 export const LOCATION_KNOCKS_CAP = 50;
 
@@ -225,7 +226,7 @@ export async function dismissLocationKnock({ key }, { filePath = DEFAULT_LOCATIO
 // privacy: id, name, platform, when first/last seen. No message content,
 // no member lists. Reuses the same locked read/write as the knock lists.
 
-const DEFAULT_SERVERS_PATH = path.join(__dirname, 'tomes', '.village-servers.json');
+const DEFAULT_SERVERS_PATH = path.join(REPO_ROOT, 'tomes', '.village-servers.json');
 
 /** Generous — this counts servers a person belongs to, not a spam surface. */
 export const SERVERS_CAP = 200;

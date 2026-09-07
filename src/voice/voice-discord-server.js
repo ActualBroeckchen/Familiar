@@ -31,14 +31,14 @@ import { discordVoiceAdapterCreator, setVoiceRosterListener, discordVoiceChannel
 import { resolveCallAudience, wardVoiceState } from './voice-call-audience.js';
 import { createTagSegment, createRoomListenerMap } from './voice-tagging.js';
 import { registerPushAdapterFactory, formatItemForPush } from '../../cerebellum.js';
-import { findVillagerByAlias, getRegistry, villagerByAlias } from '../../village.js';
+import { findVillagerByAlias, getRegistry, villagerByAlias } from '../village/village.js';
 import {
   isGroupCall, attributeSpeaker, prefixTurn, diffRoster,
   formatPresenceNote, buildGreetingPrompt, parseGreeting,
 } from './voice-presence.js';
 import { callProviderChat } from '../../llm-call.js';
 import { substituteMacros } from '../../macros.js';
-import { audienceTagFor } from '../../audience.js';
+import { audienceTagFor } from '../village/audience.js';
 import { createSynthesizer } from './voice-synthesize.js';
 import { createVoiceChatTurn } from './voice-chat-turn.js';
 import { createVoiceTurnRunner } from './voice-call-turn.js';

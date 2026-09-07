@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { visibleAudiences, topicGrantsForRoom, AUDIENCE_TAG_WARD_PRIVATE } from '../audience.js';
+import { visibleAudiences, topicGrantsForRoom, AUDIENCE_TAG_WARD_PRIVATE } from '../src/village/audience.js';
 
 // Membership-model registry (audit fix): 'family' and 'work' carry IDENTICAL
 // grants (both memories:true) — the whole point is that equal permissionScore

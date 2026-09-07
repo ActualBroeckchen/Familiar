@@ -1,7 +1,7 @@
 // village-registry-json.js — tolerant canonical-registry parsing.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitizeJsonControlChars, parseRegistryJson } from '../village-registry-json.js';
+import { sanitizeJsonControlChars, parseRegistryJson } from '../src/village/village-registry-json.js';
 
 test('clean JSON parses unchanged, repaired:false', () => {
   const text = JSON.stringify({ villagers: [{ name: 'Ada', note: 'likes tea' }] }, null, 2);

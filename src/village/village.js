@@ -26,11 +26,12 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
-import { withLock } from './thalamus.js';
-import { CONTENT_TOPICS, sanitizeTopicGrants } from './src/memory/content-tags.js';
+import { withLock } from '../../thalamus.js';
+import { CONTENT_TOPICS, sanitizeTopicGrants } from '../memory/content-tags.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_VILLAGE_PATH = path.join(__dirname, 'village.json');
+const DEFAULT_VILLAGE_PATH = path.join(REPO_ROOT, 'village.json');
 
 // ── Built-in categories ───────────────────────────────────────────
 //

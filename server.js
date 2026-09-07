@@ -159,9 +159,9 @@ import {
   migrateTrustedContacts, seedDefaultCategories,
   initVillageSync, bootSync as villageBootSync,
   pendingCategoryAudienceRemap,
-} from './village.js';
-import { parseRegistryJson } from './village-registry-json.js';
-import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, WARD_PRIVATE } from './audience.js';
+} from './src/village/village.js';
+import { parseRegistryJson } from './src/village/village-registry-json.js';
+import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, WARD_PRIVATE } from './src/village/audience.js';
 import { normalizeTag } from './src/memory/content-tags.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, AUDIO_MAX_BYTES, IMAGE_MIME_EXT, MEDIA_KINDS, mediaKindFor, MAX_IMAGES_PER_MESSAGE } from './src/vision/media.js';
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './src/vision/vision.js';
@@ -172,7 +172,7 @@ import { substituteMacros } from './macros.js';
 import { withCorePrompts } from './core-prompts.js';
 import { recordOutgoingPrompt, lastOutgoingPrompts } from './src/sessions/prompt-capture.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
-import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock, listServers, dismissServer } from './knocks.js';
+import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock, listServers, dismissServer } from './src/village/knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
