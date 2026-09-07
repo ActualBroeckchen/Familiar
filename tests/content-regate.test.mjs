@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   selectBatch, parseRetagDecision, summarizeCircles, buildRetagPrompt,
   runOneRetagTick,
-} from '../content-regate.js';
+} from '../src/memory/content-regate.js';
 import { AUDIENCE_TAG_WARD_OPEN } from '../audience.js';
 
 // ── selectBatch ──────────────────────────────────────────────────────

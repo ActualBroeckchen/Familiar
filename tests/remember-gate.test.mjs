@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { gateForCategory, resolveRememberGate, wardStandingActive } from '../memorization.js';
+import { gateForCategory, resolveRememberGate, wardStandingActive } from '../src/memory/memorization.js';
 
 // ── gateForCategory: single-category resolution against one map ───────────────
 

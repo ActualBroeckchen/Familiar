@@ -16,7 +16,7 @@
  */
 
 import { incompleteDates, collectDateSlices } from './memory-coverage.js';
-import { isCallActiveFromFile } from './src/voice/call-engine.js';
+import { isCallActiveFromFile } from '../voice/call-engine.js';
 import { enqueueMemorization } from './memorization.js';
 
 const DEFAULT_TICK_MS = 10 * 60_000; // 10 min — coverage doesn't need a fast pulse

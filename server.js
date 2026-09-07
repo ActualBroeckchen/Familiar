@@ -74,7 +74,7 @@ import {
   markReflected,
   tagRaisedOutcomes,
 } from './src/pondering/surface-events.js';
-import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedIntents } from './recent-ponderings.js';
+import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedIntents } from './src/memory/recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './src/schedule/reminders-loop.js';
 import {
   selectDueEventAlerts, formatEventAlert, alertWindowBounds,
@@ -99,9 +99,9 @@ import {
 import { listOutbox, acknowledgeOutbox, clearAcknowledged, acknowledgePendingByKind } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
 import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './src/warmth/reachout-loop.js';
-import { startMemorySweepLoop, stopMemorySweepLoop } from './memory-sweep-loop.js';
+import { startMemorySweepLoop, stopMemorySweepLoop } from './src/memory/memory-sweep-loop.js';
 import { startTomeGraduationLoop, stopTomeGraduationLoop } from './src/tomes/tome-graduation-loop.js';
-import { startContentRegateLoop, stopContentRegateLoop } from './content-regate-loop.js';
+import { startContentRegateLoop, stopContentRegateLoop } from './src/memory/content-regate-loop.js';
 import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './src/schedule/needs-tracking-loop.js';
 import { startMediaRetentionLoop, stopMediaRetentionLoop } from './media-retention-loop.js';
 import { isNeedWindow } from './src/schedule/needs-tracking.js';
@@ -145,8 +145,8 @@ import {
   cancelJob as cancelMemorizationJob,
   startMemorizationWorker, stopMemorizationWorker,
   findOrCreateSessionMemoriesTome,
-} from './memorization.js';
-import { computeCoverage, collectDateSlices } from './memory-coverage.js';
+} from './src/memory/memorization.js';
+import { computeCoverage, collectDateSlices } from './src/memory/memory-coverage.js';
 import { writeSessionLog as persistSessionLog, sessionLocationLabel } from './src/sessions/session-log.js';
 import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY } from './src/sessions/session-bindings.js';
 import { parseImport, dateFromFilename, applyFallbackDate } from './src/sessions/log-import.js';
@@ -162,7 +162,7 @@ import {
 } from './village.js';
 import { parseRegistryJson } from './village-registry-json.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, WARD_PRIVATE } from './audience.js';
-import { normalizeTag } from './content-tags.js';
+import { normalizeTag } from './src/memory/content-tags.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, AUDIO_MAX_BYTES, IMAGE_MIME_EXT, MEDIA_KINDS, mediaKindFor, MAX_IMAGES_PER_MESSAGE } from './media.js';
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './vision.js';
 import { filterOutgoingReply } from './outgoing-filter.js';

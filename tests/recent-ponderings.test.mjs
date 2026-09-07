@@ -6,7 +6,7 @@ import { promises as fsp, mkdtempSync, rmSync } from 'fs';
 import { randomUUID } from 'crypto';
 
 import { ponderOnce, PONDERINGS_TOME_NAME } from '../src/pondering/pondering.js';
-import { getRecentPonderings, formatPonderingsForPrompt, readPonderingByUid, getUnactedIntents } from '../recent-ponderings.js';
+import { getRecentPonderings, formatPonderingsForPrompt, readPonderingByUid, getUnactedIntents } from '../src/memory/recent-ponderings.js';
 
 function tempDir() {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'ponder-recent-'));

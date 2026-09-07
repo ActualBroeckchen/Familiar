@@ -21,11 +21,12 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, promises as fsp } from 'fs';
-import { segmentByDay } from './src/schedule/day-segments.js';
+import { segmentByDay } from '../schedule/day-segments.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TOMES_DIR = path.join(__dirname, 'tomes');
-export const DEFAULT_LOGS_DIR = path.join(__dirname, 'logs');
+const TOMES_DIR = path.join(REPO_ROOT, 'tomes');
+export const DEFAULT_LOGS_DIR = path.join(REPO_ROOT, 'logs');
 const DEFAULT_LEDGER_FILE = path.join(TOMES_DIR, '.memory-coverage.json');
 const LEDGER_VERSION = 1;
 

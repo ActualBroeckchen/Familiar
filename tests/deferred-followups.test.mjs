@@ -13,14 +13,14 @@ import path from 'path';
 import os from 'os';
 import { mkdtempSync, rmSync } from 'fs';
 
-import { parseFollowups, followupsFeatureEnabled, buildPrompt } from '../memorization.js';
+import { parseFollowups, followupsFeatureEnabled, buildPrompt } from '../src/memory/memorization.js';
 import {
   createSessionFollowup,
   getUnactedIntents,
   getRecentPonderings,
   formatDeferredIntentsBlock,
   FOLLOWUP_MAX_AGE_DAYS,
-} from '../recent-ponderings.js';
+} from '../src/memory/recent-ponderings.js';
 
 function tempDir() {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'followups-'));

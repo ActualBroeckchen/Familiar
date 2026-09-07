@@ -45,7 +45,7 @@ import { materializeAttachments, resolveVisionCapable, ensureDescribed, describe
 import { hearVoiceNotes } from './src/voice/voice-transcribe.js';
 import { extractTurnReply } from './llm-call.js';
 import { logDiscordWrite } from './discord-write-log.js';
-import { enqueueSessionByDay, readConsentPending, pruneConsentPending } from './memorization.js';
+import { enqueueSessionByDay, readConsentPending, pruneConsentPending } from './src/memory/memorization.js';
 import {
   isConsentCommand, parseConsentCommand, buildConsentMenu, applyConsentSet, consentHelpText,
   CONSENT_CID, buildConsentHomeView, buildCategoryView, buildMemoriesView, buildPendingView, buildDoneView,

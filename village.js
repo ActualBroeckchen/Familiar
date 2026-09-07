@@ -27,7 +27,7 @@ import { fileURLToPath } from 'url';
 import { promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
 import { withLock } from './thalamus.js';
-import { CONTENT_TOPICS, sanitizeTopicGrants } from './content-tags.js';
+import { CONTENT_TOPICS, sanitizeTopicGrants } from './src/memory/content-tags.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_VILLAGE_PATH = path.join(__dirname, 'village.json');
