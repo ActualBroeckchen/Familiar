@@ -2831,7 +2831,7 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
     words. Transport-neutral: it's the trigger the Discord adapter had been missing
     entirely (nothing called its `stopPlayback` before), and an additive backstop
     to the web adapter's instant browser-driven `{t:'barge'}`. Off-switch
-    `PROTO_FAMILIAR_VOICE_BARGE_DISABLED=1` (default ON). The `{barged:true}` return
+    `PROTO_FAMILIAR_VOICE_BARGE_DISABLED=1` (default ON). A per-reply **barge-window log** (0.11.81) makes a non-firing barge legible — `barge window: N partial(s) heard while speaking, barged=…` — so 0 heard (no words reached the engine over its own speech: a timing/receive gap) is distinguishable from N heard but held by a guard (`too-short`/`filtered-as-noise`). The `{barged:true}` return
     → `onReplyInterrupted` recording is unchanged.
   - **Non-fatal group joins (0.11.53).** The Discord adapter's `sub.on('data')`
     handler is now fully wrapped in try/catch: the opusscript shared-heap move a

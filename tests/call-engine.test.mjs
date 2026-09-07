@@ -803,3 +803,60 @@ test('a reply that plays to the end does NOT fire onReplyInterrupted', async () 
     await engine.endCall();
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
+
+// ── Barge window diagnostic (0.11.81) ───────────────────────────────────────
+// Whether an interruption could even be HEARD is otherwise invisible. The window
+// log names it: partials heard while speaking, whether I stopped, and — if I
+// didn't — the guard that blocked it. This is what tells a live "barge doesn't
+// grasp" apart: 0 heard = no words reached me over my own speech (timing/receive),
+// N heard + not stopped = a guard (too-short / filtered) held the stop.
+
+test('barge window logs partials-heard + outcome after a real barge', async () => {
+  const dir = await tmp();
+  try {
+    const worker = fakeWorker();
+    const rec = { played: [] };
+    const logs = [];
+    const engine = createCallEngine({
+      worker,
+      onTurn: async () => ({ text: 'a long spoken reply that gets cut off' }),
+      transcriptFilter: (t) => t !== 'noise',
+      streamingModelDir: '', tomesDir: dir,
+      log: (m) => logs.push(m),
+    });
+    engine.registerCallAdapter(blockingAdapterFactory(rec));
+    await engine.startCall('fake');
+    const streamId = await startPlaying(engine, worker, rec);
+    worker.emit({ op: 'asr-partial', streamId, text: 'wait hold on' });
+    await tick(); await tick();
+    assert.ok(logs.some((m) => /barge window: [1-9]\d* partial\(s\) heard while speaking, barged=true/.test(m)),
+      `expected a barged=true window line, got: ${logs.filter((m) => m.includes('barge window')).join(' | ')}`);
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('barge window names the guard when a heard partial did NOT stop me', async () => {
+  const dir = await tmp();
+  try {
+    const worker = fakeWorker();
+    const rec = { played: [] };
+    const logs = [];
+    const engine = createCallEngine({
+      worker,
+      onTurn: async () => ({ text: 'a reply' }),
+      transcriptFilter: (t) => t !== 'noise',
+      streamingModelDir: '', tomesDir: dir,
+      log: (m) => logs.push(m),
+    });
+    engine.registerCallAdapter(blockingAdapterFactory(rec));
+    await engine.startCall('fake');
+    const streamId = await startPlaying(engine, worker, rec);
+    worker.emit({ op: 'asr-partial', streamId, text: 'noise' });   // heard, but filtered
+    await tick();
+    rec.release?.();   // let playAudio finish → window log fires
+    await tick(); await tick();
+    assert.ok(logs.some((m) => /barge window: [1-9]\d* partial\(s\) heard while speaking, barged=false \(last skip: filtered-as-noise\)/.test(m)),
+      `expected barged=false with a skip reason, got: ${logs.filter((m) => m.includes('barge window')).join(' | ')}`);
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});

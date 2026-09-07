@@ -122,6 +122,8 @@ export function createCallEngine({
   const proactiveQueue = [];   // { makeReply, resolve }
   let speaking = false;        // a turn reply OR a proactive item is playing right now
   let bargeSent = false;       // barged the CURRENT playback already — don't re-stop on every partial
+  let heardWhileSpeaking = 0;  // partials that landed during my current playback — the barge window's signal
+  let bargeSkip = null;        // why the last in-window partial did NOT stop me (too-short / filtered-as-noise)
   let lastUserAudioAt = 0;     // last inbound audio frame — tells us my human is mid-utterance
   let proactiveTimer = null;
   const PROACTIVE_QUIET_MS = 1500;   // this much quiet from my human before it counts as a gap
@@ -146,7 +148,7 @@ export function createCallEngine({
     }
     const c = call;
     const { makeReply, resolve } = proactiveQueue.shift();
-    speaking = true; bargeSent = false;
+    speaking = true; bargeSent = false; heardWhileSpeaking = 0; bargeSkip = null;
     (async () => {
       let spoken = false;
       try {
@@ -234,10 +236,12 @@ export function createCallEngine({
    */
   function maybeBargeOnPartial(msg) {
     if (bargeDisabled()) return;
-    if (!speaking || bargeSent) return;            // only while I'm speaking, and once per playback
+    if (!speaking) return;                         // only while I'm speaking
+    heardWhileSpeaking++;                          // a partial DID land during my playback — recorded for the window log
+    if (bargeSent) return;                         // already stopped this playback
     const text = String(msg?.text ?? '').trim();
-    if (text.length < 2) return;                   // guard a spurious single syllable
-    if (!transcriptFilter(text)) return;           // ambient noise the recogniser guessed as words
+    if (text.length < 2) { bargeSkip = 'too-short'; return; }   // a spurious single syllable
+    if (!transcriptFilter(text)) { bargeSkip = 'filtered-as-noise'; return; }  // recogniser guessed words from noise
     bargeSent = true;
     log(`barge: recognised "${text}" over my reply — stopping`);
     try { call?.adapter?.stopPlayback?.(); } catch (e) { log(`stopPlayback on barge failed: ${e?.message ?? e}`); }
@@ -473,9 +477,17 @@ export function createCallEngine({
     // timeout) hangs the UI forever, which is the "thinks and never answers" bug.
     let res = null;
     const t0 = now();
-    try { speaking = true; bargeSent = false; res = await c.adapter.playAudio(c.callId, reply); }
+    try { speaking = true; bargeSent = false; heardWhileSpeaking = 0; bargeSkip = null; res = await c.adapter.playAudio(c.callId, reply); }
     catch (err) { log(`playAudio failed: ${err?.message ?? err}`); }
     finally { speaking = false; }
+    // Barge window — the one line that says whether an interruption could even be
+    // heard: partials that landed while I spoke, whether I stopped, and (if not)
+    // why. 0 heard + not barged = the recogniser produced no words over me (a
+    // timing/receive gap, not the filter); N heard + not barged names the guard
+    // that blocked the stop.
+    if (reply?.text) {
+      log(`barge window: ${heardWhileSpeaking} partial(s) heard while speaking, barged=${bargeSent}${(!bargeSent && bargeSkip) ? ` (last skip: ${bargeSkip})` : ''}`);
+    }
     // A barge cut the reply short: record how far it got (2c). Real-time
     // playback means elapsed ms ≈ what my human actually heard, so the next
     // turn can know it was interrupted and roughly where.
