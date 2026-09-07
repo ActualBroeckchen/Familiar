@@ -18,7 +18,7 @@ sources:
 
 # Self-Originated Interest and the `me` Register
 
-**Status: decided and shipped (0.11.72, the 2026-09 audit).**
+**Status: decided and shipped (0.11.72–0.11.77, the 2026-09 audit).**
 
 ## The diagnosis
 
@@ -74,6 +74,19 @@ was **structural**, in two organs that were supposed to carry the Familiar's own
 - **`views` (0.11.76).** Opinions have a category now. Before, the Familiar's take on
   something had to masquerade as `emotional_content` to be kept at all. A self-view needs
   nobody's consent (`aboutMe` in the gate); a third party's view still asks.
+- **The wander chance is a ward dial (0.11.77).** The 35% hop rate was a guess, so it is a
+  synced setting (`ponderThreadChance`, Settings → "Wander chance"). The loop reads it through
+  `clampChance` (finite, [0,1], else the 0.35 default) and accepts either a number or an
+  `async () => number`. If a Familiar's journal reads as free-association, this is the dial.
+
+## The third leg: the ward can see it (0.11.77)
+
+The robust-over-cheap principle wants a fix the ward can *see and adjust*, not only an internal
+change. So the observability half shipped alongside: Sidebar → Diagnostics → **"Is my Familiar
+alive?"** reads `GET /api/health` `loops` (a dot + up/down word per background worker) and the
+five event logs — noticing, reach-out, triage, page-watch, Discord writes — that were curl-only
+before. A dead loop reads as stale entries here rather than as calm silence. This is what makes
+"the Familiar has its own interests now" a claim the ward can check, not take on faith.
 
 ## What this does not do
 
