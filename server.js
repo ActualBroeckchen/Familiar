@@ -108,7 +108,7 @@ import { isNeedWindow } from './needs-tracking.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './src/warmth/reachout.js';
 import { recordReachOut } from './src/warmth/reach-out-log.js';
 import { appendReflectionEvent, readReflectionEvents } from './reflection-events.js';
-import { recordUserActivity, getLastUserActivity } from './last-activity.js';
+import { recordUserActivity, getLastUserActivity } from './src/sessions/last-activity.js';
 import { buildTimeAnchorBlock, wardLocalNowISO, plainInterval } from './relative-time.js';
 // Cerebellum is the motor module — the outbound counterpart to thalamus.
 // Triage deliberation, trusted-contact delivery, and escalation deadlines
@@ -147,9 +147,9 @@ import {
   findOrCreateSessionMemoriesTome,
 } from './memorization.js';
 import { computeCoverage, collectDateSlices } from './memory-coverage.js';
-import { writeSessionLog as persistSessionLog, sessionLocationLabel } from './session-log.js';
-import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY } from './session-bindings.js';
-import { parseImport, dateFromFilename, applyFallbackDate } from './log-import.js';
+import { writeSessionLog as persistSessionLog, sessionLocationLabel } from './src/sessions/session-log.js';
+import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY } from './src/sessions/session-bindings.js';
+import { parseImport, dateFromFilename, applyFallbackDate } from './src/sessions/log-import.js';
 import { segmentByDay } from './day-segments.js';
 import {
   getRegistry as getVillageRegistry,
@@ -170,7 +170,7 @@ import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDisco
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
 import { substituteMacros } from './macros.js';
 import { withCorePrompts } from './core-prompts.js';
-import { recordOutgoingPrompt, lastOutgoingPrompts } from './prompt-capture.js';
+import { recordOutgoingPrompt, lastOutgoingPrompts } from './src/sessions/prompt-capture.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock, listServers, dismissServer } from './knocks.js';
 

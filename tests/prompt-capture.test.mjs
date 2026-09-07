@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   recordOutgoingPrompt, lastOutgoingPrompts, lastOutgoingPrompt, _clearOutgoingPrompts,
-} from '../prompt-capture.js';
+} from '../src/sessions/prompt-capture.js';
 
 test('records the last payload per surface and reads it back verbatim', () => {
   _clearOutgoingPrompts();

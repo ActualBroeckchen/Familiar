@@ -20,7 +20,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { sessionLocationLabel } from './session-log.js';
+import { sessionLocationLabel } from './src/sessions/session-log.js';
 
 // This file sits at the repo root, so its dir IS the root.
 export const REPO_ROOT = path.dirname(fileURLToPath(import.meta.url));

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { mergeMessages, writeSessionLog } from '../session-log.js';
+import { mergeMessages, writeSessionLog } from '../src/sessions/session-log.js';
 
 const m = (id, ts, content = id) => ({ id, role: 'user', content, timestamp: ts });
 

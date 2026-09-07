@@ -33,7 +33,7 @@ import { recordThreat } from '../../threat-tracker.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
 import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs } from './voice-transcribe.js';
 import { enqueueSessionByDay } from '../../memorization.js';
-import { writeSessionLog, stampMessages, turnMessages } from '../../session-log.js';
+import { writeSessionLog, stampMessages, turnMessages } from '../sessions/session-log.js';
 import { sessionSlugId } from '../../slug-ids.js';
 import { registerPushAdapterFactory, formatItemForPush } from '../../cerebellum.js';
 import { createVoiceChatTurn } from './voice-chat-turn.js';
