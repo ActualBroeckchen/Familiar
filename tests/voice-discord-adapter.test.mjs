@@ -329,3 +329,32 @@ test('leaveCall destroys the connection and clears open speakers', async () => {
   assert.equal(deps._connection.destroyed, true);
   assert.equal(stream.destroyed, true);
 });
+
+// ── Receive observability (0.11.79) ─────────────────────────────────────────
+// The reported "released after 0 audio frames" is silent about WHY: no audio
+// delivered, or delivered-but-undecodable. These signals disambiguate it so a
+// live 0-frame case points at the receive/DAVE path vs the adapter.
+
+test('a delivered packet logs "receive is live" once; a 0-packet utterance flags the upstream cause', async () => {
+  const logs = [];
+  const deps = makeFakeDeps();
+  const { hooks } = makeHooks();
+  const { adapter } = createDiscordCallAdapter({ hooks, joinSpec: joinSpec(), deps, log: (m) => logs.push(m) });
+  await adapter.joinCall();
+
+  // Speaker A delivers a packet → "receive is live" fires exactly once.
+  deps._receiver.speaking.emit('start', 'uA');
+  const a = deps._receiver.subscribed[0].stream;
+  a.emit('data', Buffer.from([42]));
+  a.emit('data', Buffer.from([42]));
+  const live = logs.filter((m) => /receive is live/.test(m));
+  assert.equal(live.length, 1, 'first-packet log is one-time');
+
+  // Speaker B opens a subscription but Discord delivers nothing → the upstream hint.
+  deps._receiver.speaking.emit('start', 'uB');
+  deps._receiver.speaking.emit('end', 'uB');
+  assert.ok(
+    logs.some((m) => /0 inbound audio packets delivered/.test(m) && /DAVE|upstream/.test(m)),
+    'a 0-packet speaker names the receive/DAVE path, not the adapter',
+  );
+});
