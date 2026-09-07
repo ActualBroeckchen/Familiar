@@ -6,7 +6,7 @@ import path from 'node:path';
 import {
   preflightDecision, dirSize, uniqueSize, measureFootprint, volumeSpace,
   RESERVE_BYTES, FOOTPRINT_CATEGORIES,
-} from '../voice-footprint.js';
+} from '../src/voice/voice-footprint.js';
 
 const MB = 1024 * 1024;
 

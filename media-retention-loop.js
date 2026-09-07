@@ -13,7 +13,7 @@
  * Settings toggle. This is Pass 4's new (thirteenth) background worker.
  */
 
-import { isCallActiveFromFile } from './call-engine.js';
+import { isCallActiveFromFile } from './src/voice/call-engine.js';
 import { readSettingsSync } from './cerebellum.js';
 import { getThreat } from './threat-tracker.js';
 import { runMediaRetention } from './media-retention.js';

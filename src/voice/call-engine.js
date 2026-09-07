@@ -39,8 +39,9 @@ import { fileURLToPath } from 'node:url';
 import { pcm16ToFloat } from './voice-audio-features.js';
 import { normalizeTranscriptCase } from './voice-speech.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
+const DEFAULT_TOMES_DIR = path.join(REPO_ROOT, 'tomes');
 const CALL_STATE_FILE = '.call-state.json';
 
 // A speaker embedding needs only a few seconds; cap the per-utterance capture so

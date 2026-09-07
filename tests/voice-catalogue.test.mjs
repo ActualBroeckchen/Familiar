@@ -5,7 +5,7 @@ import {
   rejectionReason, attributionNotice, validateShippingSet,
   VOICE_PROVENANCE, mayLeaveTheMachine, belongsInIdentityBackup, redactForSharing,
   DEFAULT_VOICE, SHORTLIST, shortlistKeys,
-} from '../voice-catalogue.js';
+} from '../src/voice/voice-catalogue.js';
 
 test('no non-commercial source can ever reach the shipped set', () => {
   for (const s of shippableSources()) {
@@ -140,7 +140,7 @@ test('the bundled voice is CC BY, so its credit must actually appear in the NOTI
 });
 
 test('the default voice is a real catalogue entry, not a name someone hoped existed', async () => {
-  const { loadCatalogue, _resetCatalogue } = await import('../voice-clips.js');
+  const { loadCatalogue, _resetCatalogue } = await import('../src/voice/voice-clips.js');
   _resetCatalogue();
   const cat = loadCatalogue(process.cwd());
   const found = (cat.clips ?? []).find(
@@ -175,7 +175,7 @@ test('every shortlisted voice comes from a source we may ship', () => {
 });
 
 test('every shortlisted voice is a real pinned clip', async () => {
-  const { loadCatalogue, _resetCatalogue } = await import('../voice-clips.js');
+  const { loadCatalogue, _resetCatalogue } = await import('../src/voice/voice-clips.js');
   _resetCatalogue();
   const clips = loadCatalogue(process.cwd()).clips ?? [];
   for (const v of SHORTLIST) {

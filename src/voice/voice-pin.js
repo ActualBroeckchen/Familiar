@@ -23,8 +23,9 @@ import { fileURLToPath } from 'node:url';
 import { BASE_MODELS, applyPins, upstreamUrl } from './voice-models.js';
 import { fetchPlan, MODELS_SUBDIR } from './voice-fetch.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PINS_FILE = path.join(__dirname, 'voice-model-pins.json');
+const PINS_FILE = path.join(REPO_ROOT, 'voice-model-pins.json');
 
 async function readPins() {
   try { return JSON.parse(await fsp.readFile(PINS_FILE, 'utf8')); } catch { return {}; }
@@ -58,7 +59,7 @@ async function measure(url, onProgress) {
  * @param {string} modelId  a BASE_MODELS id that has a recorded `upstream`
  * @returns {Promise<{ok:boolean, reason?:string, detail?:string, sha256?:string, bytes?:number}>}
  */
-export async function pinAndInstallModel(modelId, { rootDir = __dirname, onProgress = () => {} } = {}) {
+export async function pinAndInstallModel(modelId, { rootDir = REPO_ROOT, onProgress = () => {} } = {}) {
   try {
     const known = BASE_MODELS.find((m) => m.id === modelId);
     if (!known) return { ok: false, reason: 'unknown-model' };

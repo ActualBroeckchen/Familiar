@@ -8,7 +8,7 @@ import {
   BACKENDS, DEFAULT_BACKEND, POCKET_FOOTPRINT,
   voiceboxPython, inspectBackends, resolveBackend, VOICEBOX_SUBDIR,
   ensureWindowsMsvcRuntime, placeMsvcRuntimeBesideTorch,
-} from '../voice-backend.js';
+} from '../src/voice/voice-backend.js';
 
 async function tmpRoot() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'backend-'));

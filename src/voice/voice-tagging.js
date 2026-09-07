@@ -24,8 +24,9 @@ import { existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { classifyRoomSounds } from './voice-audio-tags.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const TAGGING_MODEL_DIR = path.join(__dirname, 'models', 'audio', 'tagging-audioset');
+export const TAGGING_MODEL_DIR = path.join(REPO_ROOT, 'models', 'audio', 'tagging-audioset');
 
 const LOAD_TIMEOUT_MS = 180_000;   // a cold onnx load off laptop disk
 const TAG_TIMEOUT_MS  = 30_000;    // one short clip

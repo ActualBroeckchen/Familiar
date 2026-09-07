@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   parseWav, measureVoiceClip, frameF0, describeMeasurement,
   F0_MIN_HZ, F0_MAX_HZ, chunkIsSilent, createSilenceTracker
-} from '../voice-audio-features.js';
+} from '../src/voice/voice-audio-features.js';
 
 /**
  * Build a real 16-bit PCM WAV in memory. Synthesised rather than recorded, so
@@ -163,7 +163,7 @@ test('a steady voice and a moving one are described differently', () => {
 // ── The cached and fresh paths must agree ────────────────────────────────
 
 test('a measurement describes itself the same way whether or not it was cached', async () => {
-  const { measureClip } = await import('../voice-clips.js');
+  const { measureClip } = await import('../src/voice/voice-clips.js');
   const os = await import('node:os');
   const fsp = (await import('node:fs')).promises;
   const pathm = await import('node:path');
@@ -178,7 +178,7 @@ test('a measurement describes itself the same way whether or not it was cached',
       counts: { clips: 1, voices: 1 },
     }));
 
-    const { _resetCatalogue } = await import('../voice-clips.js');
+    const { _resetCatalogue } = await import('../src/voice/voice-clips.js');
     _resetCatalogue();
     const fetchImpl = async () => ({ ok: true, arrayBuffer: async () => wav });
 
@@ -195,7 +195,7 @@ test('a measurement describes itself the same way whether or not it was cached',
 });
 
 test('a clip whose bytes do not match the catalogue is refused, not measured', async () => {
-  const { measureClip, _resetCatalogue } = await import('../voice-clips.js');
+  const { measureClip, _resetCatalogue } = await import('../src/voice/voice-clips.js');
   const os = await import('node:os');
   const fsp = (await import('node:fs')).promises;
   const pathm = await import('node:path');

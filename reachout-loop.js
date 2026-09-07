@@ -37,7 +37,7 @@
  */
 
 import { getWaitStreak, recordWait, recordProactive, isWaitStreakEnabled } from './wait-streak.js';
-import { isCallActiveFromFile } from './call-engine.js';
+import { isCallActiveFromFile } from './src/voice/call-engine.js';
 
 const DEFAULT_TICK_MS = 10 * 60_000;     // 10 min — warmth doesn't need a fast pulse
 

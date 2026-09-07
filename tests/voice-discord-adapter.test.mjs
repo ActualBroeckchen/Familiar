@@ -10,7 +10,7 @@ import {
   createDiscordCallAdapter,
   resampleMono, downmixStereoToMono, monoToStereo,
   stereo48ToMono16, monoToStereo48,
-} from '../voice-discord-adapter.js';
+} from '../src/voice/voice-discord-adapter.js';
 
 // ── Pure helpers ────────────────────────────────────────────────────────────
 

@@ -10,7 +10,7 @@
  * decides audience itself.
  */
 
-import { extractContent } from './llm-call.js';
+import { extractContent } from '../../llm-call.js';
 
 // A hung turn must not hang the call forever. The enriched chat path can be slow
 // (an MCP cold start on the first turn, a thinking model), but it has to end so

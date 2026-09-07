@@ -33,11 +33,12 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { getAssetMeta, setAssetDescription, assetBytesPath } from './media.js';
+import { getAssetMeta, setAssetDescription, assetBytesPath } from '../../media.js';
 import { composePlan } from './voice-models.js';
 import { fetchPlan, MODELS_SUBDIR } from './voice-fetch.js';
 import { normalizeTranscriptCase } from './voice-speech.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
@@ -45,7 +46,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * with `{what:'listen'}` (the path a ward actually takes), or by
  * `scripts/ensure-audio-models.mjs --extras=asr-offline` from a terminal.
  */
-export const ASR_MODEL_DIR = path.join(__dirname, 'models', 'audio', 'asr-offline');
+export const ASR_MODEL_DIR = path.join(REPO_ROOT, 'models', 'audio', 'asr-offline');
 
 /**
  * Hybrid call transcription: re-transcribe each finished call utterance with this

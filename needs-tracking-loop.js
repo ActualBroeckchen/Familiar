@@ -22,7 +22,7 @@
 
 import { listRecurring, resolveScheduleOccurrence } from './thalamus.js';
 import { getThreat } from './threat-tracker.js';
-import { isCallActiveFromFile } from './call-engine.js';
+import { isCallActiveFromFile } from './src/voice/call-engine.js';
 import { readSettingsSync } from './cerebellum.js';
 import { selectMissedOccurrences, isNeedWindow } from './needs-tracking.js';
 

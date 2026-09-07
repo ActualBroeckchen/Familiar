@@ -18,10 +18,10 @@ import path from 'node:path';
 import os from 'node:os';
 
 import { buildStandin, clipLength, maxBytesForKind, mediaKindFor, MEDIA_KINDS, AUDIO_MAX_BYTES, MEDIA_MAX_BYTES } from '../media.js';
-import { transcribeTimeoutMs, transcriptionAllowed, continuousListeningAllowed } from '../voice-transcribe.js';
+import { transcribeTimeoutMs, transcriptionAllowed, continuousListeningAllowed } from '../src/voice/voice-transcribe.js';
 import { materializeAttachments } from '../vision.js';
 import { encodeWav, toMono, elapsedLabel, TARGET_RATE } from '../public/voice-recorder.js';
-import { parseWav } from '../voice-audio-features.js';
+import { parseWav } from '../src/voice/voice-audio-features.js';
 
 // ── The kind derivation ───────────────────────────────────────────
 
@@ -211,7 +211,7 @@ test('PIPELINE: a voice note is transcribed BEFORE the prompt is assembled', asy
   // saying "I haven't listened to this one yet" and the model confabulates
   // over the gap. Pure-function tests cannot see ordering.
   const { saveAsset, getAssetMeta, MEDIA_DIR } = await import('../media.js');
-  const { ensureTranscribed } = await import('../voice-transcribe.js');
+  const { ensureTranscribed } = await import('../src/voice/voice-transcribe.js');
 
   // A real 1-second wav through the real store.
   const samples = new Float32Array(TARGET_RATE);
@@ -280,7 +280,7 @@ test('PIPELINE: a voice note is transcribed BEFORE the prompt is assembled', asy
 
 test('PIPELINE: with voice hard-disabled, nothing is transcribed and the turn still goes out', async (t) => {
   const { saveAsset, MEDIA_DIR } = await import('../media.js');
-  const { ensureTranscribed } = await import('../voice-transcribe.js');
+  const { ensureTranscribed } = await import('../src/voice/voice-transcribe.js');
 
   const samples = new Float32Array(8000).fill(0.1);
   const meta = await saveAsset({ buffer: Buffer.from(encodeWav(samples, TARGET_RATE)), mime: 'audio/wav', origin: { surface: 'test' } });
@@ -378,7 +378,7 @@ test('a voice note survives images being switched off', async () => {
 });
 
 test('a refusal my human can undo is never cached as the transcript', async () => {
-  const src = await fs.readFile(path.join(process.cwd(), 'voice-transcribe.js'), 'utf8');
+  const src = await fs.readFile(path.join(process.cwd(), 'src/voice/voice-transcribe.js'), 'utf8');
   const fn = src.slice(src.indexOf('export async function transcribeAsset('), src.indexOf('/** Cache-write'));
   const disabled = fn.slice(fn.indexOf('if (!transcriptionAllowed'), fn.indexOf('meta.ext !== '));
 
@@ -407,7 +407,7 @@ test('the microphone button is not hidden behind anything', async () => {
 test('nothing in the voice-note path consults voiceEnabled', async () => {
   // The rule, stated where it cannot rot: voiceEnabled is for CONTINUOUS
   // listening (Pass 2). A note is a press.
-  const src = await fs.readFile(path.join(process.cwd(), 'voice-transcribe.js'), 'utf8');
+  const src = await fs.readFile(path.join(process.cwd(), 'src/voice/voice-transcribe.js'), 'utf8');
   const notePath = src.slice(src.indexOf('export async function transcribeAsset('));
   assert.doesNotMatch(notePath, /voiceEnabled/,
     'the voice-note path reads voiceEnabled again — a press is the consent');
@@ -422,7 +422,7 @@ test('nothing in the voice-note path consults voiceEnabled', async () => {
 // clear recording was unintelligible — after downloading 226 MB.
 
 test('transcription asks for the LISTENING worker, never the speaking one', async () => {
-  const src = await fs.readFile(path.join(process.cwd(), 'voice-transcribe.js'), 'utf8');
+  const src = await fs.readFile(path.join(process.cwd(), 'src/voice/voice-transcribe.js'), 'utf8');
   const srv = await fs.readFile(path.join(process.cwd(), 'server.js'), 'utf8');
 
   assert.match(src, /listeningWorker\(\{ rootDir \}\)/, 'hearVoiceNotes is back on the speaking worker');
@@ -436,7 +436,7 @@ test('the listening worker resolves to sherpa even when speaking is pocket', asy
   // shape of my own intent is not checking behaviour — the same mistake as
   // asserting a comment exists. So it resolves the backend for real, with the
   // exact settings that broke it, and looks at which script would be spawned.
-  const { resolveBackend, BACKENDS } = await import('../voice-backend.js');
+  const { resolveBackend, BACKENDS } = await import('../src/voice/voice-backend.js');
 
   const pocketSpeaker = { voiceTts: { backend: 'pocket', voice: 'vctk/p255_023/enhanced' } };
 
@@ -465,7 +465,7 @@ test('the listening worker resolves to sherpa even when speaking is pocket', asy
 
 test('listeningWorker never hands back the speaking worker', async () => {
   // Behavioural, one level up: the exported function, not the resolver.
-  const { listeningWorker } = await import('../audio-worker-current.js');
+  const { listeningWorker } = await import('../src/voice/audio-worker-current.js');
   const got = await listeningWorker({ rootDir: process.cwd() });
 
   // Either it built a listener, or it said why it could not. What it must never
@@ -540,10 +540,10 @@ test('every reason that reaches the browser has words for my human', async () =>
 // twice. Stubs test the caller; only spawning the real thing tests the worker.
 
 test('PIPELINE: the real audio worker dispatches transcribe to the real handler', async () => {
-  const { createAudioWorker } = await import('../audio-worker-host.js');
+  const { createAudioWorker } = await import('../src/voice/audio-worker-host.js');
   const worker = createAudioWorker({
     command: process.execPath,
-    workerScript: path.join(process.cwd(), 'audio-worker.mjs'),
+    workerScript: path.join(process.cwd(), 'src/voice/audio-worker.mjs'),
   });
   try {
     const r = await worker.request({ op: 'transcribe', wavPath: '/definitely/not/here.wav' }, { timeoutMs: 20_000 });
@@ -563,7 +563,7 @@ test('PIPELINE: the real audio worker dispatches transcribe to the real handler'
 });
 
 test('no op is declared twice in the worker — a duplicate key wins silently', async () => {
-  const body = await fs.readFile(path.join(process.cwd(), 'audio-worker.mjs'), 'utf8');
+  const body = await fs.readFile(path.join(process.cwd(), 'src/voice/audio-worker.mjs'), 'utf8');
   const ops = [...body.matchAll(/^ {2}async (\w+)\(/gm)].map((m) => m[1]);
   const dupes = ops.filter((k, i) => ops.indexOf(k) !== i);
   assert.deepEqual(dupes, [], `duplicate OPS keys shadow each other: ${dupes.join(', ')}`);
@@ -576,7 +576,7 @@ test('the transcription budget counts notes heard, not attachments looked at', a
   // was never transcribed — with no work done and nothing said about it. The
   // cap has to bound work, not iteration.
   const { saveAsset, MEDIA_DIR, setAssetDescription } = await import('../media.js');
-  const { ensureTranscribed } = await import('../voice-transcribe.js');
+  const { ensureTranscribed } = await import('../src/voice/voice-transcribe.js');
 
   const made = [];
   const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c6300010000050001', 'hex');
@@ -626,9 +626,9 @@ test('EVERY reason the worker or its supervisor can emit has words for my human'
   // by fixing a stop-during-request race). A list I maintain is a list I forget
   // to update; the source of truth is the code that emits them.
   const [worker, host, hostAlso, app] = await Promise.all([
-    fs.readFile(path.join(process.cwd(), 'audio-worker.mjs'), 'utf8'),
-    fs.readFile(path.join(process.cwd(), 'audio-worker-host.js'), 'utf8'),
-    fs.readFile(path.join(process.cwd(), 'voice-transcribe.js'), 'utf8'),
+    fs.readFile(path.join(process.cwd(), 'src/voice/audio-worker.mjs'), 'utf8'),
+    fs.readFile(path.join(process.cwd(), 'src/voice/audio-worker-host.js'), 'utf8'),
+    fs.readFile(path.join(process.cwd(), 'src/voice/voice-transcribe.js'), 'utf8'),
     fs.readFile(path.join(process.cwd(), 'public/app.js'), 'utf8'),
   ]);
 

@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createCallEngine, clearStaleCallState, isCallActiveFromFile, isCallActiveFromFileSync, spokenTextForMs } from '../call-engine.js';
-import { floatToPcm16, parseWav } from '../voice-audio-features.js';
+import { createCallEngine, clearStaleCallState, isCallActiveFromFile, isCallActiveFromFileSync, spokenTextForMs } from '../src/voice/call-engine.js';
+import { floatToPcm16, parseWav } from '../src/voice/voice-audio-features.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, '..');
@@ -566,7 +566,7 @@ const canRun = MODEL_DIR && existsSync(MODEL_DIR)
 
 test('real worker: a wav pushed through the adapter drives a transcript turn', { skip: canRun ? false : 'set PF_ASR_STREAMING_MODEL_DIR (and install sherpa-onnx-node) to run' }, async () => {
   const dir = await tmp();
-  const { createAudioWorker } = await import('../audio-worker-host.js');
+  const { createAudioWorker } = await import('../src/voice/audio-worker-host.js');
   const worker = createAudioWorker({ idleMs: 0 });
   const rec = { played: [] };
   const turns = [];

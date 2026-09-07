@@ -17,7 +17,7 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, promises as fsp } from 'fs';
-import { isCallActiveFromFile } from './call-engine.js';
+import { isCallActiveFromFile } from './src/voice/call-engine.js';
 import { randomUUID } from 'crypto';
 import { PROVIDER_URLS } from './providers.js';
 import { extractContent } from './llm-call.js';

@@ -32,8 +32,8 @@ import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import { Readable } from 'node:stream';
 
-import { BASE_MODELS, applyPins, formatBytes, upstreamUrl } from '../voice-models.js';
-import { isArchive, extractArchive, readMarker } from '../voice-extract.js';
+import { BASE_MODELS, applyPins, formatBytes, upstreamUrl } from '../src/voice/voice-models.js';
+import { isArchive, extractArchive, readMarker } from '../src/voice/voice-extract.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PINS = path.join(ROOT, 'voice-model-pins.json');

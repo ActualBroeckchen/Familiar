@@ -4,13 +4,13 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { cosineSimilarity, l2normalize, norm, averageEmbeddings } from '../voice-embedding.js';
+import { cosineSimilarity, l2normalize, norm, averageEmbeddings } from '../src/voice/voice-embedding.js';
 import {
   readVoiceprints, setWardPrint, getWardPrint, deleteWardPrint,
   setVillagerPrint, getVillagerPrint, deleteVillagerPrint, listVillagerPrints, enrolledPrints,
-} from '../voiceprints.js';
-import { createGuestWatchdog, GUEST_DEFAULTS } from '../voice-guest-watchdog.js';
-import { createDiarizer } from '../voice-diarize.js';
+} from '../src/voice/voiceprints.js';
+import { createGuestWatchdog, GUEST_DEFAULTS } from '../src/voice/voice-guest-watchdog.js';
+import { createDiarizer } from '../src/voice/voice-diarize.js';
 
 // ── voice-embedding: the pure math everything else stands on ───────────────
 

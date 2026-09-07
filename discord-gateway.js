@@ -42,7 +42,7 @@ import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom }
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from './cerebellum.js';
 import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, VIDEO_MIME_EXT, VIDEO_MAX_BYTES, MAX_IMAGES_PER_MESSAGE } from './media.js';
 import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from './vision.js';
-import { hearVoiceNotes } from './voice-transcribe.js';
+import { hearVoiceNotes } from './src/voice/voice-transcribe.js';
 import { extractTurnReply } from './llm-call.js';
 import { logDiscordWrite } from './discord-write-log.js';
 import { enqueueSessionByDay, readConsentPending, pruneConsentPending } from './memorization.js';

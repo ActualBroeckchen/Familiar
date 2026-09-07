@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createCallGuard, detectReleasePhrase, GUEST_NOTE_LINE } from '../voice-call-guard.js';
+import { createCallGuard, detectReleasePhrase, GUEST_NOTE_LINE } from '../src/voice/voice-call-guard.js';
 
 const WARD_PRINT = [1, 0, 0];
 const wardEmb  = [0.98, 0.02, 0];   // matches the ward
