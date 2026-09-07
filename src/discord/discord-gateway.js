@@ -33,47 +33,47 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
-import { sessionSlugId } from './slug-ids.js';
+import { sessionSlugId } from '../../slug-ids.js';
 
-import { enrich, withLock, getScheduleWindow, getMemoriesBySubject, confirmConsentMemories, dropPendingMemories } from './thalamus.js';
-import { buildAvailabilityBlock } from './src/schedule/schedule-availability.js';
-import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC, locationCallMode, DEFAULT_CALL_MODE, upsertLocation } from './src/village/village.js';
-import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom } from './src/village/audience.js';
-import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from './cerebellum.js';
-import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, VIDEO_MIME_EXT, VIDEO_MAX_BYTES, MAX_IMAGES_PER_MESSAGE } from './src/vision/media.js';
-import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from './src/vision/vision.js';
-import { hearVoiceNotes } from './src/voice/voice-transcribe.js';
-import { extractTurnReply } from './llm-call.js';
+import { enrich, withLock, getScheduleWindow, getMemoriesBySubject, confirmConsentMemories, dropPendingMemories } from '../../thalamus.js';
+import { buildAvailabilityBlock } from '../schedule/schedule-availability.js';
+import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC, locationCallMode, DEFAULT_CALL_MODE, upsertLocation } from '../village/village.js';
+import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom } from '../village/audience.js';
+import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from '../../cerebellum.js';
+import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, VIDEO_MIME_EXT, VIDEO_MAX_BYTES, MAX_IMAGES_PER_MESSAGE } from '../vision/media.js';
+import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from '../vision/vision.js';
+import { hearVoiceNotes } from '../voice/voice-transcribe.js';
+import { extractTurnReply } from '../../llm-call.js';
 import { logDiscordWrite } from './discord-write-log.js';
-import { enqueueSessionByDay, readConsentPending, pruneConsentPending } from './src/memory/memorization.js';
+import { enqueueSessionByDay, readConsentPending, pruneConsentPending } from '../memory/memorization.js';
 import {
   isConsentCommand, parseConsentCommand, buildConsentMenu, applyConsentSet, consentHelpText,
   CONSENT_CID, buildConsentHomeView, buildCategoryView, buildMemoriesView, buildPendingView, buildDoneView,
-} from './src/village/villager-consent.js';
-import { findVillagerByAlias } from './src/village/village.js';
-import { mergeSettings } from './settings-merge.js';
-import { readAllTomes } from './src/tomes/tome-store.js';
-import { activateLore, foldLoreForPrompt } from './src/tomes/tome-lore.js';
-import { resolveTomeMacros } from './src/tomes/tome-macros.js';
+} from '../village/villager-consent.js';
+import { findVillagerByAlias } from '../village/village.js';
+import { mergeSettings } from '../../settings-merge.js';
+import { readAllTomes } from '../tomes/tome-store.js';
+import { activateLore, foldLoreForPrompt } from '../tomes/tome-lore.js';
+import { resolveTomeMacros } from '../tomes/tome-macros.js';
 import {
   isQueueCommand, QUEUE_CID,
   buildQueueHomeView, buildQueueItemView, buildQueueDoneView, buildQueueText,
-} from './src/ward/ward-consent-queue.js';
+} from '../ward/ward-consent-queue.js';
 import {
   isConnectionCommand, CONN_CID, DEFAULT_VALUE, FEATURE_CONNECTIONS,
   buildConnHomeView, buildFeaturesView, buildFeatureView, buildConnDoneView, buildConnText,
   buildEffortsView, buildEffortView, isSettableEffort,
-} from './src/ward/ward-connections.js';
-import { PROVIDER_URLS, resolveReasoningEffort } from './providers.js';
-import { scoreMessage } from './crisis-signals.js';
-import { recordThreat } from './threat-tracker.js';
-import { recordUserActivity } from './src/sessions/last-activity.js';
-import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';
-import { recordKnock, recordLocationKnock, recordServer } from './src/village/knocks.js';
-import { filterOutgoingReply } from './outgoing-filter.js';
-import { enqueueOutbox, acknowledgePendingByKind } from './outbox.js';
-import { writeSessionLog as writeSessionLogShared } from './src/sessions/session-log.js';
-import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY } from './src/sessions/session-bindings.js';
+} from '../ward/ward-connections.js';
+import { PROVIDER_URLS, resolveReasoningEffort } from '../../providers.js';
+import { scoreMessage } from '../../crisis-signals.js';
+import { recordThreat } from '../../threat-tracker.js';
+import { recordUserActivity } from '../sessions/last-activity.js';
+import { buildWaitStreakLine, recordWait, recordProactive } from '../../wait-streak.js';
+import { recordKnock, recordLocationKnock, recordServer } from '../village/knocks.js';
+import { filterOutgoingReply } from '../../outgoing-filter.js';
+import { enqueueOutbox, acknowledgePendingByKind } from '../../outbox.js';
+import { writeSessionLog as writeSessionLogShared } from '../sessions/session-log.js';
+import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY } from '../sessions/session-bindings.js';
 
 // Auto-unify: the ward's Discord DM shares ONE session with their web private
 // chat (both bind to the ward-private pointer). Default ON; the ward toggle
@@ -83,16 +83,17 @@ function sessionUnifyEnabled() {
   if (process.env.PROTO_FAMILIAR_SESSION_UNIFY_DISABLED === '1') return false;
   return readSettingsSync()?.sessionUnifyEnabled !== false;   // default ON
 }
-import { substituteMacros } from './macros.js';
-import { coreSystemSegment, postHistoryMessage } from './core-prompts.js';
-import { recordOutgoingPrompt } from './src/sessions/prompt-capture.js';
-import { stripLlmTimestamps } from './message-sanitize.mjs';
-import { sanitizeExternal } from './injection-guard.js';
-import { checkForUpdate, applyUpdate, updateDisabled } from './updater.js';
+import { substituteMacros } from '../../macros.js';
+import { coreSystemSegment, postHistoryMessage } from '../../core-prompts.js';
+import { recordOutgoingPrompt } from '../sessions/prompt-capture.js';
+import { stripLlmTimestamps } from '../../message-sanitize.mjs';
+import { sanitizeExternal } from '../../injection-guard.js';
+import { checkForUpdate, applyUpdate, updateDisabled } from '../../updater.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const LOGS_DIR  = path.join(__dirname, 'logs');
-const MAP_FILE  = path.join(__dirname, 'tomes', '.discord-map.json');
+const LOGS_DIR  = path.join(REPO_ROOT, 'logs');
+const MAP_FILE  = path.join(REPO_ROOT, 'tomes', '.discord-map.json');
 
 const API_BASE = 'https://discord.com/api/v10';
 
@@ -118,7 +119,7 @@ const FATAL_CLOSE_CODES = new Set([4004, 4010, 4011, 4012, 4013, 4014]);
 // ── Per-location rate-limit bucket (V5) ──────────────────────────
 // Simple hourly token bucket persisted to tomes/.rate-limits.json.
 // { [locationKey]: { count: N, windowStartMs: T } }
-const RATE_LIMITS_FILE = path.join(__dirname, 'tomes', '.rate-limits.json');
+const RATE_LIMITS_FILE = path.join(REPO_ROOT, 'tomes', '.rate-limits.json');
 let _rl = {};
 let _rlLoaded = false;
 
@@ -175,7 +176,7 @@ function formatMsgTime(isoString) {
 
 // ── Deferred presence — [later:…] revisit token (V9) ─────────────
 
-const REVISIT_FILE    = path.join(__dirname, 'tomes', '.discord-revisits.json');
+const REVISIT_FILE    = path.join(REPO_ROOT, 'tomes', '.discord-revisits.json');
 const REVISIT_MIN_MS  = 5  * 60_000;   // 5-minute floor
 const REVISIT_MAX_MS  = 60 * 60_000;   // 1-hour ceiling
 const REVISIT_MAX_DEFER = 2;           // may re-defer this many times total
@@ -1167,7 +1168,7 @@ async function activeDiscordLore({ content, session, settings, locationKey }) {
   const none = { lead: '', tail: '', atDepth: '' };
   if (discordTomesOff()) return none;
   try {
-    const tomes = await readAllTomes(path.join(__dirname, 'tomes'));
+    const tomes = await readAllTomes(path.join(REPO_ROOT, 'tomes'));
     if (!tomes.length) return none;
     const priorTurns = (session.messages ?? []).filter(m => m.role === 'user' || m.role === 'assistant');
     const activated = activateLore(tomes, content, {
@@ -1589,7 +1590,7 @@ async function handleConsentInteraction(gw, d) {
 // click these. No LLM call: a consent decision and a routing choice must be
 // exact, so they are code, not judgment.
 
-const WARD_SETTINGS_FILE = path.join(__dirname, 'settings.json');
+const WARD_SETTINGS_FILE = path.join(REPO_ROOT, 'settings.json');
 
 // Persist a ward settings change with the same locked, atomic write + wholesale
 // top-level merge the HTTP PUT uses, so a Discord change and a web change can't

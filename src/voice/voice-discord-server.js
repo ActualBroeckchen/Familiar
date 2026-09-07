@@ -27,7 +27,7 @@ import path from 'node:path';
 
 import { createCallEngine, isCallActiveFromFile, isCallActiveFromFileSync } from './call-engine.js';
 import { createDiscordCallAdapter, loadDiscordVoiceDeps } from './voice-discord-adapter.js';
-import { discordVoiceAdapterCreator, setVoiceRosterListener, discordVoiceChannelMembers, discordBotUserId, findWardVoiceChannel, discordVoiceDisplayName } from '../../discord-gateway.js';
+import { discordVoiceAdapterCreator, setVoiceRosterListener, discordVoiceChannelMembers, discordBotUserId, findWardVoiceChannel, discordVoiceDisplayName } from '../discord/discord-gateway.js';
 import { resolveCallAudience, wardVoiceState } from './voice-call-audience.js';
 import { createTagSegment, createRoomListenerMap } from './voice-tagging.js';
 import { registerPushAdapterFactory, formatItemForPush } from '../../cerebellum.js';
