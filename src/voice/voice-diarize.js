@@ -20,7 +20,7 @@
 
 import { cosineSimilarity, averageEmbeddings } from './voice-embedding.js';
 
-export const DIARIZE_DEFAULTS = Object.freeze({
+const DIARIZE_DEFAULTS = Object.freeze({
   matchThreshold: 0.5,     // cosine to accept an enrolled print (same scale as the watchdog)
   clusterThreshold: 0.55,  // cosine to fold a segment into an existing guest cluster
   clusterTtlMs: 5 * 60_000, // a guest cluster is call-scoped; forget it after this idle

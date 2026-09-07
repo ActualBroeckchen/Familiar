@@ -39,8 +39,8 @@ export const CAPABILITY_TIERS = ['read-aloud', 'listening', 'listening-plus'];
 /** Voice engine. `pocket` is the default at EVERY capability tier (§0.7). */
 export const VOICE_ENGINES = ['pocket', 'piper'];
 
-export const DEFAULT_CAPABILITY_TIER = 'listening';
-export const DEFAULT_VOICE_ENGINE = 'pocket';
+const DEFAULT_CAPABILITY_TIER = 'listening';
+const DEFAULT_VOICE_ENGINE = 'pocket';
 
 /** Roles a capability tier pulls in, beyond the chosen voice. */
 const TIER_ROLES = {
@@ -53,7 +53,7 @@ const TIER_ROLES = {
  * Opt-in extras. Never implied by a tier — each is fetched only when the ward
  * names it, with its size stated at the point of choice (§0.7).
  */
-export const EXTRA_ROLES = ['asr-offline', 'lid', 'kws', 'punct', 'tagging'];
+const EXTRA_ROLES = ['asr-offline', 'lid', 'kws', 'punct', 'tagging'];
 
 /**
  * §0.7 ceilings, in bytes. These are the budget the build is measured
@@ -115,7 +115,7 @@ export const ASR_LANGUAGES = Object.freeze([
 
 /** Every language we have curated a model for — the table, regardless of pin state. */
 export const supportedAsrLangs = () => ASR_LANGUAGES.map((l) => l.lang);
-export const asrLanguage = (lang) => ASR_LANGUAGES.find((l) => l.lang === lang) ?? null;
+const asrLanguage = (lang) => ASR_LANGUAGES.find((l) => l.lang === lang) ?? null;
 
 /**
  * Languages a ward can actually pick right now: curated AND pinned.

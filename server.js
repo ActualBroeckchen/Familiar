@@ -55,7 +55,7 @@ import { startPageWatchLoop, stopPageWatchLoop, isRunning as pageWatchRunning } 
 import { buildPageWatchPrompt, parsePageWatchDecision } from './src/browser/page-watch.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './src/safety/threat-tracker.js';
 import { ponderOnce } from './src/pondering/pondering.js';
-import { startPonderingLoop, stopPonderingLoop, isRunning as ponderingRunning } from './src/pondering/pondering-loop.js';
+import { startPonderingLoop, stopPonderingLoop, isRunning as ponderingRunning, clampChance } from './src/pondering/pondering-loop.js';
 import { startNoticingLoop, stopNoticingLoop, resetNoticingCooldown, isRunning as noticingRunning } from './src/safety/noticing-loop.js';
 import { buildNoticingPrompt, AGING_INTENT_MS, AGING_TASK_MS, OVERDUE_EVENT_GRACE_MS } from './src/safety/noticing.js';
 import { getContactBaseline, weekdayClass } from './src/safety/contact-baselines.js';
@@ -5682,6 +5682,7 @@ function startAutonomousPondering() {
     // Threads: one hop along a related_to edge, so a ponder can wander from
     // the topic it was drawn from instead of always sampling by weight.
     getRelated: (id) => relatedInterests(id),
+    threadChance: () => clampChance(readSettingsSync().ponderThreadChance),   // Settings → "Wander chance"
     runPonder: async (topic /* string OR { mode:'reflection', ... } */, _picked = null, opts = {}) => {
       const s    = readSettingsSync();
       const conn = connectionForFeature(s, 'pondering');

@@ -26,7 +26,7 @@ let ttsStreamSeq = 40000;
 const nextTtsStreamId = () => (ttsStreamSeq = ttsStreamSeq >= 65500 ? 40000 : ttsStreamSeq + 1);
 
 /** A well-formed empty stream — a reply with nothing speakable in it. */
-export function emptyStream() {
+function emptyStream() {
   return { sampleRate: 24000, text: '', async *[Symbol.asyncIterator]() { /* nothing */ } };
 }
 

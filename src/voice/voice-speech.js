@@ -289,7 +289,7 @@ const MAX_GENERATION_CHARS = 5000;
  * less jarring between paragraphs than mid-thought, and a seam is exactly
  * what a second generation costs.
  */
-export function splitForGeneration(text, { maxChars = MAX_GENERATION_CHARS } = {}) {
+function splitForGeneration(text, { maxChars = MAX_GENERATION_CHARS } = {}) {
   if (typeof text !== 'string' || !text.trim()) return [];
   if (text.length <= maxChars) return [text.trim()];
 

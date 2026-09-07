@@ -50,7 +50,7 @@ export const DEFAULT_THREADS = Object.freeze({
   vad: 1, asr: 2, tts: 2, speaker: 1, total: 3,
 });
 
-export const DEFAULTS = Object.freeze({
+const DEFAULTS = Object.freeze({
   maxCrashes: 3,          // within the window, before parking
   crashWindowMs: 60_000,
   backoffMs: [250, 1000, 3000],
