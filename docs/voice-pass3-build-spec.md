@@ -282,6 +282,28 @@ integration seam that needs the most care and its own tests.
   - **Not a ward-sign-off safety path:** the audience gate, threat scoring, and what
     is stored-per-clearance are all untouched — this only changes what the Familiar
     *reads* about who's in the room, plus one leak-free spoken greeting.
+  - **Isolated per-speaker inbound decode (0.11.80, live-testing — three speakers).**
+    The 0.11.10 rebuild-heal below holds for TWO speakers, but with THREE a packet
+    triggered a FATAL emscripten abort inside opusscript
+    (`opus_decoder.c:492 assertion failed … Aborted()`) that the rebuild can't
+    catch — an abort kills the ONE shared WASM module, so every speaker's decoder
+    then reads `memory access out of bounds` at once. Because the heap is a
+    module-level singleton (`opusscript_native`), opusscript cannot safely decode
+    several concurrent speakers at all. Fix: inbound decode now prefers
+    **`opus-decoder`** (`@wasm-audio-decoders`), which gives each speaker its OWN
+    WASM instance — isolated heaps, so one speaker's bad/edge packet can never
+    corrupt another's, and a bad frame comes back as an `errors` array rather than
+    a fatal abort. It is pure-WASM (no compiler, honouring the no-native rule) and
+    wired as a drop-in behind the existing `{ decode, delete }` decoder contract:
+    `isolatedDecoderFrom` converts opus-decoder's planar Float32 back to the
+    interleaved s16le-stereo the rest of the pipeline already speaks
+    (`floatStereoToS16LE`), so nothing downstream changed. opusscript stays as the
+    automatic fallback when opus-decoder can't load (fine for one speaker). The
+    canonical @discordjs/voice receive path (prism-media's `opus.Decoder`) was NOT
+    adopted: it instantiates the same singleton-backed opusscript, so it hits the
+    identical crash — and @discordjs/voice's own README notes receive is
+    undocumented by Discord and "stable support is not guaranteed", so there was no
+    canonical fix to inherit.
   - **opusscript shared-heap decode fix (0.11.10, live-testing — two Familiars in
     one call).** With a second speaker in the channel, the terminal flooded with
     `opus decode failed … memory access out of bounds` and one Familiar went

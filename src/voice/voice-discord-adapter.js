@@ -83,6 +83,51 @@ export function monoToStereo(mono) {
  * Buffer for the ASR. Downmix first, then decimate — cheaper and identical
  * to the reverse order for a linear pass.
  */
+// Clamp one Float32 audio sample [-1,1) to a signed 16-bit int.
+function f32ToI16(x) {
+  const v = Math.round((x || 0) * 32768);
+  return v > 32767 ? 32767 : v < -32768 ? -32768 : v;
+}
+
+// opus-decoder hands back PLANAR Float32 channels ([L], [R]); the rest of this
+// file speaks interleaved s16le stereo (what opusscript's decode() returns), so
+// convert at the seam and nothing downstream has to change.
+export function floatStereoToS16LE(channelData, samples) {
+  const L = channelData?.[0];
+  if (!L || !samples) return null;
+  const R = channelData[1] ?? L;
+  const out = Buffer.alloc(samples * 2 * 2);   // stereo × 2 bytes
+  for (let i = 0; i < samples; i++) {
+    out.writeInt16LE(f32ToI16(L[i]), i * 4);
+    out.writeInt16LE(f32ToI16(R[i]), i * 4 + 2);
+  }
+  return out;
+}
+
+// An inbound Opus decoder that is ISOLATED from every other speaker's: each
+// opus-decoder instance owns its own WASM heap, so one speaker's packet can
+// never corrupt another's — the whole point, since opusscript keeps ONE shared
+// emscripten heap for all decoders and a bad/edge packet there fatally aborts
+// the module for EVERY speaker at once (the reported 3-speaker crash). Conforms
+// to the same { decode, delete } shape as the opusscript decoder so it is a drop
+// -in. decodeFrame() before `ready` resolves throws, so gate on it and drop the
+// first ~ms of onset (pre-roll already tolerates that); a bad frame comes back
+// as an errors array, not a fatal abort, so it degrades to a skipped packet.
+export function isolatedDecoderFrom(OpusDecoderCtor, { log = () => {} } = {}) {
+  const dec = new OpusDecoderCtor({ channels: 2, sampleRate: 48000 });
+  let ready = false;
+  Promise.resolve(dec.ready).then(() => { ready = true; }).catch((err) => log(`opus-decoder failed to initialise: ${err?.message ?? err}`));
+  return {
+    decode(opusPacket) {
+      if (!ready) return null;   // brief warmup — pre-roll covers the onset
+      const res = dec.decodeFrame(opusPacket);
+      if (!res?.samplesDecoded) return null;
+      return floatStereoToS16LE(res.channelData, res.samplesDecoded);
+    },
+    delete() { try { dec.free?.(); } catch { /* wasm freed */ } },
+  };
+}
+
 export function stereo48ToMono16(pcm48Stereo) {
   const mono48 = downmixStereoToMono(asInt16(pcm48Stereo));
   const mono16 = resampleMono(mono48, 48000, 16000);
@@ -135,6 +180,14 @@ async function probeEncryption(log) {
 export async function loadDiscordVoiceDeps({ log = () => {} } = {}) {
   const voice = await import('@discordjs/voice');
   const { default: OpusScript } = await import('opusscript');
+  // Prefer opus-decoder for INBOUND decode: one isolated WASM heap per speaker,
+  // so 3+ concurrent speakers can't corrupt each other the way opusscript's
+  // single shared heap does. If it can't load, fall back to opusscript (fine for
+  // one speaker; the known hazard returns only with several).
+  let OpusDecoderCtor = null;
+  try { ({ OpusDecoder: OpusDecoderCtor } = await import('opus-decoder')); }
+  catch (err) { log(`opus-decoder unavailable (${err?.message ?? err}) — inbound decode falls back to opusscript (one shared heap; unreliable with 3+ speakers)`); }
+  log(`inbound opus decode: ${OpusDecoderCtor ? 'opus-decoder (isolated per-speaker WASM)' : 'opusscript (shared heap fallback)'}`);
   // A voice connection with no usable encryption library handshakes and then
   // silently never reaches Ready (the "joins but join-failed" symptom). Probe up
   // front so a broken encryption stack is a clear, fast failure — not a 30s
@@ -156,7 +209,9 @@ export async function loadDiscordVoiceDeps({ log = () => {} } = {}) {
     VoiceConnectionStatus: voice.VoiceConnectionStatus,
     AudioPlayerStatus: voice.AudioPlayerStatus,
     NoSubscriberBehavior: voice.NoSubscriberBehavior,
-    makeOpusDecoder: () => new OpusScript(48000, 2, OpusScript.Application.AUDIO),
+    makeOpusDecoder: () => (OpusDecoderCtor
+      ? isolatedDecoderFrom(OpusDecoderCtor, { log })
+      : new OpusScript(48000, 2, OpusScript.Application.AUDIO)),
   };
 }
 

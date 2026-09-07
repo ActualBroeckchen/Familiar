@@ -10,6 +10,7 @@ import {
   createDiscordCallAdapter,
   resampleMono, downmixStereoToMono, monoToStereo,
   stereo48ToMono16, monoToStereo48,
+  floatStereoToS16LE, isolatedDecoderFrom,
 } from '../src/voice/voice-discord-adapter.js';
 
 // ── Pure helpers ────────────────────────────────────────────────────────────
@@ -357,4 +358,41 @@ test('a delivered packet logs "receive is live" once; a 0-packet utterance flags
     logs.some((m) => /0 inbound audio packets delivered/.test(m) && /DAVE|upstream/.test(m)),
     'a 0-packet speaker names the receive/DAVE path, not the adapter',
   );
+});
+
+// ── Isolated inbound decode (0.11.80) ───────────────────────────────────────
+// opusscript keeps ONE shared WASM heap for every decoder, so 3+ concurrent
+// speakers corrupt each other and a bad packet fatally aborts decode for ALL of
+// them. opus-decoder gives each speaker its own WASM instance. These pin the
+// seam that lets it be a drop-in for the s16le-stereo pipeline.
+
+test('floatStereoToS16LE: planar float channels → interleaved s16le stereo, clamped', () => {
+  const L = Float32Array.from([0, 1, -1, 0.5]);
+  const R = Float32Array.from([0, -1, 1, -0.5]);
+  const buf = floatStereoToS16LE([L, R], 4);
+  assert.equal(buf.length, 4 * 4);                 // 4 samples × stereo × 2 bytes
+  assert.equal(buf.readInt16LE(0), 0);             // L[0]
+  assert.equal(buf.readInt16LE(2), 0);             // R[0]
+  assert.equal(buf.readInt16LE(4), 32767);         // L[1]=+1 clamps to max
+  assert.equal(buf.readInt16LE(6), -32768);        // R[1]=-1 → min
+  assert.equal(buf.readInt16LE(8), -32768);        // L[2]=-1 → min
+  assert.equal(buf.readInt16LE(12), 16384);        // L[3]=0.5 → 0.5*32768 (sample 3 → byte 12)
+  assert.equal(floatStereoToS16LE([], 0), null);
+});
+
+test('isolatedDecoderFrom: mono-only channelData still yields stereo (dupe), and is a { decode, delete }', async () => {
+  let freed = false;
+  const FakeCtor = class {
+    constructor(opts) { this.opts = opts; this.ready = Promise.resolve(); }
+    decodeFrame() { return { channelData: [Float32Array.from([0.25, -0.25])], samplesDecoded: 2 }; }
+    free() { freed = true; }
+  };
+  const dec = isolatedDecoderFrom(FakeCtor, {});
+  assert.equal(dec.decode(new Uint8Array([1])), null, 'drops until ready (async warmup)');
+  await Promise.resolve(); await Promise.resolve();       // let ready resolve
+  const out = dec.decode(new Uint8Array([1]));
+  assert.equal(out.length, 2 * 4);
+  assert.equal(out.readInt16LE(0), out.readInt16LE(2), 'L duped into R when mono');
+  dec.delete();
+  assert.equal(freed, true);
 });
