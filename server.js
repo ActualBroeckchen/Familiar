@@ -2408,7 +2408,7 @@ app.get('/api/logs', async (_req, res) => {
         sessions.push({ sessionId, startedAt, endedAt, updatedAt, provider, model,
           location: location ?? null,
           locationLabel: sessionLocationLabel(location, origin),
-          platform: location?.platform ?? (origin === 'voice-call' ? 'voice' : 'web'),
+          platform: location?.platform ?? (typeof origin === 'string' && origin.startsWith('voice-call') ? 'voice' : 'web'),
           // Whether this is the ward's own private conversation — gates the
           // "Continue on Discord" handoff so a villager's session is never bound
           // as the ward-private pointer. Web sessions have no tag (ward-private).
