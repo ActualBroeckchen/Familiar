@@ -143,7 +143,7 @@ export function formatPonderingsForPrompt(entries) {
   // on demand with read_pondering(uid) — the same shape memory recall uses.
   const now = Date.now();
   const [latest, ...rest] = entries;
-  const lines = ['What I\'ve been thinking about lately, on my own:', ''];
+  const lines = ['On my mind lately:', ''];
 
   const relLatest = relativeTime(latest.created_at, now);
   lines.push(`— ${relLatest || latest.created_at} · "${latest.title}"`);
@@ -151,7 +151,7 @@ export function formatPonderingsForPrompt(entries) {
 
   if (rest.length) {
     lines.push('');
-    lines.push('Other recent thoughts, one line each — read_pondering(uid) pulls one up in full when it fits or my human asks:');
+    lines.push('Other recent thoughts (read_pondering(uid) for the full one):');
     for (const e of rest) {
       const rel = relativeTime(e.created_at, now);
       lines.push(`  · ${rel || e.created_at} · "${e.title}"  [id: ${e.uid}]`);
@@ -614,12 +614,12 @@ export function formatMyViewsBlock(items, { max = 8, maxChars = 240 } = {}) {
     .filter(m => m && m.register === 'me' && String(m.content ?? '').trim())
     .slice(0, max);
   if (rows.length === 0) return '';
-  const lines = ['What I\'ve come to think (my own standing views, newest first):'];
+  const lines = ['What I think (newest first):'];
   for (const m of rows) {
     const text = String(m.content).trim().replace(/\s+/g, ' ');
     const cut  = text.length > maxChars ? text.slice(0, maxChars - 1).trimEnd() + '…' : text;
     lines.push(`  - ${cut}${m.id ? `  [id: ${m.id}]` : ''}`);
   }
-  lines.push('These are mine. I speak from them, and I update one with update_memory_by_id if I\'ve changed my mind.');
+  lines.push('If I\'ve changed my mind about one, update_memory_by_id.');
   return lines.join('\n');
 }

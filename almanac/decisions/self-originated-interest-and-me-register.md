@@ -57,7 +57,7 @@ was **structural**, in two organs that were supposed to carry the Familiar's own
   proactivity rule 2) in favour of the invited default.
 
 - **The `me` register is read back (0.11.73).** `memory_list` takes a `register`
-  filter; `enrich()` renders the newest eight `me` facts as "What I've come to think"
+  filter; `enrich()` renders the newest eight `me` facts as "What I think"
   on ward-private turns (`formatMyViewsBlock`), each with its id so a stale view can be
   corrected with `update_memory_by_id`.
 - **Plain inner voice (0.11.73, ward-directed).** The ward's words: "some prompts are

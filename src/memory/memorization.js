@@ -302,7 +302,7 @@ export function buildPrompt(messages, topicLabel = null, wardName = 'My human', 
     ? `\n### Field rules — follow_ups\n\nThings I told my human I would do but didn't do this session — I said "I'll do that later" / "I'll remind you" / "I'll set that up" and never used a tool to make it real. I list each as a short summary so future-me follows through. If I DID use the right tool for it, it is not a follow-up. If nothing qualifies, [].\n`
     : '';
 
-  return `I'm looking back over the conversation I just had with {{user}}, pulling out what's worth keeping — the things I'd want to remember later about them, about myself (including what I found I think, like, dislike or want), or about the people and things in their life. One clear fact per entry, concrete and real, nothing vague. I also jot down the plain connections between the people, places and things that came up, because that little web is how I find a memory again later.${focusBlock}
+  return `I'm looking back over the conversation I just had with {{user}}, pulling out what's worth keeping — the things I'd want to remember later about them, about myself (what I think, like, dislike or want), or about the people and things in their life. One clear fact per entry, concrete and real, nothing vague. I also jot down the plain connections between the people, places and things that came up, because that little web is how I find a memory again later.${focusBlock}
 
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
 {

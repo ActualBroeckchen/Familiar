@@ -554,7 +554,7 @@ export function formatTemporalContext(payload) {
       // about, character not task. The raw engagement WEIGHT is machinery, not
       // something I need in my working context: I show the top few as plain
       // labels (heaviest first), no numbers, so the surface stays light.
-      interestLines.push('Lately I keep being drawn to think about:');
+      interestLines.push('Things I keep coming back to:');
       const topLive = [...live]
         .sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0))
         .slice(0, 6);

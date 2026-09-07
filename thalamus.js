@@ -2076,7 +2076,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         });
     const ponderingsBlock = formatPonderingsForPrompt(ponderings);
 
-    // What I've come to think — my `me` register, newest first. Self-facts
+    // "What I think" — my `me` register, newest first. Self-facts
     // land there now (memorization `about_me`, save_memory register 'me');
     // reading them back is what lets a view I formed last week still be mine
     // this week. Ward-private surface only, like the ponderings.
