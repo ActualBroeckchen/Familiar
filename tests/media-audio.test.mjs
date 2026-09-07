@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   IMAGE_MIME_EXT, AUDIO_MIME_EXT, VIDEO_MIME_EXT, MEDIA_KINDS, mediaKindFor, readImageSize,
-} from '../media.js';
+} from '../src/vision/media.js';
 
 /**
  * The store was written for images and hard-coded `kind: 'image'` while looking

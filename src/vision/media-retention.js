@@ -14,9 +14,9 @@
  * strips on doubt), and nothing here throws into a caller. Images are untouched.
  */
 
-import { callProviderChat } from './llm-call.js';
-import { substituteMacros } from './macros.js';
-import { connectionForFeature } from './cerebellum.js';
+import { callProviderChat } from '../../llm-call.js';
+import { substituteMacros } from '../../macros.js';
+import { connectionForFeature } from '../../cerebellum.js';
 import { listAssets, stripAudio, markAudioKeep } from './media.js';
 
 const DAY_MS = 24 * 60 * 60_000;

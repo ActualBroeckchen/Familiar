@@ -67,7 +67,7 @@ import {
 } from './thalamus.js';
 import { formatOrganStatus } from './organs.js';
 import { audienceTagFor, deriveNodeAudience } from './audience.js';
-import { getAssetMeta, addAssetLink, removeAssetLink, drainPendingImages } from './media.js';
+import { getAssetMeta, addAssetLink, removeAssetLink, drainPendingImages } from './src/vision/media.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './src/memory/graph-vocab.js';
 import { searchWeb, readWebpage, lookUp } from './src/search/websearch.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
@@ -2972,7 +2972,7 @@ export const TOOL_EXECUTORS = {
     // "what Milkyway looks like" becomes durable graph knowledge. Dynamic import
     // keeps vision.js out of cerebellum's static graph (vision imports cerebellum).
     if (meta.description?.text) {
-      import('./vision.js')
+      import('./src/vision/vision.js')
         .then(v => v.graduateImageDescriptionToNode(img, node))
         .catch(() => {});
     }

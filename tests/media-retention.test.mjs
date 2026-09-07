@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { selectRetentionCandidates, runMediaRetention, parseKeepRefs } from '../media-retention.js';
+import { selectRetentionCandidates, runMediaRetention, parseKeepRefs } from '../src/vision/media-retention.js';
 
 const DAY = 24 * 60 * 60_000;
 const NOW = Date.parse('2026-08-14T12:00:00Z');

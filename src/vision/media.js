@@ -23,12 +23,13 @@ import path from 'path';
 import crypto from 'crypto';
 import { promises as fsp } from 'fs';
 import { fileURLToPath } from 'url';
-import { meaningSlugId, slugifyLabel, shortSlug } from './slug-ids.js';
-import { relativeTime } from './relative-time.js';
-import { parseWav } from './src/voice/voice-audio-features.js';
+import { meaningSlugId, slugifyLabel, shortSlug } from '../../slug-ids.js';
+import { relativeTime } from '../../relative-time.js';
+import { parseWav } from '../voice/voice-audio-features.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const MEDIA_DIR = path.join(__dirname, 'media');
+export const MEDIA_DIR = path.join(REPO_ROOT, 'media');
 const SLUG_INDEX = path.join(MEDIA_DIR, '.slugs.json');
 
 // Caps enforced at save (constants here, never scattered across call sites).

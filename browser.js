@@ -22,7 +22,7 @@ import { renderSnapshot, computeDelta } from './browser-lens.js';
 import * as realDriver from './browser-driver.js';
 import { sanitizeExternal } from './injection-guard.js';
 import { logBrowserAction, readBrowserActions } from './browser-audit.js';
-import { saveAsset } from './media.js';
+import { saveAsset } from './src/vision/media.js';
 import { readGrants, readVaultEntry, hasAnyGrant } from './browser-grants.js';
 
 // The engine, swappable for tests (a stubbed browser drives the same

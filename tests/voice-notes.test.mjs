@@ -17,9 +17,9 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-import { buildStandin, clipLength, maxBytesForKind, mediaKindFor, MEDIA_KINDS, AUDIO_MAX_BYTES, MEDIA_MAX_BYTES } from '../media.js';
+import { buildStandin, clipLength, maxBytesForKind, mediaKindFor, MEDIA_KINDS, AUDIO_MAX_BYTES, MEDIA_MAX_BYTES } from '../src/vision/media.js';
 import { transcribeTimeoutMs, transcriptionAllowed, continuousListeningAllowed } from '../src/voice/voice-transcribe.js';
-import { materializeAttachments } from '../vision.js';
+import { materializeAttachments } from '../src/vision/vision.js';
 import { encodeWav, toMono, elapsedLabel, TARGET_RATE } from '../public/voice-recorder.js';
 import { parseWav } from '../src/voice/voice-audio-features.js';
 
@@ -210,7 +210,7 @@ test('PIPELINE: a voice note is transcribed BEFORE the prompt is assembled', asy
   // after materialize has already built the stand-in, so the turn goes out
   // saying "I haven't listened to this one yet" and the model confabulates
   // over the gap. Pure-function tests cannot see ordering.
-  const { saveAsset, getAssetMeta, MEDIA_DIR } = await import('../media.js');
+  const { saveAsset, getAssetMeta, MEDIA_DIR } = await import('../src/vision/media.js');
   const { ensureTranscribed } = await import('../src/voice/voice-transcribe.js');
 
   // A real 1-second wav through the real store.
@@ -279,7 +279,7 @@ test('PIPELINE: a voice note is transcribed BEFORE the prompt is assembled', asy
 });
 
 test('PIPELINE: with voice hard-disabled, nothing is transcribed and the turn still goes out', async (t) => {
-  const { saveAsset, MEDIA_DIR } = await import('../media.js');
+  const { saveAsset, MEDIA_DIR } = await import('../src/vision/media.js');
   const { ensureTranscribed } = await import('../src/voice/voice-transcribe.js');
 
   const samples = new Float32Array(8000).fill(0.1);
@@ -575,7 +575,7 @@ test('the transcription budget counts notes heard, not attachments looked at', a
   // than a voice note consumed the entire allowance on `continue`s and the note
   // was never transcribed — with no work done and nothing said about it. The
   // cap has to bound work, not iteration.
-  const { saveAsset, MEDIA_DIR, setAssetDescription } = await import('../media.js');
+  const { saveAsset, MEDIA_DIR, setAssetDescription } = await import('../src/vision/media.js');
   const { ensureTranscribed } = await import('../src/voice/voice-transcribe.js');
 
   const made = [];
@@ -673,7 +673,7 @@ test('PIPELINE: a voice note still stands in when vision is switched off', async
   // exercised. `provider`/`model` happen to be in scope there — but a bare
   // `catch {}` around it would have hidden a ReferenceError and made voice
   // notes vanish silently, which is root cause #4 of the 0.9 post-mortem.
-  const { saveAsset, MEDIA_DIR, setAssetDescription } = await import('../media.js');
+  const { saveAsset, MEDIA_DIR, setAssetDescription } = await import('../src/vision/media.js');
 
   const samples = new Float32Array(TARGET_RATE).fill(0.02);
   const note = await saveAsset({ buffer: Buffer.from(encodeWav(samples, TARGET_RATE)), mime: 'audio/wav', origin: { surface: 'test' } });
