@@ -67,13 +67,13 @@ import {
 import { PROVIDER_URLS, resolveReasoningEffort } from './providers.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
-import { recordUserActivity } from './last-activity.js';
+import { recordUserActivity } from './src/sessions/last-activity.js';
 import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';
 import { recordKnock, recordLocationKnock, recordServer } from './knocks.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { enqueueOutbox, acknowledgePendingByKind } from './outbox.js';
-import { writeSessionLog as writeSessionLogShared } from './session-log.js';
-import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY } from './session-bindings.js';
+import { writeSessionLog as writeSessionLogShared } from './src/sessions/session-log.js';
+import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY } from './src/sessions/session-bindings.js';
 
 // Auto-unify: the ward's Discord DM shares ONE session with their web private
 // chat (both bind to the ward-private pointer). Default ON; the ward toggle
@@ -85,7 +85,7 @@ function sessionUnifyEnabled() {
 }
 import { substituteMacros } from './macros.js';
 import { coreSystemSegment, postHistoryMessage } from './core-prompts.js';
-import { recordOutgoingPrompt } from './prompt-capture.js';
+import { recordOutgoingPrompt } from './src/sessions/prompt-capture.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { sanitizeExternal } from './injection-guard.js';
 import { checkForUpdate, applyUpdate, updateDisabled } from './updater.js';

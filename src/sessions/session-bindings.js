@@ -21,8 +21,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync, promises as fsp } from 'node:fs';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TOMES_DIR = path.join(__dirname, 'tomes');
+const TOMES_DIR = path.join(REPO_ROOT, 'tomes');
 export const DEFAULT_BINDINGS_FILE = path.join(TOMES_DIR, '.session-bindings.json');
 
 export const WARD_PRIVATE_KEY = 'ward-private';

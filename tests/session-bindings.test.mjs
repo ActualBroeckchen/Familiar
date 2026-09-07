@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY } from '../session-bindings.js';
+import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY } from '../src/sessions/session-bindings.js';
 
 async function tmpFile() {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'bindings-'));
