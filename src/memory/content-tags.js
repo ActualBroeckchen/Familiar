@@ -175,6 +175,7 @@ const _CATEGORY_TO_TOPIC = {
   health_info:       'medical',
   relationships:     'relationships',
   whereabouts:       'location',
+  views:             'general',
 };
 const _SENSITIVE_CATEGORIES = new Set(['emotional_content', 'health_info']);
 

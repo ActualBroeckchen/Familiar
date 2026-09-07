@@ -347,3 +347,38 @@ test('runOneTick: missing reflection callbacks → normal pondering (no error)',
   assert.equal(r.acted, true);
   assert.equal(r.mode, 'pondering');
 });
+
+// ── threads: a ponder can hop one related_to edge ──────────────────
+
+function seq(values) { let i = 0; return () => values[Math.min(i++, values.length - 1)]; }
+
+test('runOneTick hops to a related topic when the thread roll lands, and says where it came from', async () => {
+  const calls = [];
+  const r = await runOneTick({
+    getInterests: async () => [{ id: 'tea', label: 'tea', weight: 5 }],
+    getRelated:   async (id) => (id === 'tea' ? [{ id: 'kettles', label: 'Georgian kettles', weight: 2 }] : []),
+    runPonder:    async (label, picked, opts) => { calls.push({ label, picked, opts }); return null; },
+    computeInterval: () => 0,
+    rng: seq([0.1, 0.1, 0.1]),   // pick tea → roll under threadChance → pick the hop
+    now: () => 1_000_000,
+  });
+  assert.equal(r.acted, true);
+  assert.equal(r.threadFrom, 'tea');
+  assert.equal(calls[0].label, 'Georgian kettles');
+  assert.deepEqual(calls[0].opts, { threadFrom: 'tea' });
+});
+
+test('runOneTick stays on the weighted pick when the roll misses or nothing is related', async () => {
+  const calls = [];
+  const cfg = {
+    getInterests: async () => [{ id: 'tea', label: 'tea', weight: 5 }],
+    runPonder:    async (label, picked, opts) => { calls.push({ label, opts }); return null; },
+    computeInterval: () => 0,
+    now: () => 1_000_000,
+  };
+  const miss = await runOneTick({ ...cfg, getRelated: async () => [{ id: 'k', label: 'kettles', weight: 2 }], rng: seq([0.1, 0.9]) });
+  assert.equal(miss.threadFrom, null);
+  const none = await runOneTick({ ...cfg, getRelated: async () => [], rng: seq([0.1, 0.1]) });
+  assert.equal(none.threadFrom, null);
+  assert.ok(calls.every(c => c.label === 'tea' && c.opts === undefined));
+});

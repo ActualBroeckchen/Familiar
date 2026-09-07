@@ -10698,13 +10698,14 @@ async function keOpenRememberMap() {
     const data = await res.json();
     const map = data.map ?? {};
     const standing = data.standing ?? {};
-    const categories = ['basics', 'emotional_content', 'health_info', 'relationships', 'whereabouts'];
+    const categories = ['basics', 'emotional_content', 'health_info', 'relationships', 'whereabouts', 'views'];
     const labels = {
       basics: 'Basics (name, age, daily facts)',
       emotional_content: 'Emotional content (feelings, struggles)',
       health_info: 'Health information (meds, conditions)',
       relationships: 'Relationships (family, friends)',
       whereabouts: 'Whereabouts (location, travel)',
+      views: 'Views (opinions, tastes)',
     };
     function selFor(cat) {
       const v = map[cat];
@@ -12937,6 +12938,7 @@ const VL_REMEMBER_CATS = [
   { key: 'health_info',      label: 'Health info',      default: 'ask' },
   { key: 'relationships',    label: 'Relationships',    default: 'ask' },
   { key: 'whereabouts',      label: 'Whereabouts',      default: 'ask' },
+  { key: 'views',            label: 'Views & opinions', default: 'ask' },
 ];
 
 let _vlReg  = null;   // local registry cache; null = needs reload

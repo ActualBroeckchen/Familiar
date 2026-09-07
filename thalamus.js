@@ -631,7 +631,7 @@ export function shutdownPhylactery() {
  * @param {{ topic: string, delta: number, source?: string }} args
  * @returns {Promise<boolean>} true if the bump landed
  */
-export async function recordInterest({ topic, delta, source = 'chat' }) {
+export async function recordInterest({ topic, delta, source = 'chat', relatedTo = null }) {
   await startThalamus();
   if (!unruhClient) return false;
   if (!topic || typeof topic !== 'string' || !topic.trim()) return false;
@@ -640,7 +640,7 @@ export async function recordInterest({ topic, delta, source = 'chat' }) {
     console.log(`[thalamus] → unruh: interest_record (topic="${topic.trim()}", delta=${delta}, source=${source})`);
     const r = await unruhClient.callTool({
       name: 'interest_record',
-      arguments: { topic: topic.trim(), delta, source },
+      arguments: { topic: topic.trim(), delta, source, ...(relatedTo ? { related_to: String(relatedTo).trim() } : {}) },
     });
     const err = mcpToolError(r);
     if (err) { console.error('[thalamus] interest_record rejected:', err); return false; }
@@ -649,6 +649,23 @@ export async function recordInterest({ topic, delta, source = 'chat' }) {
   } catch (err) {
     console.error('[thalamus] interest_record failed:', err?.message ?? err);
     return false;
+  }
+}
+
+/**
+ * Topics one `related_to` hop from an interest — the thread the pondering
+ * loop can follow. Best-effort: [] when Unruh is unreachable.
+ */
+export async function relatedInterests(id, { limit = 6 } = {}) {
+  await startThalamus();
+  if (!unruhClient || !id) return [];
+  try {
+    const result  = await unruhClient.callTool({ name: 'interest_related', arguments: { id, limit } });
+    const payload = parseToolText(result, {});
+    return Array.isArray(payload.related) ? payload.related : [];
+  } catch (err) {
+    console.error('[thalamus] relatedInterests failed:', err?.message ?? err);
+    return [];
   }
 }
 

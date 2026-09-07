@@ -727,6 +727,7 @@ def interest_record(
     source: str | None = None,
     payload: dict | None = None,
     delta: float = 0.1,
+    related_to: str | None = None,
 ) -> dict[str, Any]:
     """I use this to record a moment of engagement with a topic — bumping its interest
     weight so it surfaces more prominently in my briefings. I reach for it when I notice
@@ -743,16 +744,31 @@ def interest_record(
         delta: weight bump magnitude. Defaults to 0.1; M5's
             instrumentation will pass varied values based on the
             signal strength (long response → bigger delta, etc).
+        related_to: label of the topic this one grew out of — links the
+            two with a related_to edge so my thinking can follow the thread.
 
-    Returns: {ok: True, id, type, raw_weight, effective_weight}.
+    Returns: {ok: True, id, type, raw_weight, effective_weight, related_to_id?}.
     """
     try:
         with get_conn() as conn:
             return interests.record(
                 conn, topic=topic, source=source, payload=payload, delta=delta,
+                related_to=related_to,
             )
     except ValueError as e:
         return _err(str(e))
+
+
+@mcp.tool()
+def interest_related(id: str, limit: int = 6) -> dict[str, Any]:
+    """I use this to see which topics sit one step from a given interest — the
+    side roads my thinking has wandered down from it. The pondering loop walks
+    these instead of only sampling by weight.
+
+    Returns: {ok: True, related: [...]} (same node shape as interest_list).
+    """
+    with get_conn() as conn:
+        return {"ok": True, "related": interests.related_interests(conn, id=id, limit=limit)}
 
 
 @mcp.tool()

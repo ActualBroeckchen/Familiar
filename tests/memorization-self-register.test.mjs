@@ -34,3 +34,22 @@ test('extraction prompt asks for about_me and invites my own views', () => {
   assert.match(p, /about_me — true when the fact is about ME/);
   assert.match(p, /what I think, like, dislike or want/);
 });
+
+// ── views: a home for opinions ────────────────────────────────────
+
+import { resolveRememberGate } from '../src/memory/memorization.js';
+import { categoryToTag } from '../src/memory/content-tags.js';
+
+test('my own view (about_me, no one else named) needs nobody\'s consent, even in a shared room', () => {
+  assert.equal(resolveRememberGate('views', [], null, null, { direct: false, aboutMe: true }), 'true');
+  // A named third party's view still asks.
+  assert.equal(resolveRememberGate('views', [], null, null, { direct: false, aboutMe: true, hasNamedSubjects: true }), 'ask');
+  // The flag alone never opens a fact ABOUT a villager.
+  assert.equal(resolveRememberGate('views', [{ id: 'v1', remember: {} }], null, null, { aboutMe: true }), 'ask');
+});
+
+test('views is a known category: kept as itself, tagged general:open', () => {
+  const p = buildPrompt([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'cricket is dull' }]);
+  assert.match(p, /\n  views\s+— what someone thinks about something/);
+  assert.deepEqual(categoryToTag('views'), { topic: 'general', level: 'open' });
+});

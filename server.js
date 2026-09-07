@@ -34,7 +34,7 @@ import {
   remapCategoryAudiences, backfillContentTags,
   searchMemory,
   reconnectPhylactery,
-  recordInterest, recordHandoff, listLiveInterests, listInterests,
+  recordInterest, relatedInterests, recordHandoff, listLiveInterests, listInterests,
   bumpInterest, demoteStanding, setStandingInterest,
   getScheduleWindow, addScheduleNode, updateScheduleNode,
   resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
@@ -5679,7 +5679,10 @@ function startAutonomousPondering() {
         windowMemories, routineReviewSection, isRoutineReview: !!review,
       };
     },
-    runPonder: async (topic /* string OR { mode:'reflection', ... } */) => {
+    // Threads: one hop along a related_to edge, so a ponder can wander from
+    // the topic it was drawn from instead of always sampling by weight.
+    getRelated: (id) => relatedInterests(id),
+    runPonder: async (topic /* string OR { mode:'reflection', ... } */, _picked = null, opts = {}) => {
       const s    = readSettingsSync();
       const conn = connectionForFeature(s, 'pondering');
       if (!conn?.apiKey) throw new Error('no connection configured for pondering');
@@ -5716,7 +5719,7 @@ function startAutonomousPondering() {
                 excerpt: String(p.content ?? p.title ?? '').trim().slice(0, 280),
               }))
           : [];
-        grounding = { memories, recent };
+        grounding = { memories, recent, threadFrom: opts?.threadFrom ?? null };
       }
 
       const result = await ponderOnce({
@@ -5733,7 +5736,7 @@ function startAutonomousPondering() {
       // delta: a passing pull decays away unless later ponders keep landing on it.
       if (result?.mode === 'pondering') {
         for (const label of (result.drawn_to ?? [])) {
-          recordInterest({ topic: label, delta: 1.0, source: 'pondering' })
+          recordInterest({ topic: label, delta: 1.0, source: 'pondering', relatedTo: typeof topic === 'string' ? topic : null })
             .then(ok => console.log(`[pondering] drawn to "${label}" → ${ok ? 'recorded' : 'not recorded'}`))
             .catch(err => console.error('[pondering] drawn_to record failed:', err?.message ?? err));
         }

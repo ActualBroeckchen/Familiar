@@ -99,3 +99,8 @@ def test_update_by_id_sets_and_clears_content_tag():
     memory.update_memory_by_id("m1", content_tag="medical:open", conn=c)
     memory.update_memory_by_id("m1", new_content="y", conn=c)
     assert _tag_of(c, "m1") == "medical:open"
+
+
+def test_category_to_tag_views_mirrors_node():
+    """`views` (an opinion or a taste) → general:open, same as content-tags.js."""
+    assert memory.category_to_tag("views") == "general:open"
