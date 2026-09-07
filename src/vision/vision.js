@@ -30,8 +30,8 @@ import { callProviderChat } from '../../llm-call.js';
 import { connectionForFeature, primaryConnectionFrom } from '../../cerebellum.js';
 import { substituteMacros } from '../../macros.js';
 import { sanitizeExternal } from '../../injection-guard.js';
-import { scoreMessage } from '../../crisis-signals.js';
-import { recordThreat } from '../../threat-tracker.js';
+import { scoreMessage } from '../safety/crisis-signals.js';
+import { recordThreat } from '../safety/threat-tracker.js';
 import { getGraphSubgraph, updateGraphNode } from '../../thalamus.js';
 import { relativeDay } from '../../relative-time.js';
 

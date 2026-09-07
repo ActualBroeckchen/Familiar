@@ -30,8 +30,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { promises as fsp, mkdirSync } from 'fs';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_TOMES_DIR  = path.join(__dirname, 'tomes');
+const DEFAULT_TOMES_DIR  = path.join(REPO_ROOT, 'tomes');
 const STATE_FILENAME     = '.threat-state.json';
 
 // Exported so spine-states.js can compute the exact instant a decaying

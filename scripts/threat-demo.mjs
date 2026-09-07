@@ -24,10 +24,10 @@ import path from 'path';
 import os   from 'os';
 import { mkdtempSync, rmSync } from 'fs';
 
-import { scoreMessage }            from '../crisis-signals.js';
+import { scoreMessage }            from '../src/safety/crisis-signals.js';
 import { recordThreat, getThreat,
          resetThreat,
-         getThreatHistory }        from '../threat-tracker.js';
+         getThreatHistory }        from '../src/safety/threat-tracker.js';
 import { computeRequiredInterval,
          tierForWeight }           from '../src/pondering/pondering-cadence.js';
 import { PROVIDER_URLS }           from '../providers.js';

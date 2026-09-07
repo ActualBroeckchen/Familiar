@@ -20,10 +20,11 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { promises as fsp, mkdirSync } from 'fs';
-import { outboxSlugId, isLegacyId } from './slug-ids.js';
+import { outboxSlugId, isLegacyId } from '../../slug-ids.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
+const DEFAULT_TOMES_DIR = path.join(REPO_ROOT, 'tomes');
 const FILENAME = '.outbox.json';
 
 const HISTORY_CAP = 200;

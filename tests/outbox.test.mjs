@@ -4,7 +4,7 @@ import path from 'path';
 import os from 'os';
 import { mkdtempSync, rmSync } from 'fs';
 
-import { enqueueOutbox, listOutbox, acknowledgeOutbox, clearAcknowledged, acknowledgePendingByKind } from '../outbox.js';
+import { enqueueOutbox, listOutbox, acknowledgeOutbox, clearAcknowledged, acknowledgePendingByKind } from '../src/safety/outbox.js';
 
 function tempDir() {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'outbox-test-'));

@@ -21,7 +21,7 @@
  */
 
 import { listRecurring, resolveScheduleOccurrence } from '../../thalamus.js';
-import { getThreat } from '../../threat-tracker.js';
+import { getThreat } from '../safety/threat-tracker.js';
 import { isCallActiveFromFile } from '../voice/call-engine.js';
 import { readSettingsSync } from '../../cerebellum.js';
 import { selectMissedOccurrences, isNeedWindow } from './needs-tracking.js';

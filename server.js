@@ -48,18 +48,18 @@ import {
   memByTimerange, getRecentMemoryLines,
   setIntention, roundsForWard, listIntentions, getDueIntentions,
 } from './thalamus.js';
-import { scoreMessage } from './crisis-signals.js';
+import { scoreMessage } from './src/safety/crisis-signals.js';
 import { foldReasoningIntoContent, callProviderChat } from './llm-call.js';
 import { fetchReadable } from './src/search/websearch.js';
 import { startPageWatchLoop, stopPageWatchLoop } from './src/browser/page-watch-loop.js';
 import { buildPageWatchPrompt, parsePageWatchDecision } from './src/browser/page-watch.js';
-import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
+import { recordThreat, resetThreat, getThreat, getThreatHistory } from './src/safety/threat-tracker.js';
 import { ponderOnce } from './src/pondering/pondering.js';
 import { startPonderingLoop, stopPonderingLoop } from './src/pondering/pondering-loop.js';
-import { startNoticingLoop, stopNoticingLoop, resetNoticingCooldown } from './noticing-loop.js';
-import { buildNoticingPrompt, AGING_INTENT_MS, AGING_TASK_MS, OVERDUE_EVENT_GRACE_MS } from './noticing.js';
-import { getContactBaseline, weekdayClass } from './contact-baselines.js';
-import { getWaitStreak, recordWait, recordProactive } from './wait-streak.js';
+import { startNoticingLoop, stopNoticingLoop, resetNoticingCooldown } from './src/safety/noticing-loop.js';
+import { buildNoticingPrompt, AGING_INTENT_MS, AGING_TASK_MS, OVERDUE_EVENT_GRACE_MS } from './src/safety/noticing.js';
+import { getContactBaseline, weekdayClass } from './src/safety/contact-baselines.js';
+import { getWaitStreak, recordWait, recordProactive } from './src/safety/wait-streak.js';
 import {
   addLocation, listLocations, getCurrentLocation, setCurrentLocation, deleteLocation,
   weatherLocationsPrivate, ingestWeather, readWeather,
@@ -96,8 +96,8 @@ import {
   resolveAttribution, isIgnored, wardCalendarId,
   writeCalendarCache, readCalendarCache, normalizeAttributionEntry,
 } from './src/gcal/gcal-attribution.js';
-import { listOutbox, acknowledgeOutbox, clearAcknowledged, acknowledgePendingByKind } from './outbox.js';
-import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
+import { listOutbox, acknowledgeOutbox, clearAcknowledged, acknowledgePendingByKind } from './src/safety/outbox.js';
+import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './src/safety/silence-triage-loop.js';
 import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './src/warmth/reachout-loop.js';
 import { startMemorySweepLoop, stopMemorySweepLoop } from './src/memory/memory-sweep-loop.js';
 import { startTomeGraduationLoop, stopTomeGraduationLoop } from './src/tomes/tome-graduation-loop.js';
@@ -165,7 +165,7 @@ import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, 
 import { normalizeTag } from './src/memory/content-tags.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, AUDIO_MAX_BYTES, IMAGE_MIME_EXT, MEDIA_KINDS, mediaKindFor, MAX_IMAGES_PER_MESSAGE } from './src/vision/media.js';
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './src/vision/vision.js';
-import { filterOutgoingReply } from './outgoing-filter.js';
+import { filterOutgoingReply } from './src/safety/outgoing-filter.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw } from './src/discord/discord-gateway.js';
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
 import { substituteMacros } from './macros.js';

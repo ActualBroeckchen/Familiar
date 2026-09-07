@@ -16,7 +16,7 @@ import {
   MAX_RAW_WEIGHT,
   HISTORY_CAP,
   THREAT_TIERS,
-} from '../threat-tracker.js';
+} from '../src/safety/threat-tracker.js';
 
 function tempDir() {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'threat-test-'));

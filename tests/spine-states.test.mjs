@@ -17,7 +17,7 @@ import {
   decayCrossingMs,
   syncSpineState,
   SPINE_MIN_WEIGHT,
-} from '../spine-states.js';
+} from '../src/safety/spine-states.js';
 
 // ── isSensitiveNode ────────────────────────────────────────────────
 

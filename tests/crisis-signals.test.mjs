@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { scoreMessage, SIGNALS, SCORE_CAPS } from '../crisis-signals.js';
+import { scoreMessage, SIGNALS, SCORE_CAPS } from '../src/safety/crisis-signals.js';
 
 // Helper: assert that scoring a message produces ≥ N signals firing,
 // at the expected tier, with the resulting level within [min,max].

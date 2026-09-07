@@ -9,7 +9,7 @@ import {
   BUILTIN_TOOLS, TOOL_EXECUTORS, composeNoticingTools, villagerToolNames,
 } from '../cerebellum.js';
 import { TOOL_MODULES } from '../tool-surfacing.js';
-import { buildNoticingPrompt } from '../noticing.js';
+import { buildNoticingPrompt } from '../src/safety/noticing.js';
 
 test('flag_distress: has a schema, an executor, and is CORE (always advertised)', () => {
   assert.ok(BUILTIN_TOOLS.some(t => t.function?.name === 'flag_distress'), 'schema present');
