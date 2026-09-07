@@ -48,7 +48,7 @@ async function main() {
   // 4. The optional sidecar.
   let sidecar = false;
   try {
-    const { inspectBackends, BACKENDS } = await import('../voice-backend.js');
+    const { inspectBackends, BACKENDS } = await import('../src/voice/voice-backend.js');
     sidecar = Boolean((await inspectBackends(ROOT))[BACKENDS.POCKET].available);
   } catch { /* voice-backend is part of the app; absence just means "no" */ }
 

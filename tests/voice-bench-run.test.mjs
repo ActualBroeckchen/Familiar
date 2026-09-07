@@ -6,7 +6,7 @@ import path from 'node:path';
 import {
   startBenchmark, statusOf, cancelBenchmark, resetBenchmark,
   reportPathsRelative, STAGE_LABELS,
-} from '../voice-bench-run.js';
+} from '../src/voice/voice-bench-run.js';
 
 const tmp = () => fs.mkdtemp(path.join(os.tmpdir(), 'vbr-'));
 const settle = async (predicate, ms = 5000) => {

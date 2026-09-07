@@ -19,14 +19,15 @@ import { fileURLToPath } from 'node:url';
 import { setWardPrint, setVillagerPrint } from './voiceprints.js';
 import { averageEmbeddings } from './voice-embedding.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Models unpack to models/audio/<model.id>/ (same as asr-offline). The default
 // speaker model is CAM++ (BASE_MODELS id `speaker-embed`); the optional "swanky"
 // upgrade is NeMo TitaNet-Large (`speaker-embed-large`). Whichever the ward has
 // active is loaded — the extractor just finds the sole .onnx in the dir.
-export const SPEAKER_MODEL_DIR       = path.join(__dirname, 'models', 'audio', 'speaker-embed');
-export const SPEAKER_MODEL_DIR_LARGE = path.join(__dirname, 'models', 'audio', 'speaker-embed-large');
+export const SPEAKER_MODEL_DIR       = path.join(REPO_ROOT, 'models', 'audio', 'speaker-embed');
+export const SPEAKER_MODEL_DIR_LARGE = path.join(REPO_ROOT, 'models', 'audio', 'speaker-embed-large');
 
 /** The active speaker-model directory for these settings (default = CAM++). */
 export function speakerModelDir(settings = {}) {

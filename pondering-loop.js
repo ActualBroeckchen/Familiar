@@ -31,7 +31,7 @@
  */
 
 import { pickInterest }            from './interest-picker.js';
-import { isCallActiveFromFile }    from './call-engine.js';
+import { isCallActiveFromFile }    from './src/voice/call-engine.js';
 import { computeRequiredInterval } from './pondering-cadence.js';
 
 const DEFAULT_TICK_MS = 60_000; // poll once per minute by default

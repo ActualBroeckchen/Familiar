@@ -24,7 +24,7 @@
  * engine as a silent clip that looks like a failure.
  */
 
-import { stripLlmTimestamps } from './message-sanitize.mjs';
+import { stripLlmTimestamps } from '../../message-sanitize.mjs';
 import { MAX_CHAR_IN_SENTENCE, MIN_CHAR_IN_SENTENCE } from './voice-generation.js';
 
 /**

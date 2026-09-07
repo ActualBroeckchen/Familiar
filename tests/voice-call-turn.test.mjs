@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createVoiceTurnRunner } from '../voice-call-turn.js';
+import { createVoiceTurnRunner } from '../src/voice/voice-call-turn.js';
 
 const tick = () => new Promise((r) => setTimeout(r, 5));
 /** A recognisable async-iterable of PCM, so we can assert synthesize's output flows through. */

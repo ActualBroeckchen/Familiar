@@ -17,8 +17,8 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { composePlan, formatBytes, evaluatePlan } from '../voice-models.js';
-import { fetchPlan, inspectInstalled, consentSummary, MODELS_SUBDIR } from '../voice-fetch.js';
+import { composePlan, formatBytes, evaluatePlan } from '../src/voice/voice-models.js';
+import { fetchPlan, inspectInstalled, consentSummary, MODELS_SUBDIR } from '../src/voice/voice-fetch.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MODELS_DIR = path.join(ROOT, MODELS_SUBDIR);

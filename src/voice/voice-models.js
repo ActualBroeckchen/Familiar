@@ -365,7 +365,7 @@ export function applyPins(baseModels, pins) {
 /** Read the generated pins file, if one exists. Absence is normal, not an error. */
 function loadPins() {
   try {
-    const url = new URL('./voice-model-pins.json', import.meta.url);
+    const url = new URL('../../voice-model-pins.json', import.meta.url);
     return JSON.parse(readFileSync(url, 'utf8'));
   } catch {
     return {};

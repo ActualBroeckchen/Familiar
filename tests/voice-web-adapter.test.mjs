@@ -4,8 +4,8 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { createWebCallAdapter } from '../voice-web-adapter.js';
-import { createCallEngine } from '../call-engine.js';
+import { createWebCallAdapter } from '../src/voice/voice-web-adapter.js';
+import { createCallEngine } from '../src/voice/call-engine.js';
 
 const tmp = () => fs.mkdtemp(path.join(os.tmpdir(), 'web-'));
 const tick = (ms = 10) => new Promise((r) => setTimeout(r, ms));

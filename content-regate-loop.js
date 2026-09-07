@@ -14,7 +14,7 @@
 
 import { listContentGateCandidates, updateMemoryById, enrich } from './thalamus.js';
 import { getRegistry } from './village.js';
-import { isCallActiveFromFile } from './call-engine.js';
+import { isCallActiveFromFile } from './src/voice/call-engine.js';
 import { readSettingsSync, connectionForFeature } from './cerebellum.js';
 import { PROVIDER_URLS } from './providers.js';
 import { callProviderChat } from './llm-call.js';

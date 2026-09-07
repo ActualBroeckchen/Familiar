@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   encodeJson, encodePcm, createFrameReader,
   KIND_JSON, KIND_PCM, MAX_FRAME_BYTES,
-} from '../audio-frame.js';
+} from '../src/voice/audio-frame.js';
 
 const collect = () => {
   const frames = [];

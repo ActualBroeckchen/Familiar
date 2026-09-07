@@ -24,7 +24,7 @@
  * "Google Calendar sync" Settings toggle (soft), both checked by isEnabled.
  */
 
-import { isCallActiveFromFile } from './call-engine.js';
+import { isCallActiveFromFile } from './src/voice/call-engine.js';
 
 const BASE_TICK_MS = 60_000;                 // how often the loop wakes to check
 export const DEFAULT_SYNC_INTERVAL_MS = 60 * 60_000;  // hourly (§1.6)

@@ -19,8 +19,9 @@ import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { averageEmbeddings } from './voice-embedding.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_FILE = path.join(__dirname, 'tomes', '.voiceprints.json');
+const DEFAULT_FILE = path.join(REPO_ROOT, 'tomes', '.voiceprints.json');
 
 function fileOf(opts) {
   return (opts && typeof opts.file === 'string' && opts.file) ? opts.file : DEFAULT_FILE;

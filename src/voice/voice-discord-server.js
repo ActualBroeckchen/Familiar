@@ -27,28 +27,28 @@ import path from 'node:path';
 
 import { createCallEngine, isCallActiveFromFile, isCallActiveFromFileSync } from './call-engine.js';
 import { createDiscordCallAdapter, loadDiscordVoiceDeps } from './voice-discord-adapter.js';
-import { discordVoiceAdapterCreator, setVoiceRosterListener, discordVoiceChannelMembers, discordBotUserId, findWardVoiceChannel, discordVoiceDisplayName } from './discord-gateway.js';
+import { discordVoiceAdapterCreator, setVoiceRosterListener, discordVoiceChannelMembers, discordBotUserId, findWardVoiceChannel, discordVoiceDisplayName } from '../../discord-gateway.js';
 import { resolveCallAudience, wardVoiceState } from './voice-call-audience.js';
 import { createTagSegment, createRoomListenerMap } from './voice-tagging.js';
-import { registerPushAdapterFactory, formatItemForPush } from './cerebellum.js';
-import { findVillagerByAlias, getRegistry, villagerByAlias } from './village.js';
+import { registerPushAdapterFactory, formatItemForPush } from '../../cerebellum.js';
+import { findVillagerByAlias, getRegistry, villagerByAlias } from '../../village.js';
 import {
   isGroupCall, attributeSpeaker, prefixTurn, diffRoster,
   formatPresenceNote, buildGreetingPrompt, parseGreeting,
 } from './voice-presence.js';
-import { callProviderChat } from './llm-call.js';
-import { substituteMacros } from './macros.js';
-import { audienceTagFor } from './audience.js';
+import { callProviderChat } from '../../llm-call.js';
+import { substituteMacros } from '../../macros.js';
+import { audienceTagFor } from '../../audience.js';
 import { createSynthesizer } from './voice-synthesize.js';
 import { createVoiceChatTurn } from './voice-chat-turn.js';
 import { createVoiceTurnRunner } from './voice-call-turn.js';
 import { voiceThreatEnabled } from './voice-call-server.js';
 import { speakableText, isLikelyNoiseTranscript } from './voice-speech.js';
-import { scoreMessage } from './crisis-signals.js';
-import { recordThreat, getThreat, THREAT_TIERS } from './threat-tracker.js';
-import { enqueueSessionByDay } from './memorization.js';
-import { writeSessionLog, stampMessages, turnMessages } from './session-log.js';
-import { slugifyLabel, sessionSlugId } from './slug-ids.js';
+import { scoreMessage } from '../../crisis-signals.js';
+import { recordThreat, getThreat, THREAT_TIERS } from '../../threat-tracker.js';
+import { enqueueSessionByDay } from '../../memorization.js';
+import { writeSessionLog, stampMessages, turnMessages } from '../../session-log.js';
+import { slugifyLabel, sessionSlugId } from '../../slug-ids.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
 import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs } from './voice-transcribe.js';
 

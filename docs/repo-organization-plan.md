@@ -43,13 +43,30 @@ Additive, near-zero risk; delivers most of the felt improvement:
 
 ## Stage 1 — the structural fix (IN PROGRESS): move root modules into `src/<domain>/`
 
-**Done so far:** `src/weather/` (5 files) — the pilot that proved the recipe and
-the guardrails end-to-end (full suite + `audit:wiring` green, zero stale refs). A
-reusable migration script lives at
-`scripts/migrate-domain.mjs` — it resolves every relative specifier (`from`,
-`import()`, `export … from`, `new URL(…, import.meta.url)`) against the old layout
-and recomputes it for the new location, so dynamic imports are handled too. Run it,
-then `git mv` the files and fix `__dirname` repo-root paths (below).
+**Done so far:** `src/weather/` (5 files, the pilot) and **`src/voice/` (37 files
+— voice + audio + call-engine)**. Both green (full suite + `audit:wiring`, zero
+stale refs). A reusable migration script lives at `scripts/migrate-domain.mjs` — it
+resolves every relative specifier (`from`, `import()`, `export … from`,
+`new URL(…, import.meta.url)`) against the old layout and recomputes it for the new
+location, so dynamic imports are handled too. Run it, then `git mv` the files and
+fix `__dirname` repo-root paths (below).
+
+**The voice slice added a shared `repo-root.js`** (exports `REPO_ROOT`, computed
+from its own root location) — the depth-independent fix for the `__dirname`
+landmine. The six voice files that built repo-root paths now import `REPO_ROOT`
+instead of deriving it from `__dirname`. Prefer this over `../../` counting for
+future domains.
+
+**Test-file gotcha (bit me on voice):** `migrate-domain.mjs` rewrites *import*
+specifiers everywhere, but source-scanning tests also reference moved files as
+**literal path strings** — `read('voice-transcribe.js')`,
+`path.join(process.cwd(), 'audio-worker.mjs')`, `['…'].map(read)`. Those need
+updating too, but *surgically*: rewrite only file-READER arguments, never a
+`.includes('audio-worker-current.js')` substring assertion (a blanket replace
+breaks those). And don't `git checkout --` a test to undo a bad literal edit — that
+also reverts the script's legitimate import rewrite. When a test pins an import
+PATH (`from '…/voice-audio-features.js'`), prefer a path-flexible match
+(`from '[^']*voice-audio-features\.js'`) so the next move doesn't re-break it.
 
 **The `__dirname` lesson (do NOT skip this on the next domain):** a moved file's
 `path.join(__dirname, 'tomes' | 'models/…' | 'voice-model-pins.json')` still points

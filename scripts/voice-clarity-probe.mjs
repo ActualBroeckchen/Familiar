@@ -35,13 +35,13 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createAudioWorker } from '../audio-worker-host.js';
-import { encodeWav, measureVoiceClip } from '../voice-audio-features.js';
-import { prepareForSpeech } from '../voice-speech.js';
-import { loadCatalogue, clipKey } from '../voice-clips.js';
-import { DEFAULT_TTS_TEMPERATURE } from '../voice-generation.js';
-import { MODELS_SUBDIR } from '../voice-fetch.js';
-import { bundledVoicePath } from '../voices.js';
+import { createAudioWorker } from '../src/voice/audio-worker-host.js';
+import { encodeWav, measureVoiceClip } from '../src/voice/voice-audio-features.js';
+import { prepareForSpeech } from '../src/voice/voice-speech.js';
+import { loadCatalogue, clipKey } from '../src/voice/voice-clips.js';
+import { DEFAULT_TTS_TEMPERATURE } from '../src/voice/voice-generation.js';
+import { MODELS_SUBDIR } from '../src/voice/voice-fetch.js';
+import { bundledVoicePath } from '../src/voice/voices.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 

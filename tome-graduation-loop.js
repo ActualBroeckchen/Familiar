@@ -14,7 +14,7 @@
 
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { isCallActiveFromFile } from './call-engine.js';
+import { isCallActiveFromFile } from './src/voice/call-engine.js';
 import { promises as fsp } from 'fs';
 
 import {

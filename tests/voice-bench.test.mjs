@@ -8,8 +8,8 @@ import {
   percentile, summarizeLatencies, machineFacts, interferencePhase,
   renderReport, runBenchmark, saveReport,
   interferenceBudgetMs, INTERFERENCE_BUDGET,
-} from '../voice-bench.js';
-import { composePlan } from '../voice-models.js';
+} from '../src/voice/voice-bench.js';
+import { composePlan } from '../src/voice/voice-models.js';
 
 // ── WER ──────────────────────────────────────────────────────────────────
 

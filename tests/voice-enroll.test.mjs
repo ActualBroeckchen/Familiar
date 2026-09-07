@@ -4,8 +4,8 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { embedClip, embedClips, enrollWard, enrollVillager } from '../voice-enroll.js';
-import { getWardPrint, getVillagerPrint } from '../voiceprints.js';
+import { embedClip, embedClips, enrollWard, enrollVillager } from '../src/voice/voice-enroll.js';
+import { getWardPrint, getVillagerPrint } from '../src/voice/voiceprints.js';
 
 // A fake worker: op:'load' succeeds; op:'embed' returns whatever embedding the
 // test script maps for a given wavPath (or a failure reason).

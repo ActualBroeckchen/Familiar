@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { classifyRoomSounds, TAG_DEFAULTS } from '../voice-audio-tags.js';
+import { classifyRoomSounds, TAG_DEFAULTS } from '../src/voice/voice-audio-tags.js';
 
 const ev = (name, prob) => ({ name, prob });
 

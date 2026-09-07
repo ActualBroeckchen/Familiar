@@ -269,25 +269,25 @@ app.use(express.static(path.join(__dirname, 'public')));
 import { PROVIDER_URLS, resolveReasoningEffort } from './providers.js';
 import { ensureManualTome } from './manual-tome.js';
 import { listProviderModels } from './provider-models.js';
-import { startBenchmark, statusOf, cancelBenchmark, resetBenchmark, reportPathsRelative } from './voice-bench-run.js';
-import { composePlan, evaluatePlan, availableAsrLangs, CAPABILITY_TIERS, VOICE_ENGINES, formatBytes } from './voice-models.js';
-import { consentSummary, inspectInstalled, fetchPlan, MODELS_SUBDIR } from './voice-fetch.js';
-import { measureFootprint } from './voice-footprint.js';
-import { listClips, measureClip, cachedFeatures, catalogueSummary } from './voice-clips.js';
-import { currentAudioWorker as currentAudioWorkerShared, listeningWorker, stopAudioWorker, VOICE_HARD_DISABLED } from './audio-worker-current.js';
-import { hearVoiceNotes, transcribeAsset, transcriptionAllowed, correctTranscript } from './voice-transcribe.js';
-import { enrollWard, enrollVillager, speakerModelPresent, speakerModelDir } from './voice-enroll.js';
-import { pinAndInstallModel } from './voice-pin.js';
-import { readVoiceprints, listVillagerPrints, deleteWardPrint, deleteVillagerPrint } from './voiceprints.js';
+import { startBenchmark, statusOf, cancelBenchmark, resetBenchmark, reportPathsRelative } from './src/voice/voice-bench-run.js';
+import { composePlan, evaluatePlan, availableAsrLangs, CAPABILITY_TIERS, VOICE_ENGINES, formatBytes } from './src/voice/voice-models.js';
+import { consentSummary, inspectInstalled, fetchPlan, MODELS_SUBDIR } from './src/voice/voice-fetch.js';
+import { measureFootprint } from './src/voice/voice-footprint.js';
+import { listClips, measureClip, cachedFeatures, catalogueSummary } from './src/voice/voice-clips.js';
+import { currentAudioWorker as currentAudioWorkerShared, listeningWorker, stopAudioWorker, VOICE_HARD_DISABLED } from './src/voice/audio-worker-current.js';
+import { hearVoiceNotes, transcribeAsset, transcriptionAllowed, correctTranscript } from './src/voice/voice-transcribe.js';
+import { enrollWard, enrollVillager, speakerModelPresent, speakerModelDir } from './src/voice/voice-enroll.js';
+import { pinAndInstallModel } from './src/voice/voice-pin.js';
+import { readVoiceprints, listVillagerPrints, deleteWardPrint, deleteVillagerPrint } from './src/voice/voiceprints.js';
 import { assetBytesPath } from './media.js';
-import { DEFAULT_VOICE } from './voice-catalogue.js';
-import { resolveVoice, installVoice, saveWardVoice, listLocalVoices } from './voices.js';
+import { DEFAULT_VOICE } from './src/voice/voice-catalogue.js';
+import { resolveVoice, installVoice, saveWardVoice, listLocalVoices } from './src/voice/voices.js';
 import { mergeSettings } from './settings-merge.js';
-import { prepareForSpeech, splitForUtterances, splitForSpeech } from './voice-speech.js';
+import { prepareForSpeech, splitForUtterances, splitForSpeech } from './src/voice/voice-speech.js';
 import {
   speakUnitsSelfHealing,
   SMALL_UTTERANCE_CHARS, DEFAULT_TTS_SEED, MAX_CHAR_IN_SENTENCE,
-} from './voice-generation.js';
+} from './src/voice/voice-generation.js';
 
 /**
  * Failures where nothing further can be spoken, so the read-aloud loop stops
@@ -295,9 +295,9 @@ import {
  * else is a per-part problem and must NOT silence the parts that still work.
  */
 const FATAL_TTS_REASONS = new Set(['no-worker', 'no-engine', 'not-loaded', 'stopped', 'worker-died', 'worker-stopped', 'parked', 'spawn-failed']);
-import { resolveBackend, inspectBackends, BACKENDS, rebuildVoicebox } from './voice-backend.js';
-import { wavHeader, WAV_STREAMING_LENGTH, measureVoiceClip, floatToPcm16 } from './voice-audio-features.js';
-import { KIND_PCM } from './audio-frame.js';
+import { resolveBackend, inspectBackends, BACKENDS, rebuildVoicebox } from './src/voice/voice-backend.js';
+import { wavHeader, WAV_STREAMING_LENGTH, measureVoiceClip, floatToPcm16 } from './src/voice/voice-audio-features.js';
+import { KIND_PCM } from './src/voice/audio-frame.js';
 import { shortSlug } from './slug-ids.js';
 // Tome / state-file coordination is owned by thalamus — every writer
 // of a shared file goes through these helpers so cross-loop races
@@ -5380,7 +5380,7 @@ const httpServer = app.listen(PORT, HOST, async () => {
   // server down — chat, read-aloud, and voice notes keep working regardless
   // (the no-module-may-break-the-chat-path rule).
   try {
-    const { attachVoiceCall } = await import('./voice-call-server.js');
+    const { attachVoiceCall } = await import('./src/voice/voice-call-server.js');
     const sharedVoiceWorkers = {
       getListeningWorker: async () => (await listeningWorker({ rootDir: __dirname })).worker,
       getTtsWorker: async () => (await currentAudioWorker()).worker,
@@ -5396,7 +5396,7 @@ const httpServer = app.listen(PORT, HOST, async () => {
     // Discord voice (Pass 3) shares the SAME ASR/TTS workers — one call at a
     // time across both transports. Failure here never blocks web calls or chat.
     try {
-      const { attachDiscordVoice } = await import('./voice-discord-server.js');
+      const { attachDiscordVoice } = await import('./src/voice/voice-discord-server.js');
       const { setDiscordVoiceController } = await import('./discord-gateway.js');
       const discordVoice = attachDiscordVoice({
         rootDir: __dirname, port: PORT,

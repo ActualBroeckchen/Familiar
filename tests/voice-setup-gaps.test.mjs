@@ -150,7 +150,7 @@ test('both surfaces hear voice notes — the RULE C cell vision missed', () => {
     assert.ok(read(f).includes('hearVoiceNotes'), `${f} does not listen before it answers`);
   }
   // And that the worker lives somewhere both can reach, rather than inside one.
-  assert.ok(read('voice-transcribe.js').includes('audio-worker-current.js'));
+  assert.ok(read('src/voice/voice-transcribe.js').includes('audio-worker-current.js'));
 });
 
 test('docs tell someone voice exists, and what to do when it does not work', () => {
