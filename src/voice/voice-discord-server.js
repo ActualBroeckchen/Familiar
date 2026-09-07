@@ -370,6 +370,11 @@ export function attachDiscordVoice(deps) {
           startedAt:  new Date(sess.startedAt ?? Date.now()).toISOString(),
           endedAt:    endedIso,
           origin:     'voice-call-discord',
+          // A real location so the Sessions tab labels + types it as a voice call
+          // (not "Web chat"): platform 'voice' drives the icon/filter, the label
+          // distinguishes a Discord call from a web one. Without this the log was
+          // written but read as web chat and looked missing.
+          location:   { platform: 'voice', kind: 'discord', label: 'Discord voice call' },
           audienceTag,
           provider:   conn.provider, model: conn.model,
           messages:   stampMessages(sess.messages, endedIso),

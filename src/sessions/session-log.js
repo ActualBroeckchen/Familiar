@@ -120,6 +120,7 @@ export async function writeSessionLog(data, { logsDir, merge = false } = {}) {
 export function sessionLocationLabel(location, origin) {
   if (!location || typeof location !== 'object') {
     // Older logs predate the `location` field — infer from `origin` when we can.
+    if (origin === 'voice-call-discord') return 'Discord voice call';
     if (origin === 'voice-call') return 'Voice call';
     return 'Web chat';
   }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { mergeMessages, writeSessionLog } from '../src/sessions/session-log.js';
+import { mergeMessages, writeSessionLog, sessionLocationLabel } from '../src/sessions/session-log.js';
 
 const m = (id, ts, content = id) => ({ id, role: 'user', content, timestamp: ts });
 
@@ -69,4 +69,20 @@ test('writeSessionLog merge: location and startedAt are set-once (creator wins)'
     assert.equal(log.startedAt, 'A');
     assert.deepEqual(log.messages.map(x => x.id), ['a', 'b']);
   } finally { await fsp.rm(dir, { recursive: true, force: true }); }
+});
+
+// ── Voice calls are labelled as voice, not "Web chat" (0.11.82) ──────────────
+// Discord voice logs land with origin 'voice-call-discord'. Before this they had
+// no `location`, and sessionLocationLabel only knew 'voice-call' — so a real
+// voice call read as "Web chat" in the Sessions tab and looked like it never
+// logged. New logs carry a location; existing ones are re-labelled from origin.
+test('sessionLocationLabel: a Discord voice call reads as a voice call, both new and legacy logs', () => {
+  // New logs (carry a location object).
+  assert.equal(sessionLocationLabel({ platform: 'voice', kind: 'discord', label: 'Discord voice call' }, 'voice-call-discord'), 'Discord voice call');
+  // Legacy Discord voice logs already on disk (origin only, no location).
+  assert.equal(sessionLocationLabel(null, 'voice-call-discord'), 'Discord voice call');
+  // Web voice call unchanged.
+  assert.equal(sessionLocationLabel(null, 'voice-call'), 'Voice call');
+  // A real web chat still reads as web chat.
+  assert.equal(sessionLocationLabel(null, undefined), 'Web chat');
 });
