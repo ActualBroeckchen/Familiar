@@ -125,7 +125,7 @@ ponderings injection, care-check framing) and as background loops
 ├── silence-triage-loop.js   Autonomous singleton loop; LLM-deliberated proactive check-ins
 ├── reachout-loop.js         Autonomous singleton loop; warm non-crisis outreach (companionship). Stands down at moderate+ threat (triage owns distress); quiet-hours + cooldown gated
 ├── tome-graduation-loop.js  Autonomous singleton loop (Phase 4, opt-in/default-OFF); drains durable facts stranded in tomes into Phylactery (identity + memory + graph; relational facts resolve-or-create nodes + dedup edges). Pure logic in tome-graduation.js. Code-gated candidates → one batched LLM judgment (Phase-3 rubric; leans toward graduating — consolidation back-end prunes over-gathering) → route via thalamus wrappers (ward memory consent-gated) → tidy only after confirmed route (delete/pointer). Off-switch PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1; distinct from Pillar H (identity→RAG); per-tome opt-out `graduationExempt` (0.8.106): ward-toggleable in the Tomes modal, stamped on runtime tomes at creation, exposed via GET/PATCH /api/tomes — the name-exclusion list stays as belt-and-suspenders
-├── content-regate-loop.js   Autonomous singleton loop (ward-disclosure Phase B, opt-in/default-OFF); the Familiar reviews EXISTING ward-private ward-self memories and, with a batched judgment, opens the ones that may be content-gated (`audience → ward-content-gated`, optionally correcting the coarse backfill `content_tag`) while keeping the rest private. Pure logic in content-regate.js. Conservative (parser fails closed to keep); code-selects candidates (memory_list_content_gate_candidates — ward-private + no third-party subject only, never touches a third-party fact); reviewed-tracker judges each once; every opening writes a `[DISCLOSURE NOTICE]` (enrich(), ward-visible) settled by `disclosure_acknowledge` / reverted by `keep_memory_private`. Off-switch PROTO_FAMILIAR_CONTENT_REGATE_DISABLED=1 + "Review my private notes for content-sharing" toggle
+├── content-regate-loop.js   Autonomous singleton loop (ward-disclosure Phase B, opt-in/default-OFF); the Familiar reviews EXISTING ward-private ward-self memories and, with a batched judgment, opens the ones that may be content-gated (`audience → ward-content-gated`, optionally correcting the coarse backfill `content_tag`) while keeping the rest private. Pure logic in content-regate.js. Conservative (parser fails closed to keep); code-selects candidates (memory_list_content_gate_candidates — ward-private + no third-party subject only, never touches a third-party fact); reviewed-tracker judges each once; every opening writes a `[DISCLOSURE NOTICE]` (enrich(), ward-visible) settled by `acknowledge_disclosure` / reverted by `keep_memory_private`. Off-switch PROTO_FAMILIAR_CONTENT_REGATE_DISABLED=1 + "Review my private notes for content-sharing" toggle
 ├── content-regate.js        Pure Phase-B logic: selectBatch / parseRetagDecision (fail-closed) / summarizeCircles / buildRetagPrompt + injectable runOneRetagTick; reviewed-tracker (tomes/.content-regate-reviewed.json) + disclosure notices (tomes/.disclosure-notices.json)
 ├── needs-tracking-loop.js   Autonomous singleton loop (Pass 2, opt-in/default-OFF); marks a recurring need-window's occurrence `missed` once its [when,end] elapses unresolved (builds the needs-fulfilment ledger). Pure selection in needs-tracking.js. Stands down at moderate+ threat (never competes with triage); only the LAPSE is made factual — projected consequence edges are untouched. Off-switch PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1
 ├── needs-tracking.js        Pure Pass-2 logic: isNeedWindow / selectMissedOccurrences / summarizeNeedsForDay (the live "Needs today" view)
@@ -1725,14 +1725,14 @@ candidates and re-screens every graduated item against the care matcher
 (defence in depth). `auto_snapshot` runs before any identity trim. Ward-block
 graduations land in `graduation_log`; thalamus surfaces unacknowledged ones as
 a `[GRADUATION NOTICE]` block (TTL-cached, ward-private turns only,
-non-blocking), and the Familiar calls `graduation_acknowledge` once mentioned.
+non-blocking), and the Familiar calls `acknowledge_graduation` once mentioned.
 Tested in `phylactery/tests/test_graduation.py`.
 
 The sibling `[DISCLOSURE NOTICE]` block (ward-disclosure Phase B) works the same
 way for the content-gating re-tag pass: when `content-regate.js` opens one of the
 ward's own formerly-private facts to be governed by content rules, thalamus
 surfaces it (ward-private turns only) so nothing opens behind the ward's back;
-the Familiar calls `disclosure_acknowledge` once mentioned, or `keep_memory_private`
+the Familiar calls `acknowledge_disclosure` once mentioned, or `keep_memory_private`
 to revert a fact to strictly-private on the ward's word.
 
 **Encrypted backup/restore** (`backup.py`) — "back up / restore my Familiar":

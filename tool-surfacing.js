@@ -70,13 +70,13 @@ export const TOOL_MODULES = {
   // weather — the sky over my human's day (W-B). Surfaced by leaving-the-house
   // language and by the readiness/stewardship agenda + a new outside event
   // landing on the calendar (exactly when the weather matters).
-  weather_today: 'weather', set_current_location: 'weather',
+  weather_today: 'weather', set_current_location: 'weather', delete_location: 'weather',
 
   acknowledge_deferred_intent: 'acks', snooze_deferred_intent: 'acks',
   list_deferred_intents: 'acks', drop_deferred_intent: 'acks',
   memory_confirm_consent: 'acks', memory_drop_pending: 'acks',
-  graduation_acknowledge: 'acks',
-  disclosure_acknowledge: 'acks', keep_memory_private: 'acks',
+  acknowledge_graduation: 'acks',
+  acknowledge_disclosure: 'acks', keep_memory_private: 'acks',
   // Reading my own recent thought in full — the expand path for the pondering
   // index, which renders on every ward turn, so the tool must always be reachable
   // (like recall). Ward-only: it's absent from the villager allowlist, so a

@@ -62,7 +62,7 @@ import {
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
   searchMemoryRestricted, searchMemory, memByTimerange,
-  setCurrentLocation, listLocations,
+  setCurrentLocation, listLocations, deleteLocation,
   withLock,
   probeOrgans,
 } from './thalamus.js';
@@ -2248,7 +2248,7 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'graduation_acknowledge',
+      name: 'acknowledge_graduation',
       description: "I call this once I've mentioned to my human (or judged no mention is needed) the ward-block detail I filed off my always-injected surface — the items shown in the [GRADUATION NOTICE] block. It marks them as surfaced so I don't keep re-raising the same graduations. Nothing is deleted; the detail stays recalled-when-relevant and can be pulled back.",
       parameters: {
         type: 'object',
@@ -2266,7 +2266,7 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'disclosure_acknowledge',
+      name: 'acknowledge_disclosure',
       description: "I call this once I've told my human (or judged no mention is needed) about the formerly-private facts I opened to my content-sharing rules — the items in the [DISCLOSURE NOTICE] block. It settles those notices so I don't keep re-raising them. The facts stay opened; this only marks that I've surfaced them.",
       parameters: {
         type: 'object',
@@ -2453,6 +2453,20 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           place: { type: 'string', description: "The saved place label to make current (e.g. \"work\")." },
+        },
+        required: ['place'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_location',
+      description: "I remove a saved place from {{user}}'s list — a stale or duplicate one. I name it by a label I've seen (set_current_location's list of what I have, or one {{user}} tells me directly). If it was their current place, another saved one takes over automatically, so there's never a gap.",
+      parameters: {
+        type: 'object',
+        properties: {
+          place: { type: 'string', description: "The saved place label to remove (e.g. \"old office\")." },
         },
         required: ['place'],
       },
@@ -2819,25 +2833,29 @@ export const TOOL_EXECUTORS = {
     return quietOk(`Dropped ${n} consent-pending record(s). (Auto-snapshot taken before deletion.)`);
   },
 
-  graduation_acknowledge: async ({ ids }) => {
+  acknowledge_graduation: async ({ ids }) => {
     if (!Array.isArray(ids) || ids.length === 0) return 'ids must be a non-empty array of graduation notice IDs.';
     const result = await acknowledgeGraduations(ids);
     const n = result?.acknowledged ?? ids.length;
     return quietOk(`Marked ${n} graduation notice(s) as surfaced. The filed-away detail stays recalled-when-relevant.`);
   },
+  // alias, remove after 0.12 — a mid-conversation model may still recall the old name
+  graduation_acknowledge: (args) => TOOL_EXECUTORS.acknowledge_graduation(args),
 
   // ── Disclosure notices (ward-disclosure spec, Phase B) ─────────────
   // I've told my human which of their formerly-private facts I opened to my
   // content rules; these settle those notices. acknowledge = I mentioned it (or
   // judged it needs no mention), leave it opened. keep_memory_private = my human
   // wants it strictly between us again — revert its audience to ward-private.
-  disclosure_acknowledge: async ({ ids } = {}) => {
+  acknowledge_disclosure: async ({ ids } = {}) => {
     const arr = Array.isArray(ids) ? ids : (ids ? [ids] : []);
     if (!arr.length) return 'ids must be a non-empty array of disclosure notice ids.';
     const { clearDisclosureNotice } = await import('./src/memory/content-regate.js');
     for (const id of arr) { await clearDisclosureNotice(id).catch(() => {}); }
     return quietOk(`Marked ${arr.length} disclosure notice(s) as surfaced.`);
   },
+  // alias, remove after 0.12 — a mid-conversation model may still recall the old name
+  disclosure_acknowledge: (args) => TOOL_EXECUTORS.acknowledge_disclosure(args),
 
   keep_memory_private: async ({ id } = {}) => {
     if (!id || typeof id !== 'string') return 'I need the id of the memory to keep private.';
@@ -4412,6 +4430,23 @@ export const TOOL_EXECUTORS = {
     return quietOk(`Current place is now ${match.label}.`, { id: match.id });
   },
 
+  delete_location: async ({ place } = {}) => {
+    const label = String(place ?? '').trim();
+    if (!label) return 'I need the label of the place to remove.';
+    let locs;
+    try { locs = (await listLocations())?.locations ?? []; } catch { locs = []; }
+    const match = locs.find(l => String(l.label ?? '').toLowerCase() === label.toLowerCase());
+    if (!match) {
+      const names = locs.map(l => l.label).filter(Boolean);
+      return names.length
+        ? `I don't have a place saved as "${label}". The ones I do have: ${names.join(', ')}.`
+        : `I don't have any places saved yet, so there's nothing to remove.`;
+    }
+    const res = await deleteLocation({ ident: match.id });
+    if (!res?.ok) return "I couldn't remove that place just now — I'll try again.";
+    return quietOk(`Removed ${match.label} from my saved places.`, { id: match.id });
+  },
+
   // ── Browser (spec §4; ward-only, §5.7) ─────────────────────────────────
   // The browse_* tools are the Familiar's own hands on the web, never a
   // villager's — a gated turn can't steer them. browser.js is dynamic-imported
@@ -4515,7 +4550,7 @@ const WEB_TOOL_NAMES = new Set(['look_up', 'web_search', 'read_webpage']);
 // The weather tools only appear when weather is enabled (default-ON settings
 // toggle + the env off-switch) — a Familiar with no places saved still sees
 // them, and weather_today tells it kindly there's nowhere to check yet.
-const WEATHER_TOOL_NAMES = new Set(['weather_today', 'set_current_location']);
+const WEATHER_TOOL_NAMES = new Set(['weather_today', 'set_current_location', 'delete_location']);
 const PAGE_WATCH_TOOL_NAMES = new Set(['watch_page', 'list_page_watches', 'unwatch_page']);
 // Vision link tools (vision build spec §6.5) — need vision enabled but not a
 // capable turn (linking is by-id metadata); view_image is gated separately on
