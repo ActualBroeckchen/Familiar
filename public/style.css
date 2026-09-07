@@ -372,6 +372,30 @@ textarea:focus-visible {
 .status-badge.busy { color: var(--warn-color); }
 .status-badge.err  { color: var(--error-color); }
 
+/* "Is my Familiar alive?" loop-status readout — one dot + name per
+   background loop. Color is never the only carrier (WCAG 1.4.1): each
+   dot's aria-label/title names the state, and the row also prints the
+   word "up"/"down" so it reads fine with color off. */
+.loops-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  padding: 8px 0;
+}
+.loops-status-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--text);
+}
+.loops-dot { font-size: 0.9rem; line-height: 1; cursor: default; }
+.loops-dot.ok  { color: var(--success-color); }
+.loops-dot.err { color: var(--error-color); }
+.loops-status-word { color: var(--text-dim); font-size: 0.76rem; }
+
+.loops-log-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+
 /* Active-connection chip — always-visible, atop the chat; opens Connections. */
 .conn-chip {
   display: inline-flex;

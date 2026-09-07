@@ -403,6 +403,10 @@
             <div class="action-row" style="margin-top:4px">
               <button id="voice-bench-btn" class="btn-secondary">🎤 Voice benchmark</button>
             </div>
+            <p class="field-hint" style="margin-top:10px">Which background loops are actually running right now, plus their own decision logs (noticing, warm reach-out, triage, page watch, Discord writes) — so a quiet Familiar and a stuck one don't look the same.</p>
+            <div class="action-row" style="margin-top:4px">
+              <button id="loops-health-btn" class="btn-secondary">💓 Is my Familiar alive?</button>
+            </div>
           </div>
         </div>
 
@@ -959,6 +963,55 @@
     </div>
   </div>
 
+  <!-- Loops & logs modal ("Is my Familiar alive?") — loop-alive readout +
+       the five background-loop decision logs, each with its own filter. -->
+  <div class="modal-backdrop hidden" id="loops-health-modal" role="dialog" aria-modal="true" aria-labelledby="loops-health-title">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2 class="modal-title" id="loops-health-title">Is my Familiar alive?</h2>
+        <button class="icon-btn modal-close" id="loops-health-close" aria-label="Close" data-ms-icon="close"></button>
+      </div>
+      <div class="modal-body">
+        <p class="field-hint hint-keep">Which background loops are running right now, and their own decision logs — a quiet loop and a stuck one don't look the same from here.</p>
+
+        <div id="loops-status-row" class="loops-status-row"></div>
+
+        <div class="ke-tabs" role="tablist">
+          <button class="ke-tab ke-tab-active" data-loops-tab="noticing"  role="tab">Noticing</button>
+          <button class="ke-tab"               data-loops-tab="reachout" role="tab">Reach-out</button>
+          <button class="ke-tab"               data-loops-tab="triage"   role="tab">Triage</button>
+          <button class="ke-tab"               data-loops-tab="pagewatch" role="tab">Page watch</button>
+          <button class="ke-tab"               data-loops-tab="discord"  role="tab">Discord writes</button>
+        </div>
+
+        <div class="ke-pane ke-pane-active" id="loops-pane-noticing">
+          <input type="search" id="loops-search-noticing" class="vl-search" placeholder="Filter noticing log…" aria-label="Filter noticing log" autocomplete="off">
+          <div id="loops-list-noticing" class="loops-log-list"></div>
+        </div>
+        <div class="ke-pane" id="loops-pane-reachout">
+          <input type="search" id="loops-search-reachout" class="vl-search" placeholder="Filter reach-out log…" aria-label="Filter reach-out log" autocomplete="off">
+          <div id="loops-list-reachout" class="loops-log-list"></div>
+        </div>
+        <div class="ke-pane" id="loops-pane-triage">
+          <input type="search" id="loops-search-triage" class="vl-search" placeholder="Filter triage log…" aria-label="Filter triage log" autocomplete="off">
+          <div id="loops-list-triage" class="loops-log-list"></div>
+        </div>
+        <div class="ke-pane" id="loops-pane-pagewatch">
+          <input type="search" id="loops-search-pagewatch" class="vl-search" placeholder="Filter page-watch log…" aria-label="Filter page-watch log" autocomplete="off">
+          <div id="loops-list-pagewatch" class="loops-log-list"></div>
+        </div>
+        <div class="ke-pane" id="loops-pane-discord">
+          <input type="search" id="loops-search-discord" class="vl-search" placeholder="Filter Discord writes…" aria-label="Filter Discord writes log" autocomplete="off">
+          <div id="loops-list-discord" class="loops-log-list"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="loops-health-refresh" class="btn-secondary" type="button">↻ Refresh</button>
+        <button id="loops-health-done" class="btn-ghost" type="button">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Knowledge editor modal (Phylactery) -->
   <div class="modal-backdrop hidden" id="knowledge-modal" role="dialog" aria-modal="true" aria-labelledby="knowledge-modal-title">
     <div class="modal modal-wide modal-resizable" id="knowledge-modal-inner">
@@ -1205,6 +1258,11 @@
             <label for="pondering-scale">Pondering interval scale</label>
             <input type="number" id="pondering-scale" value="1" min="1" max="10" step="0.5">
             <div class="field-hint">Multiplies the base ponder interval. 1× = default cadence (30 min – 6 hr). 2× doubles every interval (1 hr – 12 hr). Use this to dial token cost down without disabling entirely. Only stretches, never speeds up.</div>
+          </div>
+          <div class="field">
+            <label for="pondering-thread-chance">Wander chance <span id="pondering-thread-chance-val" style="font-variant-numeric:tabular-nums">35%</span></label>
+            <input type="range" id="pondering-thread-chance" min="0" max="100" step="5" value="35" aria-label="Wander chance">
+            <div class="field-hint">How often a ponder follows a side road off its topic instead of staying put. 0% = never wander, 100% = always.</div>
           </div>
           <div class="field-row" style="margin-top:12px">
             <label for="ponder-web-toggle">Look things up while pondering</label>
