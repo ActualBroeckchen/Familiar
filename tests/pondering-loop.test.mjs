@@ -382,3 +382,21 @@ test('runOneTick stays on the weighted pick when the roll misses or nothing is r
   assert.equal(none.threadFrom, null);
   assert.ok(calls.every(c => c.label === 'tea' && c.opts === undefined));
 });
+
+test('threadChance may be a dial: a function is awaited, and out-of-range values clamp', async () => {
+  const { clampChance } = await import('../src/pondering/pondering-loop.js');
+  assert.equal(clampChance(2), 1);
+  assert.equal(clampChance(-1), 0);
+  assert.equal(clampChance('nope'), 0.35);
+  assert.equal(clampChance(undefined), 0.35);
+  const calls = [];
+  const r = await runOneTick({
+    getInterests: async () => [{ id: 'tea', label: 'tea', weight: 5 }],
+    getRelated:   async () => [{ id: 'k', label: 'kettles', weight: 2 }],
+    threadChance: async () => 0,      // dial at zero → never hops
+    runPonder:    async (label) => { calls.push(label); return null; },
+    computeInterval: () => 0, rng: seq([0.1, 0.0, 0.1]), now: () => 1_000_000,
+  });
+  assert.equal(r.threadFrom, null);
+  assert.deepEqual(calls, ['tea']);
+});

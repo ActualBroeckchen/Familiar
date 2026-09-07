@@ -37,6 +37,11 @@ import { computeRequiredInterval } from './pondering-cadence.js';
 const DEFAULT_TICK_MS = 60_000; // poll once per minute by default
 // How often a ponder hops one related_to edge instead of staying on the weighted pick.
 const DEFAULT_THREAD_CHANCE = 0.35;
+/** A thread chance from settings: finite and within [0,1], else the default. */
+export function clampChance(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : DEFAULT_THREAD_CHANCE;
+}
 
 /**
  * Run a single tick. Pure-ish — all I/O comes through injected callbacks
@@ -72,7 +77,7 @@ export async function runOneTick({
   // ponder the neighbour instead — a curiosity leads to the next one. Off
   // when no getRelated is wired.
   getRelated       = null,    // async (id) => [{ id, label, weight }]
-  threadChance     = DEFAULT_THREAD_CHANCE,
+  threadChance     = DEFAULT_THREAD_CHANCE,   // number, or async () => number (a ward-set dial)
 }) {
   if (typeof getInterests !== 'function') throw new Error('getInterests is required');
   if (typeof runPonder    !== 'function') throw new Error('runPonder is required');
@@ -126,7 +131,8 @@ export async function runOneTick({
   }
 
   let threadFrom = null;
-  if (typeof getRelated === 'function' && picked.id && rng() < threadChance) {
+  const chance = clampChance(typeof threadChance === 'function' ? await threadChance() : threadChance);
+  if (typeof getRelated === 'function' && picked.id && rng() < chance) {
     const related = await Promise.resolve(getRelated(picked.id)).catch(() => []);
     const hop = pickInterest(related, { rng });
     if (hop && hop.id !== picked.id) { threadFrom = picked.label; picked = hop; }
