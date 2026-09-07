@@ -69,7 +69,7 @@ import { formatOrganStatus } from './organs.js';
 import { audienceTagFor, deriveNodeAudience } from './audience.js';
 import { getAssetMeta, addAssetLink, removeAssetLink, drainPendingImages } from './media.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './graph-vocab.js';
-import { searchWeb, readWebpage, lookUp } from './websearch.js';
+import { searchWeb, readWebpage, lookUp } from './src/search/websearch.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { markIntentActedOn, snoozeIntent, dropIntent, getUnactedIntents, readPonderingByUid } from './recent-ponderings.js';
 import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';

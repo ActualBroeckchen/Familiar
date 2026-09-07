@@ -31,7 +31,7 @@ import dns from 'node:dns/promises';
 import net from 'node:net';
 
 import { API_PROVIDERS } from './websearch-providers.js';
-import { sanitizeExternal } from './injection-guard.js';
+import { sanitizeExternal } from '../../injection-guard.js';
 
 // The HTML-extraction stack (linkedom + @mozilla/readability + turndown) is
 // loaded LAZILY, not as static top-level imports. These are optional-feature

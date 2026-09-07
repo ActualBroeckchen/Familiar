@@ -50,7 +50,7 @@ import {
 } from './thalamus.js';
 import { scoreMessage } from './crisis-signals.js';
 import { foldReasoningIntoContent, callProviderChat } from './llm-call.js';
-import { fetchReadable } from './websearch.js';
+import { fetchReadable } from './src/search/websearch.js';
 import { startPageWatchLoop, stopPageWatchLoop } from './page-watch-loop.js';
 import { buildPageWatchPrompt, parsePageWatchDecision } from './page-watch.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';

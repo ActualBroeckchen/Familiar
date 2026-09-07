@@ -19,7 +19,7 @@
  * Everything here is Node-side; the model only ever receives clean text.
  */
 
-import { guardedFetch, WebAccessError } from './websearch.js';
+import { guardedFetch, WebAccessError } from './src/search/websearch.js';
 import { sanitizeExternal } from './injection-guard.js';
 
 const DEFAULT_UA = 'proto-familiar/1.0 (personal companion reader; +https://github.com/PsycherosAI)';

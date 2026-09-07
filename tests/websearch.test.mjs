@@ -9,7 +9,7 @@ import {
   lookUp,
   readWebpage,
   WebAccessError,
-} from '../websearch.js';
+} from '../src/search/websearch.js';
 
 // ── SSRF guard: pure IP classification ───────────────────────────
 test('isBlockedIp blocks loopback, private, link-local, metadata, and reserved', () => {
@@ -271,7 +271,7 @@ test('readWebpage sanitizes injection spans in page text, keeps the article', as
 });
 
 // ── extractReadable (shared by the static + browser read paths) ────────────
-import { extractReadable } from '../websearch.js';
+import { extractReadable } from '../src/search/websearch.js';
 
 test('extractReadable turns HTML into framed, provenance-stamped markdown', async () => {
   const html = '<html><head><title>Oat Milk</title></head><body><article><h1>Oat Milk</h1><p>Creamy oat milk, one litre. Barista edition, good for coffee.</p><p>It froths well and keeps in the fridge.</p></article></body></html>';

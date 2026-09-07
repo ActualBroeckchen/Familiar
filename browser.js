@@ -311,7 +311,7 @@ export async function browseRead({ url } = {}, { settings, sessionId } = {}) {
     const { readPage } = driver;
     if (typeof readPage !== 'function') return { ok: false };
     const { html, url: finalUrl } = await readPage(url, opts(settings));
-    const { extractReadable } = await import('./websearch.js');
+    const { extractReadable } = await import('./src/search/websearch.js');
     const maxChars = Math.min(Math.max(Number(settings?.webSearchMaxChars) || 8000, 500), 100000);
     const res = await extractReadable(html, { url: finalUrl, maxChars });
     if (res.ok) logBrowserAction({ tool: 'read_webpage', target: finalUrl, verdict: 'read (browser)', sessionId });
