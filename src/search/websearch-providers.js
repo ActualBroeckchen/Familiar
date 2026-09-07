@@ -18,7 +18,7 @@
  * guide-chat tools-info block (docs/websearch-modular-build-spec.md §5b).
  */
 
-import { timedFetch } from './web-fetch-util.js';
+import { timedFetch } from '../../web-fetch-util.js';
 
 // Brave — independent index, header-token auth. Maps web.results[] → rows.
 export async function braveSearch(query, { apiKey } = {}, { fetchFn = fetch } = {}) {
