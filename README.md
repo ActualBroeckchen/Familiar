@@ -151,6 +151,8 @@ You don't need to understand any of this to use it. But knowing what the pieces 
 
 **Village** is not a software component but a concept — the circle of people in your life who the Familiar knows about and can involve when you need support. You define your Village. The Familiar can only contact people you have explicitly designated, and you always see what's sent.
 
+**Working on the code?** Start with [**ARCHITECTURE.md**](ARCHITECTURE.md) — it's the map: the entry point, the load-bearing files, and how the (currently flat) root modules group into domains. It's the antidote to landing on a wall of files. Component-level depth lives in [`docs/architecture.md`](docs/architecture.md); the plan to move the root modules into `src/<domain>/` is in [`docs/repo-organization-plan.md`](docs/repo-organization-plan.md).
+
 ---
 
 ## A few words used in this project
@@ -177,6 +179,7 @@ Still stuck? The [Discord server](https://discord.gg/ajKBCWGaE) is the best plac
 
 | | |
 |---|---|
+| [Architecture map](ARCHITECTURE.md) | **Start here to work on the code** — what the pieces are and where they live |
 | [Full setup guide](docs/getting-started.md) | Detailed installation, updating, and configuration |
 | [Features](docs/features.md) | Everything Familiar can do |
 | [Developer reference](docs/developer-reference.md) | API docs, project layout, internals, research index |
