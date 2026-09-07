@@ -146,7 +146,7 @@ test('both surfaces hear voice notes — the RULE C cell vision missed', () => {
   // Web got ensureDescribed, Discord silently did not, and the Familiar
   // described images it had never looked at. The shared call is what makes
   // that impossible to repeat; this asserts both ends still use it.
-  for (const f of ['server.js', 'discord-gateway.js']) {
+  for (const f of ['server.js', 'src/discord/discord-gateway.js']) {
     assert.ok(read(f).includes('hearVoiceNotes'), `${f} does not listen before it answers`);
   }
   // And that the worker lives somewhere both can reach, rather than inside one.
