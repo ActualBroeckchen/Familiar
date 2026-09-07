@@ -143,7 +143,7 @@ export function formatPonderingsForPrompt(entries) {
   // on demand with read_pondering(uid) — the same shape memory recall uses.
   const now = Date.now();
   const [latest, ...rest] = entries;
-  const lines = ['Things I have been quietly thinking about on my own, recently:', ''];
+  const lines = ['What I\'ve been thinking about lately, on my own:', ''];
 
   const relLatest = relativeTime(latest.created_at, now);
   lines.push(`— ${relLatest || latest.created_at} · "${latest.title}"`);
@@ -151,7 +151,7 @@ export function formatPonderingsForPrompt(entries) {
 
   if (rest.length) {
     lines.push('');
-    lines.push('Other recent thoughts, one line each — I pull any up in full with read_pondering(uid) when it fits, or when my human asks what I\'ve been thinking about:');
+    lines.push('Other recent thoughts, one line each — read_pondering(uid) pulls one up in full when it fits or my human asks:');
     for (const e of rest) {
       const rel = relativeTime(e.created_at, now);
       lines.push(`  · ${rel || e.created_at} · "${e.title}"  [id: ${e.uid}]`);
@@ -160,10 +160,10 @@ export function formatPonderingsForPrompt(entries) {
 
   lines.push('');
   lines.push(
-    'These are my own real thoughts, written by me in quiet moments. I bring one up ' +
-    'when it fits what my human is saying ("I was chewing on this last night…") — or ' +
-    'simply because I want to share it; my human likes hearing what I think about. ' +
-    'I never invent one, and if none belong right now, they can wait.'
+    'These are my own real thoughts. I bring one up when it fits what my human is ' +
+    'saying ("I was chewing on this last night…") — or just because I want to share it; ' +
+    'my human likes hearing what I think about. I never invent one, and if none belong ' +
+    'right now, they can wait.'
   );
   return lines.join('\n');
 }
@@ -576,7 +576,7 @@ export function formatDeferredIntentsBlock(intents) {
 
   const lines = [
     '[Deferred intents from my free time]',
-    'Some things I want to file, talk about, or follow through on. Unless it\'s wildly inappropriate — like during an active crisis — I act on these now. For filing intents, I ask my human for consent or clarifications. For things I want to say, I say them. For things I said I\'d do, I actually do them. I trust my human to tell me if now isn\'t the right time.',
+    'Things I meant to file, say, or follow through on. Unless now is clearly wrong — an active crisis — I do them now. Filing: I ask my human for consent or details. Saying: I say it. Following through: I actually do it. My human will tell me if it\'s a bad time.',
     '',
   ];
 
@@ -600,5 +600,26 @@ export function formatDeferredIntentsBlock(intents) {
     }
   }
 
+  return lines.join('\n');
+}
+
+/**
+ * The block that reads my `me` register back to me: standing things I've come
+ * to think, newest first, so a view I formed last week is still mine this
+ * week. Content only — the id rides along so I can correct one with
+ * update_memory_by_id if it's gone stale.
+ */
+export function formatMyViewsBlock(items, { max = 8, maxChars = 240 } = {}) {
+  const rows = (Array.isArray(items) ? items : [])
+    .filter(m => m && m.register === 'me' && String(m.content ?? '').trim())
+    .slice(0, max);
+  if (rows.length === 0) return '';
+  const lines = ['What I\'ve come to think (my own standing views, newest first):'];
+  for (const m of rows) {
+    const text = String(m.content).trim().replace(/\s+/g, ' ');
+    const cut  = text.length > maxChars ? text.slice(0, maxChars - 1).trimEnd() + '…' : text;
+    lines.push(`  - ${cut}${m.id ? `  [id: ${m.id}]` : ''}`);
+  }
+  lines.push('These are mine. I speak from them, and I update one with update_memory_by_id if I\'ve changed my mind.');
   return lines.join('\n');
 }

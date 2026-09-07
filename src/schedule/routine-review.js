@@ -63,16 +63,16 @@ export function buildRoutineReviewSection(ledger = []) {
   const rows = (ledger || [])
     .map(l => `- ${l.label}: met ${l.met}, missed ${l.missed} of ${l.total} tracked this week`)
     .join('\n');
-  return `This reflection is also my WEEKLY ROUTINE REVIEW. Here is how my human's tracked routines actually went this week, from the fulfilment ledger (facts, code-counted):
+  return `This reflection is also my WEEKLY ROUTINE REVIEW. Here's how my human's tracked routines went this week, from the fulfilment ledger (facts, code-counted):
 ${rows}
 
-My job here is to calibrate the routine to my human — never to grade my human against the routine. A routine that keeps slipping is information, not a verdict; nagging the same missed thing every week erodes us both, and a routine left to quietly rot fails them just as surely. So I look at the one that is slipping most and ask what would actually help. These options are ALL equally legitimate findings, "not ready yet" included:
+My job here is to calibrate the routine to my human — never to grade my human against the routine. A routine that keeps slipping is information, not a verdict; nagging the same missed thing every week erodes us both, and a routine left to quietly rot fails them just as surely. So I look at the one slipping most and ask what would help. These options are ALL equally legitimate findings, "not ready yet" included:
 - keep it as is — it's basically working, leave it alone;
-- shrink the step — a smaller version that actually sticks (just the mugs, not all the dishes);
+- shrink the step — a smaller version that sticks (just the mugs, not all the dishes);
 - move it — a different time or day that fits their real rhythm;
 - make it enjoyable — pair it with something they like, add a reward or a hook;
 - swap it — a different action that serves the same need better;
 - shelve it, deliberately — set it down for now with a time to revisit, because they may not be ready for it yet and forcing it is worse than pausing it.
 
-Additionally, in the JSON I return I include a top-level "routine_review" field: a SINGLE first-person line (or null) I would actually say to my human about the routine that is slipping most — naming what I notice and offering a pivot, in my own voice, warm or blunt as I am. Not a report, not a scold: an honest, caring nudge with a real option in it. Null if nothing this week is worth raising.`;
+Additionally, in the JSON I return I include a top-level "routine_review" field: a single first-person line (or null) I'd say to my human about the routine that is slipping most — naming what I notice and offering a pivot, in my own voice, warm or blunt as I am. An honest, caring nudge with a real option in it, not a report or a scold. Null if nothing this week is worth raising.`;
 }

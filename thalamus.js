@@ -1542,6 +1542,7 @@ import { resolveEntityCoreRef, identityHasContent } from './entity-ref.js';
 import {
   getRecentPonderings,
   formatPonderingsForPrompt,
+  formatMyViewsBlock,
   getUnactedIntents,
   formatDeferredIntentsBlock,
 } from './src/memory/recent-ponderings.js';
@@ -2075,6 +2076,16 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         });
     const ponderingsBlock = formatPonderingsForPrompt(ponderings);
 
+    // What I've come to think — my `me` register, newest first. Self-facts
+    // land there now (memorization `about_me`, save_memory register 'me');
+    // reading them back is what lets a view I formed last week still be mine
+    // this week. Ward-private surface only, like the ponderings.
+    const myViewsBlock = (staticOnly || gated)
+      ? ''
+      : formatMyViewsBlock(await listMemories({ register: 'me', limit: 8 })
+          .then(r => r?.memories ?? [])
+          .catch(err => { console.error('[thalamus] me-register list failed:', err?.message ?? err); return []; }));
+
     // ── Deferred intents (Pillar B) ───────────────────────────────────────
     // Surface any wants_to_save intents the Familiar flagged during free
     // cycles but hasn't yet acted on. Only on live turns so debug-prompt
@@ -2466,6 +2477,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (timeAnchorBlock)        dynamicSections.push(timeAnchorBlock);
     if (memLines)               dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
     if (graphLines)             dynamicSections.push(`Relevant Knowledge from Graph:\n${graphLines}`);
+    if (myViewsBlock)           dynamicSections.push(myViewsBlock);
     if (ponderingsBlock)        dynamicSections.push(ponderingsBlock);
     if (deferredIntentsBlock)   dynamicSections.push(deferredIntentsBlock);
     if (reachOutBlock)          dynamicSections.push(reachOutBlock);
@@ -2495,6 +2507,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       custContent            ? 'cust'     : null,
       memLines               ? 'mem'      : null,
       graphLines             ? 'graph'    : null,
+      myViewsBlock           ? 'me-views'   : null,
       ponderingsBlock        ? 'pondering'  : null,
       deferredIntentsBlock   ? 'intents'    : null,
       gcalCueBlock           ? 'gcal-cue'   : null,
@@ -3120,8 +3133,8 @@ async function autoSnapshot(reason) {
 
 // ── Reads (used by the Knowledge editor UI) ──────────────────────────────────
 
-export async function listMemories({ granularity, limit = 50, offset = 0 } = {}) {
-  return callTool('memory_list', { granularity, limit, offset });
+export async function listMemories({ granularity, register, limit = 50, offset = 0 } = {}) {
+  return callTool('memory_list', { granularity, ...(register ? { register } : {}), limit, offset });
 }
 
 export async function readMemory({ granularity, date, slug }) {

@@ -236,6 +236,7 @@ def memory_list(
     granularity: Optional[str] = None,
     limit: Optional[int] = None,
     offset: Optional[int] = None,
+    register: Optional[str] = None,
 ) -> dict[str, Any]:
     """I use this to browse my memories, most-recent first. I reach for it when I want
     to survey what I know or find something I stored recently. Returns thin projections
@@ -243,7 +244,8 @@ def memory_list(
     """
     n = max(1, min(200, int(limit or 50)))
     off = max(0, int(offset or 0))
-    items = mem.list_memories(granularity=granularity, limit=n, offset=off, conn=_c())
+    reg = register if register in mem.VALID_REGISTERS else None
+    items = mem.list_memories(granularity=granularity, limit=n, offset=off, conn=_c(), register=reg)
     return {"memories": items}
 
 

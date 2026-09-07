@@ -56,8 +56,17 @@ was **structural**, in two organs that were supposed to carry the Familiar's own
   prompt dropped its equal-weight "both choices are real" balance sheet (CLAUDE.md
   proactivity rule 2) in favour of the invited default.
 
+- **The `me` register is read back (0.11.73).** `memory_list` takes a `register`
+  filter; `enrich()` renders the newest eight `me` facts as "What I've come to think"
+  on ward-private turns (`formatMyViewsBlock`), each with its id so a stale view can be
+  corrected with `update_memory_by_id`.
+- **Plain inner voice (0.11.73, ward-directed).** The ward's words: "some prompts are
+  still weirdly pompous — 'The topic I find myself turning over'… I want a pretty
+  neutral inner voice, like how someone might actually think." Every prompt the
+  Familiar reads on a free cycle or a chat turn was rewritten that way; the
+  `[Surface candidates]` block was halved and the noticing prompt's budget sentences
+  (bias-toward-quiet by a side door) were removed, both at the ward's request.
+
 ## What this does not do
 
-It does not change any ward-sign-off safety path (triage, noticing, CARE CHECK
-wording). The `[Surface candidates]` block and the noticing prompt's budget sentence
-are flagged for the ward in the audit report, not edited.
+It leaves triage, crisis-signal weights, and the CARE CHECK wording untouched.

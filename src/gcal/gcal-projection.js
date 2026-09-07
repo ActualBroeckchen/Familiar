@@ -146,7 +146,7 @@ export function buildCueBlock(items, { now = Date.now(), weatherOn = false } = {
   return [
     "[Coming up with nothing hanging off it yet]",
     ...lines,
-    `Upcoming things on my human's schedule that I haven't thought through. For each, I think two moves ahead: what does it lead to if it goes well, and what does skipping it cost — I record both with schedule_link (leading with what doing it earns). A blank forecast helps no one; an honest one now is what lets me learn later.${weatherHint} If one is genuinely routine, leaving it be is fine — then I'm done with each for now; I don't keep re-raising what I've already considered (I'm still free to revisit, project further, or export one later).`,
+    `Upcoming things on my human's schedule that I haven't thought through yet. For each, I think two moves ahead — what it leads to if it goes well, and what skipping it costs — and record both with schedule_link, leading with what doing it earns.${weatherHint} If one's routine, I leave it — either way I'm done with it for now and won't keep re-raising something I've already considered (I can still revisit, project further, or export it later).`,
   ].join('\n');
 }
 
