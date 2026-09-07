@@ -4,7 +4,7 @@ topics: [decisions, vision, architecture]
 sources:
   - id: vision-js
     type: file
-    path: vision.js
+    path: src/vision/vision.js
 ---
 
 # Message attachments ride beside content, not inside it

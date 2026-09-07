@@ -4,10 +4,10 @@ topics: [architecture, sessions, multi-embodiment]
 sources:
   - id: session-bindings-js
     type: file
-    path: session-bindings.js
+    path: src/sessions/session-bindings.js
   - id: discord-gateway-js
     type: file
-    path: discord-gateway.js
+    path: src/discord/discord-gateway.js
   - id: app-js
     type: file
     path: public/app.js
@@ -16,7 +16,7 @@ sources:
     path: server.js
   - id: session-log-js
     type: file
-    path: session-log.js
+    path: src/sessions/session-log.js
 ---
 
 # Unified Ward Sessions

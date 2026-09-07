@@ -10,10 +10,10 @@ sources:
     path: CLAUDE.md
   - id: knocks-js
     type: file
-    path: knocks.js
+    path: src/village/knocks.js
   - id: discord-gateway-js
     type: file
-    path: discord-gateway.js
+    path: src/discord/discord-gateway.js
   - id: organs-js
     type: file
     path: organs.js
@@ -58,6 +58,12 @@ context; it never executes actions. Each peer is
 treated as a plural, independently-failing collaborator — a downed Phylactery does not take
 Unruh's temporal context out with it, and an empty sub-block simply renders as nothing in the
 prompt rather than as an error [@architecture-doc].
+
+`thalamus.js`, `cerebellum.js`, and `organs.js` are three of about 21 files that stay at the
+repository root by design, alongside `server.js` and other cross-cutting helpers, while the
+domain-specific modules referenced throughout this wiki (voice, browser, memory, and the rest)
+now live under `src/<domain>/` — see
+[Domain folder layout](../decisions/domain-folder-layout) for why the split landed where it did.
 
 That graceful degradation used to be silent: a missing organ just meant the Familiar reasoned
 with less context, with no signal to the ward or a debugging agent that anything had gone
@@ -245,3 +251,5 @@ If you're asking yourself... go to:
   rules (versioning, degradation, id schemes) that apply across every component above.
 - [Prompt-cache-aware context ordering](../decisions/prompt-cache-aware-context-ordering) — why
   Thalamus's context is split into a static prefix and a depth-injected dynamic block.
+- [Domain folder layout](../decisions/domain-folder-layout) — why domain modules now live under
+  `src/<domain>/` while `server.js` and a handful of cross-cutting files stay at the root.

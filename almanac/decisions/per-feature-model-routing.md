@@ -10,7 +10,7 @@ sources:
     path: server.js
   - id: ward-connections-js
     type: file
-    path: ward-connections.js
+    path: src/ward/ward-connections.js
   - id: providers-js
     type: file
     path: providers.js

@@ -28,10 +28,10 @@ sources:
     note: "Later review conversation with Claude Fable 5 in which the maintainer articulated two framings for Unruh's schedule and threat mechanics that are not yet reflected in code or docs/unruh-design.md."
   - id: reminders-loop-js
     type: file
-    path: reminders-loop.js
+    path: src/schedule/reminders-loop.js
   - id: temporal-format-js
     type: file
-    path: temporal-format.js
+    path: src/schedule/temporal-format.js
   - id: relative-time-js
     type: file
     path: relative-time.js
@@ -43,7 +43,7 @@ sources:
     path: unruh/src/unruh/gcal.py
   - id: gcal-projection
     type: file
-    path: gcal-projection.js
+    path: src/gcal/gcal-projection.js
   - id: cerebellum
     type: file
     path: cerebellum.js

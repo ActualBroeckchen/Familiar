@@ -4,10 +4,10 @@ topics: [architecture, autonomous-loops, pondering]
 sources:
   - id: pondering-loop-js
     type: file
-    path: pondering-loop.js
+    path: src/pondering/pondering-loop.js
   - id: recent-ponderings-js
     type: file
-    path: recent-ponderings.js
+    path: src/memory/recent-ponderings.js
   - id: cerebellum-js
     type: file
     path: cerebellum.js
@@ -19,10 +19,10 @@ sources:
     path: docs/architecture.md
   - id: pondering-js
     type: file
-    path: pondering.js
+    path: src/pondering/pondering.js
   - id: ponder-research-js
     type: file
-    path: ponder-research.js
+    path: src/pondering/ponder-research.js
 ---
 
 # Pondering

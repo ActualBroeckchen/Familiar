@@ -7,7 +7,7 @@ sources:
     path: CLAUDE.md
   - id: memorization-js
     type: file
-    path: memorization.js
+    path: src/memory/memorization.js
   - id: server-js
     type: file
     path: server.js
@@ -22,10 +22,10 @@ sources:
     path: docs/tomes.md
   - id: ward-consent-queue-js
     type: file
-    path: ward-consent-queue.js
+    path: src/ward/ward-consent-queue.js
   - id: memory-coverage-js
     type: file
-    path: memory-coverage.js
+    path: src/memory/memory-coverage.js
   - id: naming-conversation
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/6ad1c817-Naming_a_new_entitycore_module.txt

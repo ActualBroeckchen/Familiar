@@ -7,7 +7,7 @@ sources:
     path: docs/voice-build-spec.md
   - id: audio-worker
     type: file
-    path: audio-worker.mjs
+    path: src/voice/audio-worker.mjs
   - id: embed-py
     type: file
     path: phylactery/src/phylactery/embed.py
@@ -16,7 +16,7 @@ sources:
     path: docs/architecture.md
   - id: call-engine-js
     type: file
-    path: call-engine.js
+    path: src/voice/call-engine.js
 ---
 
 # ONNX Runtime: Shared Budget, Not Shared Process

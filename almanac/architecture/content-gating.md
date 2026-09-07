@@ -10,22 +10,22 @@ sources:
     path: CLAUDE.md
   - id: content-tags-js
     type: file
-    path: content-tags.js
+    path: src/memory/content-tags.js
   - id: content-regate
     type: file
-    path: content-regate.js
+    path: src/memory/content-regate.js
   - id: content-gate-py
     type: file
     path: phylactery/src/phylactery/content_gate.py
   - id: audience-js
     type: file
-    path: audience.js
+    path: src/village/audience.js
   - id: village-js
     type: file
-    path: village.js
+    path: src/village/village.js
   - id: memorization-js
     type: file
-    path: memorization.js
+    path: src/memory/memorization.js
   - id: content-tag-migration
     type: file
     path: phylactery/src/phylactery/migrations/0005_content_tag.sql
@@ -34,7 +34,7 @@ sources:
     path: cerebellum.js
   - id: discord-gateway-js
     type: file
-    path: discord-gateway.js
+    path: src/discord/discord-gateway.js
 ---
 
 # Content-Based Memory Gating

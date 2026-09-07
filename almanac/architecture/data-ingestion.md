@@ -4,7 +4,7 @@ topics: [architecture, data-ingestion]
 sources:
   - id: log-import-js
     type: file
-    path: log-import.js
+    path: src/sessions/log-import.js
   - id: server-js
     type: file
     path: server.js

@@ -4,16 +4,16 @@ topics: [architecture, memorization]
 sources:
   - id: ward-connections-js
     type: file
-    path: ward-connections.js
+    path: src/ward/ward-connections.js
   - id: ward-consent-queue-js
     type: file
-    path: ward-consent-queue.js
+    path: src/ward/ward-consent-queue.js
   - id: discord-menu-kit-js
     type: file
-    path: discord-menu-kit.js
+    path: src/discord/discord-menu-kit.js
   - id: discord-gateway-js
     type: file
-    path: discord-gateway.js
+    path: src/discord/discord-gateway.js
   - id: providers-js
     type: file
     path: providers.js

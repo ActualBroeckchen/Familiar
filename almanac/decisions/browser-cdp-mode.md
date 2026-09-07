@@ -7,10 +7,10 @@ sources:
     path: docs/browser-cdp-mode-build-spec.md
   - id: browser-driver-js
     type: file
-    path: browser-driver.js
+    path: src/browser/browser-driver.js
   - id: browser-cdp-arm-js
     type: file
-    path: browser-cdp-arm.js
+    path: src/browser/browser-cdp-arm.js
   - id: browser-cdp-arm-test
     type: file
     path: tests/browser-cdp-arm.test.mjs
@@ -19,7 +19,7 @@ sources:
     path: docs/browser-build-spec.md
   - id: cdp-launcher-js
     type: file
-    path: cdp-launcher.js
+    path: src/browser/cdp-launcher.js
 ---
 
 # CDP Mode: Driving the Ward's Own Chrome

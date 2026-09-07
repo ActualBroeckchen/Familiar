@@ -7,25 +7,25 @@ sources:
     path: docs/browser-build-spec.md
   - id: websearch-js
     type: file
-    path: websearch.js
+    path: src/search/websearch.js
   - id: village-js
     type: file
-    path: village.js
+    path: src/village/village.js
   - id: browser-grants-js
     type: file
-    path: browser-grants.js
+    path: src/browser/browser-grants.js
   - id: browser-lens-js
     type: file
-    path: browser-lens.js
+    path: src/browser/browser-lens.js
   - id: browser-driver-js
     type: file
-    path: browser-driver.js
+    path: src/browser/browser-driver.js
   - id: browser-js
     type: file
-    path: browser.js
+    path: src/browser/browser.js
   - id: ponder-research-js
     type: file
-    path: ponder-research.js
+    path: src/pondering/ponder-research.js
 ---
 
 # Browser Milestone: Guardrails in Code, Not Prompts

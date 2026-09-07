@@ -7,16 +7,16 @@ sources:
     path: docs/initiative-build-spec.md
   - id: reachout
     type: file
-    path: reachout.js
+    path: src/warmth/reachout.js
   - id: wait-streak
     type: file
-    path: wait-streak.js
+    path: src/safety/wait-streak.js
   - id: silence-triage-loop
     type: file
-    path: silence-triage-loop.js
+    path: src/safety/silence-triage-loop.js
   - id: discord-gateway
     type: file
-    path: discord-gateway.js
+    path: src/discord/discord-gateway.js
   - id: reachout-test
     type: file
     path: tests/reachout.test.mjs

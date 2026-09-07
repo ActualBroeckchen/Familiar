@@ -23,7 +23,7 @@ sources:
     path: phylactery/src/phylactery/consolidate.py
   - id: memorization-js
     type: file
-    path: memorization.js
+    path: src/memory/memorization.js
   - id: phylactery-server
     type: file
     path: phylactery/src/phylactery/server.py
