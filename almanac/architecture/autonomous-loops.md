@@ -14,6 +14,12 @@ sources:
   - id: media-retention-loop
     type: file
     path: src/vision/media-retention-loop.js
+  - id: server-js
+    type: file
+    path: server.js
+  - id: app-js
+    type: file
+    path: public/app.js
 ---
 
 # Autonomous Loops
@@ -139,6 +145,21 @@ weekday-class from session logs and reports nothing until roughly two weeks of h
 see [Contact-rhythm baselines](../decisions/contact-rhythm-baselines) for the conservative
 ward-contact signal and the honesty rule that gates it.
 
+## User-visible observability: the Diagnostics panel (0.11.77)
+
+Loops fail silently by design — the shared contract above requires it — but that leaves the
+ward with no way to tell a genuinely quiet Familiar from one whose loop died. The 2026-09
+audit's fix was to surface what previously only `curl` could see: Sidebar → Diagnostics →
+"Is my Familiar alive?" opens a modal that reads `GET /api/health`'s `loops` object (one entry
+per self-pacing background worker: pondering, noticing, reachout, memory sweep, Google
+Calendar sync, page watch) and renders a status dot per loop, plus tabs over the five event
+logs that were previously reachable only as raw JSON routes — `/api/noticing-events`,
+`/api/reachout-events`, `/api/triage-events`, `/api/page-watch-events`, and
+`/api/discord-writes` [@server-js] [@app-js]. `/api/health`'s own comment states the intent
+plainly: a dead loop should read as `false` in this panel, not as calm silence [@server-js]. A
+loop with no recent entries in its log is the ward-visible signal that something needs
+attention, distinguishing "nothing has happened" from "nothing can happen."
+
 ## Related
 
 - [Pondering](pondering) — the autonomous thought loop, its cadence, and the `read_pondering` tool.
@@ -162,3 +183,5 @@ ward-contact signal and the honesty rule that gates it.
 - [Local process over VM/Docker sandboxing](../decisions/local-process-over-vm-sandboxing) — why
   these loops all run inside one continuously-running Node process rather than a separate
   always-on listener waking heavier components lazily.
+- [Self-originated interest and the `me` register](../decisions/self-originated-interest-and-me-register) —
+  the 2026-09 audit that also shipped the Diagnostics panel described above.
