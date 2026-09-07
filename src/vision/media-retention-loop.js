@@ -13,9 +13,9 @@
  * Settings toggle. This is Pass 4's new (thirteenth) background worker.
  */
 
-import { isCallActiveFromFile } from './src/voice/call-engine.js';
-import { readSettingsSync } from './cerebellum.js';
-import { getThreat } from './threat-tracker.js';
+import { isCallActiveFromFile } from '../voice/call-engine.js';
+import { readSettingsSync } from '../../cerebellum.js';
+import { getThreat } from '../../threat-tracker.js';
 import { runMediaRetention } from './media-retention.js';
 
 const DEFAULT_TICK_MS = 6 * 60 * 60_000;   // ~daily-ish (6 h); aged audio is in no hurry

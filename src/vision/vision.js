@@ -25,18 +25,19 @@ import path from 'path';
 import { promises as fsp } from 'fs';
 import { fileURLToPath } from 'url';
 import { getAsset, getAssetMeta, setAssetDescription, buildStandin, VIDEO_MAX_BYTES } from './media.js';
-import { shortSlug } from './slug-ids.js';
-import { callProviderChat } from './llm-call.js';
-import { connectionForFeature, primaryConnectionFrom } from './cerebellum.js';
-import { substituteMacros } from './macros.js';
-import { sanitizeExternal } from './injection-guard.js';
-import { scoreMessage } from './crisis-signals.js';
-import { recordThreat } from './threat-tracker.js';
-import { getGraphSubgraph, updateGraphNode } from './thalamus.js';
-import { relativeDay } from './relative-time.js';
+import { shortSlug } from '../../slug-ids.js';
+import { callProviderChat } from '../../llm-call.js';
+import { connectionForFeature, primaryConnectionFrom } from '../../cerebellum.js';
+import { substituteMacros } from '../../macros.js';
+import { sanitizeExternal } from '../../injection-guard.js';
+import { scoreMessage } from '../../crisis-signals.js';
+import { recordThreat } from '../../threat-tracker.js';
+import { getGraphSubgraph, updateGraphNode } from '../../thalamus.js';
+import { relativeDay } from '../../relative-time.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CAP_FILE = path.join(__dirname, 'tomes', '.vision-capability.json');
+const CAP_FILE = path.join(REPO_ROOT, 'tomes', '.vision-capability.json');
 
 export const DEFAULT_MAX_LIVE_IMAGES = 4;
 

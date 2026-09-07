@@ -24,7 +24,7 @@ import path from 'path';
 import { promises as fsp } from 'fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { shortSlug } from './slug-ids.js';
+import { shortSlug } from '../../slug-ids.js';
 import { IMAGE_MIME_EXT } from './media.js';
 
 // The command that starts the server. Overridable for odd installs / testing.

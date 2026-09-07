@@ -40,8 +40,8 @@ import { buildAvailabilityBlock } from './src/schedule/schedule-availability.js'
 import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC, locationCallMode, DEFAULT_CALL_MODE, upsertLocation } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom } from './audience.js';
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from './cerebellum.js';
-import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, VIDEO_MIME_EXT, VIDEO_MAX_BYTES, MAX_IMAGES_PER_MESSAGE } from './media.js';
-import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from './vision.js';
+import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, VIDEO_MIME_EXT, VIDEO_MAX_BYTES, MAX_IMAGES_PER_MESSAGE } from './src/vision/media.js';
+import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from './src/vision/vision.js';
 import { hearVoiceNotes } from './src/voice/voice-transcribe.js';
 import { extractTurnReply } from './llm-call.js';
 import { logDiscordWrite } from './discord-write-log.js';

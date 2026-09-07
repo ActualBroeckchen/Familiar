@@ -182,7 +182,7 @@ import { segmentByDay, dayDelta } from '../schedule/day-segments.js';
 import { recordSegmentRun, isSegmentMemorized, segmentMemorizedThrough } from './memory-coverage.js';
 import { readSettingsSync } from '../../cerebellum.js';
 import { substituteMacros } from '../../macros.js';
-import { contentWithStandins, getAssetMeta } from '../../media.js';
+import { contentWithStandins, getAssetMeta } from '../vision/media.js';
 import { createSessionFollowup } from './recent-ponderings.js';
 
 // Vision (§7): fold image stand-ins into a slice's transcript so an image-
@@ -197,7 +197,7 @@ async function foldImageStandins(messages, settings) {
   const list = Array.isArray(messages) ? messages : [];
   if (!list.some(m => Array.isArray(m?.attachments) && m.attachments.length)) return list;
   let describeAsset = null;
-  try { ({ describeAsset } = await import('../../vision.js')); } catch { /* describe optional */ }
+  try { ({ describeAsset } = await import('../vision/vision.js')); } catch { /* describe optional */ }
   const out = [];
   for (const m of list) {
     if (!Array.isArray(m?.attachments) || !m.attachments.length) { out.push(m); continue; }

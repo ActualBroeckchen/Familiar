@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   pickAnalyzeTool, buildAnalyzeArgs, textFromToolResult, zaiVisionDisabled,
-} from '../zai-vision.js';
+} from '../src/vision/zai-vision.js';
 
 test('pickAnalyzeTool prefers analyze_image, else a general image tool', () => {
   assert.equal(pickAnalyzeTool([{ name: 'extract_text_from_screenshot' }, { name: 'analyze_image' }]), 'analyze_image');

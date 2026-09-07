@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   isGeminiVideoProvider, bareModel, toGeminiRequest, extractGeminiText,
   uploadVideoToGemini, generateWithGeminiFile, answerAboutVideo,
-} from '../gemini-file-api.js';
+} from '../src/vision/gemini-file-api.js';
 
 function res(status, { json = {}, headers = {} } = {}) {
   const h = new Map(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));

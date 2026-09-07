@@ -103,7 +103,7 @@ import { startMemorySweepLoop, stopMemorySweepLoop } from './src/memory/memory-s
 import { startTomeGraduationLoop, stopTomeGraduationLoop } from './src/tomes/tome-graduation-loop.js';
 import { startContentRegateLoop, stopContentRegateLoop } from './src/memory/content-regate-loop.js';
 import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './src/schedule/needs-tracking-loop.js';
-import { startMediaRetentionLoop, stopMediaRetentionLoop } from './media-retention-loop.js';
+import { startMediaRetentionLoop, stopMediaRetentionLoop } from './src/vision/media-retention-loop.js';
 import { isNeedWindow } from './src/schedule/needs-tracking.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './src/warmth/reachout.js';
 import { recordReachOut } from './src/warmth/reach-out-log.js';
@@ -163,8 +163,8 @@ import {
 import { parseRegistryJson } from './village-registry-json.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, WARD_PRIVATE } from './audience.js';
 import { normalizeTag } from './src/memory/content-tags.js';
-import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, AUDIO_MAX_BYTES, IMAGE_MIME_EXT, MEDIA_KINDS, mediaKindFor, MAX_IMAGES_PER_MESSAGE } from './media.js';
-import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './vision.js';
+import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, AUDIO_MAX_BYTES, IMAGE_MIME_EXT, MEDIA_KINDS, mediaKindFor, MAX_IMAGES_PER_MESSAGE } from './src/vision/media.js';
+import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './src/vision/vision.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw } from './discord-gateway.js';
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
@@ -279,7 +279,7 @@ import { hearVoiceNotes, transcribeAsset, transcriptionAllowed, correctTranscrip
 import { enrollWard, enrollVillager, speakerModelPresent, speakerModelDir } from './src/voice/voice-enroll.js';
 import { pinAndInstallModel } from './src/voice/voice-pin.js';
 import { readVoiceprints, listVillagerPrints, deleteWardPrint, deleteVillagerPrint } from './src/voice/voiceprints.js';
-import { assetBytesPath } from './media.js';
+import { assetBytesPath } from './src/vision/media.js';
 import { DEFAULT_VOICE } from './src/voice/voice-catalogue.js';
 import { resolveVoice, installVoice, saveWardVoice, listLocalVoices } from './src/voice/voices.js';
 import { mergeSettings } from './settings-merge.js';
@@ -2841,7 +2841,7 @@ app.post('/api/video-understand', express.json({ limit: '256kb' }), async (req, 
   }
   const { assetId, prompt, provider, model, apiKey } = req.body || {};
   try {
-    const gm = await import('./gemini-file-api.js');
+    const gm = await import('./src/vision/gemini-file-api.js');
     if (!gm.isGeminiVideoProvider(provider, model)) {
       return res.status(400).json({ ok: false, error: 'Longer clips go through Gemini — pick a Google Gemini connection for this.' });
     }
@@ -6773,7 +6773,7 @@ async function handleSignal(signal) {
   try { stopDiscordGateway(); } catch { /* already stopped */ }
   try { shutdownPhylactery(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }
-  try { import('./zai-vision.js').then(m => m.shutdownZaiVision()).catch(() => {}); } catch { /* never spawned */ }
+  try { import('./src/vision/zai-vision.js').then(m => m.shutdownZaiVision()).catch(() => {}); } catch { /* never spawned */ }
   // Give the close handshakes a tiny window, then exit.
   setTimeout(() => process.exit(0), 250).unref();
 }

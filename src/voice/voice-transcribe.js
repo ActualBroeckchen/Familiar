@@ -33,7 +33,7 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { getAssetMeta, setAssetDescription, assetBytesPath } from '../../media.js';
+import { getAssetMeta, setAssetDescription, assetBytesPath } from '../vision/media.js';
 import { composePlan } from './voice-models.js';
 import { fetchPlan, MODELS_SUBDIR } from './voice-fetch.js';
 import { normalizeTranscriptCase } from './voice-speech.js';

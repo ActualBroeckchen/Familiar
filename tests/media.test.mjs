@@ -13,7 +13,7 @@ import {
   deleteAsset, resolveAssetId, buildStandin, contentWithStandins,
   addAssetLink, removeAssetLink, assetsForNode, drainPendingImages,
   readImageSize, MEDIA_MAX_BYTES, IMAGE_MIME_EXT,
-} from '../media.js';
+} from '../src/vision/media.js';
 import { slugifyLabel, meaningSlugId } from '../slug-ids.js';
 
 // ── Fixtures: minimal-but-valid encoded headers, so readImageSize is tested

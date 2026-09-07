@@ -5,8 +5,8 @@ import {
   isModalityError, DEFAULT_MAX_LIVE_IMAGES, looksVisionCapable,
   describeAsset, resolveVisionConnection, scoreImageDescriptionThreat,
   graduateImageDescriptionToNode, ensureDescribed,
-} from '../vision.js';
-import { saveAsset, deleteAsset, getAssetMeta, setAssetDescription } from '../media.js';
+} from '../src/vision/vision.js';
+import { saveAsset, deleteAsset, getAssetMeta, setAssetDescription } from '../src/vision/media.js';
 
 function gif(w, h) {
   const b = Buffer.from('GIF89a\x00\x00\x00\x00\x00\x00\x00', 'binary');
@@ -60,7 +60,7 @@ test('looksVisionCapable: recognises vision families, rejects their text-only si
 });
 
 // ── Video (the vision patch) ──────────────────────────────────────
-import { looksVideoCapable, resolveVideoCapable } from '../vision.js';
+import { looksVideoCapable, resolveVideoCapable } from '../src/vision/vision.js';
 let _vseq = 5000;
 async function mkVideo(label = 'clip', over = {}) {
   const b = Buffer.from(`fake-video-bytes-${_vseq++}`);   // unique bytes → unique sha
