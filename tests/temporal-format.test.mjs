@@ -117,7 +117,7 @@ test('renders live interests as plain labels (no numeric weight), heaviest first
       ],
     },
   });
-  assert.match(out, /Lately I keep being drawn to think about:/);
+  assert.match(out, /Things I keep coming back to:/);
   // Labels present, weights gone.
   assert.match(out, /owl feather aerodynamics/);
   assert.match(out, /biomimetic engineering/);

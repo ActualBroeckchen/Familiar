@@ -12,7 +12,7 @@ test('empty or non-me items render nothing', () => {
 test('me items render newest-first with ids, capped, in my own voice', () => {
   const items = Array.from({ length: 10 }, (_, i) => ({ register: 'me', id: `v-${i}`, content: `view ${i}` }));
   const out = formatMyViewsBlock(items);
-  assert.match(out, /^What I've come to think/);
+  assert.match(out, /^What I think/);
   assert.match(out, /view 0.*\[id: v-0\]/);
   assert.doesNotMatch(out, /view 8/, 'capped at 8');
   assert.match(out, /update_memory_by_id/);
