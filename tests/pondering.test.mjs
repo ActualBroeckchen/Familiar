@@ -866,3 +866,8 @@ test('ponder prompt invites drawn_to alongside wants_to_save', () => {
   assert.match(p, /"drawn_to"/);
   assert.match(p, /my own curiosities take root/);
 });
+
+test('grounding says where a threaded ponder came from', () => {
+  const b = buildGroundingBlock({ threadFrom: 'tea', memories: [], recent: [] });
+  assert.match(b, /I got here from thinking about tea/);
+});

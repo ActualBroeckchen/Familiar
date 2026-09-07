@@ -74,6 +74,10 @@ export function buildGroundingBlock(grounding) {
   const recent   = Array.isArray(grounding.recent)   ? grounding.recent.filter(r => (r?.excerpt ?? r?.title ?? '').trim()) : [];
   const parts = [];
 
+  if (typeof grounding.threadFrom === 'string' && grounding.threadFrom.trim()) {
+    parts.push(`I got here from thinking about ${grounding.threadFrom.trim()} — this is a side road off that, and I'm following it.`);
+  }
+
   if (memories.length) {
     const lines = memories.map(m => `  - ${m.date ? `(${m.date}) ` : ''}${m.excerpt.trim()}`).join('\n');
     parts.push(`What I remember about this:\n${lines}\nThat's what I actually know, so I think from there. I don't make up things I don't remember — and if my human's got real history with this, I don't talk about it like I'm looking in from outside.`);

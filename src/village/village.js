@@ -646,7 +646,7 @@ const RELATION_TO_FAMILIAR_VALUES = [
 ];
 
 export const REMEMBER_CATEGORIES = [
-  'basics', 'emotional_content', 'health_info', 'relationships', 'whereabouts',
+  'basics', 'emotional_content', 'health_info', 'relationships', 'whereabouts', 'views',
 ];
 
 function sanitizeRemember(raw) {

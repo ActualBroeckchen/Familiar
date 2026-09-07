@@ -35,6 +35,8 @@ import { isCallActiveFromFile }    from '../voice/call-engine.js';
 import { computeRequiredInterval } from './pondering-cadence.js';
 
 const DEFAULT_TICK_MS = 60_000; // poll once per minute by default
+// How often a ponder hops one related_to edge instead of staying on the weighted pick.
+const DEFAULT_THREAD_CHANCE = 0.35;
 
 /**
  * Run a single tick. Pure-ish — all I/O comes through injected callbacks
@@ -66,6 +68,11 @@ export async function runOneTick({
   // Same LLM call, different question being asked.
   shouldReflect    = null,    // async () => boolean
   getReflectionInput = null,  // async () => { mode:'reflection', outcomes, existingNotes }
+  // Threads: after the weighted pick, sometimes hop one related_to edge and
+  // ponder the neighbour instead — a curiosity leads to the next one. Off
+  // when no getRelated is wired.
+  getRelated       = null,    // async (id) => [{ id, label, weight }]
+  threadChance     = DEFAULT_THREAD_CHANCE,
 }) {
   if (typeof getInterests !== 'function') throw new Error('getInterests is required');
   if (typeof runPonder    !== 'function') throw new Error('runPonder is required');
@@ -113,13 +120,20 @@ export async function runOneTick({
     }
   }
 
-  const picked = pickInterest(interests, { rng });
+  let picked = pickInterest(interests, { rng });
   if (!picked) {
     return { acted: false, reason: 'no_eligible_pick', threatLevel, scale, at: now() };
   }
 
-  const result = await runPonder(picked.label, picked);
-  return { acted: true, mode: 'pondering', picked, result, at: now(), topWeight, threatLevel, scale, requiredMs: required };
+  let threadFrom = null;
+  if (typeof getRelated === 'function' && picked.id && rng() < threadChance) {
+    const related = await Promise.resolve(getRelated(picked.id)).catch(() => []);
+    const hop = pickInterest(related, { rng });
+    if (hop && hop.id !== picked.id) { threadFrom = picked.label; picked = hop; }
+  }
+
+  const result = await runPonder(picked.label, picked, threadFrom ? { threadFrom } : undefined);
+  return { acted: true, mode: 'pondering', picked, threadFrom, result, at: now(), topWeight, threatLevel, scale, requiredMs: required };
 }
 
 // ── Singleton lifecycle ───────────────────────────────────────────

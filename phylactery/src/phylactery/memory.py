@@ -620,6 +620,7 @@ _CATEGORY_TO_TOPIC = {
     "health_info": "medical",
     "relationships": "relationships",
     "whereabouts": "location",
+    "views": "general",
 }
 _TAG_SENSITIVE_CATEGORIES = {"emotional_content", "health_info"}
 

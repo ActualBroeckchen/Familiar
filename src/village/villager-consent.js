@@ -30,11 +30,13 @@ export const CATEGORY_LABELS = {
   health_info:       'health',
   relationships:     'relationships',
   whereabouts:       'whereabouts (places, travel)',
+  views:             'views (opinions, tastes)',
 };
 const CATEGORY_ALIASES = {
   basics: 'basics', feelings: 'emotional_content', emotions: 'emotional_content',
   emotional_content: 'emotional_content', health: 'health_info', health_info: 'health_info',
   relationships: 'relationships', whereabouts: 'whereabouts', places: 'whereabouts',
+  views: 'views', opinions: 'views', takes: 'views',
 };
 const GATE_WORDS = { keep: true, ask: 'ask', never: false };
 

@@ -32,7 +32,7 @@ const QUEUE_FILE = path.join(TOMES_DIR, '.memorization-queue.json');
 export const CONSENT_PENDING_FILE = path.join(TOMES_DIR, '.consent-pending.json');
 
 // remember taxonomy — must match village.js REMEMBER_CATEGORIES
-const REMEMBER_CATS = ['basics', 'emotional_content', 'health_info', 'relationships', 'whereabouts'];
+const REMEMBER_CATS = ['basics', 'emotional_content', 'health_info', 'relationships', 'whereabouts', 'views'];
 
 // Resolve the remember gate for a single category against a remember map.
 // Shared default (matches village.js + build-spec §7): when the map is absent
@@ -76,7 +76,9 @@ export function wardStandingActive(wardStanding, category, nowMs = Date.now()) {
 //   • The same fact heard INDIRECTLY (a group room — direct=false) → asked for,
 //     as before. Standing consent still relaxes an 'ask' to auto-confirm.
 export function resolveRememberGate(category, subjectVillagers, wardRemember, wardStanding = null, opts = {}) {
-  const { direct = false, hasNamedSubjects = false, fictional = false } = opts;
+  const { direct = false, hasNamedSubjects = false, fictional = false, aboutMe = false } = opts;
+  // My own view, about no one else: nobody's consent to ask for.
+  if (aboutMe && !hasNamedSubjects && !(subjectVillagers && subjectVillagers.length)) return 'true';
   // A fictional character — the canon of a show, game, book or film — has no
   // real-world privacy to protect, so a fact about them is kept freely, no ask,
   // whatever the channel. (Ward's call: don't forget who Sailor Moon canonically
@@ -343,6 +345,7 @@ category — exactly one:
   health_info       — physical health, conditions, medications, symptoms
   relationships     — how people are connected: family, partners, friends, colleagues
   whereabouts       — location, travel, living situation, where someone is
+  views             — what someone thinks about something: an opinion, a taste, a take. Mine too — it's how my own views get kept.
 
 subjects — the names of whoever this fact is about. Empty list [] if it's just about me or {{user}}.
 
@@ -428,7 +431,7 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
 content — my note on this one fact, in my own voice.
   If it's about me, I write "I …" — never my own name in the third person, even if someone in the room called me by it. If it's about {{user}}, I use their name or "my human". Anyone else, I name them.
 
-category — exactly one: basics, emotional_content, health_info, relationships, whereabouts.
+category — exactly one: basics, emotional_content, health_info, relationships, whereabouts, views (an opinion or a taste, mine included).
 
 subjects — the names of whoever a fact is about, including someone who isn't in {{user}}'s Village. I don't leave a person out to play it safe — the consent step decides what's kept, and asks {{user}} about anyone it isn't sure of. Empty list [] if it's just about me or {{user}}.
 
@@ -856,7 +859,7 @@ async function processJob(job) {
     // (a show/game/book's canon) has no real-world privacy to gate — kept freely.
     const fictional = fact.fictional === true;
     const gate = resolveRememberGate(category, subjectVillagers, wardRemember, wardStanding,
-      { direct, hasNamedSubjects, fictional });
+      { direct, hasNamedSubjects, fictional, aboutMe: fact.about_me === true });
     if (gate === 'false') continue; // drop silently
 
     // Content tag (the recall-gating axis). The model suggests a "topic:level";

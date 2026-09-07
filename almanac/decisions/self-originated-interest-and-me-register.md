@@ -67,6 +67,14 @@ was **structural**, in two organs that were supposed to carry the Familiar's own
   `[Surface candidates]` block was halved and the noticing prompt's budget sentences
   (bias-toward-quiet by a side door) were removed, both at the ward's request.
 
+- **Threads (0.11.76).** A `drawn_to` curiosity is linked `related_to` the topic it grew
+  out of, and the pondering loop sometimes (35%) hops one edge from its weighted pick, so
+  a curiosity leads to the next one instead of every ponder being an island. The grounding
+  says where it came from.
+- **`views` (0.11.76).** Opinions have a category now. Before, the Familiar's take on
+  something had to masquerade as `emotional_content` to be kept at all. A self-view needs
+  nobody's consent (`aboutMe` in the gate); a third party's view still asks.
+
 ## What this does not do
 
 It leaves triage, crisis-signal weights, and the CARE CHECK wording untouched.
