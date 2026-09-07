@@ -1626,7 +1626,7 @@ import {
   getUnactedIntents,
   formatDeferredIntentsBlock,
 } from './src/memory/recent-ponderings.js';
-import { getThreat } from './threat-tracker.js';
+import { getThreat } from './src/safety/threat-tracker.js';
 import {
   selectSurfaceCandidates,
   formatSurfaceCandidatesBlock,
@@ -1637,7 +1637,7 @@ import {
   tagOutcomes,
 } from './src/pondering/surface-events.js';
 import { WARD_PRIVATE, isGranted, stripGatedSections, fetchEligibility } from './src/village/audience.js';
-import { syncSpineState, stripSensitiveScheduleNodes } from './spine-states.js';
+import { syncSpineState, stripSensitiveScheduleNodes } from './src/safety/spine-states.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
 function sortFiles(files, order) {

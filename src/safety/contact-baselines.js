@@ -44,10 +44,11 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { promises as fsp, readFileSync } from 'fs';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_LOGS_DIR  = path.join(__dirname, 'logs');
-const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
-const SETTINGS_FILE     = path.join(__dirname, 'settings.json');
+const DEFAULT_LOGS_DIR  = path.join(REPO_ROOT, 'logs');
+const DEFAULT_TOMES_DIR = path.join(REPO_ROOT, 'tomes');
+const SETTINGS_FILE     = path.join(REPO_ROOT, 'settings.json');
 const CACHE_FILENAME    = '.contact-baselines.json';
 
 const DAY_MS = 24 * 60 * 60_000;

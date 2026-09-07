@@ -33,8 +33,8 @@ import { readSettingsSync, primaryConnectionFrom, connectionForFeature, getRecen
 import { buildTimeAnchorBlock, relativeTime } from '../../relative-time.js';
 import { substituteMacros } from '../../macros.js';
 import { stripLlmTimestamps } from '../../message-sanitize.mjs';
-import { buildWaitStreakLine } from '../../wait-streak.js';
-import { getContactBaseline, buildRhythmLine } from '../../contact-baselines.js';
+import { buildWaitStreakLine } from '../safety/wait-streak.js';
+import { getContactBaseline, buildRhythmLine } from '../safety/contact-baselines.js';
 import { readWeatherNowLine } from '../weather/weather-mirror.js';
 
 // ── Warm-villager selection ──────────────────────────────────────

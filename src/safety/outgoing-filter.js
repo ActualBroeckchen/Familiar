@@ -12,7 +12,7 @@
 //   threshold=0.70, retry budget=3,
 //   safe-refusal="I can't share that here…"
 
-import { searchMemoryRestricted } from './thalamus.js';
+import { searchMemoryRestricted } from '../../thalamus.js';
 
 export const FILTER_THRESHOLD    = 0.70;
 export const FILTER_RETRY_BUDGET = 3;

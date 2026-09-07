@@ -22,7 +22,7 @@
  * silent failure mode the design doc called for.
  */
 
-import { enqueueOutbox } from '../../outbox.js';
+import { enqueueOutbox } from '../safety/outbox.js';
 
 const DEFAULT_TICK_MS = 30_000;  // 30s — sub-minute precision without
                                   // the constant churn of every-second.

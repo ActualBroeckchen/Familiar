@@ -36,13 +36,14 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { promises as fsp, mkdirSync } from 'fs';
 import { THREAT_TIERS, DEFAULT_TAU_DAYS } from './threat-tracker.js';
-import { wardLocalNowISO } from './relative-time.js';
-import { expandOccurrences } from './src/schedule/recurrence.js';
+import { wardLocalNowISO } from '../../relative-time.js';
+import { expandOccurrences } from '../schedule/recurrence.js';
 
 const DAY_MS = 24 * 3600 * 1000;
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
+const DEFAULT_TOMES_DIR = path.join(REPO_ROOT, 'tomes');
 const POINTER_FILENAME  = '.spine-episode.json';
 
 // Minting threshold: moderate and above (ward-signed granularity). Reuses the

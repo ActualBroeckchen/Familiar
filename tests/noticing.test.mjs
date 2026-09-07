@@ -13,7 +13,7 @@ import {
   SITUATION_REPORT_CAP,
   DEFAULT_RECHECK_AFTER_ACT_MS,
   DEFAULT_RECHECK_AFTER_WAIT_MS,
-} from '../noticing.js';
+} from '../src/safety/noticing.js';
 
 const HOUR = 3_600_000;
 

@@ -20,7 +20,7 @@ import {
   isBaselinesEnabled,
   WINDOW_MS,
   MIN_SPAN_DAYS,
-} from '../contact-baselines.js';
+} from '../src/safety/contact-baselines.js';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;

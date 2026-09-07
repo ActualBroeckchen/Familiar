@@ -41,7 +41,7 @@ import { callProviderChat } from './llm-call.js';
 import { listOwnFiles, readOwnFile, searchSessions, isSessionLogPath, readSessionLog } from './own-files.js';
 import { readCalendarCache, resolveAttribution, normalizeAttributionEntry } from './src/gcal/gcal-attribution.js';
 import { computeAvailability, formatAvailabilityLines } from './src/schedule/schedule-availability.js';
-import { isSensitiveNode } from './spine-states.js';
+import { isSensitiveNode } from './src/safety/spine-states.js';
 import {
   enrich, getScheduleWindow,
   // Tool-executor writes — ALWAYS through thalamus's wrappers, never a
@@ -72,14 +72,14 @@ import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './
 import { searchWeb, readWebpage, lookUp } from './src/search/websearch.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { markIntentActedOn, snoozeIntent, dropIntent, getUnactedIntents, readPonderingByUid } from './src/memory/recent-ponderings.js';
-import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';
+import { buildWaitStreakLine, recordWait, recordProactive } from './src/safety/wait-streak.js';
 import { readWeatherNowLine, weatherEnabled } from './src/weather/weather-mirror.js';
 import { resolveLocation, getForecast, dayDatesFor } from './src/weather/weather-service.js';
 import { weatherArc, formatWeatherVague } from './src/weather/weather-format.js';
-import { flagDistress } from './threat-tracker.js';
-import { resetTriageCooldown } from './silence-triage-loop.js';
+import { flagDistress } from './src/safety/threat-tracker.js';
+import { resetTriageCooldown } from './src/safety/silence-triage-loop.js';
 import { pruneConsentPending } from './src/memory/memorization.js';
-import { enqueueOutbox, listOutbox, updateOutboxMeta, rekeyOutboxIds } from './outbox.js';
+import { enqueueOutbox, listOutbox, updateOutboxMeta, rekeyOutboxIds } from './src/safety/outbox.js';
 import { buildTimeAnchorBlock, relativeTime, plainInterval, wardLocalNowISO } from './relative-time.js';
 import { substituteMacros } from './macros.js';
 import { selectSurfaceCandidates } from './src/pondering/surface-context.js';

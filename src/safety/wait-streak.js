@@ -44,11 +44,12 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { promises as fsp, mkdirSync, readFileSync } from 'fs';
 
-import { plainInterval } from './relative-time.js';
+import { plainInterval } from '../../relative-time.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
-const SETTINGS_FILE     = path.join(__dirname, 'settings.json');
+const DEFAULT_TOMES_DIR = path.join(REPO_ROOT, 'tomes');
+const SETTINGS_FILE     = path.join(REPO_ROOT, 'settings.json');
 const FILENAME          = '.wait-streak.json';
 
 function file(tomesDir) { return path.join(tomesDir, FILENAME); }

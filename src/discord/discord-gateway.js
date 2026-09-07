@@ -65,13 +65,13 @@ import {
   buildEffortsView, buildEffortView, isSettableEffort,
 } from '../ward/ward-connections.js';
 import { PROVIDER_URLS, resolveReasoningEffort } from '../../providers.js';
-import { scoreMessage } from '../../crisis-signals.js';
-import { recordThreat } from '../../threat-tracker.js';
+import { scoreMessage } from '../safety/crisis-signals.js';
+import { recordThreat } from '../safety/threat-tracker.js';
 import { recordUserActivity } from '../sessions/last-activity.js';
-import { buildWaitStreakLine, recordWait, recordProactive } from '../../wait-streak.js';
+import { buildWaitStreakLine, recordWait, recordProactive } from '../safety/wait-streak.js';
 import { recordKnock, recordLocationKnock, recordServer } from '../village/knocks.js';
-import { filterOutgoingReply } from '../../outgoing-filter.js';
-import { enqueueOutbox, acknowledgePendingByKind } from '../../outbox.js';
+import { filterOutgoingReply } from '../safety/outgoing-filter.js';
+import { enqueueOutbox, acknowledgePendingByKind } from '../safety/outbox.js';
 import { writeSessionLog as writeSessionLogShared } from '../sessions/session-log.js';
 import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY } from '../sessions/session-bindings.js';
 
