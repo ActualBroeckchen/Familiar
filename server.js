@@ -98,15 +98,15 @@ import {
 } from './src/gcal/gcal-attribution.js';
 import { listOutbox, acknowledgeOutbox, clearAcknowledged, acknowledgePendingByKind } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
-import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';
+import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './src/warmth/reachout-loop.js';
 import { startMemorySweepLoop, stopMemorySweepLoop } from './memory-sweep-loop.js';
 import { startTomeGraduationLoop, stopTomeGraduationLoop } from './src/tomes/tome-graduation-loop.js';
 import { startContentRegateLoop, stopContentRegateLoop } from './content-regate-loop.js';
 import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './needs-tracking-loop.js';
 import { startMediaRetentionLoop, stopMediaRetentionLoop } from './media-retention-loop.js';
 import { isNeedWindow } from './needs-tracking.js';
-import { decideReachoutViaLLM, getWarmVillagers } from './reachout.js';
-import { recordReachOut } from './reach-out-log.js';
+import { decideReachoutViaLLM, getWarmVillagers } from './src/warmth/reachout.js';
+import { recordReachOut } from './src/warmth/reach-out-log.js';
 import { appendReflectionEvent, readReflectionEvents } from './reflection-events.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
 import { buildTimeAnchorBlock, wardLocalNowISO, plainInterval } from './relative-time.js';

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { getRecentMemoryLines } from '../thalamus.js';
-import { buildReachoutPrompt } from '../reachout.js';
+import { buildReachoutPrompt } from '../src/warmth/reachout.js';
 import { formatRecentMessagesForContext } from '../cerebellum.js';
 
 // The shared recent-message formatter (used by warm reach-out AND noticing —
