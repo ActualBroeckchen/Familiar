@@ -19,10 +19,10 @@
  */
 
 import { withUnruh, parseToolText }     from './_unruh-mcp.mjs';
-import { ponderOnce }                    from '../pondering.js';
+import { ponderOnce }                    from '../src/pondering/pondering.js';
 import { startPonderingLoop,
-         stopPonderingLoop }             from '../pondering-loop.js';
-import { tierForWeight }                 from '../pondering-cadence.js';
+         stopPonderingLoop }             from '../src/pondering/pondering-loop.js';
+import { tierForWeight }                 from '../src/pondering/pondering-cadence.js';
 
 function parseArgs(argv) {
   const a = {};

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { researchForPonder, sourcesBlock } from '../ponder-research.js';
+import { researchForPonder, sourcesBlock } from '../src/pondering/ponder-research.js';
 
 // A fake shared budget so the loop's real file I/O never runs in tests.
 function fakeBudget(start) {

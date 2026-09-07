@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runOneTick } from '../pondering-loop.js';
+import { runOneTick } from '../src/pondering/pondering-loop.js';
 
 // Sequence-aware stubs: return queued results in order, fail loudly
 // on unexpected extra calls.

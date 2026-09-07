@@ -54,8 +54,8 @@ import { fetchReadable } from './src/search/websearch.js';
 import { startPageWatchLoop, stopPageWatchLoop } from './page-watch-loop.js';
 import { buildPageWatchPrompt, parsePageWatchDecision } from './page-watch.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
-import { ponderOnce } from './pondering.js';
-import { startPonderingLoop, stopPonderingLoop } from './pondering-loop.js';
+import { ponderOnce } from './src/pondering/pondering.js';
+import { startPonderingLoop, stopPonderingLoop } from './src/pondering/pondering-loop.js';
 import { startNoticingLoop, stopNoticingLoop, resetNoticingCooldown } from './noticing-loop.js';
 import { buildNoticingPrompt, AGING_INTENT_MS, AGING_TASK_MS, OVERDUE_EVENT_GRACE_MS } from './noticing.js';
 import { getContactBaseline, weekdayClass } from './contact-baselines.js';
@@ -73,7 +73,7 @@ import {
   getNewOutcomesSinceLastReflection,
   markReflected,
   tagRaisedOutcomes,
-} from './surface-events.js';
+} from './src/pondering/surface-events.js';
 import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedIntents } from './recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
 import {
@@ -107,7 +107,7 @@ import { startMediaRetentionLoop, stopMediaRetentionLoop } from './media-retenti
 import { isNeedWindow } from './needs-tracking.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './src/warmth/reachout.js';
 import { recordReachOut } from './src/warmth/reach-out-log.js';
-import { appendReflectionEvent, readReflectionEvents } from './reflection-events.js';
+import { appendReflectionEvent, readReflectionEvents } from './src/pondering/reflection-events.js';
 import { recordUserActivity, getLastUserActivity } from './src/sessions/last-activity.js';
 import { buildTimeAnchorBlock, wardLocalNowISO, plainInterval } from './relative-time.js';
 // Cerebellum is the motor module — the outbound counterpart to thalamus.

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shortPonderUid } from '../pondering.js';
+import { shortPonderUid } from '../src/pondering/pondering.js';
 
 test('shortPonderUid: compact slug shape, no lookalike chars', () => {
   for (let i = 0; i < 200; i++) {

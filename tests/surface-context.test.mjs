@@ -5,7 +5,7 @@ import {
   passesHardGates,
   selectSurfaceCandidates,
   formatSurfaceCandidatesBlock,
-} from '../surface-context.js';
+} from '../src/pondering/surface-context.js';
 
 // ── Classifier ──────────────────────────────────────────────────────
 

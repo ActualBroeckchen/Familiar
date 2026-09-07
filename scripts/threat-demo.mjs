@@ -29,7 +29,7 @@ import { recordThreat, getThreat,
          resetThreat,
          getThreatHistory }        from '../threat-tracker.js';
 import { computeRequiredInterval,
-         tierForWeight }           from '../pondering-cadence.js';
+         tierForWeight }           from '../src/pondering/pondering-cadence.js';
 import { PROVIDER_URLS }           from '../providers.js';
 
 const TOMES_DIR = mkdtempSync(path.join(os.tmpdir(), 'threat-demo-'));

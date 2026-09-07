@@ -17,8 +17,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const FILE = path.join(__dirname, 'tomes', '.ponder-web-budget.json');
+const FILE = path.join(REPO_ROOT, 'tomes', '.ponder-web-budget.json');
 
 export const PONDER_READS_PER_DAY_DEFAULT = 12;
 
