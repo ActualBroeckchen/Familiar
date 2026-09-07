@@ -20,7 +20,7 @@ import path from 'path';
 import os from 'os';
 import { existsSync, readFileSync, mkdirSync, promises as fsp } from 'fs';
 import { fileURLToPath } from 'url';
-import { recentReachOuts, formatReachOutBlock } from './reach-out-log.js';
+import { recentReachOuts, formatReachOutBlock } from './src/warmth/reach-out-log.js';
 import { randomUUID } from 'crypto';
 import { wardLocalNowISO } from './relative-time.js';
 import { mcpToolError } from './phylactery-result.js';

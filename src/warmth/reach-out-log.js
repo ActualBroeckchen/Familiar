@@ -38,10 +38,11 @@ import { promises as fsp, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { slugifyLabel, shortSlug } from './slug-ids.js';
+import { slugifyLabel, shortSlug } from '../../slug-ids.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
+const DEFAULT_TOMES_DIR = path.join(REPO_ROOT, 'tomes');
 const FILENAME = '.reachout-log.json';
 
 /** How long a knock can still be what my human is answering. */
