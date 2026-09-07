@@ -81,9 +81,9 @@ import {
   selectDueWeatherAlerts, formatWeatherAlert,
   clampLeadMinutes, clampElapsedStampHours, ALERT_GRACE_MS, MAX_LEAD_MS,
 } from './event-alerts.js';
-import { startGcalSyncLoop, stopGcalSyncLoop, resetGcalSyncCadence } from './gcal-sync-loop.js';
-import { recordSyncOutcome, readSyncStatus } from './gcal-sync-status.js';
-import { fetchIcal, fetchViaCli, cliPresetHint } from './gcal-source.js';
+import { startGcalSyncLoop, stopGcalSyncLoop, resetGcalSyncCadence } from './src/gcal/gcal-sync-loop.js';
+import { recordSyncOutcome, readSyncStatus } from './src/gcal/gcal-sync-status.js';
+import { fetchIcal, fetchViaCli, cliPresetHint } from './src/gcal/gcal-source.js';
 import {
   parseCredentials, buildAuthUrl, exchangeCode,
   readToken as readGoogleToken, writeToken as writeGoogleToken,
@@ -91,11 +91,11 @@ import {
   getFreshAccessToken, listEvents as listGoogleEvents,
   listCalendars as listGoogleCalendars, hasCalendarListScope,
   normalizeGoogleEvents, isConnected as googleConnected,
-} from './gcal-google.js';
+} from './src/gcal/gcal-google.js';
 import {
   resolveAttribution, isIgnored, wardCalendarId,
   writeCalendarCache, readCalendarCache, normalizeAttributionEntry,
-} from './gcal-attribution.js';
+} from './src/gcal/gcal-attribution.js';
 import { listOutbox, acknowledgeOutbox, clearAcknowledged, acknowledgePendingByKind } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
 import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';

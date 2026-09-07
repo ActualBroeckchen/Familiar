@@ -39,7 +39,7 @@ import { promises as fsp, readFileSync, mkdirSync } from 'fs';
 import { PROVIDER_URLS } from './providers.js';
 import { callProviderChat } from './llm-call.js';
 import { listOwnFiles, readOwnFile, searchSessions, isSessionLogPath, readSessionLog } from './own-files.js';
-import { readCalendarCache, resolveAttribution, normalizeAttributionEntry } from './gcal-attribution.js';
+import { readCalendarCache, resolveAttribution, normalizeAttributionEntry } from './src/gcal/gcal-attribution.js';
 import { computeAvailability, formatAvailabilityLines } from './schedule-availability.js';
 import { isSensitiveNode } from './spine-states.js';
 import {
@@ -83,15 +83,15 @@ import { enqueueOutbox, listOutbox, updateOutboxMeta, rekeyOutboxIds } from './o
 import { buildTimeAnchorBlock, relativeTime, plainInterval, wardLocalNowISO } from './relative-time.js';
 import { substituteMacros } from './macros.js';
 import { selectSurfaceCandidates } from './surface-context.js';
-import { rekeyCueState } from './gcal-projection.js';
+import { rekeyCueState } from './src/gcal/gcal-projection.js';
 import { TOOL_MODULES, CORE, MODULE_INDEX, normalizeRequestedModules } from './tool-surfacing.js';
 import { rekeyPonderingUids } from './pondering.js';
-import { pushIcsViaCli, resolveWriteCommand } from './gcal-source.js';
+import { pushIcsViaCli, resolveWriteCommand } from './src/gcal/gcal-source.js';
 import {
   readToken as readGoogleToken, writeToken as writeGoogleToken,
   getFreshAccessToken as getGoogleAccessToken, buildEventResource, insertEvent as insertGoogleEvent,
   isConnected as googleConnected,
-} from './gcal-google.js';
+} from './src/gcal/gcal-google.js';
 import { getRecentOfferInfo, rekeySurfaceEventIds } from './surface-events.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

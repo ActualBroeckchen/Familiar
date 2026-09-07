@@ -19,8 +19,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { promises as fsp } from 'fs';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
+const DEFAULT_TOMES_DIR = path.join(REPO_ROOT, 'tomes');
 const FILENAME = '.gcal-sync-status.json';
 
 function file(tomesDir) { return path.join(tomesDir, FILENAME); }

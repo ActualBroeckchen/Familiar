@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeIcalUrl, fetchIcal } from '../gcal-source.js';
+import { normalizeIcalUrl, fetchIcal } from '../src/gcal/gcal-source.js';
 
 const ICS = 'BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\nUID:a\nDTSTART:20260101T090000Z\nSUMMARY:x\nEND:VEVENT\nEND:VCALENDAR\n';
 
@@ -48,7 +48,7 @@ test('fetchIcal: a thrown network error becomes ok:false', async () => {
   assert.match(r.error, /ECONNREFUSED/);
 });
 
-import { fetchViaCli, normalizeCliEvents, detectCli, cliPresetHint } from '../gcal-source.js';
+import { fetchViaCli, normalizeCliEvents, detectCli, cliPresetHint } from '../src/gcal/gcal-source.js';
 
 const ok = (stdout) => async () => ({ code: 0, stdout, stderr: '', failed: false });
 const fail = (stderr, code = 1) => async () => ({ code, stdout: '', stderr, failed: true });
@@ -110,7 +110,7 @@ test('cliPresetHint returns a default command for known presets', () => {
   assert.equal(cliPresetHint('unknown'), '');
 });
 
-import { pushIcsViaCli, resolveWriteCommand, writePresetCommand } from '../gcal-source.js';
+import { pushIcsViaCli, resolveWriteCommand, writePresetCommand } from '../src/gcal/gcal-source.js';
 
 test('resolveWriteCommand: override wins, else preset, else empty', () => {
   assert.equal(resolveWriteCommand({ source: 'gcalcli', override: 'my cmd {file}' }), 'my cmd {file}');
@@ -148,7 +148,7 @@ test('pushIcsViaCli: no command / nothing valid → ok:false, never throws', asy
   assert.equal((await pushIcsViaCli({ icsText: 'not ics', command: 'x', runner: async () => ({ code: 0 }) })).ok, false);
 });
 
-import { applyCliWindowTokens } from '../gcal-source.js';
+import { applyCliWindowTokens } from '../src/gcal/gcal-source.js';
 
 test('applyCliWindowTokens: substitutes the look-ahead window tokens', () => {
   const out = applyCliWindowTokens('tool --from {dateMin} --to {dateMax} --iso {timeMin} {timeMax} --n {days}', {

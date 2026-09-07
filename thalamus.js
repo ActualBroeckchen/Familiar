@@ -1614,7 +1614,7 @@ function wrapFile(filename, content, promptLabel) {
 // from temporal-format.js directly.
 import { formatTemporalContext } from './temporal-format.js';
 import { buildStewardshipBlock } from './stewardship.js';
-import { nextProjectionCue, gatherProjectionCandidates } from './gcal-projection.js';
+import { nextProjectionCue, gatherProjectionCandidates } from './src/gcal/gcal-projection.js';
 import { weatherEnabled } from './src/weather/weather-mirror.js';
 import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
 import { expandWindow } from './recurrence.js';

@@ -25,8 +25,9 @@ import { promises as fsp } from 'fs';
 import { fileURLToPath } from 'url';
 import { normalizeCliEvents } from './gcal-source.js';
 
+import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
+const DEFAULT_TOMES_DIR = path.join(REPO_ROOT, 'tomes');
 const TOKEN_FILE = '.gcal-google-token.json';
 
 const AUTH_ENDPOINT  = 'https://accounts.google.com/o/oauth2/v2/auth';

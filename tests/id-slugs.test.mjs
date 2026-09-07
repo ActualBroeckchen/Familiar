@@ -17,7 +17,7 @@ test('shortPonderUid: effectively unique across a large draw', () => {
 
 import { sessionSlugId, outboxSlugId, isLegacyId, shortSlug } from '../slug-ids.js';
 import { rekeyOutboxIds, enqueueOutbox, listOutbox } from '../outbox.js';
-import { rekeyCueState, readCueState, writeCueState } from '../gcal-projection.js';
+import { rekeyCueState, readCueState, writeCueState } from '../src/gcal/gcal-projection.js';
 import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';

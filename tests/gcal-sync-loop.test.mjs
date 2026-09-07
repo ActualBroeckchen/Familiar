@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   runOneGcalSyncTick, clampSyncIntervalMs, DEFAULT_SYNC_INTERVAL_MS,
   startGcalSyncLoop, stopGcalSyncLoop, FAILURE_RETRY_MS,
-} from '../gcal-sync-loop.js';
+} from '../src/gcal/gcal-sync-loop.js';
 
 test('clampSyncIntervalMs: floors, ceils, and defaults', () => {
   assert.equal(clampSyncIntervalMs(60 * 60_000), 60 * 60_000);

@@ -5,7 +5,7 @@ import {
   getFreshAccessToken, listEvents, listCalendars, hasCalendarListScope,
   normalizeGoogleEvents, buildEventResource,
   insertEvent, isConnected, publicStatus, SCOPE,
-} from '../gcal-google.js';
+} from '../src/gcal/gcal-google.js';
 
 const jsonRes = (obj, ok = true, status = 200) => ({ ok, status, text: async () => JSON.stringify(obj) });
 
