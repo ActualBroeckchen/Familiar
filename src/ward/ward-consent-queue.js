@@ -13,7 +13,7 @@
  * gates the whole surface to the ward. No LLM call — a consent decision must be
  * exact, so it is code, not judgment.
  */
-import { EMBED_COLOR, btn, row } from './discord-menu-kit.js';
+import { EMBED_COLOR, btn, row } from '../../discord-menu-kit.js';
 
 export const QUEUE_CID = 'pfqueue';
 export const QUEUE_PAGE_SIZE = 6;

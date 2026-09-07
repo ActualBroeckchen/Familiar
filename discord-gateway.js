@@ -58,12 +58,12 @@ import { resolveTomeMacros } from './src/tomes/tome-macros.js';
 import {
   isQueueCommand, QUEUE_CID,
   buildQueueHomeView, buildQueueItemView, buildQueueDoneView, buildQueueText,
-} from './ward-consent-queue.js';
+} from './src/ward/ward-consent-queue.js';
 import {
   isConnectionCommand, CONN_CID, DEFAULT_VALUE, FEATURE_CONNECTIONS,
   buildConnHomeView, buildFeaturesView, buildFeatureView, buildConnDoneView, buildConnText,
   buildEffortsView, buildEffortView, isSettableEffort,
-} from './ward-connections.js';
+} from './src/ward/ward-connections.js';
 import { PROVIDER_URLS, resolveReasoningEffort } from './providers.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';

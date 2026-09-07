@@ -8,12 +8,12 @@ import { EMBED_COLOR, btn, row, expiredView } from '../discord-menu-kit.js';
 import {
   isQueueCommand, QUEUE_CID,
   buildQueueHomeView, buildQueueItemView, buildQueueDoneView, buildQueueText,
-} from '../ward-consent-queue.js';
+} from '../src/ward/ward-consent-queue.js';
 import {
   isConnectionCommand, CONN_CID, DEFAULT_VALUE, FEATURE_CONNECTIONS,
   buildConnHomeView, buildFeaturesView, buildFeatureView, buildConnDoneView, buildConnText,
   buildEffortsView, buildEffortView, effortLabelOf, isSettableEffort,
-} from '../ward-connections.js';
+} from '../src/ward/ward-connections.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
