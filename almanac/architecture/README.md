@@ -244,6 +244,8 @@ If you're asking yourself... go to:
   multi-writer log merge that makes that safe, and the composer-safe live-sync poller.
 - [Installer and launcher](installer-and-launcher) — the per-platform one-click install,
   update, and launch tooling, and the invariants it must preserve.
+- [Update](update) — the self-update mechanism, detection, and the design choice to never
+  update automatically without the ward's consent.
 - [Entity-as-subject](../concepts/entity-as-subject) and
   [Multi-embodiment](../concepts/multi-embodiment) — the design stance this architecture
   exists to serve.
