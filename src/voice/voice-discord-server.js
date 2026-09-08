@@ -27,7 +27,8 @@ import path from 'node:path';
 
 import { createCallEngine, isCallActiveFromFile, isCallActiveFromFileSync } from './call-engine.js';
 import { createDiscordCallAdapter, loadDiscordVoiceDeps } from './voice-discord-adapter.js';
-import { discordVoiceAdapterCreator, setVoiceRosterListener, discordVoiceChannelMembers, discordBotUserId, findWardVoiceChannel, discordVoiceDisplayName } from '../discord/discord-gateway.js';
+import { discordVoiceAdapterCreator, setVoiceRosterListener, discordVoiceChannelMembers, discordBotUserId, findWardVoiceChannel, discordVoiceDisplayName, ingestDiscordMedia } from '../discord/discord-gateway.js';
+import { describeAsset } from '../vision/vision.js';
 import { resolveCallAudience, wardVoiceState } from './voice-call-audience.js';
 import { createTagSegment, createRoomListenerMap } from './voice-tagging.js';
 import { registerPushAdapterFactory, formatItemForPush } from '../../cerebellum.js';
@@ -55,6 +56,16 @@ import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCall
 /** Hard off-switch — same pattern as every other loop/feature. */
 function discordVoiceDisabled() {
   return process.env.PROTO_FAMILIAR_DISCORD_VOICE_DISABLED === '1';
+}
+
+/**
+ * The text-in-voice interleave off-switch. A message typed in the voice
+ * channel's attached chat becomes a spoken turn (and an image shared there is
+ * described so I can talk about it even on a voice model that can't see). On by
+ * default; this flag falls the whole feature back to normal text handling.
+ */
+function voiceTextInterleaveDisabled() {
+  return process.env.PROTO_FAMILIAR_VOICE_TEXT_INTERLEAVE_DISABLED === '1';
 }
 
 function asrLang(settings) {
@@ -314,6 +325,15 @@ export function attachDiscordVoice(deps) {
     if (Array.isArray(ctx.roomSounds) && ctx.roomSounds.length) {
       try { const line = roomListeners.for(ctx.callId).note(ctx.roomSounds); if (line) systemNotes.push(line); }
       catch (err) { log(`room-sound note failed: ${err?.message ?? err}`); }
+    }
+
+    // Text-interleave (Discord text-in-voice): a typed message can carry image
+    // descriptions the controller resolved before injecting the turn. They ride
+    // in as one-off notes, same shape as the room-sound note — so the reply can
+    // speak about a picture even on a voice model that can't see. Annotation
+    // only: never stored, never moves the threat tier.
+    if (Array.isArray(ctx.textNotes) && ctx.textNotes.length) {
+      for (const n of ctx.textNotes) { const t = String(n ?? '').trim(); if (t) systemNotes.push(t); }
     }
 
     const turnHistory = systemNotes.length ? [...hist, ...systemNotes.map(content => ({ role: 'system', content }))] : hist;
@@ -621,5 +641,114 @@ export function attachDiscordVoice(deps) {
     };
   });
 
-  return { joinVoiceCall, leaveVoiceCall, isCallActive: engine.isCallActive };
+  // ── Text-in-voice interleave (Discord) ───────────────────────────────────
+  // A Discord voice channel carries a small attached text chat sharing the voice
+  // channel's id. While a call is live there, a message typed into it is answered
+  // BY VOICE, interleaved into the same call — the repair path ("that word was
+  // 'Phylactery', not 'philosophy'") and a way to show me a picture mid-call. It
+  // rides the exact turn the mic does: gated to the room's audience (who can hear
+  // the reply), stored in the same per-tag session, spoken aloud.
+
+  /** Is the one live call on this guild+channel? (The text chat shares the VC id.) */
+  function isCallOnChannel(guildId, channelId) {
+    const callId = engine.currentCallId();
+    if (!callId) return false;
+    const meta = callMeta.get(callId);
+    return Boolean(meta && String(meta.guildId) === String(guildId) && String(meta.channelId) === String(channelId));
+  }
+
+  // Describe each image a typed message carried, so the reply can speak about a
+  // picture even on a voice model that can't see it. Images are ingested at the
+  // CALL's audience tag (the clearance the reply is spoken at) — a villager's
+  // picture is stored at the room's tag, never above it. `ingestDecision` carries
+  // the resolved speaker so `ingestDiscordMedia`'s own gate (ward/villager yes,
+  // stranger never) applies unchanged. describe is image-only; video rides as a
+  // plain "they shared a clip" note. Best-effort throughout: a failed
+  // fetch/describe becomes an honest "couldn't make it out", never a throw.
+  async function describeCallImages(msg, ingestDecision, audienceTag) {
+    const notes = [];
+    try {
+      const { attachments } = await ingestDiscordMedia(msg, ingestDecision, { audienceTag, sessionId: null });
+      for (const a of (Array.isArray(attachments) ? attachments : [])) {
+        if (a.kind !== 'image') { notes.push('[they shared a clip in the call chat — I can hear the call, not watch a video]'); continue; }
+        let desc = null;
+        try { const m = await describeAsset(a.id, readSettings()); desc = m?.description?.text ?? null; }
+        catch (err) { log(`describe of call-chat image failed: ${err?.message ?? err}`); }
+        notes.push(desc
+          ? `[an image shared in the call chat] ${desc}`
+          : '[an image was shared in the call chat, but I couldn\'t make it out]');
+      }
+    } catch (err) { log(`call-chat image ingest failed: ${err?.message ?? err}`); }
+    return notes;
+  }
+
+  /**
+   * Handle a message typed in the live call's text chat. Returns true when it
+   * became a voice turn (so the gateway skips normal text handling), false when
+   * it didn't (no live call here, my own/another bot's message, an unregistered
+   * speaker → fail-closed to normal handling, or nothing to say). I resolve the
+   * speaker myself rather than trust `decision`, because classifyMessage
+   * short-circuits an image-with-no-caption before it ever resolves who spoke.
+   */
+  async function handleCallText(msg, decision) {
+    if (voiceTextInterleaveDisabled()) return false;
+    const callId = engine.currentCallId();
+    if (!callId) return false;
+    const meta = callMeta.get(callId);
+    if (!meta) return false;
+
+    const authorId = msg?.author?.id;
+    if (!authorId) return false;
+    if (authorId === discordBotUserId()) return false;   // never answer myself (the inner loop guard)
+    if (msg?.author?.bot) return false;                   // another bot doesn't drive a call turn
+
+    // Ward wins; else a registered villager; else a stranger, who falls through to
+    // normal handling (never answered here, never stored at the call's clearance).
+    const wardUserId = String(readSettings()?.discordWardUserId ?? '').trim();
+    const isWard = Boolean(wardUserId && authorId === wardUserId);
+    let villager = null;
+    if (!isWard) {
+      try { villager = await findVillagerByAlias({ platform: 'discord', id: authorId }); } catch { villager = null; }
+      if (!villager) return false;
+    }
+    const speakerName = isWard ? null : (villager?.name ?? decision?.speakerName ?? null);
+
+    // The reply is spoken ALOUD into the call, so it's gated to who can HEAR — the
+    // VC roster's lowest clearance — exactly like a spoken turn. Images share that
+    // clearance for storage.
+    const { audienceTag } = await callAudience(meta);
+
+    const content = String(msg?.content ?? '').trim();
+    const hasImages = Array.isArray(msg?.attachments) && msg.attachments.length > 0;
+    const ingestDecision = { isWard, villager, speakerName, locationKey: meta.locationKey };
+    const textNotes = hasImages ? await describeCallImages(msg, ingestDecision, audienceTag) : [];
+
+    // The typed words are the turn. With no words but a picture, the picture's
+    // description becomes the turn so there's still something to answer.
+    let transcript = content;
+    if (!transcript && textNotes.length) transcript = textNotes.join('\n');
+    if (!transcript) return false;
+
+    // Resolve the speaker to the ref runTurn expects: 'ward' for my human, else a
+    // stable text-ref → user id (so runTurn resolves the villager + their
+    // clearance the same way a spoken turn does). Mirrors the slug refs the
+    // adapter mints for voice; cleared with the rest on leave.
+    let speakerRef;
+    if (isWard) {
+      speakerRef = 'ward';
+    } else {
+      speakerRef = `text-${authorId}`;
+      refToUser.set(speakerRef, authorId);
+    }
+
+    // With a caption AND images, the caption is the turn and each image rides as a
+    // note. With images only, the note already IS the transcript above — so don't
+    // repeat it.
+    const notes = (content && textNotes.length) ? textNotes : [];
+    const injected = engine.injectTextTurn(speakerRef, transcript, notes.length ? { textNotes: notes } : null);
+    if (injected) log(`typed in the call chat by ${isWard ? 'my human' : (speakerName || 'a villager')} — answering by voice${textNotes.length ? ` (+${textNotes.length} image note(s))` : ''}`);
+    return injected;
+  }
+
+  return { joinVoiceCall, leaveVoiceCall, isCallActive: engine.isCallActive, isCallOnChannel, handleCallText };
 }

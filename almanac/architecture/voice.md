@@ -104,9 +104,11 @@ design — see [Safety spine](safety-spine)'s deferred-work section for why it s
 room sounds for care detection, and what a future ward-signed spec would need to decide
 [@voice-audio-tags]; and a shared-heap decode bug in the `opusscript` Opus decoder that silenced
 one Familiar whenever a second one joined the same Discord call, fixed in 0.11.10-alpha
-[@voice-discord-adapter-js]; and media retention (Pass 4 §9), the default-on background worker
+[@voice-discord-adapter-js]; media retention (Pass 4 §9), the default-on background worker
 that curates aged voice-clip sounds without ever touching their transcripts
-[@media-retention-loop]. See [Vision and media](vision-and-media) for the sibling
+[@media-retention-loop]; and text-in-voice interleave (0.11.85-alpha), which lets a message typed
+into a live Discord call's attached text chat become a spoken turn in that same call
+[@call-engine-js]. See [Vision and media](vision-and-media) for the sibling
 multimodal-input milestone that voice's media storage reuses.
 
 ## The footprint budget: disk as an accessibility constraint
@@ -517,6 +519,68 @@ cache from 0.11.9 were both reverted along with the old fail-counting teardown: 
 fixed, filtering out other bots is no longer needed, and **all speakers, including other bots,
 are decoded** — two Familiars conversing by voice over Discord is supported
 [@voice-discord-adapter-js].
+
+## Text-in-voice interleave: typing into a live call (0.11.85-alpha)
+
+A Discord voice channel carries a small attached text chat that shares the voice channel's id.
+While a call is live there, a message typed into that chat becomes a spoken turn interleaved
+into the same call, rather than being handled as an ordinary Discord text message
+[@call-engine-js]. Two cases motivate it: the repair path — typing "that word was 'Phylactery',
+not 'philosophy'" so the Familiar reads the correction and answers by voice — and showing the
+Familiar a picture mid-call on a voice model that cannot see [@voice-discord-server-js].
+
+**The engine stays transport-neutral.** `call-engine.js` gains a public `injectTextTurn(speakerRef,
+text, meta)` that funnels a text-sourced turn through the exact same internal machinery a spoken
+turn uses: `handleTurn` (which still respects the `turnBusy`/`pendingTurn` coalescing and
+serialisation), `runOneTurn`, the injected `onTurn`, and `adapter.playAudio` — so the reply is
+spoken aloud like any other turn [@call-engine-js]. The turn is tagged `source: 'text'` and
+carries an opaque `textNotes` array that `runOneTurn` forwards into the `onTurn` context
+uninterpreted; the engine itself never inspects Discord or knows the text came from a chat
+window. A spoken turn is `source: 'voice'` with `textNotes: null`, so existing call behaviour is
+unchanged [@call-engine-js].
+
+**The controller resolves the speaker itself, not the caller's classification.**
+`voice-discord-server.js` gains `isCallOnChannel(guildId, channelId)` and
+`handleCallText(msg, decision)` on the returned controller. `handleCallText` re-resolves who
+spoke — ward first (via `settings.discordWardUserId`), else a registered villager (via
+`findVillagerByAlias`), else a stranger, which returns `false` and falls through to normal text
+handling — rather than trusting the passed-in `decision`, because `classifyMessage` can
+short-circuit an image-with-no-caption before it resolves a speaker [@voice-discord-server-js].
+The bot's own messages and other bots' messages are skipped the same way the ordinary loop guard
+works. The turn is gated to the **call's** audience — `callAudience(meta)`, the voice-channel
+roster's lowest clearance, i.e. who can *hear* the spoken reply — never the text channel's own
+audience, mirroring the rule a spoken turn already follows: the reply is spoken aloud to the
+whole call, so gating to who can read the text chat would leak a higher-clearance recall aloud
+[@voice-discord-server-js]. The villager is registered under a `text-<id>` ref in the same
+`refToUser` map the voice adapter uses, so `runTurn` resolves their clearance identically to a
+spoken turn, and the turn joins the same per-tag call session rather than being memorised twice
+[@voice-discord-server-js].
+
+**Images are described, not seen.** An image shared in the call chat is ingested at the call's
+audience tag via `ingestDiscordMedia` (exported from `discord-gateway.js`; its own ward-or-
+villager-yes, stranger-never gate still applies) and run through `describeAsset` — a look-once,
+keep-forever description — so the reply can talk about a picture even on a voice model with no
+vision [@voice-discord-server-js] [@discord-gateway-js]. The description rides in as a one-off
+`textNotes` entry, the same shape as the room-sound annotation covered above: it is never stored
+and never moves the threat tier. With a caption and an image together, the caption is the turn
+and the image rides as a note; with an image and no caption, the description itself becomes the
+turn text, so there is still something to answer [@voice-discord-server-js]. A video attachment
+is not described — it becomes a plain "they shared a clip" note — and a failed image fetch or
+describe call degrades to an honest "couldn't make it out" note rather than throwing into the
+call [@voice-discord-server-js].
+
+**Routing happens once, before observe/respond classification.** In `discord-gateway.js`'s
+`MESSAGE_CREATE` handler, after command parsing (`!leave`, `/update`, and similar) and before the
+normal observe/respond branching, a message on a channel with a live call routes to
+`gw.voiceController.handleCallText`; if it returns `true` the gateway returns immediately and
+skips the normal text path entirely, so an interleaved message is never also memorised as an
+ordinary Discord text turn [@discord-gateway-js]. A stranger's message (`handleCallText` returns
+`false`) falls through unchanged to whatever the gateway would otherwise have done with it.
+
+The whole feature is default-on and gated by one off-switch,
+`PROTO_FAMILIAR_VOICE_TEXT_INTERLEAVE_DISABLED=1`, which falls the call's text chat back to
+ordinary text handling — the same discipline every other loop in this codebase follows
+[@voice-discord-server-js].
 
 ## Media retention: curating aged voice clips (Pass 4 §9)
 

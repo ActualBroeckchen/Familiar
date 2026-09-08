@@ -2085,7 +2085,7 @@ async function fetchDiscordVideo(att, { timeoutMs = 12000 } = {}) {
 // failed fetch is a count, not an error. Images are downscaled; video is fetched
 // raw and size-capped (VIDEO_MAX_BYTES → only short clips ingest inline). The
 // SAME audience rule and caps apply to both.
-async function ingestDiscordMedia(msg, decision, { audienceTag, sessionId }) {
+export async function ingestDiscordMedia(msg, decision, { audienceTag, sessionId }) {
   if (discordVisionOff()) return { attachments: [], failed: 0 };
   // Ward always; registered villager yes; stranger never.
   if (!decision.isWard && !decision.villager) return { attachments: [], failed: 0 };
@@ -3008,6 +3008,22 @@ function onDispatch(t, d) {
         if (decision.isWard && decision.kind === 'ward-dm') {
           if (isQueueCommand(d.content))      { await handleQueueCommand(gw, { msg: d }); return; }
           if (isConnectionCommand(d.content)) { await handleConnectionCommand(gw, { msg: d }); return; }
+        }
+
+        // Text-in-voice interleave (Pass 4): if a voice call is live in THIS
+        // channel (the attached text chat shares the voice channel's id), a typed
+        // message becomes a spoken turn in that call rather than normal text —
+        // the repair path and mid-call picture sharing. The controller gates it to
+        // the call's audience and fail-closes a stranger back to normal handling
+        // (returns false), so this only steals ward/villager messages it actually
+        // answered. Commands above (!leave, /update) are already handled, so they
+        // never reach here.
+        if (d.guild_id && gw.voiceController?.isCallOnChannel?.(d.guild_id, d.channel_id)) {
+          const spoken = await gw.voiceController.handleCallText(d, decision).catch((err) => {
+            console.error('[discord] call-text interleave failed:', err?.message ?? err);
+            return false;
+          });
+          if (spoken) return;
         }
 
         // V8 lurk: read the room without replying.

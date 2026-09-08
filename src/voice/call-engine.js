@@ -455,6 +455,25 @@ export function createCallEngine({
     });
   }
 
+  /**
+   * Inject a turn whose transcript came from TEXT, not the microphone (the
+   * text-in-voice interleave, Discord). It rides the SAME machinery a spoken turn
+   * does — `handleTurn`'s serialisation + coalescing, `runOneTurn`, the injected
+   * `onTurn`, and the adapter playback — so the reply is spoken aloud into the
+   * call exactly like an answer to speech. The engine stays transport-neutral: it
+   * doesn't know the text came from Discord, only that it's a turn tagged
+   * `source:'text'` (so the caller/adapter can tell them apart) carrying whatever
+   * opaque `textNotes` the caller wants folded in as context. Returns false if no
+   * call is live or the text is empty — never throws at the caller.
+   */
+  function injectTextTurn(speakerRef, transcript, meta = null) {
+    if (!call) return false;
+    const text = String(transcript ?? '').trim();
+    if (!text) return false;
+    handleTurn(speakerRef, text, { ...(meta || {}), source: 'text' });
+    return true;
+  }
+
   async function runOneTurn(speakerRef, transcript, meta = null) {
     const c = call;
     if (!c) return;
@@ -469,7 +488,12 @@ export function createCallEngine({
     // turn runner classifies + phrases them into a one-off "what I can hear" note;
     // they never persist and never touch the threat tier.
     const roomSounds = meta?.roomSounds ?? c.streams.get(speakerRef)?.lastRoomSounds ?? null;
-    try { reply = await onTurn(transcript, { callId: c.callId, speakerRef, speakerName, embedding, roomSounds }); }
+    // Opaque per-turn context the caller wants folded in (the text-interleave
+    // passes image descriptions here); `source` tells a spoken turn from a typed
+    // one. The engine forwards both without interpreting them.
+    const textNotes = Array.isArray(meta?.textNotes) ? meta.textNotes : null;
+    const source = meta?.source === 'text' ? 'text' : 'voice';
+    try { reply = await onTurn(transcript, { callId: c.callId, speakerRef, speakerName, embedding, roomSounds, textNotes, source }); }
     catch (err) { log(`onTurn threw: ${err?.message ?? err}`); }
     if (call !== c) return;   // the call ended mid-turn — nothing to deliver to
     // Always hand the turn's outcome to the adapter, even when there is nothing
@@ -572,6 +596,7 @@ export function createCallEngine({
     startCall,
     endCall,
     speakProactive,   // spoken-not-banner: queue text to speak at the next gap; resolves true once heard
+    injectTextTurn,   // text-in-voice interleave: feed a typed message in as a turn, spoken back aloud
     isCallActive: () => Boolean(call),
     currentCallId: () => call?.callId ?? null,
     adapterIds: () => [...adapters.keys()],
