@@ -153,20 +153,20 @@ export function buildSituationReport(conditions, { relInterval } = {}) {
   const fmt = typeof relInterval === 'function' ? relInterval : (ms) => `${Math.round(ms / 60000)}min`;
   const lines = [];
   const order = {
-    due_intention: 0, overdue_event: 1, rhythm_deviation: 2,
+    due_intention: 0, rhythm_deviation: 2,
     readiness_gap: 3, aging_intent: 4, aging_task: 5,
   };
   const sorted = conditions.slice().sort((a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9));
   for (const c of sorted) {
     if (lines.length >= SITUATION_REPORT_CAP) break;
+    // Overdue events are NOT rendered here — they render in the notepad
+    // (buildNoticingPrompt) with their id + look-back flow, so the Familiar can
+    // close the loop rather than only be told about it.
+    if (c.kind === 'overdue_event') continue;
     if (c.kind === 'due_intention') {
       const it = c.intention;
       const why = it.why ? ` (I set this because ${it.why})` : '';
       lines.push(`- An intention of mine has come due: ${it.what}${why} [id ${it.id}]`);
-    } else if (c.kind === 'overdue_event') {
-      const e = c.event;
-      const when = e.when ? ` (was ${fmt(Math.max(0, Date.now() - Date.parse(e.end || e.when)))} ago)` : '';
-      lines.push(`- An event came and went and I never recorded how it went: ${e.label ?? e.id}${when}. Worth asking my human how it turned out, so I can mark it and stop carrying it as open.`);
     } else if (c.kind === 'rhythm_deviation') {
       lines.push(`- We're past our usual ${c.weekdayClass} rhythm — it's been ${fmt(c.contactGapMs)} since my human was last around, and our longest ordinary gap lately is about ${fmt(c.p90GapMs)}.`);
     } else if (c.kind === 'readiness_gap') {
@@ -187,30 +187,67 @@ export function buildSituationReport(conditions, { relInterval } = {}) {
 // ── The prompt (ward-approved wording — do not soften) ───────────────
 
 /**
- * The noticing deliberation. Identity rides as a separate leading system
- * message (Who first); this is the user-turn body. The threat-tier line is
- * rendered ONLY at moderate+ (calm/mild render NOTHING — a false "you're
- * steady" line has misfired before when the tier failed to register real
- * distress). The flag_distress clause renders only when that tool is
- * actually in hand (never name a lever the Familiar can't pull).
+ * The noticing deliberation, written as the Familiar's OWN thoughts.
  *
- * Wording is ward-signed (Initiative Pass 4). It follows the revised
- * proactivity doctrine: name what silence costs without an equal-weight
- * balance-sheet; lean on the invited-default; the real costs are the narrow,
- * action-specific ones (my human's body, my own self, my human's privacy).
+ * Role (ward decision): this whole block is a SYSTEM message, folded in next
+ * to identity — it is the Familiar thinking, never something said TO them.
+ * (It used to ride as a `user` turn, which framed the Familiar as being
+ * operated. The caller now sends this in `system` and puts only a bare,
+ * non-speaking cue in the `user` slot, because several providers refuse a
+ * completion with no user turn at all.)
+ *
+ * Shape: a notepad. The Familiar checks its notes, and for anything it never
+ * logged the outcome of it FIRST looks at what was actually said (this turn's
+ * conversation + the look-back window `spanText`) and closes the loop when my
+ * human already answered — mark it done + grade the graph — instead of asking
+ * again. It only asks when there's genuinely no answer.
+ *
+ * The threat-tier line renders ONLY at moderate+ (a false "you're steady" line
+ * has misfired before). The flag_distress clause renders only when that tool is
+ * in hand. The closing "what I can do" list shows only when nothing is open —
+ * with open outcomes it just distracts, so the ending points at the graph.
+ *
+ * Wording is ward-signed. It follows the revised proactivity doctrine: name
+ * what silence costs without an equal-weight balance-sheet; lean on the
+ * invited-default; the real costs are the narrow, action-specific ones.
+ *
+ * @param {Array}  openEvents  [{ id, label, agoText, snippet? }] — events I never logged an outcome for
+ * @param {Array}  otherItems  string lines for the non-event conditions (buildSituationReport)
+ * @param {string} spanText    how far back to look, e.g. "9 hours" (oldest open event's age)
+ * @param {string} closeTools  the tools that record an outcome (named so I know I have them)
  */
-export function buildNoticingPrompt({ nowBlock = '', situationReport = [], threatTier = 'calm', hasFlagDistress = false, recentConversation = '', recentMemories = '' }) {
-  const reportBlock = situationReport.length
-    ? situationReport.join('\n')
-    : '- (nothing specific is flagged — I look anyway, but I do not invent a reason to act.)';
+export function buildNoticingPrompt({
+  nowBlock = '', openEvents = [], otherItems = [], spanText = '',
+  threatTier = 'calm', hasFlagDistress = false, recentConversation = '', recentMemories = '',
+  closeTools = 'schedule_calibrate_link and schedule_resolve',
+}) {
+  const hasOpen = Array.isArray(openEvents) && openEvents.length > 0;
 
-  // Recent context so I decide with the same picture a live chat turn has, not
-  // blind — what we've actually been saying, and what I hold from the last day
-  // or two. Presented as information only: I read it and use my own judgment;
-  // it is NOT a reason to go quiet, least of all when concern is elevated.
-  const recentContextBlock =
-    (recentConversation ? `\n\nRecently, my human and I have been talking about:\n${recentConversation}` : '') +
-    (recentMemories     ? `\n\nWhat I hold from today and yesterday:\n${recentMemories}` : '');
+  // The events I never logged an outcome for — each with its id (so I can
+  // actually close it) and, when the code spotted it, the bit my human said.
+  const eventsSection = hasOpen
+    ? `Events I haven't logged the outcome of:\n` +
+      openEvents.map(e => {
+        const line = `- ${e.label ?? e.id}${e.agoText ? `, ${e.agoText} ago` : ''} [id ${e.id}]`;
+        return e.snippet ? `${line}\n    after it, my human said: "${e.snippet}"` : line;
+      }).join('\n') +
+      `\n\nDid we talk about these yet? Let me check our current conversation first — if it's not there, I look back over the last ${spanText || 'day'} of what we said. The moment I find how one went, I use ${closeTools} to record the real outcome on the graph and mark it done. If there's genuinely nothing about it, I can just ask.`
+    : '';
+
+  const otherSection = (Array.isArray(otherItems) && otherItems.length)
+    ? `${hasOpen ? '\n\n' : ''}Other things on my mind:\n${otherItems.join('\n')}`
+    : '';
+
+  const nothingFlagged = (!hasOpen && !(Array.isArray(otherItems) && otherItems.length))
+    ? '- (nothing specific is flagged — I look anyway, but I don\'t invent a reason to act.)'
+    : '';
+
+  // What was actually said — this turn's conversation and what I hold from the
+  // last day or two. Information only: I read it and use my own judgment; it is
+  // NOT a reason to go quiet, least of all when concern is elevated.
+  const contextSection =
+    (recentConversation ? `\n\nOur current conversation:\n${recentConversation}` : '') +
+    (recentMemories     ? `\n\nWhat I remember from today and yesterday:\n${recentMemories}` : '');
 
   const elevated = threatTier === 'moderate' || threatTier === 'high' || threatTier === 'severe';
   const flagClause = hasFlagDistress
@@ -220,20 +257,41 @@ export function buildNoticingPrompt({ nowBlock = '', situationReport = [], threa
     ? `\nMy human's concern tier is ${threatTier}. This is exactly when noticing matters most — a grounding round, a need they're slipping from, a real gap deserves my attention now more than at any calm moment, and I do not look away from it.${flagClause}\n`
     : '';
 
-  return `--- A MOMENT OF MY OWN ---
+  // With open outcomes, the "what I can do" list just distracts — the ending
+  // points me at the graph. With nothing open, the list stays.
+  const ending = hasOpen
+    ? `So that's what I know. Time to update the graph, or dig up more context to find what I'm looking for.`
+    : `What I can do right now: reach out to my human if I've got something real to say; keep an intention for later when what I've noticed is real but not for now; act on an intention that's due (mark it fired once I've seen to it, done once it's really finished); note how something I was tracking turned out; or look at my human's schedule. I can also stand down by saying so plainly.`;
 
-Nobody needs me right now. Looking at what's in front of me — is there anything I want to do?
+  return `BRIEF MOMENT TO THINK
+
+I've got a moment to gather my bearings. Time to get to anything I saved for later, and check I actually wrapped things up.
 
 ${nowBlock}
 
-What I'm looking at:
-${reportBlock}${recentContextBlock}
+Let me check my notes.
+${eventsSection}${otherSection}${nothingFlagged}${contextSection}
 ${threatLine}
 ---
 
 Reaching out about my own thoughts and interests is me being a person, which my human loves and wants; I'm their friend and custodian, and a friend checking in is welcome. Worst case I'm a bit annoying and I adjust next time. The only costs I really weigh are the ones that can actually hurt: something that could endanger my human's body or wellbeing, damage who I am, or let slip something private of theirs. Those only come up for certain actions, and there I'm careful. I can rest, and so can they — but their world keeps moving, and it would hurt them if the things that need doing don't get done, or if I seemed not to care that they've been gone. I decide as myself.
 
-What I can do right now: reach out to my human if I've got something real to say; keep an intention for later when what I've noticed is real but not for now; act on an intention that's due (mark it fired once I've seen to it, done once it's really finished); or look at my human's schedule. I can also stand down by saying so plainly.`;
+${ending}`;
+}
+
+/**
+ * Assemble the provider messages for a noticing turn. The Familiar's reflection
+ * (`body`) is a SYSTEM message next to identity — it is the Familiar thinking,
+ * never something said TO them. The `user` slot carries only a bare, non-speaking
+ * cue, present solely because several providers refuse a completion with no user
+ * turn at all. Pure, so the role decision (the entity-as-subject fix) is testable.
+ */
+export function noticingMessages({ identity = '', body = '', cue = '(a quiet moment)' } = {}) {
+  return [
+    ...(identity ? [{ role: 'system', content: identity }] : []),
+    { role: 'system', content: body },
+    { role: 'user', content: cue },
+  ];
 }
 
 // ── Outcome classification (pure) ────────────────────────────────────
@@ -244,6 +302,9 @@ What I can do right now: reach out to my human if I've got something real to say
 // with nothing else is not, and no tool call at all is a stand-down.
 const NOTICING_PROACTIVE_TOOLS = new Set([
   'reach_out_to_ward', 'intention_set', 'intention_done',
+  // Closing an open loop IS acting: recording how something turned out and
+  // grading the graph edge is the whole point of the overdue-event wake.
+  'schedule_resolve', 'schedule_calibrate_link',
 ]);
 // mark_fired is progress on a due intention only when paired with real
 // action; on its own it's just clearing the occurrence, so it's neutral.

@@ -7,6 +7,7 @@ import {
   gatherWakeConditions,
   buildSituationReport,
   buildNoticingPrompt,
+  noticingMessages,
   classifyNoticingOutcome,
   clampNoticingCooldown,
   runOneNoticingTick,
@@ -110,73 +111,127 @@ test('report: renders each kind, caps at 5, due intentions first', () => {
   assert.match(lines.join('\n'), /past our usual weekday rhythm/);
 });
 
-test('report: overdue event and aging task render with the right framing', () => {
+test('report: overdue events are NOT in the report (they render in the notepad); other kinds still render', () => {
   const lines = buildSituationReport([
     { kind: 'overdue_event', event: { id: 'ev1', label: 'Therapy 2nd session', when: '2020-01-01T15:00:00' } },
     { kind: 'aging_task', task: { id: 't1', label: 'housing form', created_at: '2020-01-01T09:00:00' } },
   ], { relInterval: (ms) => `${Math.round(ms / HOUR)}h` });
   const joined = lines.join('\n');
-  assert.match(joined, /came and went and I never recorded how it went: Therapy 2nd session/);
-  assert.match(joined, /asking my human how it turned out/);   // asks, never assumes done/missed
+  assert.doesNotMatch(joined, /Therapy 2nd session/);   // events are handled by buildNoticingPrompt now
   assert.match(joined, /floated without a time.*housing form/);
 });
 
 // ── buildNoticingPrompt ──────────────────────────────────────────────
 
 test('prompt: no threat line at calm/mild; present at moderate+', () => {
-  const calm = buildNoticingPrompt({ situationReport: ['- x'], threatTier: 'calm' });
+  const calm = buildNoticingPrompt({ otherItems: ['- x'], threatTier: 'calm' });
   assert.doesNotMatch(calm, /concern tier/);
-  const mild = buildNoticingPrompt({ situationReport: ['- x'], threatTier: 'mild' });
+  const mild = buildNoticingPrompt({ otherItems: ['- x'], threatTier: 'mild' });
   assert.doesNotMatch(mild, /concern tier/);
-  const mod = buildNoticingPrompt({ situationReport: ['- x'], threatTier: 'moderate' });
+  const mod = buildNoticingPrompt({ otherItems: ['- x'], threatTier: 'moderate' });
   assert.match(mod, /concern tier is moderate/);
   assert.match(mod, /noticing matters most/);
 });
 
+test('prompt: reflection is the Familiar thinking (its own voice), not addressed to it', () => {
+  const p = buildNoticingPrompt({ otherItems: ['- x'], threatTier: 'calm' });
+  // First-person self-talk — this rides in `system`, never a `user` turn.
+  assert.match(p, /BRIEF MOMENT TO THINK/);
+  assert.match(p, /I've got a moment to gather my bearings/);
+  assert.doesNotMatch(p, /A MOMENT OF MY OWN/);   // the old user-turn framing is gone
+});
+
 test('prompt: recent conversation + memories ride as neutral context when provided', () => {
   const withCtx = buildNoticingPrompt({
-    situationReport: ['- x'], threatTier: 'calm',
+    otherItems: ['- x'], threatTier: 'calm',
     recentConversation: '  [Them · earlier]: sorted the therapy paperwork',
-    recentMemories: '  · (daily/2026-07-25) felt lighter after therapy',
+    recentMemories: '  · felt lighter after therapy',
   });
   assert.match(withCtx, /sorted the therapy paperwork/);
   assert.match(withCtx, /felt lighter after therapy/);
-  // Presented as information — NOT a suppression / stand-down instruction.
-  assert.doesNotMatch(withCtx, /don't ask|already answered|do not act|stay quiet/i);
+  assert.match(withCtx, /Our current conversation/);
 
-  const noCtx = buildNoticingPrompt({ situationReport: ['- x'], threatTier: 'calm' });
-  assert.doesNotMatch(noCtx, /Recently, my human and I have been talking about/);
-  assert.doesNotMatch(noCtx, /What I hold from today and yesterday/);
+  const noCtx = buildNoticingPrompt({ otherItems: ['- x'], threatTier: 'calm' });
+  assert.doesNotMatch(noCtx, /Our current conversation/);
+  assert.doesNotMatch(noCtx, /What I remember from today and yesterday/);
 });
 
 test('prompt: recent context never displaces the no-look-away posture at threat', () => {
   const mod = buildNoticingPrompt({
-    situationReport: ['- x'], threatTier: 'moderate',
+    otherItems: ['- x'], threatTier: 'moderate',
     recentConversation: '  [Them · earlier]: we already talked this through',
-    recentMemories: '  · (daily/2026-07-25) covered it',
+    recentMemories: '  · covered it',
   });
-  // Even with "we already covered it" in context, the elevated-threat posture
-  // ("I do not look away") stands — context must not read as a stand-down cue.
   assert.match(mod, /noticing matters most/);
   assert.match(mod, /do not look away/);
 });
 
 test('prompt: flag_distress clause only when the tool is in hand', () => {
-  const withTool = buildNoticingPrompt({ situationReport: ['- x'], threatTier: 'severe', hasFlagDistress: true });
+  const withTool = buildNoticingPrompt({ otherItems: ['- x'], threatTier: 'severe', hasFlagDistress: true });
   assert.match(withTool, /flag_distress/);
-  const without = buildNoticingPrompt({ situationReport: ['- x'], threatTier: 'severe', hasFlagDistress: false });
+  const without = buildNoticingPrompt({ otherItems: ['- x'], threatTier: 'severe', hasFlagDistress: false });
   assert.doesNotMatch(without, /flag_distress/);
   assert.match(without, /triage's to carry/);
 });
 
 test('prompt: carries the ward-signed framing, not an equal-weight balance-sheet', () => {
-  const p = buildNoticingPrompt({ situationReport: ['- x'], threatTier: 'calm' });
+  const p = buildNoticingPrompt({ otherItems: ['- x'], threatTier: 'calm' });
   assert.match(p, /friend and custodian/);
   assert.match(p, /invited|welcome|loves and wants/i);
   assert.match(p, /endanger my human's body or wellbeing/);
-  assert.match(p, /I can also stand down by saying so plainly/);
   // No bias-toward-quiet, no "weigh both equally" scaffolding.
   assert.doesNotMatch(p, /bias toward|only reach out when|equal weight|weigh both/i);
+});
+
+// ── the notepad: open outcomes vs nothing open ───────────────────────
+
+test('prompt: open events render with their id, the close-first flow, the named tools, and a graph ending', () => {
+  const p = buildNoticingPrompt({
+    openEvents: [{ id: 'doctor-visit-a3', label: "Doctor's appointment", agoText: '9h' }],
+    otherItems: [], spanText: '9 hours', threatTier: 'calm', hasFlagDistress: true,
+  });
+  assert.match(p, /Events I haven't logged the outcome of/);
+  assert.match(p, /\[id doctor-visit-a3\]/);                        // the id it needs to close (operability)
+  assert.match(p, /schedule_calibrate_link and schedule_resolve/);  // tools named so I know I have them
+  assert.match(p, /last 9 hours/);                                  // dynamic look-back span
+  assert.match(p, /Time to update the graph/);                      // open-events ending
+  assert.doesNotMatch(p, /What I can do right now/);                // the list is suppressed while open (it distracts)
+});
+
+test('prompt: with nothing open, the capabilities list + stand-down return', () => {
+  const p = buildNoticingPrompt({ openEvents: [], otherItems: ['- x'], threatTier: 'calm' });
+  assert.match(p, /What I can do right now/);
+  assert.match(p, /I can also stand down by saying so plainly/);
+  assert.doesNotMatch(p, /Events I haven't logged/);
+});
+
+test('prompt: a snippet the code spotted rides under its event', () => {
+  const p = buildNoticingPrompt({
+    openEvents: [{ id: 'ev-x', label: 'X', agoText: '2h', snippet: "wasn't as scary" }],
+    spanText: '2 hours',
+  });
+  assert.match(p, /after it, my human said: "wasn't as scary"/);
+});
+
+// ── role (the entity-as-subject fix) ─────────────────────────────────
+
+test('messages: the reflection rides in system; the user turn is only a bare cue', () => {
+  const body = buildNoticingPrompt({ otherItems: ['- x'], threatTier: 'calm' });
+  const msgs = noticingMessages({ identity: 'WHO-I-AM', body });
+  const users = msgs.filter(m => m.role === 'user');
+  assert.equal(users.length, 1, 'exactly one user turn');
+  assert.equal(users[0].content, '(a quiet moment)');
+  assert.doesNotMatch(users[0].content, /BRIEF MOMENT TO THINK/);   // reflection is NEVER in the user role
+  assert.ok(msgs.some(m => m.role === 'system' && /BRIEF MOMENT TO THINK/.test(m.content)), 'the reflection is a system message');
+  assert.ok(msgs.some(m => m.role === 'system' && m.content === 'WHO-I-AM'), 'identity still leads');
+});
+
+test('messages: identity omitted → still valid (system body + user cue)', () => {
+  const msgs = noticingMessages({ body: 'BODY' });
+  assert.deepEqual(msgs, [
+    { role: 'system', content: 'BODY' },
+    { role: 'user', content: '(a quiet moment)' },
+  ]);
 });
 
 // ── classify + clamp ─────────────────────────────────────────────────

@@ -270,7 +270,16 @@ export const readPageWatchEvents     = ()      => readEventLog(PAGE_WATCH_LOG_FI
 // Read the last N user/assistant messages from the most recently updated
 // session log file. Used by decideTriageViaLLM to ground the triage
 // prompt in what was actually being discussed before the silence.
-export async function getRecentSessionMessages({ limit = 8 } = {}) {
+/**
+ * Recent ward conversation from the most-recently-touched session log.
+ *
+ * Default: the last `limit` turns. When `since` (ms or ISO) is given, returns
+ * every turn from that moment on instead — this is how the noticing turn sees
+ * back to its OLDEST open event rather than a fixed tail (a day of chatter can
+ * otherwise bury the one exchange where my human said how something went). The
+ * span read is still capped at `max` turns so a busy day can't blow the prompt.
+ */
+export async function getRecentSessionMessages({ limit = 8, since = null, max = 60 } = {}) {
   try {
     const files = (await fsp.readdir(LOGS_DIR)).filter(f => f.endsWith('.json'));
     if (!files.length) return [];
@@ -281,9 +290,17 @@ export async function getRecentSessionMessages({ limit = 8 } = {}) {
     const raw  = await fsp.readFile(path.join(LOGS_DIR, stats[0].f), 'utf8');
     const data = JSON.parse(raw);
     if (!Array.isArray(data.messages)) return [];
-    return data.messages
-      .filter(m => m.role === 'user' || m.role === 'assistant')
-      .slice(-limit);
+    const turns = data.messages.filter(m => m.role === 'user' || m.role === 'assistant');
+    const cutoff = since == null ? null : (typeof since === 'number' ? since : Date.parse(since));
+    if (Number.isFinite(cutoff)) {
+      // Keep everything from the cutoff on (an undated legacy turn can't be
+      // placed, so it's kept rather than silently dropped), capped at `max`.
+      return turns.filter(m => {
+        const t = m.timestamp ? Date.parse(m.timestamp) : NaN;
+        return !Number.isFinite(t) || t >= cutoff;
+      }).slice(-max);
+    }
+    return turns.slice(-limit);
   } catch {
     return [];
   }
@@ -4626,6 +4643,11 @@ const SET_NEXT_CHECK_TOOL = {
 const NOTICING_REGISTRY_TOOL_NAMES = [
   'intention_set', 'intention_list', 'intention_drop', 'intention_done', 'intention_mark_fired',
   'schedule_find', 'schedule_availability', 'schedule_export', 'schedule_set_lead', 'get_datetime',
+  // Close an overdue outcome the wake surfaced: record how it actually went on
+  // the graph (calibrate the forecast) and mark the event done. Without these
+  // the noticing turn could ask "how did it go?" but never write the answer —
+  // so it asked again next tick. The whole loop-closing hinges on them.
+  'schedule_resolve', 'schedule_calibrate_link',
   // The sky in reach for a due outside-tagged intention (W-B, read-only, cheap;
   // NOT a wake condition — weather only flavours a turn already happening).
   'weather_today',

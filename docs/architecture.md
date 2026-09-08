@@ -889,24 +889,39 @@ out. `noticing.js` holds the pure logic — wake conditions (a due intention who
 condition passes, a contact gap past the baseline p90, a readiness gap, an aging
 untriggered intention, an aging floating task (`AGING_TASK_MS`), an overdue
 unresolved event (`OVERDUE_EVENT_GRACE_MS`, reached via the window's `linked`
-endpoints — ward-signed 0.8.98, the Familiar ASKS the outcome and records it, it
-never assumes done/missed); **no wake condition → no turn**), the condition
-code-gate (`conditionPasses` — evaluated here, not left to the model, since no
-human reads this turn), the code-built ≤5-item situation report, the ward-signed
+endpoints — ward-signed 0.8.98; the Familiar checks what was said and CLOSES the
+loop when my human already answered, else asks — it never assumes done/missed);
+**no wake condition → no turn**), the condition code-gate (`conditionPasses` —
+evaluated here, not left to the model, since no human reads this turn), the
+code-built situation report for the non-event conditions, the ward-signed
 prompt (`buildNoticingPrompt` — threat-tier line only at moderate+, flag_distress
 clause only when that tool is in hand), and the injectable `runOneNoticingTick`.
+**Role (entity-as-subject, ward-signed 0.11.86):** the prompt is the Familiar's
+own reflection, so it assembles as a **`system`** message next to identity
+(`noticingMessages`), never a `user` turn (which framed it as being operated); a
+bare `(a quiet moment)` cue fills the `user` slot only because several providers
+refuse a completion with no user turn. **Loop-closing (0.11.86):** overdue events
+render as a *notepad* in `buildNoticingPrompt` — each with its slug id and the
+named closing tools (`schedule_calibrate_link` + `schedule_resolve`, now in
+`NOTICING_REGISTRY_TOOL_NAMES`), so the Familiar can grade the graph + mark it
+done rather than only being told about it. It checks the conversation FIRST and
+closes when my human answered (prompted or unprompted), only asking otherwise.
 `noticing-loop.js` is the singleton that drives it, self-paced (`set_next_check`,
 clamped [5min,6h], adaptive default). The bounded, tool-using deliberation runs
-in `server.js`'s `noticingDeliberate` (`composeNoticingTools`: intention CRUD + a
-few schedule reads + the noticing-scoped `reach_out_to_ward` warm-knock and
-`set_next_check`; a reach-out refused during quiet hours is not counted as
-acting). It assembles the same recent context a live chat turn / warm reach-out
-gets — identity (static block), the time anchor, **recent conversation
-(`getRecentSessionMessages` → `formatRecentMessagesForContext`) and recent
-memories (`getRecentMemoryLines`, today+yesterday)** — so it doesn't decide blind
-to what was just said. That context is **information only** (ward decision, no
-suppression instruction): it never nudges a stand-down, and the recent context is
-worded to yield to the no-look-away posture at elevated threat. **Does NOT stand down at elevated threat** (ward-signed,
+in `server.js`'s `noticingDeliberate`. It assembles the same recent context a live
+chat turn / warm reach-out gets — identity (static block), the time anchor,
+recent conversation and recent memories (`getRecentMemoryLines`, today+yesterday)
+— so it doesn't decide blind to what was just said. **When an outcome is open,
+`getRecentSessionMessages` reads back to the OLDEST open event (`since`, capped at
+`max`) instead of a fixed 6-turn tail** — a day of unrelated chatter can't
+otherwise bury the one exchange where my human said how something went. That
+context is **information only** (ward decision, no suppression instruction): it
+never nudges a stand-down, and yields to the no-look-away posture at elevated
+threat. **No-nag ledger (`noticing-outcomes.js`):** an event already ASKED about
+(a reach-out actually went out, still unresolved) is suppressed from surfacing for
+`ASK_COOLDOWN_MS` (20h) — closing writes a real resolution, so it never depends on
+the model's say-so; a per-event closed/asked/left line logs the outcome. This
+loop-closing set is a ward-sign-off path. **Does NOT stand down at elevated threat** (ward-signed,
 safety-significant — the tier shifts the register, never skips the turn; joins
 the safety-critical sign-off set). A proactive act resets the wait streak; a
 stand-down increments it (`source:'noticing'`). Every decision-reaching tick —
