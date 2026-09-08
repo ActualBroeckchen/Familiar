@@ -14,7 +14,7 @@ implemented**, or **proposed**. A "proposed" or "not yet implemented" status is 
 the page's honest record of how far the decision has actually traveled from conversation into
 code.
 
-Twenty-four decisions live here. Grouped by the question each one answers:
+Twenty-five decisions live here. Grouped by the question each one answers:
 
 ## Naming and module identity
 

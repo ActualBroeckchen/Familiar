@@ -232,6 +232,8 @@ If you're asking yourself... go to:
   assembled server-side, and the lesson about cross-surface consistency.
 - [Autonomous loops](autonomous-loops) — the background workers, what each one does, and how
   to turn one off.
+- [Pondering](pondering) — the autonomous pondering loop, how the Familiar thinks aloud
+  at a cadence weighted by interest and threat level.
 - [Safety spine](safety-spine) — crisis detection, threat tracking, and how escalation to a
   human trusted contact works.
 - [Injection guard: wiring history](injection-guard-gap) — the pattern-scanner's
