@@ -29,6 +29,7 @@
 
 import path from 'node:path';
 import { existsSync, readdirSync } from 'node:fs';
+import { offlineRecognizerConfig } from './offline-asr-models.js';
 import { encodeJson, encodePcm, createFrameReader, KIND_JSON, KIND_PCM } from './audio-frame.js';
 import { floatToPcm16, pcm16ToFloat, createSilenceTracker } from './voice-audio-features.js';
 import {
@@ -116,29 +117,16 @@ function buildPocketTts(modelDir) {
  * per utterance, and pinning it to one language would break the bilingual
  * household this model was chosen for.
  */
-function buildRecognizer(modelDir) {
-  const at = (f) => path.join(modelDir, f);
-  return new engine.OfflineRecognizer({
-    // Stated rather than inherited. SenseVoice is a 16 kHz, 80-dimension fbank
-    // model; sherpa's C++ FeatureExtractorConfig defaults to exactly that, so
-    // omitting this block PROBABLY works — but the Node binding builds the
-    // struct from whatever JS properties are present, and I could not verify
-    // from the installed package whether an absent `featConfig` leaves the C++
-    // defaults or zeroes them. A silently zeroed sample rate would produce
-    // garbage, not an error. So the two values that matter are written down.
-    featConfig: { sampleRate: 16000, featureDim: 80 },
-    modelConfig: {
-      senseVoice: {
-        model: at('model.int8.onnx'),
-        language: '',
-        useInverseTextNormalization: 1,
-      },
-      tokens: at('tokens.txt'),
-      numThreads: threads.asr,
-      provider: 'cpu',
-      debug: false,
-    },
-  });
+// buildRecognizer delegates the per-family config to the pure
+// offlineRecognizerConfig (offline-asr-models.js), so the SenseVoice/Whisper/
+// Parakeet branching is unit-tested without the engine or a real model. Here we
+// only discover the dir's files and wrap the config in the recogniser.
+function buildRecognizer(modelDir, kind = 'sensevoice') {
+  let files = [];
+  try { files = readdirSync(modelDir); } catch { /* dir missing → config builder throws a clear error */ }
+  return new engine.OfflineRecognizer(
+    offlineRecognizerConfig({ kind, files, at: (f) => path.join(modelDir, f), numThreads: threads.asr }),
+  );
 }
 
 /**
@@ -412,7 +400,7 @@ const OPS = {
    * Load a model for a role. Idempotent: loading what is already loaded is a
    * no-op rather than a second copy in RAM.
    */
-  async load({ reqId, role, modelDir }) {
+  async load({ reqId, role, modelDir, kind }) {
     const e = await ensureEngine();
     if (!e.ok) return send({ reqId, ok: false, reason: e.reason, detail: e.detail });
     if (!role || !modelDir) return send({ reqId, ok: false, reason: 'bad-request', detail: 'role and modelDir are required' });
@@ -427,7 +415,7 @@ const OPS = {
 
     try {
       if (role === 'tts') loaded.set(role, { session: buildPocketTts(modelDir), modelDir, at: Date.now() });
-      else if (role === 'asr-offline') loaded.set(role, { session: buildRecognizer(modelDir), modelDir, at: Date.now() });
+      else if (role === 'asr-offline') loaded.set(role, { session: buildRecognizer(modelDir, kind), modelDir, at: Date.now() });
       else if (role === 'asr-streaming') loaded.set(role, { session: buildOnlineRecognizer(modelDir), modelDir, at: Date.now() });
       else if (role === 'vad') loaded.set(role, { session: buildVad(modelDir), modelDir, at: Date.now() });
       else if (role === 'speaker') loaded.set(role, { session: buildSpeakerExtractor(modelDir), modelDir, at: Date.now() });

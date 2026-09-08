@@ -31,11 +31,12 @@
  */
 
 import path from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { getAssetMeta, setAssetDescription, assetBytesPath } from '../vision/media.js';
 import { composePlan } from './voice-models.js';
 import { fetchPlan, MODELS_SUBDIR } from './voice-fetch.js';
+import { offlineAsrChoice, OFFLINE_ASR_MODELS } from './offline-asr-models.js';
 import { normalizeTranscriptCase } from './voice-speech.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
@@ -76,6 +77,47 @@ export function voiceCallSettleMs(settings) {
 /** Is the offline recogniser actually unpacked on disk (not just the dir)? */
 function offlineModelPresent() {
   return existsSync(path.join(ASR_MODEL_DIR, 'model.int8.onnx'));
+}
+
+const AUDIO_MODELS_DIR = path.join(REPO_ROOT, 'models', 'audio');
+function dirForChoice(choice) { return path.join(AUDIO_MODELS_DIR, choice.dir); }
+
+/** Is a given offline model actually unpacked (its files on disk), not just its
+ *  folder? Whisper/Parakeet ship encoder(+joiner) files; SenseVoice ships one
+ *  model file. Both need tokens.txt. Never throws. */
+function modelUnpacked(dir, kind) {
+  try {
+    const files = readdirSync(dir);
+    if (!files.includes('tokens.txt')) return false;
+    if (kind === 'whisper' || kind === 'parakeet') return files.some((f) => /encoder.*\.onnx$/i.test(f));
+    return files.some((f) => /^model.*\.onnx$/i.test(f));
+  } catch { return false; }
+}
+
+/** Whether the ward's currently-selected offline model is downloaded. */
+export function offlineAsrModelPresent(settings) {
+  const c = offlineAsrChoice(settings);
+  return modelUnpacked(dirForChoice(c), c.kind);
+}
+
+/**
+ * Resolve which offline model the call FINAL will actually use RIGHT NOW: the
+ * ward's selected one if it is downloaded; else SenseVoice if THAT is
+ * downloaded (so choosing an upgrade that isn't fetched yet never breaks a
+ * call — it quietly uses the default); else none (the streaming text carries
+ * the final). Pure over the filesystem, never throws.
+ * Returns { dir, kind, selectedKey, usingKey, present, fellBack }.
+ */
+export function resolveOfflineAsr(settings) {
+  const sel = offlineAsrChoice(settings);
+  if (modelUnpacked(dirForChoice(sel), sel.kind)) {
+    return { dir: dirForChoice(sel), kind: sel.kind, selectedKey: sel.key, usingKey: sel.key, present: true, fellBack: false };
+  }
+  const sv = OFFLINE_ASR_MODELS.sensevoice;
+  if (sel.key !== 'sensevoice' && modelUnpacked(dirForChoice(sv), sv.kind)) {
+    return { dir: dirForChoice(sv), kind: sv.kind, selectedKey: sel.key, usingKey: sv.key, present: true, fellBack: true };
+  }
+  return { dir: dirForChoice(sel), kind: sel.kind, selectedKey: sel.key, usingKey: sel.key, present: false, fellBack: false };
 }
 
 let _offlineFetchInFlight = null;

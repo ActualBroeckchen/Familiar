@@ -92,7 +92,8 @@ export function createCallEngine({
   onTurn,                 // async (transcript, ctx) => reply | null   (injected)
   onReplyInterrupted = null, // (ctx, { fullText, spokenUpTo, playedMs }) => void — a barge cut a reply short (2c)
   streamingModelDir = '', // asr-streaming model dir; loaded once on call start
-  offlineModelDir = '',   // asr-offline (SenseVoice) dir; loaded when offlineFinal is on
+  offlineModelDir = '',   // asr-offline model dir; string OR () => string (the ward's selected model, resolved at call start)
+  offlineModelKind = 'sensevoice', // model family for the recogniser config; string OR () => string
   offlineFinal = () => false, // hybrid ASR: re-transcribe each utterance with the offline model
   ensureOffline = null,   // async () => fetch the offline model if missing (no-op if present)
   turnSettleMs = () => 0, // coalesce utterances within this gap into one turn (0 = reply per utterance)
@@ -517,7 +518,9 @@ export function createCallEngine({
     // boundary; the accurate offline model (SenseVoice) transcribes it. Load the
     // offline model too, best-effort — if it can't load we fall back to
     // streaming-only rather than failing the call (graceful degradation).
-    const useOffline = Boolean(offlineFinal()) && Boolean(offlineModelDir);
+    const offDir  = typeof offlineModelDir  === 'function' ? offlineModelDir()  : offlineModelDir;
+    const offKind = typeof offlineModelKind === 'function' ? offlineModelKind() : offlineModelKind;
+    const useOffline = Boolean(offlineFinal()) && Boolean(offDir);
     let offlineReady = false;
     if (useOffline) {
       // Make sure the model is on disk — fetch it in the background if not (no-op
@@ -526,9 +529,9 @@ export function createCallEngine({
       // model. This is what makes the hybrid setting a real capability instead of
       // a switch with no model behind it.
       if (ensureOffline) ensureOffline().catch(() => {});
-      const off = await worker.request({ op: 'load', role: 'asr-offline', modelDir: offlineModelDir }, { timeoutMs: 60000 }).catch((e) => ({ ok: false, reason: String(e?.message ?? e) }));
+      const off = await worker.request({ op: 'load', role: 'asr-offline', modelDir: offDir, kind: offKind }, { timeoutMs: 60000 }).catch((e) => ({ ok: false, reason: String(e?.message ?? e) }));
       offlineReady = Boolean(off?.ok);
-      if (offlineReady) log(`hybrid ASR on — the accurate offline model is loaded${off?.alreadyLoaded ? ' (already resident)' : ''}`);
+      if (offlineReady) log(`hybrid ASR on — the accurate offline model is loaded (${offKind})${off?.alreadyLoaded ? ' (already resident)' : ''}`);
       else log(`accurate transcription model not ready (${off?.reason ?? 'unknown'}) — this call uses streaming transcripts (the model may be downloading; the next call will use it)`);
     }
 

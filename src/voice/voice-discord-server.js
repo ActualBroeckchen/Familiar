@@ -50,7 +50,7 @@ import { enqueueSessionByDay } from '../memory/memorization.js';
 import { writeSessionLog, stampMessages, turnMessages } from '../sessions/session-log.js';
 import { slugifyLabel, sessionSlugId } from '../../slug-ids.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
-import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs } from './voice-transcribe.js';
+import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs, resolveOfflineAsr } from './voice-transcribe.js';
 
 /** Hard off-switch — same pattern as every other loop/feature. */
 function discordVoiceDisabled() {
@@ -424,7 +424,10 @@ export function attachDiscordVoice(deps) {
     onTurn,
     onReplyInterrupted,
     streamingModelDir: path.join(rootDir, MODELS_SUBDIR, `asr-streaming-${asrLang(readSettings())}`),
-    offlineModelDir: ASR_MODEL_DIR,
+    // The ward's selected offline model, resolved at call start; falls back to
+    // SenseVoice when the chosen upgrade isn't downloaded yet (deferred opt-in).
+    offlineModelDir:  () => resolveOfflineAsr(readSettings()).dir,
+    offlineModelKind: () => resolveOfflineAsr(readSettings()).kind,
     offlineFinal: () => voiceOfflineAsrEnabled(readSettings()),
     ensureOffline: () => ensureOfflineAsrModel({ rootDir, log }),
     // Coalesce sentences into one turn (don't reply over a longer thought) and

@@ -275,7 +275,8 @@ import { consentSummary, inspectInstalled, fetchPlan, MODELS_SUBDIR } from './sr
 import { measureFootprint } from './src/voice/voice-footprint.js';
 import { listClips, measureClip, cachedFeatures, catalogueSummary } from './src/voice/voice-clips.js';
 import { currentAudioWorker as currentAudioWorkerShared, listeningWorker, stopAudioWorker, VOICE_HARD_DISABLED } from './src/voice/audio-worker-current.js';
-import { hearVoiceNotes, transcribeAsset, transcriptionAllowed, correctTranscript } from './src/voice/voice-transcribe.js';
+import { hearVoiceNotes, transcribeAsset, transcriptionAllowed, correctTranscript, resolveOfflineAsr } from './src/voice/voice-transcribe.js';
+import { OFFLINE_ASR_MODELS } from './src/voice/offline-asr-models.js';
 import { enrollWard, enrollVillager, speakerModelPresent, speakerModelDir } from './src/voice/voice-enroll.js';
 import { pinAndInstallModel } from './src/voice/voice-pin.js';
 import { readVoiceprints, listVillagerPrints, deleteWardPrint, deleteVillagerPrint } from './src/voice/voiceprints.js';
@@ -2215,6 +2216,18 @@ app.post('/api/voice/ward-voice', express.raw({ type: 'audio/*', limit: '25mb' }
 app.get('/api/voice/local', async (_req, res) => {
   try { res.json({ ok: true, ...(await listLocalVoices(__dirname)) }); }
   catch (err) { res.json({ ok: false, error: String(err?.message ?? err) }); }
+});
+
+// GET the offline-ASR model choice + live state, so Settings can show which
+// model calls/voice-notes actually use, whether the selected one is downloaded,
+// and whether it fell back to SenseVoice. The `options` list drives the picker.
+app.get('/api/voice/asr-model', (_req, res) => {
+  try {
+    const s = readSettingsSync() || {};
+    const r = resolveOfflineAsr(s);
+    const options = Object.values(OFFLINE_ASR_MODELS).map((m) => ({ key: m.key, label: m.label }));
+    res.json({ ok: true, options, selected: r.selectedKey, using: r.usingKey, present: r.present, fellBack: r.fellBack });
+  } catch (err) { res.json({ ok: false, error: String(err?.message ?? err) }); }
 });
 
 // ── Voiceprint enrolment (voice Pass 4, §8) ────────────────────────────────
