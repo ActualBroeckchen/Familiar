@@ -475,6 +475,10 @@ const state = {
   voiceProactiveGreetings: true,   // group calls: say a short hello aloud when someone joins (rides the next silence, stands down under distress). Default ON.
   voiceKeepAudio: false,           // §9: record a call to an audio asset (deliberate; default OFF)
   voiceSpeakerModel: 'campplus',   // §8: which speaker-embedding model — 'campplus' (default) | 'titanet-large' (opt-in upgrade)
+  // Offline ASR model for the accurate voice-note/call transcription pass —
+  // 'sensevoice' (default, bundled) | 'whisper' | 'parakeet' (opt-in upgrades,
+  // downloaded separately; falls back to SenseVoice until installed).
+  voiceOfflineAsrModel: 'sensevoice',
   // Transient (never synced/saved): images picked in the composer, awaiting send.
   pendingAttachments: [],
 
@@ -536,7 +540,7 @@ const SERVER_SYNCED_KEYS = [
   'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode', 'voiceCallOfflineTranscribe', 'voiceCallSettleMs',
   'mediaRetentionEnabled', 'voiceNoteRetentionDays', 'voiceEscalationFactor',
   'voiceGuestPolicy', 'voiceGuestThreshold', 'voiceGuestEnterSegments', 'voiceGuestExitSegments', 'voiceGuestExitQuietSec',
-  'voiceAudioTaggingEnabled', 'voiceProactiveJoin', 'voiceProactiveGreetings', 'voiceKeepAudio', 'voiceSpeakerModel',
+  'voiceAudioTaggingEnabled', 'voiceProactiveJoin', 'voiceProactiveGreetings', 'voiceKeepAudio', 'voiceSpeakerModel', 'voiceOfflineAsrModel',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -1040,6 +1044,9 @@ function loadPersisted() {
     state.warmthQuietHoursEnd = 8;
   }
   if (!Array.isArray(state.trustedContacts)) state.trustedContacts = [];
+  if (!['sensevoice', 'whisper', 'parakeet'].includes(state.voiceOfflineAsrModel)) {
+    state.voiceOfflineAsrModel = 'sensevoice';
+  }
   migrateLegacyConnection();
 }
 
@@ -4278,6 +4285,10 @@ function readSettingsFromUI() {
   if ($('vision-threat-toggle')) state.visionThreatScoring = $('vision-threat-toggle').checked;
   if ($('voice-call-threat-toggle')) state.voiceThreatScoring = $('voice-call-threat-toggle').checked;
   if ($('voice-call-lang') && $('voice-call-lang').value) state.voiceAsrLanguage = $('voice-call-lang').value;
+  if ($('voice-offline-asr-model')) {
+    state.voiceOfflineAsrModel = ['sensevoice', 'whisper', 'parakeet'].includes($('voice-offline-asr-model').value)
+      ? $('voice-offline-asr-model').value : 'sensevoice';
+  }
   if ($('voice-call-mode')) state.voiceCallMode = $('voice-call-mode').value === 'open' ? 'open' : 'push';
   if ($('voice-call-offline-toggle')) state.voiceCallOfflineTranscribe = $('voice-call-offline-toggle').checked;
   if ($('voice-proactive-join-toggle')) state.voiceProactiveJoin = $('voice-proactive-join-toggle').checked;
@@ -4478,6 +4489,7 @@ function writeSettingsToUI() {
   if ($('vision-threat-toggle')) setIfNotFocused($('vision-threat-toggle'), 'checked', state.visionThreatScoring !== false);
   if ($('voice-call-threat-toggle')) setIfNotFocused($('voice-call-threat-toggle'), 'checked', state.voiceThreatScoring !== false);
   if ($('voice-call-lang')) setIfNotFocused($('voice-call-lang'), 'value', state.voiceAsrLanguage ?? 'en');
+  if ($('voice-offline-asr-model')) setIfNotFocused($('voice-offline-asr-model'), 'value', state.voiceOfflineAsrModel ?? 'sensevoice');
   if ($('voice-call-mode')) setIfNotFocused($('voice-call-mode'), 'value', state.voiceCallMode === 'open' ? 'open' : 'push');
   if ($('voice-call-offline-toggle')) setIfNotFocused($('voice-call-offline-toggle'), 'checked', state.voiceCallOfflineTranscribe !== false);
   if ($('voice-proactive-join-toggle')) setIfNotFocused($('voice-proactive-join-toggle'), 'checked', state.voiceProactiveJoin === true);
@@ -5927,7 +5939,7 @@ function init() {
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
     'event-alerts-toggle', 'event-alerts-lead', 'elapsed-stamp-hours',
     'weather-toggle', 'vision-enabled-toggle', 'vision-threat-toggle',
-    'voice-call-threat-toggle', 'voice-call-lang', 'voice-call-mode',
+    'voice-call-threat-toggle', 'voice-call-lang', 'voice-call-mode', 'voice-offline-asr-model',
     'voice-call-offline-toggle', 'voice-call-settle', 'voice-proactive-join-toggle', 'voice-greetings-toggle', 'audio-tagging-toggle',
     'gcal-write-toggle', 'gcal-write-command',
     'gcal-ical-urls', 'gcal-cli-calendars',
@@ -6348,6 +6360,8 @@ function init() {
   initVoiceTuning();
   initVoiceprints();
   refreshVoiceBackendPane();
+  refreshOfflineAsrModelUi();
+  $('voice-offline-asr-model')?.addEventListener('change', () => { refreshOfflineAsrModelUi(); });
   $('voice-picker-close')?.addEventListener('click', closeVoicePicker);
   $('voice-picker-done')?.addEventListener('click', closeVoicePicker);
   $('voice-picker-more')?.addEventListener('click', () => loadVoicePage(false));
@@ -8741,6 +8755,44 @@ function downloadVoiceBench() {
 // as my human browses rather than demanding a 350 MB download first.
 
 const VP = { offset: 0, limit: 40, total: 0, searchTimer: null, playing: null, chosen: null };
+
+// Short display names for the offline ASR models — the endpoint's own
+// `label` is descriptive ("SenseVoice — multilingual (default)"), fine for
+// an option row but too long for a one-line status sentence.
+const OFFLINE_ASR_SHORT_NAME = { sensevoice: 'SenseVoice', whisper: 'Whisper', parakeet: 'NeMo Parakeet' };
+
+/**
+ * Fill the offline-ASR-model picker and its status line from
+ * GET /api/voice/asr-model. Whisper/Parakeet are opt-in upgrades this UI
+ * never downloads on its own (see docs/troubleshooting.md) — this only
+ * reports what's actually installed and in use, and re-fetches itself
+ * after the select changes so picking a not-yet-downloaded model shows
+ * that immediately.
+ */
+async function refreshOfflineAsrModelUi() {
+  const sel = $('voice-offline-asr-model'), st = $('voice-offline-asr-model-state');
+  if (!sel) return;
+  try {
+    const r = await (await fetch('/api/voice/asr-model')).json();
+    if (!r?.ok) return;
+    if (Array.isArray(r.options) && r.options.length) {
+      sel.innerHTML = r.options.map(o => `<option value="${o.key}">${o.label}</option>`).join('');
+    }
+    const want = state.voiceOfflineAsrModel ?? 'sensevoice';
+    sel.value = r.options?.some(o => o.key === want) ? want : (r.selected || 'sensevoice');
+    if (st) {
+      const usingName = OFFLINE_ASR_SHORT_NAME[r.using] || r.using;
+      const selectedName = OFFLINE_ASR_SHORT_NAME[r.selected] || r.selected;
+      if (r.present && !r.fellBack) {
+        st.textContent = `Using ${usingName}.`;
+      } else if (r.selected && r.selected !== 'sensevoice' && (!r.present || r.fellBack)) {
+        st.textContent = `${selectedName} isn't downloaded yet, so calls and voice notes use SenseVoice for now. It's an opt-in upgrade — pin and install it from a checkout (see docs/troubleshooting.md), the same one-time step as the listening model.`;
+      } else {
+        st.textContent = `${selectedName} isn't installed yet.`;
+      }
+    }
+  } catch { /* leave the static hint in place */ }
+}
 
 /**
  * Fill the call-language picker from the languages actually installed.

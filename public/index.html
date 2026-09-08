@@ -310,6 +310,14 @@
             <span>Let me notice sounds in the room on a call — a dog barking, a TV, running water — so I can be a better listener to where you are. It's just for the moment; these sounds are never saved and never change how I read your safety. Needs the small audio-tagging model. Off by default.</span>
           </label>
 
+          <h4 class="section-label" style="margin-top:16px; font-size:0.9em; opacity:0.85">Voice transcription model</h4>
+          <p class="field-hint">Whisper and NeMo Parakeet are more accurate than the default, SenseVoice, but they aren't bundled — picking one here doesn't download anything on its own. Getting one running is a one-time, deliberate step from a checkout (pin + install the model, the same way the listening model itself is set up — see docs/troubleshooting.md), so calls and voice notes keep using SenseVoice until it's actually in place.</p>
+          <div class="action-row" style="margin-top:8px; align-items:center; gap:8px; flex-wrap:wrap">
+            <label for="voice-offline-asr-model" style="font-size:0.85em">Voice transcription model</label>
+            <select id="voice-offline-asr-model" aria-label="Voice transcription model"></select>
+          </div>
+          <p class="field-hint" id="voice-offline-asr-model-state" style="margin-top:6px" aria-live="polite"></p>
+
           <h4 class="section-label" style="margin-top:16px; font-size:0.9em; opacity:0.85">Who's speaking (voiceprint)</h4>
           <p class="field-hint">If I learn your voice, I can tell on a call when someone else is in the room and keep our private things private until we're alone again. Your voiceprint stays on this machine and is never synced.</p>
           <div class="action-row" style="margin-top:8px; align-items:center; gap:8px; flex-wrap:wrap">

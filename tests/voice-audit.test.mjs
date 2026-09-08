@@ -149,13 +149,23 @@ test('voice notes are capped per message, and the cap matches what I can hear', 
 // ── B: config I could not verify, so stopped relying on ───────────
 
 test('the recogniser states its feature config instead of inheriting one', async () => {
-  const worker = await read('src/voice/audio-worker.mjs');
-  const fn = worker.slice(worker.indexOf('function buildRecognizer('));
-  const body = fn.slice(0, fn.indexOf('\n}\n'));
-  // I could not confirm from the installed package whether an absent
-  // `featConfig` leaves sherpa's C++ defaults or zeroes them, and a zeroed
-  // sample rate produces garbage rather than an error.
-  assert.match(body, /featConfig: \{ sampleRate: 16000, featureDim: 80 \}/);
+  // Behaviour, not source text: the config the worker feeds sherpa must STATE
+  // the 16 kHz / 80-dim fbank rather than inherit it (an absent featConfig may
+  // leave the C++ defaults or zero them; a zeroed sample rate produces garbage,
+  // not an error). Assert the pure builder's output for every model family,
+  // since that is what the worker now wraps (offline-asr-models.js). The old
+  // version scraped buildRecognizer's source for the literal and broke the
+  // moment the config moved into the shared builder, though nothing real changed.
+  const { offlineRecognizerConfig } = await import('../src/voice/offline-asr-models.js');
+  const filesByKind = {
+    sensevoice: ['model.int8.onnx', 'tokens.txt'],
+    whisper:    ['enc-encoder.onnx', 'dec-decoder.onnx', 'tokens.txt'],
+    parakeet:   ['encoder.onnx', 'decoder.onnx', 'joiner.onnx', 'tokens.txt'],
+  };
+  for (const [kind, files] of Object.entries(filesByKind)) {
+    const cfg = offlineRecognizerConfig({ kind, files, at: (f) => f });
+    assert.deepEqual(cfg.featConfig, { sampleRate: 16000, featureDim: 80 }, `${kind} states featConfig`);
+  }
 });
 
 // ── The meta-check: no new orphans ────────────────────────────────
