@@ -232,6 +232,8 @@ If you're asking yourself... go to:
   assembled server-side, and the lesson about cross-surface consistency.
 - [Autonomous loops](autonomous-loops) — the background workers, what each one does, and how
   to turn one off.
+- [Pondering](pondering) — the autonomous pondering loop, how the Familiar thinks aloud
+  at a cadence weighted by interest and threat level.
 - [Safety spine](safety-spine) — crisis detection, threat tracking, and how escalation to a
   human trusted contact works.
 - [Injection guard: wiring history](injection-guard-gap) — the pattern-scanner's
@@ -244,6 +246,8 @@ If you're asking yourself... go to:
   multi-writer log merge that makes that safe, and the composer-safe live-sync poller.
 - [Installer and launcher](installer-and-launcher) — the per-platform one-click install,
   update, and launch tooling, and the invariants it must preserve.
+- [Update](update) — the self-update mechanism, detection, and the design choice to never
+  update automatically without the ward's consent.
 - [Entity-as-subject](../concepts/entity-as-subject) and
   [Multi-embodiment](../concepts/multi-embodiment) — the design stance this architecture
   exists to serve.
