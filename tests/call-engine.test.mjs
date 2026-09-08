@@ -492,6 +492,74 @@ test('a queued proactive item resolves false if the call ends before a gap opens
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
+// ── injectTextTurn — the text-in-voice interleave entry point ──────────────
+// A typed message becomes a turn that rides the SAME machinery a spoken one does:
+// onTurn is called with the text, the reply is played by the adapter, and the
+// turn is tagged source:'text' carrying the caller's opaque textNotes.
+
+test('injectTextTurn runs a turn and speaks the reply (rides the spoken-turn path)', async () => {
+  const dir = await tmp();
+  try {
+    const rec = { played: [] };
+    const turns = [];
+    const engine = createCallEngine({
+      worker: fakeWorker(),
+      onTurn: async (t, ctx) => { turns.push({ t, ctx }); return `SPOKEN:${t}`; },
+      tomesDir: dir,
+    });
+    engine.registerCallAdapter(fakeAdapterFactory(rec));
+    await engine.startCall('fake');
+
+    const ok = engine.injectTextTurn('ward', '  that word was Phylactery  ', { textNotes: ['[an image shared in the call chat] a cat'] });
+    assert.equal(ok, true, 'a live call accepts the injected text');
+    await tick();
+
+    assert.equal(turns.length, 1, 'exactly one turn fired from the typed message');
+    assert.equal(turns[0].t, 'that word was Phylactery', 'the transcript is the trimmed typed text');
+    assert.equal(turns[0].ctx.speakerRef, 'ward');
+    assert.equal(turns[0].ctx.source, 'text', 'the turn is marked as text-sourced');
+    assert.deepEqual(turns[0].ctx.textNotes, ['[an image shared in the call chat] a cat'], 'image notes ride to onTurn');
+    assert.equal(rec.played[0].reply, 'SPOKEN:that word was Phylactery', 'the reply was spoken into the call');
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('injectTextTurn refuses when no call is live, and on empty text', async () => {
+  const dir = await tmp();
+  try {
+    const rec = { played: [] };
+    const turns = [];
+    const engine = createCallEngine({ worker: fakeWorker(), onTurn: async (t) => { turns.push(t); return 'x'; }, tomesDir: dir });
+    engine.registerCallAdapter(fakeAdapterFactory(rec));
+
+    assert.equal(engine.injectTextTurn('ward', 'hello'), false, 'no call → refused');
+    await engine.startCall('fake');
+    assert.equal(engine.injectTextTurn('ward', '   '), false, 'empty text → refused');
+    await tick();
+    assert.equal(turns.length, 0, 'neither refused case fired a turn');
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('a SPOKEN turn is source:voice with no textNotes (injectText adds no drag to speech)', async () => {
+  const dir = await tmp();
+  try {
+    const worker = fakeWorker();
+    const rec = { played: [] };
+    const turns = [];
+    const engine = createCallEngine({ worker, onTurn: async (_t, ctx) => { turns.push(ctx); return 'x'; }, tomesDir: dir });
+    engine.registerCallAdapter(fakeAdapterFactory(rec));
+    await engine.startCall('fake');
+    await rec.hooks.pushAudio({ callId: 'c1', speakerRef: 'ward', pcm: Buffer.alloc(320) });
+    const open = worker.calls.requests.find((r) => r.op === 'asrStream');
+    worker.emit({ op: 'asr-final', streamId: open.streamId, text: 'spoken words' });
+    await tick();
+    assert.equal(turns[0].source, 'voice', 'a mic turn is voice-sourced');
+    assert.equal(turns[0].textNotes, null, 'and carries no text notes');
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
 test('one call at a time; a second start is refused as busy', async () => {
   const dir = await tmp();
   try {

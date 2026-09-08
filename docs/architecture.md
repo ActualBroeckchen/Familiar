@@ -3035,6 +3035,30 @@ annotation-only). The audio-tagging model still needs its live pin
 speaker models. The long-term care-detection ambition on top of §8.4 is a
 separate, ward-signed spec and deliberately NOT built here.
 
+- **Text-in-voice interleave (`voice-discord-server.js` + `call-engine.js`)** — a
+  Discord voice channel carries a small attached text chat that shares the voice
+  channel's id. While a call is live there, a message TYPED into that chat becomes
+  a spoken turn interleaved into the same call: the repair path ("that word was
+  'Phylactery', not 'philosophy'") and a way to show me a picture mid-call. The
+  gateway intercepts a MESSAGE_CREATE on the live call's channel
+  (`isCallOnChannel`) and hands it to `handleCallText`, which resolves the speaker
+  itself (ward / registered villager / stranger — a stranger falls through to
+  normal text handling, fail-closed; my own + other bots' messages are skipped),
+  then feeds it through the engine's new **`injectTextTurn`** — the SAME
+  `handleTurn` → `runOneTurn` → `onTurn` → adapter-playback machinery a spoken turn
+  uses, so the reply is spoken aloud and the turn is gated to the call's audience
+  (who can HEAR it — the VC roster's lowest clearance) and stored in the same
+  per-tag session. The engine stays transport-neutral: a text turn is just a turn
+  tagged `source:'text'` carrying opaque `textNotes`. **Images:** an image shared
+  in the call chat is ingested at the CALL's audience tag (via `ingestDiscordMedia`,
+  which keeps the ward/villager-yes / stranger-never gate) and DESCRIBED
+  (`describeAsset`, look-once-keep-forever), and the description rides in as a
+  one-off `textNotes` note — so I can talk about a picture even on a voice model
+  that can't see. A caption + image → caption is the turn, image rides as a note;
+  an image with no caption → the description becomes the turn. Off-switch
+  `PROTO_FAMILIAR_VOICE_TEXT_INTERLEAVE_DISABLED=1` (default ON; falls the whole
+  feature back to normal text handling).
+
 ## Security design
 
 - **API key handling:** key travels browser → `localhost` only. Server
