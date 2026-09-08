@@ -122,7 +122,7 @@ still shifts its *register* — moderate-or-higher renders a tier line in the de
 and a genuinely alarming read is handed to triage rather than answered with a casual reach-out —
 but the turn itself is never skipped. Because it acts on the ward's safety-adjacent surface, any
 change to when or whether noticing acts requires the same sign-off as the triage files
-[@claude-md].
+[@claude-md]. See [Noticing](noticing) for the architecture of outcome tracking, the anti-nag ledger that prevents repeated asks, and the role-fix that ensures the Familiar's own reflection is framed as entity-as-subject rather than being operated.
 
 ## Shared self-observation: the wait-streak line
 
@@ -162,6 +162,7 @@ attention, distinguishing "nothing has happened" from "nothing can happen."
 
 ## Related
 
+- [Noticing](noticing) — the autonomous loop that surfaces aging commitments and overdue events, the no-nag ledger, and how it integrates with entity-as-subject framing.
 - [Pondering](pondering) — the autonomous thought loop, its cadence, and the `read_pondering` tool.
 - [Safety spine](safety-spine) — the crisis-detection and escalation machinery
   silence-triage sits on top of.
