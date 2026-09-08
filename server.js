@@ -57,7 +57,8 @@ import { recordThreat, resetThreat, getThreat, getThreatHistory } from './src/sa
 import { ponderOnce } from './src/pondering/pondering.js';
 import { startPonderingLoop, stopPonderingLoop, isRunning as ponderingRunning, clampChance } from './src/pondering/pondering-loop.js';
 import { startNoticingLoop, stopNoticingLoop, resetNoticingCooldown, isRunning as noticingRunning } from './src/safety/noticing-loop.js';
-import { buildNoticingPrompt, AGING_INTENT_MS, AGING_TASK_MS, OVERDUE_EVENT_GRACE_MS } from './src/safety/noticing.js';
+import { buildNoticingPrompt, noticingMessages, AGING_INTENT_MS, AGING_TASK_MS, OVERDUE_EVENT_GRACE_MS } from './src/safety/noticing.js';
+import { readAskedMap, writeAskedMap, filterRecentlyAsked, stampAsked, pruneAsked } from './src/safety/noticing-outcomes.js';
 import { getContactBaseline, weekdayClass } from './src/safety/contact-baselines.js';
 import { getWaitStreak, recordWait, recordProactive } from './src/safety/wait-streak.js';
 import {
@@ -6579,13 +6580,25 @@ async function gatherNoticingWakeInputs() {
   // therapy 2 weeks ago) ride in `linked`. Scoping to what's reachable naturally
   // limits this to events that MATTER (carry consequences), not every past speck.
   const seenOverdue = new Set();
-  const overdueEvents = [...nodes, ...linked].filter(n => {
+  const allOverdue = [...nodes, ...linked].filter(n => {
     if (n?.type !== 'event' || n.resolution || !n.id || seenOverdue.has(n.id)) return false;
     const t = Date.parse(n.end || n.when || '');
     if (!Number.isFinite(t) || t >= nowMs - OVERDUE_EVENT_GRACE_MS) return false;
     seenOverdue.add(n.id);
     return true;
-  }).slice(0, 3);
+  }).map(n => ({
+    id: n.id, label: n.label ?? n.id, when: n.when, end: n.end,
+    atMs: Date.parse(n.end || n.when || ''),
+  }));
+
+  // Dedup (ward-signed): an event I already ASKED about is suppressed until the
+  // cooldown passes, so I don't nag — it re-surfaces after, still unresolved, and
+  // I close it then (the look-back window still holds my human's answer). Prune
+  // the ledger against what's still live so it can't grow without bound.
+  const askedMap = await readAskedMap(TOMES_DIR);
+  const prunedAsked = pruneAsked(askedMap, allOverdue.map(e => e.id), { now: nowMs });
+  if (JSON.stringify(prunedAsked) !== JSON.stringify(askedMap)) writeAskedMap(TOMES_DIR, prunedAsked).catch(() => {});
+  const overdueEvents = filterRecentlyAsked(allOverdue, prunedAsked, { now: nowMs }).slice(0, 3);
 
   return {
     dueIntentions: Array.isArray(dueRes?.due) ? dueRes.due : [],
@@ -6606,44 +6619,69 @@ async function gatherNoticingWakeInputs() {
 // The bounded, tool-using deliberation. Composes the noticing toolset, runs
 // the tool-call loop, and reports which tools were EFFECTIVELY called (a
 // reach-out refused during quiet hours is not counted as acting).
-async function noticingDeliberate({ situationReport, threatTier, quietHours }) {
+async function noticingDeliberate({ situationReport, threatTier, quietHours, conditions = [] }) {
   const s = readSettingsSync();
   const conn = connectionForFeature(s, 'noticing');
   if (!conn?.apiKey || !conn?.model) return { toolNamesCalled: [] };
 
   const nowMs = Date.now();
-  const [{ static: identity }, lastAct, recentMessages, recentMemories] = await Promise.all([
+
+  // The overdue events this turn surfaces (already dedup-filtered upstream). Each
+  // carries its id (so I can actually close it) and age. The oldest one sets how
+  // far back I read the conversation — the whole point, so a day of unrelated
+  // chatter can't bury the exchange where my human said how something went.
+  const openEvents = (Array.isArray(conditions) ? conditions : [])
+    .filter(c => c.kind === 'overdue_event' && c.event?.id && Number.isFinite(c.event?.atMs))
+    .map(c => ({ id: c.event.id, label: c.event.label, atMs: c.event.atMs, agoText: plainInterval(c.event.atMs, nowMs), snippet: null }));
+  const oldestAtMs = openEvents.length ? Math.min(...openEvents.map(e => e.atMs)) : null;
+  const spanText = oldestAtMs != null ? plainInterval(oldestAtMs, nowMs) : '';
+
+  const [{ static: identity }, lastAct, recentMemories] = await Promise.all([
     enrich('', { staticOnly: true }).catch(() => ({ static: '' })),
     getLastUserActivity().catch(() => null),
-    // Same recent context a live chat turn / warm reach-out gets, so noticing
-    // isn't deciding blind to what was just said or what I hold from the last
-    // day or two. Information only — no suppression, no stand-down (ward
-    // decision); the no-look-away-at-threat posture is unchanged.
-    getRecentSessionMessages({ limit: 6 }).catch(() => []),
     getRecentMemoryLines({ days: 2, limit: 8, now: nowMs }).catch(() => ''),
   ]);
+  // Recent conversation: when there's an open outcome, read back to the OLDEST
+  // open event (capped) rather than a fixed 6-turn tail — so my human's answer,
+  // even said hours ago and buried under later chatter, is actually in front of
+  // me to close on. Information only; never a stand-down cue.
+  const recentMessages = await getRecentSessionMessages(
+    oldestAtMs != null ? { since: oldestAtMs, max: 60 } : { limit: 6 },
+  ).catch(() => []);
+
   const nowBlock = buildTimeAnchorBlock({
     now: nowMs, lastUserMessageAt: lastAct?.ts ?? null, timeZone: s?.wardTimeZone || null,
     // Noticing is a ward-private deliberation → full weather line, in the
     // ward's chosen unit.
     weatherLine: readWeatherNowLine({ unit: s?.weatherUnit }),
   });
-  const prompt = substituteMacros(buildNoticingPrompt({
+  const noticingBody = substituteMacros(buildNoticingPrompt({
     // flag_distress is in the noticing toolset now, so the prompt's
     // hand-to-triage clause names a lever the Familiar can actually pull.
-    nowBlock, situationReport, threatTier, hasFlagDistress: true,
+    nowBlock, openEvents, otherItems: situationReport, spanText, threatTier, hasFlagDistress: true,
     recentConversation: formatRecentMessagesForContext(recentMessages, nowMs),
     recentMemories,
   }), s);
-  const messages = [
-    ...(identity ? [{ role: 'system', content: identity }] : []),
-    { role: 'user', content: prompt },
-  ];
+  // Role (ward decision): the Familiar's own reflection rides as SYSTEM, next to
+  // identity — never a `user` turn, which framed it as being operated. A bare,
+  // non-speaking cue fills the `user` slot only because several providers refuse
+  // a completion with no user turn at all. (Assembly is a pure helper so the role
+  // decision is pinned by a test.)
+  const messages = noticingMessages({ identity, body: noticingBody });
   const tools = composeNoticingTools(s);
 
   let nextCheckInMs = null;
   const effectiveNames = [];
+  // Which surfaced events the turn actually CLOSED (a real schedule_resolve on
+  // the event id) — the enforcement signal: a close is a written resolution, not
+  // the model's say-so. Drives both "acted" and the no-nag ledger below.
+  const resolvedEventIds = new Set();
+  const openEventIds = new Set(openEvents.map(e => e.id));
   const executeTool = async (name, argsJson, ctx) => {
+    if (name === 'schedule_resolve') {
+      try { const a = argsJson ? JSON.parse(argsJson) : {}; if (a?.id && openEventIds.has(a.id)) resolvedEventIds.add(a.id); }
+      catch { /* a malformed id just doesn't count as a close */ }
+    }
     if (name === 'set_next_check') {
       let a = {}; try { a = argsJson ? JSON.parse(argsJson) : {}; } catch { /* ignore */ }
       const min = Number(a.minutes);
@@ -6690,6 +6728,26 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours }) {
     // A whole-loop failure surfaces as deliberation_failed upstream.
     throw err;
   }
+
+  // Enforcement + the no-nag ledger. An event the turn RESOLVED is closed (it
+  // drops out of "overdue" on its own next tick — a written resolution, never
+  // the model's word). An open event the turn ASKED about (a reach-out actually
+  // went out, and it wasn't resolved) is stamped so it isn't re-asked until the
+  // cooldown. Anything else is left to surface again. Logged per event so a loop
+  // that never closes is visible, not silent.
+  if (openEvents.length) {
+    const reachedOut = effectiveNames.includes('reach_out_to_ward');
+    const askedIds = reachedOut ? openEvents.map(e => e.id).filter(id => !resolvedEventIds.has(id)) : [];
+    for (const e of openEvents) {
+      const outcome = resolvedEventIds.has(e.id) ? 'closed' : (askedIds.includes(e.id) ? 'asked' : 'left');
+      console.log(`[noticing] overdue event ${e.id} (${e.label}): ${outcome}`);
+    }
+    if (askedIds.length) {
+      const cur = await readAskedMap(TOMES_DIR);
+      await writeAskedMap(TOMES_DIR, stampAsked(cur, askedIds, nowMs));
+    }
+  }
+
   return { toolNamesCalled: effectiveNames, nextCheckInMs };
 }
 
