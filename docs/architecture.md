@@ -3083,3 +3083,28 @@ separate, ward-signed spec and deliberately NOT built here.
   build instruction for the Phylactery milestone (A→B→G→…).
 - [`docs/research/`](research/) — research notes that feed future
   design decisions (task-handling obstacles, etc.).
+
+## Offline ASR model choice (0.11.84)
+
+The voice-note / call FINAL transcription model is ward-selectable. `offline-asr-models.js`
+is the single source of truth: three entries keyed `sensevoice` (default, multilingual,
+bundled), `whisper` (opt-in, multilingual, more accurate, heavier), `parakeet` (opt-in,
+English-only NeMo transducer — the one that supports hotword/name biasing). Each has its own
+`models/audio/<dir>` so switching never overwrites another, and a `kind` that drives the
+recogniser config.
+
+- **Config is a pure function.** `offlineRecognizerConfig({kind,files,at})` returns the sherpa
+  `OfflineRecognizer` config for the family (senseVoice / whisper / transducer), discovering
+  encoder/decoder/joiner/model files by shape (names differ per family + quantisation). The
+  worker's `buildRecognizer` just lists the dir and wraps it — so the branching is unit-tested
+  without the engine or a real model. Unknown kind → SenseVoice (degrade to the working path).
+- **Selection + fallback.** `resolveOfflineAsr(settings)` (voice-transcribe.js) picks the
+  selected model if it's downloaded, else falls back to SenseVoice if THAT is present, else
+  none (the streaming text carries the final). Both voice servers pass it to the engine as
+  `offlineModelDir`/`offlineModelKind` resolvers (evaluated at call start), so choosing an
+  upgrade that isn't fetched yet never breaks a call.
+- **Download is opt-in.** Whisper/Parakeet are in the catalogue but UNPINNED, so the fetch
+  machinery refuses to download them until the ward pins them: `npm run pin:whisper` /
+  `npm run pin:parakeet` (then install). `GET /api/voice/asr-model` reports
+  `{options, selected, using, present, fellBack}` for the Settings picker. Setting:
+  `voiceOfflineAsrModel` (synced, default `sensevoice`).

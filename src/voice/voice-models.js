@@ -53,7 +53,7 @@ const TIER_ROLES = {
  * Opt-in extras. Never implied by a tier — each is fetched only when the ward
  * names it, with its size stated at the point of choice (§0.7).
  */
-const EXTRA_ROLES = ['asr-offline', 'lid', 'kws', 'punct', 'tagging'];
+const EXTRA_ROLES = ['asr-offline', 'asr-offline-whisper', 'asr-offline-parakeet', 'lid', 'kws', 'punct', 'tagging'];
 
 /**
  * §0.7 ceilings, in bytes. These are the budget the build is measured
@@ -281,6 +281,41 @@ const BASE_MODELS = Object.freeze([
      * plus tokens.txt and the sample wavs. If either ever disagrees, what was
      * downloaded is not what upstream published.
      */
+    files: [],
+  },
+  {
+    // OPT-IN offline-ASR upgrade #1 — Whisper. NOT in any tier/extras by default
+    // and deliberately UNPINNED, so it is never fetched on its own: choosing it
+    // in Settings costs nothing until the ward pins + installs it (the repo
+    // refuses to download an unpinned model). Multilingual, markedly better
+    // English than SenseVoice, heavier + slower, 30 s input window. Unpacks to
+    // models/audio/asr-offline-whisper/ (offline-asr-models.js `dir`). The
+    // upstream asset below is the INTENDED sherpa-onnx release; the exact name
+    // must be confirmed + pinned (scripts/pin-audio-models.mjs) before a fetch
+    // will run — that confirmation IS the opt-in.
+    id: 'asr-offline-whisper',
+    role: 'asr-offline-whisper',
+    engine: null,
+    lang: 'multi',
+    label: 'Offline ASR upgrade — Whisper (multilingual, more accurate)',
+    why: 'Optional voice-note/call accuracy upgrade that keeps both languages.',
+    estBytes: 800 * MB,
+    upstream: { tag: 'asr-models', asset: 'sherpa-onnx-whisper-medium.int8.tar.bz2' },
+    files: [],
+  },
+  {
+    // OPT-IN offline-ASR upgrade #2 — NeMo Parakeet. Same opt-in/unpinned rules.
+    // ENGLISH ONLY, so not for a bilingual call — but a transducer, so it is the
+    // one offline model that supports hotword biasing (feeding it names), and it
+    // is very accurate on English. Unpacks to models/audio/asr-offline-parakeet/.
+    id: 'asr-offline-parakeet',
+    role: 'asr-offline-parakeet',
+    engine: null,
+    lang: 'en',
+    label: 'Offline ASR upgrade — NeMo Parakeet (English only, name hints)',
+    why: 'Optional English-only accuracy upgrade with name/hotword biasing.',
+    estBytes: 650 * MB,
+    upstream: { tag: 'asr-models', asset: 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2' },
     files: [],
   },
   {

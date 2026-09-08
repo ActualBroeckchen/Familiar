@@ -31,7 +31,7 @@ import { createSynthesizer } from './voice-synthesize.js';
 import { scoreMessage } from '../safety/crisis-signals.js';
 import { recordThreat } from '../safety/threat-tracker.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
-import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs } from './voice-transcribe.js';
+import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs, resolveOfflineAsr } from './voice-transcribe.js';
 import { enqueueSessionByDay } from '../memory/memorization.js';
 import { writeSessionLog, stampMessages, turnMessages } from '../sessions/session-log.js';
 import { sessionSlugId } from '../../slug-ids.js';
@@ -355,7 +355,10 @@ export function attachVoiceCall(deps) {
     onTurn,
     onReplyInterrupted,
     streamingModelDir: path.join(rootDir, MODELS_SUBDIR, `asr-streaming-${asrLang(readSettings())}`),
-    offlineModelDir: ASR_MODEL_DIR,
+    // The ward's selected offline model, resolved at call start; falls back to
+    // SenseVoice when the chosen upgrade isn't downloaded yet (deferred opt-in).
+    offlineModelDir:  () => resolveOfflineAsr(readSettings()).dir,
+    offlineModelKind: () => resolveOfflineAsr(readSettings()).kind,
     offlineFinal: () => voiceOfflineAsrEnabled(readSettings()),
     ensureOffline: () => ensureOfflineAsrModel({ rootDir, log }),
     // Settle only in open-mic mode — push-to-talk's release IS the definitive end,
