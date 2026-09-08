@@ -42,23 +42,74 @@ function fromInt16(arr) {
   return Buffer.from(arr.buffer, arr.byteOffset, arr.length * 2);
 }
 
+// Windowed-sinc low-pass FIR, cached by (inRate,cutoff,taps). Hamming window,
+// unity DC gain. Cheap to build, reused across a call's utterances.
+const _firCache = new Map();
+function lowPassFir(inRate, cutoffHz, taps) {
+  const key = `${inRate}:${cutoffHz}:${taps}`;
+  let h = _firCache.get(key);
+  if (h) return h;
+  h = new Float64Array(taps);
+  const fc = cutoffHz / inRate;          // normalised cutoff (cycles/sample)
+  const mid = (taps - 1) / 2;
+  let sum = 0;
+  for (let n = 0; n < taps; n++) {
+    const x = n - mid;
+    const sinc = x === 0 ? 2 * fc : Math.sin(2 * Math.PI * fc * x) / (Math.PI * x);
+    const w = 0.54 - 0.46 * Math.cos((2 * Math.PI * n) / (taps - 1));  // Hamming
+    h[n] = sinc * w;
+    sum += h[n];
+  }
+  for (let n = 0; n < taps; n++) h[n] /= sum;   // normalise to unity DC gain
+  _firCache.set(key, h);
+  return h;
+}
+
 /**
- * Linear-interpolation resample of a mono Int16Array from inRate to outRate.
- * Linear is plenty for speech at these ratios (3:1 down, 2:1 up) and needs no
- * FIR/anti-alias table — the whole point of staying pure-JS with no native lib.
+ * Resample a mono Int16Array from inRate to outRate.
+ *
+ * DOWNsampling anti-aliases FIRST. This used to be plain linear interpolation,
+ * which for 48k→16k (an exact 3:1 ratio) reduces to picking every 3rd sample —
+ * NO filtering at all, so everything above the 8 kHz output Nyquist folds back
+ * into the speech band. That aliasing is what smeared sibilants and fricatives
+ * ("cyber"→"ciber", "selection"→"celectio") before the recogniser ever ran.
+ * Now a windowed-sinc low-pass (cutoff just under the output Nyquist) removes
+ * those highs before decimation. UPsampling never aliases, so it stays plain
+ * linear interpolation (and equal rates are a no-op passthrough).
  */
 export function resampleMono(mono, inRate, outRate) {
   if (inRate === outRate) return mono;
+  let src = mono;
+  if (outRate < inRate) {
+    // Filter at the INPUT rate; cutoff a hair under the output Nyquist so the
+    // transition band is inside what survives decimation.
+    const fir = lowPassFir(inRate, 0.45 * outRate, 31);
+    const taps = fir.length, mid = (taps - 1) >> 1, n = mono.length;
+    const filt = new Int16Array(n);
+    for (let i = 0; i < n; i++) {
+      let acc = 0, wsum = 0;
+      for (let k = 0; k < taps; k++) {
+        const idx = i + k - mid;
+        if (idx >= 0 && idx < n) { acc += mono[idx] * fir[k]; wsum += fir[k]; }
+      }
+      // Renormalise by the weight ACTUALLY applied, so a partial kernel at the
+      // first/last few samples still has unity DC gain — a constant tone stays
+      // constant to the edges instead of dipping (no boundary transient).
+      const v = wsum ? acc / wsum : 0;
+      filt[i] = v < -32768 ? -32768 : v > 32767 ? 32767 : Math.round(v);
+    }
+    src = filt;
+  }
   const outLen = Math.max(0, Math.floor((mono.length * outRate) / inRate));
   const out = new Int16Array(outLen);
   const step = inRate / outRate;
-  const lastIdx = mono.length - 1;
+  const lastIdx = src.length - 1;
   for (let j = 0; j < outLen; j++) {
     const pos = j * step;
     const i = Math.floor(pos);
     const frac = pos - i;
-    const a = mono[i] ?? 0;
-    const b = mono[Math.min(i + 1, lastIdx)] ?? a;
+    const a = src[i] ?? 0;
+    const b = src[Math.min(i + 1, lastIdx)] ?? a;
     out[j] = (a * (1 - frac) + b * frac) | 0;
   }
   return out;

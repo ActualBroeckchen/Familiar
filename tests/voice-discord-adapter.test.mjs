@@ -396,3 +396,37 @@ test('isolatedDecoderFrom: mono-only channelData still yields stereo (dupe), and
   dec.delete();
   assert.equal(freed, true);
 });
+
+// ── Anti-aliased downsampling (0.11.83) ─────────────────────────────────────
+// 48k→16k was an exact 3:1 ratio, so the old linear interp reduced to naive
+// decimation (pick every 3rd sample) with no low-pass — aliasing everything
+// above 8 kHz into the speech band. These prove the low-pass now suppresses a
+// >Nyquist tone while passing a low one, and that lengths/passthrough hold.
+const rms = (a) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * a[i]; return Math.sqrt(s / (a.length || 1)); };
+function tone(freq, rate, secs, amp = 10000) {
+  const n = Math.floor(rate * secs);
+  const out = new Int16Array(n);
+  for (let i = 0; i < n; i++) out[i] = Math.round(amp * Math.sin(2 * Math.PI * freq * i / rate));
+  return out;
+}
+
+test('resampleMono: a 12 kHz tone (above the 8 kHz output Nyquist) is strongly attenuated, not aliased down', () => {
+  const out = resampleMono(tone(12000, 48000, 0.2), 48000, 16000);
+  // Naive decimation would alias 12 kHz → 4 kHz at nearly full amplitude (~7000 RMS).
+  // The low-pass must knock it well down.
+  assert.ok(rms(out) < 1500, `aliased tone not suppressed: rms=${rms(out).toFixed(0)}`);
+});
+
+test('resampleMono: a 500 Hz tone survives the downsample largely intact', () => {
+  const inTone = tone(500, 48000, 0.2);
+  const out = resampleMono(inTone, 48000, 16000);
+  // Passband: most of the energy is kept (allow for filter/quantisation loss).
+  assert.ok(rms(out) > 0.8 * rms(inTone), `passband tone lost too much: in=${rms(inTone).toFixed(0)} out=${rms(out).toFixed(0)}`);
+});
+
+test('resampleMono: length still scales by ratio, equal rates still passthrough', () => {
+  const a = Int16Array.from([1, 2, 3]);
+  assert.equal(resampleMono(a, 16000, 16000), a);                 // same ref
+  assert.equal(resampleMono(tone(300, 48000, 0.1), 48000, 16000).length, Math.floor(4800 / 3));
+  assert.equal(resampleMono(Int16Array.from([1,2,3,4]), 24000, 48000).length, 8);   // upsample unaffected
+});
