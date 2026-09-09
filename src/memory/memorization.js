@@ -478,6 +478,8 @@ temporality — did this HAPPEN, or is it just TRUE now?
   Both, or unsure → "episodic". A dated memory is the safe default; the standing truth can still surface from it.
 
 confidence — 0.0 to 1.0, how sure I am I've got it right. I drop anything below 0.4. This is about whether the thing happened, not who it's about — a fuzzy referent doesn't lower it (I mark that unresolved in the note instead).
+
+attribution_confidence — OPTIONAL, 0.0 to 1.0: how sure I am WHO the fact is about. I add it (low, around 0.3) only when I've marked a referent unresolved above; I omit it when I'm sure. It never drops the fact — it just tells my recall to lean on it gently until a later pass resolves who.
 ${scheduleRules}${scheduleLegendBlock}
 ### Field rules — relations
 
@@ -560,6 +562,8 @@ ${CONTENT_TAG_FIELD_RULE}
 temporality — "episodic" for something from this day (a mood, an event, what happened); "standing" for a fact that's just generally true now (a job, where someone lives, a lasting preference). Unsure or both → "episodic".
 
 confidence — 0.0 to 1.0. I drop anything below 0.4. This is about whether the thing happened, not who it's about — a fuzzy referent doesn't lower it (I mark that unresolved in the note instead).
+
+attribution_confidence — OPTIONAL, 0.0 to 1.0: how sure I am WHO the fact is about. I add it (low, around 0.3) only when I've marked a referent unresolved above; I omit it when I'm sure. It never drops the fact — it just tells my recall to lean on it gently until a later pass resolves who.
 
 ### Field rules — relations
 
@@ -969,6 +973,12 @@ async function processJob(job) {
     if (!content) continue;
     const confidence = typeof fact.confidence === 'number' ? fact.confidence : 1.0;
     if (confidence < 0.4) continue; // low-confidence skip per §3
+    // Attribution confidence (WHO it's about) is a SEPARATE axis — it never
+    // culls the fact (no <0.4 skip); it only rides through so recall can
+    // downweight a fuzzy-attribution memory. Omitted/out-of-range → undefined,
+    // which Phylactery treats as fully attributed.
+    const attributionConfidence = typeof fact.attribution_confidence === 'number'
+      ? Math.max(0, Math.min(1, fact.attribution_confidence)) : undefined;
     const category = REMEMBER_CATS.includes(fact.category) ? fact.category : 'basics';
     const subjectNames = Array.isArray(fact.subjects) ? fact.subjects : [];
 
@@ -1039,6 +1049,7 @@ async function processJob(job) {
       contentTag,
       consent_pending: gate === 'ask',
       confidence,
+      ...(attributionConfidence !== undefined ? { attributionConfidence } : {}),
       slug,
       ...(scheduleRefs.length ? { sourceMeta: { schedule_refs: scheduleRefs } } : {}),
     });
