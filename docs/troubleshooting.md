@@ -481,6 +481,7 @@ is not an off-switch.
 | `PROTO_FAMILIAR_VOICE_GREETINGS_DISABLED` | the spoken hello when someone joins a group call (presence/labels stay on) |
 | `PROTO_FAMILIAR_VOICE_BARGE_DISABLED` | barge-in — the Familiar stopping when someone speaks over it in a call (falls back to the web browser's own barge; disables the noise-robust partial-driven interrupt) |
 | `PROTO_FAMILIAR_VOICE_TEXT_INTERLEAVE_DISABLED` | typing in a Discord voice channel's attached text chat during a call — the Familiar reading it and answering by voice (and describing an image shared there). Falls back to treating those messages as normal text |
+| `PROTO_FAMILIAR_PROACTIVE_SESSION_DISABLED` | recording proactive messages (reminders, event alerts, "a thought from me", triage check-ins) into your shared session so the Familiar knows it sent them and your reply has context (esp. Discord DMs). Delivery is unaffected either way |
 | `PROTO_FAMILIAR_VISION_DISABLED` | seeing images |
 | `PROTO_FAMILIAR_VISION_THREAT_DISABLED` | an image raising your Familiar's concern |
 | `PROTO_FAMILIAR_ZAI_VISION_DISABLED` | the z.ai Coding-Plan vision route |

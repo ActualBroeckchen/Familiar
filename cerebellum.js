@@ -94,6 +94,7 @@ import {
   isConnected as googleConnected,
 } from './src/gcal/gcal-google.js';
 import { getRecentOfferInfo, rekeySurfaceEventIds } from './src/pondering/surface-events.js';
+import { appendWardProactiveTurn, isWardConversationalKind } from './src/sessions/proactive-session.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -471,7 +472,16 @@ export async function dispatchOutboxPush(item, {
 export async function enqueueAndDispatch(args, deps = {}) {
   const enq = await enqueueOutbox(args);
   if (!enq?.deduped && enq?.id) {
-    await dispatchOutboxPush({ ...args, id: enq.id }, deps);
+    const item = { ...args, id: enq.id };
+    await dispatchOutboxPush(item, deps);
+    // Record my own proactive voice in our shared ward session, so I know I said
+    // it (no re-sending the same reminder) and my human's reply has an antecedent
+    // — the fix for a Discord DM reply arriving context-less. Only the Familiar's
+    // OWN messages (relays/notices excluded); best-effort, never sinks delivery
+    // (append never throws), and gated so a test-injected dispatch can opt out.
+    if (isWardConversationalKind(args?.kind) && deps.appendToWardSession !== false) {
+      await appendWardProactiveTurn({ text: formatItemForPush(item), kind: args.kind, logsDir: LOGS_DIR });
+    }
   }
   return enq;
 }
