@@ -86,6 +86,7 @@ Noticing runs on self-paced cadence via `set_next_check`, clamped to 5 minutes (
 - [Safety spine](safety-spine) — the crisis detection and escalation machinery that noticing deliberately does not defer to.
 - [Unruh](unruh) — where the intention store and event graph data live, which noticing's wake conditions read.
 - [Tomes and lore](tomes-and-lore) — where the noticing ledgers (.noticing-asked.json) and event nodes live.
+- [Session search](session-search) — the raw transcript search tool available in the noticing turn to check whether an outcome was already mentioned before asking.
 - [Entity-as-subject](../concepts/entity-as-subject) — the stance that makes the role fix meaningful: the Familiar owns its reflections.
 - [Proactivity over caution](../decisions/proactivity-over-caution) — the incident and rules that frame noticing as a safety-significant, ward-signed feature.
 - [Wait-streak experiment](../decisions/wait-streak-experiment) — the shared self-observation counter noticing uses.
