@@ -154,3 +154,17 @@ test('buildExtractionMessages: notes lead as system, transcript rides faithfully
   assert.deepEqual(middle, conversationMessages(MESSAGES));
   assert.ok(middle.some(m => m.role === 'user') && middle.some(m => m.role === 'assistant'));
 });
+
+test('both extraction prompts carry the "whose fact is it?" attribution rule', () => {
+  const ward = buildPrompt(MESSAGES);
+  const shared = buildSharedRoomPrompt(MESSAGES);
+  for (const p of [ward, shared]) {
+    assert.match(p, /Whose fact is it\?/);
+    assert.match(p, /\{\{user\}\}/);   // uses the name macro, not "my human", here
+  }
+  // The ward rule forbids folding another's action onto the human.
+  assert.match(ward, /never write \{\{user\}\} as having done another person's action/);
+  // The shared rule leans on the speaker tags and forbids collapsing the room.
+  assert.match(shared, /don't fold the room into \{\{user\}\}/);
+  assert.match(shared, /\[Name\]: before a line is who said it/);
+});
