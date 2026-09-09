@@ -94,7 +94,7 @@ import {
   isConnected as googleConnected,
 } from './src/gcal/gcal-google.js';
 import { getRecentOfferInfo, rekeySurfaceEventIds } from './src/pondering/surface-events.js';
-import { appendWardProactiveTurn, isWardConversationalKind } from './src/sessions/proactive-session.js';
+import { appendWardProactiveTurn, isWardConversationalKind, proactiveMessageId } from './src/sessions/proactive-session.js';
 import { searchSessionLogs } from './src/sessions/session-search.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -481,7 +481,10 @@ export async function enqueueAndDispatch(args, deps = {}) {
     // OWN messages (relays/notices excluded); best-effort, never sinks delivery
     // (append never throws), and gated so a test-injected dispatch can opt out.
     if (isWardConversationalKind(args?.kind) && deps.appendToWardSession !== false) {
-      await appendWardProactiveTurn({ text: formatItemForPush(item), kind: args.kind, logsDir: LOGS_DIR });
+      // Share the outbox id so the web's own outbox-injection treats this as the
+      // same message, not a second copy (the log merges by id; the browser's
+      // pollSessionDelta skips proactive turns).
+      await appendWardProactiveTurn({ text: formatItemForPush(item), kind: args.kind, messageId: proactiveMessageId(enq.id), logsDir: LOGS_DIR });
     }
   }
   return enq;

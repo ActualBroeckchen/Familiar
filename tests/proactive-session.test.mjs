@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
-  appendWardProactiveTurn, isWardConversationalKind, WARD_CONVERSATIONAL_KINDS,
+  appendWardProactiveTurn, isWardConversationalKind, WARD_CONVERSATIONAL_KINDS, proactiveMessageId,
 } from '../src/sessions/proactive-session.js';
 import { getSessionBinding, WARD_PRIVATE_KEY } from '../src/sessions/session-bindings.js';
 
@@ -43,6 +43,20 @@ test('no bound session → mints one, records the message as an assistant turn, 
     // The binding now points at this session, so a reply continues it.
     const b = await getSessionBinding(WARD_PRIVATE_KEY, { bindingsFile });
     assert.equal(b.sessionId, r.sessionId);
+  } finally { await fs.rm(logsDir, { recursive: true, force: true }); }
+});
+
+test('a caller-supplied messageId is used verbatim (the shared id that de-dupes with the web)', () => {
+  assert.equal(proactiveMessageId('abc123'), 'outbox:abc123');
+});
+
+test('appendWardProactiveTurn stamps the given messageId — so the web injection recognises it', async () => {
+  const { logsDir, bindingsFile } = await ctx();
+  try {
+    const id = proactiveMessageId('rem-42');
+    const r = await appendWardProactiveTurn({ text: 'meds at nine', kind: 'reminder', messageId: id, logsDir, bindingsFile, now: () => 1000 });
+    const log = await readLog(logsDir, r.sessionId);
+    assert.equal(log.messages[0].id, id, 'the stable id rides onto the turn (not a random uuid)');
   } finally { await fs.rm(logsDir, { recursive: true, force: true }); }
 });
 
