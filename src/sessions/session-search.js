@@ -11,10 +11,14 @@
  *   - a time window (`sinceMs`) that returns everything said since then, keyword-
  *     free — the reliable way to read back over "since this morning".
  *
- * Ward-privacy is structural: `wardVisibleOnly` keeps the search to ward-private
- * and web sessions (audienceTag null or 'ward-private'); a villager/guild segment
- * is never read. The tool executor ALSO fail-closes on a gated turn — this flag
- * is the belt to that suspenders.
+ * Scope: this only ever RUNS on a private ward turn (the `search_conversation`
+ * executor fail-closes on a gated villager turn), so its results never reach a
+ * villager regardless of what it read. That means it can safely read the ward's
+ * own chats (web + ward DM), private voice, AND the GROUP rooms the ward shares —
+ * an outcome my human mentioned to friends is fair game for closing a loop. The
+ * one line held back is a villager's 1:1 DM: that channel is private to THAT
+ * villager (the content-gating boundary), not the ward's to sweep — `isWardReadableLog`
+ * excludes it unless `includeVillagerDms` is set.
  */
 
 import { promises as fsp } from 'node:fs';
@@ -28,7 +32,20 @@ export function messageText(m) {
   return '';
 }
 
-const wardVisibleTag = (tag) => tag == null || tag === 'ward-private';
+/**
+ * What the ward's own private reasoning may read: their own chats (web + ward DM),
+ * private voice (audienceTag null or 'ward-private'), AND the group rooms they're
+ * part of (`location.kind === 'group'`, or a `discord:guild:` key). A villager's
+ * 1:1 DM is held back — private to that villager. Pure.
+ */
+export function isWardReadableLog(log) {
+  const tag = log?.audienceTag;
+  if (tag == null || tag === 'ward-private') return true;
+  const loc = log?.location ?? {};
+  if (loc.kind === 'group') return true;
+  if (typeof loc.key === 'string' && loc.key.startsWith('discord:guild:')) return true;
+  return false;
+}
 
 /**
  * Search ward-visible session logs for messages matching `query` and/or falling
@@ -40,11 +57,11 @@ const wardVisibleTag = (tag) => tag == null || tag === 'ward-private';
  * @param {number}  sinceMs        only messages at/after this epoch-ms. Optional; overrides `days`.
  * @param {number}  days           lookback when no `sinceMs` (default 14, clamped 1–60).
  * @param {number}  limit          max matches (default 8, clamped 1–20).
- * @param {boolean} wardVisibleOnly keep to ward-private/web logs (default true).
+ * @param {boolean} includeVillagerDms also read villager 1:1 DMs (default false — held back).
  */
 export async function searchSessionLogs({
   logsDir, query = '', sinceMs = null, days = 14, limit = 8,
-  now = Date.now, wardVisibleOnly = true,
+  now = Date.now, includeVillagerDms = false,
 } = {}) {
   if (!logsDir) return [];
   const q = String(query ?? '').trim().toLowerCase();
@@ -61,7 +78,7 @@ export async function searchSessionLogs({
     let log;
     try { log = JSON.parse(await fsp.readFile(path.join(logsDir, f), 'utf8')); }
     catch { continue; }
-    if (wardVisibleOnly && !wardVisibleTag(log?.audienceTag)) continue;
+    if (!includeVillagerDms && !isWardReadableLog(log)) continue;
     const sid = log?.sessionId ?? f.replace(/\.json$/, '');
     for (const m of (Array.isArray(log?.messages) ? log.messages : [])) {
       if (m?.role !== 'user' && m?.role !== 'assistant') continue;

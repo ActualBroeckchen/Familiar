@@ -6,7 +6,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { searchSessionLogs, messageText } from '../src/sessions/session-search.js';
+import { searchSessionLogs, messageText, isWardReadableLog } from '../src/sessions/session-search.js';
 
 const HOUR = 3_600_000;
 const T0 = 1_000_000_000_000;
@@ -24,13 +24,29 @@ async function seed() {
       { role: 'user', content: 'the silkie chickens look like clouds', timestamp: iso(T0 - 30 * 60_000) },
     ],
   }));
-  // A villager room log — must NEVER be read by a ward search.
-  await fs.writeFile(path.join(dir, 's-villager.json'), JSON.stringify({
-    sessionId: 's-villager', audienceTag: 'circle:friends',
-    messages: [{ role: 'user', content: 'the doctor thing', speaker: 'Sam', timestamp: iso(T0 - HOUR) }],
+  // A GROUP room the ward shares — searchable (its results only ever reach the
+  // ward's private reasoning, and the ward is part of the room).
+  await fs.writeFile(path.join(dir, 's-group.json'), JSON.stringify({
+    sessionId: 's-group', audienceTag: 'circle:friends',
+    location: { platform: 'discord', kind: 'group', key: 'discord:guild:g1:channel:c1' },
+    messages: [{ role: 'user', content: 'told the group the doctor visit went fine', speaker: 'Ward', timestamp: iso(T0 - 2 * HOUR) }],
+  }));
+  // A villager's 1:1 DM — private to THAT villager; held back by default.
+  await fs.writeFile(path.join(dir, 's-villager-dm.json'), JSON.stringify({
+    sessionId: 's-villager-dm', audienceTag: 'villager:sam',
+    location: { platform: 'discord', kind: 'private', key: 'discord:dm:sam' },
+    messages: [{ role: 'user', content: 'sam mentioned the doctor thing', speaker: 'Sam', timestamp: iso(T0 - HOUR) }],
   }));
   return dir;
 }
+
+test('isWardReadableLog: ward + group readable; a villager DM is not', () => {
+  assert.equal(isWardReadableLog({ audienceTag: null }), true);
+  assert.equal(isWardReadableLog({ audienceTag: 'ward-private' }), true);
+  assert.equal(isWardReadableLog({ audienceTag: 'circle:friends', location: { kind: 'group' } }), true);
+  assert.equal(isWardReadableLog({ audienceTag: 'x', location: { key: 'discord:guild:g:channel:c' } }), true);
+  assert.equal(isWardReadableLog({ audienceTag: 'villager:sam', location: { kind: 'private', key: 'discord:dm:sam' } }), false);
+});
 
 test('messageText: pulls text from a string or a vision-era parts array', () => {
   assert.equal(messageText({ content: 'hi' }), 'hi');
@@ -38,13 +54,23 @@ test('messageText: pulls text from a string or a vision-era parts array', () => 
   assert.equal(messageText({ content: null }), '');
 });
 
-test('keyword search finds a match and never reads a villager log', async () => {
+test('keyword search reads ward + group logs, but NOT a villager DM', async () => {
   const dir = await seed();
   try {
     const r = await searchSessionLogs({ logsDir: dir, query: 'doctor', now: () => T0, days: 30 });
-    assert.ok(r.length >= 1);
-    assert.ok(r.every(m => m.sessionId === 's-ward'), 'only the ward-visible session is searched');
-    assert.ok(r.some(m => /got back from the doctor/.test(m.text)));
+    const ids = new Set(r.map(m => m.sessionId));
+    assert.ok(ids.has('s-ward'), 'the ward session is searched');
+    assert.ok(ids.has('s-group'), 'the group room the ward shares is searched');
+    assert.ok(!ids.has('s-villager-dm'), 'a villager 1:1 DM is held back');
+    assert.ok(r.some(m => /told the group the doctor visit went fine/.test(m.text)));
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('includeVillagerDms opens the 1:1 DMs too (opt-in)', async () => {
+  const dir = await seed();
+  try {
+    const r = await searchSessionLogs({ logsDir: dir, query: 'doctor', now: () => T0, days: 30, includeVillagerDms: true });
+    assert.ok(r.some(m => m.sessionId === 's-villager-dm'), 'the villager DM is searched only when opted in');
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
