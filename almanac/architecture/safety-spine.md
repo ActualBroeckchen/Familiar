@@ -44,6 +44,9 @@ sources:
   - id: voice-tagging
     type: file
     path: src/voice/voice-tagging.js
+  - id: providers-js
+    type: file
+    path: providers.js
 ---
 
 # Safety Spine
@@ -118,6 +121,14 @@ escalation indefinitely [@architecture-doc]. `contactDeadlineFor()` and
 for behavioral changes [@claude-md]. Confirmed-delivery-over-enqueue-time was the answer settled
 on when this exact tradeoff was raised in review [@fable-review-conversation].
 
+`cerebellum.decideTriageViaLLM` (the triage deliberation feeding this escalation path) gates on
+`connectionReady` and resolves its endpoint through `resolveProviderUrl`, both from
+`providers.js` — the same readiness check every other LLM call site uses (0.11.91-alpha). This
+lets the caring spine run on a keyless local model with no other change to tier gates,
+cool-downs, or the `wait` default, and it was flagged to the ward as its own sign-off item
+precisely because it touches triage's connection-acceptance behavior. See
+[Providers and connection readiness](providers) for the readiness gate itself [@providers-js].
+
 **No covert contact** is structural, not a convention the Familiar is asked to honor: every
 message `deliverToTrustedContact()` sends out is *also* mirrored into the human's own outbox
 as an `outbound_alert`, even if the delivery to the trusted contact itself fails
@@ -151,7 +162,10 @@ safety-spine files carry an extra rule: a stricter gate, a longer cool-down clam
 [Proactivity over caution](../decisions/proactivity-over-caution) even when it looks like an
 ordinary defensive improvement [@claude-md]. That is why sign-off is scoped to *behavioral*
 change specifically — a pure relocation with byte-identical behavior does not require it
-[@claude-md].
+[@claude-md]. The generated prompt catalog (see
+[Engineering conventions](../reference/engineering-conventions), "Prompt catalog") marks the
+triage, care-check, noticing, and content-regate prompts with a "safety sign-off" badge, so a
+reviewer can see at a glance which prompts this rule covers without grepping the tree.
 
 ## Deferred safety-gated work: what needs ward sign-off before a line of code is touched
 
@@ -218,3 +232,5 @@ itself, which no ward setting can reach around [@voice-audio-tags] [@future-feat
 - [Plugin surface ("Grimoire")](../decisions/plugin-surface-safety-wall) — a designed-but-not-yet-built
   extension surface that commits, in advance, to excluding plugin-contributed prompt context from
   every scoring and deliberation input this page describes.
+- [Providers and connection readiness](providers) — the connection-readiness gate silence-triage
+  now shares with every other LLM call site, and why that change needed its own ward sign-off.

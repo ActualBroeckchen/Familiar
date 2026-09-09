@@ -35,6 +35,12 @@ sources:
   - id: tome-macros-js
     type: file
     path: src/tomes/tome-macros.js
+  - id: build-prompt-catalog
+    type: file
+    path: scripts/build-prompt-catalog.mjs
+  - id: prompt-catalog-test
+    type: file
+    path: tests/prompt-catalog.test.mjs
 ---
 
 # Engineering Conventions
@@ -280,6 +286,43 @@ Behavioral changes (not relocations, comments, or renames) to `crisis-signals.js
 `cerebellum.js`, or the `[CARE CHECK]` assembly in `thalamus.js` require asking the human
 before shipping [@claude-md]. See [Proactivity over caution](../decisions/proactivity-over-caution)
 and [Safety spine](../architecture/safety-spine) for why.
+
+## Prompt catalog: a live-source review page for every prompt and tool description
+
+`scripts/build-prompt-catalog.mjs` (`npm run prompts:catalog`) generates `docs/prompt-catalog.html`,
+a single self-contained page listing all 16 prompts the Familiar reads plus all 104
+`BUILTIN_TOOLS` descriptions, each with its file:line, a one-line purpose note, the text as
+authored, a copy button, and one search box over everything [@build-prompt-catalog]. It exists
+so reviewing every prompt for wording or safety implications does not mean grepping the tree by
+hand — the shipping commit's own framing was "I seriously need to go over all the prompts"
+[@build-prompt-catalog].
+
+The generator reads LIVE source on every run and stores no prompt copy of its own, so the page
+cannot drift out of sync with the code; adding a prompt to the catalog is one manifest entry in
+`PROMPTS`, added centrally rather than touching the prompt's own source file — a property that
+matters because several prompt files are the safety-critical ones named above
+[@build-prompt-catalog]. Two capture modes cover how a prompt's text actually exists in source:
+`'literal'` lifts the authored template or string verbatim by locating a unique anchor at the
+literal's opening delimiter, with a scanner that handles escapes, `${…}` interpolation brace
+depth (including a nested template literal inside an interpolation), and adjacent string
+concatenation (a plain string literal followed by `+` and a template literal), so an
+interpolated slot like `${focusBlock}` shows as-authored rather than resolved
+[@build-prompt-catalog]. `'render'` instead imports the real function for a
+prompt that code assembles per-branch (the tier-by-tier `[CARE CHECK]` block — see
+[Safety spine](../architecture/safety-spine)) and renders each variant, rather than guessing at a
+single literal [@build-prompt-catalog]. `tests/prompt-catalog.test.mjs` pins the scanner and
+extractor logic directly, including the nested-interpolation and concatenation cases
+[@prompt-catalog-test].
+
+The generator fails loudly on purpose: a drifted or duplicate anchor, or an anchor that does not
+sit at a literal's start, throws naming the entry, and an empty prompt block is never emitted
+silently — a stale catalog that looks fine is judged worse than one that refuses to build
+[@build-prompt-catalog]. Safety prompts (triage, care-check, noticing, content-regate) carry a
+"safety sign-off" badge in the generated page, so a reviewer sees at a glance which entries need
+human sign-off before their wording changes, per the rule above [@build-prompt-catalog]. The
+generated `docs/prompt-catalog.html` is committed as a snapshot (so it opens with no build step)
+and is deliberately a local file, not something published externally, because it surfaces the
+Familiar's own inner-voice and care-related framing verbatim [@build-prompt-catalog].
 
 ## Test discipline: assert, not narrate
 

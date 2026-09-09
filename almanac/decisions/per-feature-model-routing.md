@@ -1,6 +1,6 @@
 ---
 title: Per-Feature Model Routing
-topics: [decisions, memorization, architecture]
+topics: [decisions, memorization, architecture, connections]
 sources:
   - id: app-js
     type: file
@@ -98,3 +98,6 @@ from the Discord console only, not from the web UI.
   worker resolves its connection through this same mechanism.
 - [Ward Discord console](../architecture/ward-console) — the `!connection` command that exposes
   active-connection selection, per-feature routing, and reasoning effort from Discord.
+- [Providers and connection readiness](../architecture/providers) — what a call site does with
+  the connection this routing mechanism resolves: URL resolution, the keyless-local readiness
+  gate, and the safety implication for silence-triage.

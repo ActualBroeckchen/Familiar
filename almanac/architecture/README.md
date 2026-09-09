@@ -186,6 +186,7 @@ If you're asking yourself... go to:
 - **How does the Familiar speak, and what governs what voice models it fetches?** → [Voice](voice)
 - **How is the Familiar consistent across web, Discord, and voice?** → [Core prompts and multi-surface assembly](core-prompts)
 - **How does the ward control settings from Discord instead of the web app?** → [Ward Discord console](ward-console)
+- **How does a saved connection turn into an actual LLM request, and can a local model with no API key be used?** → [Providers and connection readiness](providers)
 - **When do sessions end, and how can the ward manually close an open session?** → [Session lifecycle](session-lifecycle)
 - **How does the ward's web chat and Discord DM stay one conversation?** → [Unified Ward Sessions](session-unification)
 
@@ -241,6 +242,9 @@ If you're asking yourself... go to:
 - [Ward Discord console](ward-console) — the ward-only `!queue` and `!connection` Discord
   menus: the pending memory-consent queue, active-connection and per-feature routing, and
   per-connection reasoning-effort control.
+- [Providers and connection readiness](providers) — how `providers.js` turns a saved connection
+  into an actual request: URL resolution and canonicalisation, the single keyless-aware
+  readiness gate every LLM call site shares, and the safety implication for silence-triage.
 - [Unified Ward Sessions](session-unification) — the shared session-binding pointer that
   makes the ward's web private chat and Discord DM one continuous conversation, the
   multi-writer log merge that makes that safe, and the composer-safe live-sync poller.
