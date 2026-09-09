@@ -69,6 +69,7 @@ Here is the journey a fact takes from conversation to durable memory:
 
 - **If you're asking "where does a fact live?"** → Start with Phylactery for identity, Unruh for schedule, Tomes for hand-authored facts. Then [Content-gating](content-gating) if you're controlling who sees what.
 - **If you're asking "how does a session turn into a lasting memory?"** → [Session memorization](session-memorization) for the job queue, then [Phylactery](phylactery) for consolidation.
+- **If you're asking "how does the Familiar find something that was said?"** → [Session search](session-search) for raw transcript search (what was literally said) versus Phylactery `recall` for distilled memory retrieval.
 - **If you're asking "how does the Familiar know it needs to reach out?"** → [Unruh](unruh) for the schedule and interests, [Autonomous loops](autonomous-loops) for the reminders and triage.
 - **If you're asking "how does threat state work?"** → [Safety spine](safety-spine) for detection and tracking, [Unruh](unruh) for the scalar that gates other loops.
 - **If you're asking "why does the ward need both Phylactery and Tomes?"** → [Multi-embodiment](../concepts/multi-embodiment) for why canonical state is shared across surfaces, and the original problem Tomes solve: the ward can guarantee a fact surfaces without waiting for the system to infer it.
