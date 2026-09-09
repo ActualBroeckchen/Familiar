@@ -23,6 +23,7 @@ import { resolveProviderUrl, authHeader, providerRequiresKey } from '../../provi
 import { extractContent } from '../../llm-call.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
+import { slugifyLabel } from '../../slug-ids.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOMES_DIR  = path.join(REPO_ROOT, 'tomes');
 const QUEUE_FILE = path.join(TOMES_DIR, '.memorization-queue.json');
@@ -257,15 +258,40 @@ function filterReadable(messages) {
 // get a role, so their lines keep an inline `[Name]:` / ward label to stay
 // distinct (the Familiar still lands correctly on assistant). Exported for the
 // pipeline test.
-export function conversationMessages(messages, { sharedRoom = false, wardLabel = 'My human' } = {}) {
+// The OpenAI `name` field value for a transcript turn — a CODE-MINTED handle, so
+// a real name's spaces/unicode can never trip the field's charset and 400 the
+// whole request (the reason we slug rather than pass a raw name). The Familiar's
+// own turns (assistant) get none — the role already carries them. A villager or
+// stranger gets their slugified name; the ward (a user turn with no speaker) gets
+// `ward-<slug>` — the `ward-` prefix marks the bond, the name keeps them a
+// specific person, never flattened into a bare role (CLAUDE.md: name the human).
+// Material with no live speaker (an archived log dropped on a user turn) gets
+// `session-archive`, so it can't read as someone addressing the Familiar.
+export function speakerNameField({ role, speaker, wardName = 'My human', material = false } = {}) {
+  if (role !== 'user') return undefined;              // assistant = the Familiar
+  if (material) return 'session-archive';
+  const name = String(speaker ?? '').trim();
+  if (name) return slugifyLabel(name) || undefined;   // villager / stranger
+  const w = slugifyLabel(wardName);                    // no speaker → the ward
+  return w ? `ward-${w}` : 'ward';
+}
+
+// The conversation as faithful role-tagged turns. `withNames` (off by default,
+// opt-in per connection because not every OpenAI-compatible server accepts the
+// field) additionally stamps each user turn with a name-safe `name` handle so the
+// model gets a first-class sender id, not just the inline `[Name]:` text.
+export function conversationMessages(messages, { sharedRoom = false, wardLabel = 'My human', withNames = false } = {}) {
   return filterReadable(messages).map(m => {
     if (m.role !== 'user') return { role: 'assistant', content: m.content ?? '' };
     const c = m.content ?? '';
-    if (sharedRoom) {
-      const labeled = /^\[[^\]]+\]:/.test(c) ? c : `${wardLabel}: ${c}`;
-      return { role: 'user', content: labeled };
+    const turn = sharedRoom
+      ? { role: 'user', content: /^\[[^\]]+\]:/.test(c) ? c : `${wardLabel}: ${c}` }
+      : { role: 'user', content: c };
+    if (withNames) {
+      const name = speakerNameField({ role: 'user', speaker: m.speaker, wardName: wardLabel });
+      if (name) turn.name = name;
     }
-    return { role: 'user', content: c };
+    return turn;
   });
 }
 
@@ -282,12 +308,26 @@ const EXTRACTION_CLOSING_CUE = 'End of the logs. Now output only the memories JS
 // turns, then the neutral SYSTEM close cue. `instructions` is already
 // macro-resolved by the caller. Exported so the pipeline shape (system-first,
 // role-faithful middle, cue-last) is testable without stubbing all of processJob.
-export function buildExtractionMessages({ instructions, messages, sharedRoom = false, wardLabel = 'My human' }) {
+export function buildExtractionMessages({ instructions, messages, sharedRoom = false, wardLabel = 'My human', withNames = false }) {
   return [
     { role: 'system', content: instructions },
-    ...conversationMessages(messages, { sharedRoom, wardLabel }),
+    ...conversationMessages(messages, { sharedRoom, wardLabel, withNames }),
     { role: 'system', content: EXTRACTION_CLOSING_CUE },
   ];
+}
+
+// Whether to stamp `name` fields for this job — opt-in per connection, default
+// off. The ward sets `nameFieldCapable: 'yes'` on a connection they've confirmed
+// accepts the field; everything else stays off, so this can never 400 a
+// memorization on a server that rejects it. (The auto-detect that flips this
+// without a manual step is a follow-up.)
+export function nameFieldEnabledFor(job = {}, settings = {}) {
+  const conns = Array.isArray(settings?.connections) ? settings.connections : [];
+  const match = conns.find(c =>
+    c?.provider === job.provider &&
+    c?.model === job.model &&
+    (c?.baseUrl ?? null) === (job.baseUrl ?? null));
+  return match?.nameFieldCapable === 'yes';
 }
 
 // The content-tag field, shared by both extraction prompts (private + shared
@@ -820,6 +860,7 @@ async function processJob(job) {
     messages: visionMessages,
     sharedRoom: promptFn !== buildPrompt,
     wardLabel: wardName,
+    withNames: nameFieldEnabledFor(job, settings),
   });
 
   const { content: raw, finishReason } = await callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, baseUrl: job.baseUrl, messages });

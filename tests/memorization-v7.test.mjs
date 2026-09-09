@@ -2,7 +2,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildSharedRoomPrompt, buildPrompt, conversationMessages, buildExtractionMessages } from '../src/memory/memorization.js';
+import { buildSharedRoomPrompt, buildPrompt, conversationMessages, buildExtractionMessages, speakerNameField, nameFieldEnabledFor } from '../src/memory/memorization.js';
+
+const NAME_SAFE = /^[a-zA-Z0-9_-]+$/;   // the OpenAI `name` charset — no spaces/unicode
 
 const MESSAGES = [
   { role: 'user',      content: 'Hi, feeling really stressed today.' },
@@ -167,4 +169,60 @@ test('both extraction prompts carry the "whose fact is it?" attribution rule', (
   // The shared rule leans on the speaker tags and forbids collapsing the room.
   assert.match(shared, /don't fold the room into \{\{user\}\}/);
   assert.match(shared, /\[Name\]: before a line is who said it/);
+});
+
+// ── name-field speaker handles (opt-in structural attribution) ──────
+
+test('speakerNameField: code-minted handles are always name-safe', () => {
+  // The whole point: a real name's spaces/unicode never reach the field raw.
+  assert.equal(speakerNameField({ role: 'user', speaker: 'Chen Wei' }), 'chen-wei');
+  assert.match(speakerNameField({ role: 'user', speaker: 'José García' }), NAME_SAFE);
+  assert.match(speakerNameField({ role: 'user', speaker: "O'Brien" }), NAME_SAFE);
+});
+
+test('speakerNameField: ward is ward-<slug> (bond marker + a specific person, never bare)', () => {
+  assert.equal(speakerNameField({ role: 'user', speaker: null, wardName: 'Mary Anne' }), 'ward-mary-anne');
+  assert.match(speakerNameField({ role: 'user', speaker: null, wardName: 'Mary Anne' }), NAME_SAFE);
+  // Unconfigured name still yields a safe fallback, never empty.
+  assert.equal(speakerNameField({ role: 'user', speaker: null, wardName: '' }), 'ward');
+});
+
+test('speakerNameField: material gets session-archive; the Familiar (assistant) gets none', () => {
+  assert.equal(speakerNameField({ role: 'user', material: true, speaker: 'anything' }), 'session-archive');
+  assert.equal(speakerNameField({ role: 'assistant', speaker: 'Chen' }), undefined);  // role carries it
+});
+
+test('conversationMessages withNames: stamps a name per user turn, none on the Familiar', () => {
+  const shared = [
+    { role: 'user',      content: 'hey', speaker: null },          // the ward
+    { role: 'assistant', content: 'hi there' },                    // the Familiar
+    { role: 'user',      content: '[Chen]: brought snacks', speaker: 'Chen' },
+  ];
+  const msgs = conversationMessages(shared, { sharedRoom: true, wardLabel: 'Bluebell', withNames: true });
+  assert.equal(msgs[0].name, 'ward-bluebell');
+  assert.equal('name' in msgs[1], false, 'the assistant turn carries no name');
+  assert.equal(msgs[2].name, 'chen');
+  for (const m of msgs) if (m.name) assert.match(m.name, NAME_SAFE);
+});
+
+test('conversationMessages: withNames off (default) adds no name field — zero behaviour change', () => {
+  const msgs = conversationMessages(MESSAGES);   // default withNames:false
+  assert.ok(!msgs.some(m => 'name' in m), 'no name field unless explicitly opted in');
+});
+
+test('buildExtractionMessages threads withNames to the transcript turns', () => {
+  const instructions = buildPrompt(MESSAGES);
+  const on  = buildExtractionMessages({ instructions, messages: MESSAGES, withNames: true });
+  const off = buildExtractionMessages({ instructions, messages: MESSAGES, withNames: false });
+  assert.ok(on.some(m => m.role === 'user' && m.name), 'names present when on');
+  assert.ok(!off.some(m => 'name' in m), 'no names when off');
+});
+
+test('nameFieldEnabledFor: only a connection explicitly marked capable opts in', () => {
+  const job = { provider: 'openai', model: 'gpt-4o', baseUrl: null };
+  assert.equal(nameFieldEnabledFor(job, { connections: [{ provider: 'openai', model: 'gpt-4o', baseUrl: null, nameFieldCapable: 'yes' }] }), true);
+  assert.equal(nameFieldEnabledFor(job, { connections: [{ provider: 'openai', model: 'gpt-4o', baseUrl: null }] }), false, 'default off');
+  assert.equal(nameFieldEnabledFor(job, { connections: [{ provider: 'openai', model: 'gpt-4o', baseUrl: null, nameFieldCapable: 'no' }] }), false);
+  assert.equal(nameFieldEnabledFor(job, { connections: [] }), false, 'no match → off');
+  assert.equal(nameFieldEnabledFor(job, {}), false);
 });
