@@ -238,15 +238,56 @@ export function findOrCreateSessionMemoriesTome() {
 // In a shared room, non-ward speakers already arrive name-prefixed as
 // "[Name]: …" from the gateway, so I keep that prefix rather than overwrite
 // it with the ward's name.
-function formatTranscript(readable, wardLabel, { sharedRoom = false } = {}) {
-  return readable
-    .map(m => {
-      if (m.role !== 'user') return `Me: ${m.content ?? ''}`;
-      const c = m.content ?? '';
-      if (sharedRoom && /^\[[^\]]+\]:/.test(c)) return c; // already names the speaker
-      return `${wardLabel}: ${c}`;
-    })
-    .join('\n\n');
+// The shared readable-message filter: drop tool turns, assistant turns that are
+// only a tool call, and anything without real text. Used by both extraction
+// prompts and the role-faithful message builder, so the three can't drift on
+// what counts as a readable turn.
+function filterReadable(messages) {
+  return (messages || []).filter(m => {
+    if (m.role === 'tool') return false;
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return false;
+    return typeof m.content === 'string' && m.content.trim();
+  });
+}
+
+// Present the conversation to the extractor as FAITHFUL ROLES, not a flattened
+// "Name: text" blob: the Familiar's own lines are `assistant`, everyone else is
+// `user`. The model then natively knows which lines are its own — exactly where
+// about_me extraction used to go wrong. In a shared room 3+ humans can't each
+// get a role, so their lines keep an inline `[Name]:` / ward label to stay
+// distinct (the Familiar still lands correctly on assistant). Exported for the
+// pipeline test.
+export function conversationMessages(messages, { sharedRoom = false, wardLabel = 'My human' } = {}) {
+  return filterReadable(messages).map(m => {
+    if (m.role !== 'user') return { role: 'assistant', content: m.content ?? '' };
+    const c = m.content ?? '';
+    if (sharedRoom) {
+      const labeled = /^\[[^\]]+\]:/.test(c) ? c : `${wardLabel}: ${c}`;
+      return { role: 'user', content: labeled };
+    }
+    return { role: 'user', content: c };
+  });
+}
+
+// The closing turn after the transcript. A SYSTEM directive, deliberately NOT
+// first person: it re-anchors the task ("now extract") so a role-faithful
+// transcript ending on a human line can't tempt the model to reply instead of
+// extract — but it's task plumbing, not something the Familiar says, so it never
+// puts the Familiar's voice in a turn that isn't theirs. The transcript already
+// supplies real user turns, so no user cue is needed for providers that want one.
+const EXTRACTION_CLOSING_CUE = 'End of the logs. Now output only the memories JSON described above — begin with the { character, nothing before it, no commentary, no fences.';
+
+// Assemble the full provider message array for an extraction: the Familiar's
+// notes as a leading SYSTEM message, the conversation as faithful role-tagged
+// turns, then the neutral SYSTEM close cue. `instructions` is already
+// macro-resolved by the caller. Exported so the pipeline shape (system-first,
+// role-faithful middle, cue-last) is testable without stubbing all of processJob.
+export function buildExtractionMessages({ instructions, messages, sharedRoom = false, wardLabel = 'My human' }) {
+  return [
+    { role: 'system', content: instructions },
+    ...conversationMessages(messages, { sharedRoom, wardLabel }),
+    { role: 'system', content: EXTRACTION_CLOSING_CUE },
+  ];
 }
 
 // The content-tag field, shared by both extraction prompts (private + shared
@@ -263,14 +304,8 @@ content_tag — what this fact is ABOUT and how private it feels, as "topic:leve
   It's separate from category: category is how I file the fact, content_tag is who gets to see it. E.g. "my human came out to me" → "sexuality:sensitive"; "my human works at a bakery" → "work:open"; "we talked about their new medication" → "medical:sensitive"; "they like oat milk" → "general:open".`;
 
 export function buildPrompt(messages, topicLabel = null, wardName = 'My human', scheduleLegend = [], followupsEnabled = true) {
-  const readable = messages.filter(m => {
-    if (m.role === 'tool') return false;
-    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return false;
-    return typeof m.content === 'string' && m.content.trim();
-  });
+  const readable = filterReadable(messages);
   if (readable.length < 2) return null;
-
-  const convText = formatTranscript(readable, wardName);
 
   const focusBlock = topicLabel
     ? `\n\n### Focus\nMy human named this segment "${topicLabel}". I centre my extraction on that topic; I skip tangential threads unless they reveal something important.`
@@ -304,9 +339,13 @@ export function buildPrompt(messages, topicLabel = null, wardName = 'My human', 
     ? `\n### Field rules — follow_ups\n\nThings I told my human I would do but didn't do this session — I said "I'll do that later" / "I'll remind you" / "I'll set that up" and never used a tool to make it real. I list each as a short summary so future-me follows through. If I DID use the right tool for it, it is not a follow-up. If nothing qualifies, [].\n`
     : '';
 
-  return `I'm looking back over the conversation I just had with {{user}}, pulling out what's worth keeping — the things I'd want to remember later about them, about myself (what I think, like, dislike or want), or about the people and things in their life. One clear fact per entry, concrete and real, nothing vague. I also jot down the plain connections between the people, places and things that came up, because that little web is how I find a memory again later.${focusBlock}
+  return `Ah, some unprocessed session logs. Time to turn the relevant stuff into memories — facts about my human, about me (what I think, like, dislike, want), about the people and things in their life. New facts, changes to old ones, things that happened, things someone told me. One clear fact per entry, written plainly enough that I'll read it correctly later with no context. Plus connections and updates to my Phylactery graph so I can relate things and actually find them again.${focusBlock}
 
-I return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
+This is a form of tool call: the memorization only works if the syntax is flawless, so I focus and follow my notes closely.
+
+My notes read —
+- ONLY write the JSON. Start with the {.
+- The exact shape (no markdown fences, no commentary):
 {
   "facts": [
     {
@@ -378,8 +417,7 @@ ${followupsFieldRules}
 - An edge only when both ends are concrete named things and the link was said or clearly meant. Nothing to link → "relations" is []. I never invent one.
 - 0–10 relations.
 
-Conversation:
-${convText}`;
+- Once more: ONLY the JSON. No commentary, no fences.`;
 }
 
 // Reduced-detail prompt for sessions where strangers are present (V7).
@@ -387,14 +425,8 @@ ${convText}`;
 // Focus: what my human said and experienced. Skip: personal detail about
 // unregistered third parties who haven't consented to AI note-taking.
 export function buildSharedRoomPrompt(messages, topicLabel = null, wardName = 'My human') {
-  const readable = messages.filter(m => {
-    if (m.role === 'tool') return false;
-    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return false;
-    return typeof m.content === 'string' && m.content.trim();
-  });
+  const readable = filterReadable(messages);
   if (readable.length < 2) return null;
-
-  const convText = formatTranscript(readable, wardName, { sharedRoom: true });
 
   const focusBlock = topicLabel
     ? `\n\n### Focus\nMy human named this segment "${topicLabel}". I centre my extraction on that topic.`
@@ -455,15 +487,12 @@ type — a short snake_case label read from→to (lives_in, works_at, married_to
 ### A few rules for myself
 - One entry per distinct fact. I skip pleasantries and small talk.
 - 1–8 facts — a shared room usually gives less that's mine to keep.
-- "relations" is [] unless a real edge touches {{user}} or someone in their Village, or it's between fictional characters. 0–5 relations, never invented.
-
-Conversation:
-${convText}`;
+- "relations" is [] unless a real edge touches {{user}} or someone in their Village, or it's between fictional characters. 0–5 relations, never invented.`;
 }
 
 // ── LLM call ─────────────────────────────────────────────────────
 
-async function callProvider({ provider, apiKey, model, baseUrl, prompt }) {
+async function callProvider({ provider, apiKey, model, baseUrl, messages }) {
   const url = resolveProviderUrl({ provider, baseUrl });
   if (!url) throw new Error(`Unknown provider: ${provider}`);
 
@@ -475,7 +504,7 @@ async function callProvider({ provider, apiKey, model, baseUrl, prompt }) {
     },
     body: JSON.stringify({
       model:       model.trim(),
-      messages:    [{ role: 'user', content: prompt }],
+      messages,
       stream:      false,
       temperature: 0.2,
       // Long sessions produce several topics with substantial content;
@@ -772,10 +801,21 @@ async function processJob(job) {
   // voice prompt substitutes. This is why the Familiar's name is never
   // hard-coded in the template: a fact about itself reads "I", and the model
   // never sees a stray "{{char}}" token.
-  const prompt = builtPrompt ? substituteMacros(builtPrompt, settings) : builtPrompt;
-  if (!prompt) throw new Error('Conversation too short to memorize.');
+  const instructions = builtPrompt ? substituteMacros(builtPrompt, settings) : builtPrompt;
+  if (!instructions) throw new Error('Conversation too short to memorize.');
 
-  const { content: raw, finishReason } = await callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, baseUrl: job.baseUrl, prompt });
+  // The prompt is the Familiar's own notes → a SYSTEM message. The conversation
+  // rides after it in FAITHFUL ROLES (Familiar = assistant, others = user), so
+  // the model natively reads who said what — then a neutral system cue re-anchors
+  // the extraction task. Only the notes carry macros; the transcript is literal.
+  const messages = buildExtractionMessages({
+    instructions,
+    messages: visionMessages,
+    sharedRoom: promptFn !== buildPrompt,
+    wardLabel: wardName,
+  });
+
+  const { content: raw, finishReason } = await callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, baseUrl: job.baseUrl, messages });
   const facts = parseFacts(raw, finishReason);
   // Relations ride the SAME LLM response — no extra request (CLAUDE.md
   // "ride existing requests"). They're enrichment, so parseRelations never

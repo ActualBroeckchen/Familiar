@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildSharedRoomPrompt, buildPrompt } from '../src/memory/memorization.js';
+import { buildSharedRoomPrompt, buildPrompt, conversationMessages, buildExtractionMessages } from '../src/memory/memorization.js';
 
 const MESSAGES = [
   { role: 'user',      content: 'Hi, feeling really stressed today.' },
@@ -42,9 +42,9 @@ test('buildSharedRoomPrompt: does NOT contain the full-detail category list', ()
   assert.doesNotMatch(p, /Example bad/);
 });
 
-test('buildSharedRoomPrompt: includes the conversation text', () => {
-  const p = buildSharedRoomPrompt(MESSAGES);
-  assert.match(p, /feeling really stressed/);
+test('conversationMessages: carries the shared-room conversation as role-faithful turns', () => {
+  const msgs = conversationMessages(MESSAGES, { sharedRoom: true, wardLabel: 'My human' });
+  assert.ok(msgs.some(m => m.role === 'user' && /feeling really stressed/.test(m.content)));
 });
 
 test('buildSharedRoomPrompt: includes topicLabel when provided', () => {
@@ -98,48 +98,59 @@ test('both prompts ask for a content_tag with the topic vocabulary and levels', 
 
 // ── Transcript labelling — never "User" (first-person convention) ──
 
-test('buildPrompt: never labels my human as "User" in the transcript', () => {
-  const p = buildPrompt(MESSAGES, null, 'Bluebell');
-  // The forbidden generic label must not appear as a turn marker.
-  assert.doesNotMatch(p, /^User:/m);
-  assert.doesNotMatch(p, /\nUser: /);
+// ── Role-faithful transcript (conversationMessages) ──────────────────
+// The conversation now rides as real user/assistant turns, not a flattened
+// "Name: text" blob folded into the prompt — so the model natively reads who
+// said what, and the prompt (the Familiar's notes) no longer holds the transcript.
+
+test('conversationMessages (ward DM): the ward is a plain user turn, no "Name:"/"User:" label', () => {
+  const msgs = conversationMessages(MESSAGES);   // sharedRoom defaults false
+  assert.equal(msgs[0].role, 'user');
+  assert.equal(msgs[0].content, 'Hi, feeling really stressed today.');  // raw; the role carries identity
+  assert.ok(!msgs.some(m => /^User: |^My human: |^Bluebell: /.test(m.content)));
 });
 
-test('buildPrompt: labels my human by their configured name', () => {
-  const p = buildPrompt(MESSAGES, null, 'Bluebell');
-  assert.match(p, /Bluebell: Hi, feeling really stressed today\./);
+test('conversationMessages: the Familiar\'s lines are the assistant role, never "Me:"/"Assistant:"', () => {
+  const msgs = conversationMessages(MESSAGES);
+  assert.equal(msgs[1].role, 'assistant');
+  assert.equal(msgs[1].content, "I hear you. What's going on?");
+  assert.ok(!msgs.some(m => /^Me: |^Assistant: /.test(m.content)));
 });
 
-test('buildPrompt: falls back to "My human" when no name is given', () => {
-  const p = buildPrompt(MESSAGES);
-  assert.match(p, /My human: Hi, feeling really stressed today\./);
-  assert.doesNotMatch(p, /^User:/m);
-});
-
-test('buildPrompt: labels my own turns "Me", not "Assistant"', () => {
-  const p = buildPrompt(MESSAGES, null, 'Bluebell');
-  assert.match(p, /Me: I hear you\./);
-  assert.doesNotMatch(p, /^Assistant:/m);
-});
-
-test('buildSharedRoomPrompt: ward by name, never "User"', () => {
-  const p = buildSharedRoomPrompt(MESSAGES, null, 'Bluebell');
-  assert.match(p, /Bluebell: Hi, feeling really stressed today\./);
-  assert.doesNotMatch(p, /^User:/m);
-  assert.doesNotMatch(p, /^Assistant:/m);
-});
-
-test('buildSharedRoomPrompt: preserves name-prefixed villager turns', () => {
+test('conversationMessages (shared room): ward labelled by name, villager prefix kept, Familiar = assistant', () => {
   const sharedMsgs = [
     { role: 'user',      content: 'Hi, feeling stressed.' },          // the ward (unprefixed)
     { role: 'assistant', content: 'I hear you.' },
     { role: 'user',      content: '[Chen]: I brought snacks.' },      // a villager (prefixed)
     { role: 'assistant', content: 'Thanks, Chen.' },
   ];
-  const p = buildSharedRoomPrompt(sharedMsgs, null, 'Bluebell');
-  // The ward's unprefixed turn gets their name; Chen's prefix is kept verbatim,
-  // NOT overwritten with the ward's name.
-  assert.match(p, /Bluebell: Hi, feeling stressed\./);
-  assert.match(p, /\[Chen\]: I brought snacks\./);
-  assert.doesNotMatch(p, /Bluebell: \[Chen\]/);
+  const msgs = conversationMessages(sharedMsgs, { sharedRoom: true, wardLabel: 'Bluebell' });
+  assert.deepEqual(msgs, [
+    { role: 'user',      content: 'Bluebell: Hi, feeling stressed.' },  // unprefixed ward → labelled
+    { role: 'assistant', content: 'I hear you.' },
+    { role: 'user',      content: '[Chen]: I brought snacks.' },        // villager prefix kept verbatim
+    { role: 'assistant', content: 'Thanks, Chen.' },
+  ]);
+});
+
+test('the extraction prompt no longer carries the raw transcript (it rides as its own turns)', () => {
+  const p = buildPrompt(MESSAGES, null, 'Bluebell');
+  assert.doesNotMatch(p, /feeling really stressed/);   // the transcript is not in the notes
+  assert.doesNotMatch(p, /^Bluebell: /m);
+  assert.doesNotMatch(p, /^Me: /m);
+});
+
+test('buildExtractionMessages: notes lead as system, transcript rides faithfully, cue closes as system', () => {
+  const instructions = buildPrompt(MESSAGES, null, 'Bluebell');
+  const msgs = buildExtractionMessages({ instructions, messages: MESSAGES, sharedRoom: false, wardLabel: 'Bluebell' });
+  // system-first (the notes), system-last (the neutral close cue), never a
+  // Familiar-voiced user turn in between.
+  assert.equal(msgs[0].role, 'system');
+  assert.equal(msgs[0].content, instructions);
+  assert.equal(msgs.at(-1).role, 'system');
+  assert.match(msgs.at(-1).content, /only the memories JSON|begin with the \{/i);
+  // The middle is the role-faithful transcript.
+  const middle = msgs.slice(1, -1);
+  assert.deepEqual(middle, conversationMessages(MESSAGES));
+  assert.ok(middle.some(m => m.role === 'user') && middle.some(m => m.role === 'assistant'));
 });
