@@ -112,7 +112,7 @@ const PROMPTS = [
     title: 'Memory extraction (shared room)',
     purpose: "The group-room variant: I note what went on around me, including what other people did or said, WITHOUT pre-censoring — the consent step afterwards weighs each person by where they sit in my human's Village.",
     file: 'src/memory/memorization.js',
-    anchor: 'This conversation happened in a shared room',
+    anchor: 'Ah, some unprocessed session logs — and this was a shared room',
   },
   {
     id: 'tome-graduation', group: 'Memory',
