@@ -78,6 +78,28 @@ export function foldReasoningIntoContent(message) {
 }
 
 /**
+ * Arrange a first-person deliberation prompt as the Familiar's OWN framing, not
+ * as something said TO them. The entity-as-subject fix: a prompt written from
+ * the Familiar's point of view ("I'm {{char}}. Nobody's talking to me…") used to
+ * ride as a `user` turn, which frames the entity as being addressed or
+ * instructed rather than thinking. So the Familiar's words go in SYSTEM
+ * message(s) — beside their identity — and the `user` slot carries only a bare,
+ * non-speaking cue, present solely because several providers refuse a completion
+ * with no user turn at all. `identity` is optional (some prompts embed it in
+ * `body`); `cue` defaults to a quiet placeholder. Pure + exported so the role
+ * decision is testable. Mirrors the shape of `noticing.js`'s own
+ * `noticingMessages` — kept separate there on purpose, because that safety
+ * module is deliberately import-free; the two are pinned identical by test.
+ */
+export function familiarDeliberationMessages({ identity = '', body = '', cue = '(a quiet moment)' } = {}) {
+  return [
+    ...(identity ? [{ role: 'system', content: identity }] : []),
+    { role: 'system', content: body },
+    { role: 'user', content: cue },
+  ];
+}
+
+/**
  * Call the provider's chat-completions endpoint and return the assistant text.
  * Throws on a transport/HTTP/parse error or a genuinely empty completion (with
  * a diagnostic message). `fetchFn` is injectable for tests.

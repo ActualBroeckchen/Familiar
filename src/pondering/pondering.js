@@ -18,7 +18,7 @@
 import path from 'path';
 import { SLUG_ALPHABET } from '../../slug-ids.js';
 import { fileURLToPath } from 'url';
-import { callProviderChat } from '../../llm-call.js';
+import { callProviderChat, familiarDeliberationMessages } from '../../llm-call.js';
 import { providerRequiresKey } from '../../providers.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
@@ -234,7 +234,14 @@ The heading must be a single markdown heading line starting with "## ". In edge_
 // is free for non-thinking models — they stop when done). Shared helper owns
 // the reasoning-model handling + empty-content diagnostics.
 async function defaultCallLLM({ provider, apiKey, model, baseUrl, prompt }) {
-  return callProviderChat({ provider, apiKey, model, baseUrl, prompt, temperature: 0.7, maxTokens: 4000 });
+  // The pondering prompt is the Familiar's own first-person thinking, so it
+  // rides as a system message with a bare user cue (see familiarDeliberationMessages),
+  // not as a `user` turn framing the thought as spoken TO them.
+  return callProviderChat({
+    provider, apiKey, model, baseUrl,
+    messages: familiarDeliberationMessages({ body: prompt, cue: '(a quiet moment to think)' }),
+    temperature: 0.7, maxTokens: 4000,
+  });
 }
 
 // ── Parsing ──────────────────────────────────────────────────────
