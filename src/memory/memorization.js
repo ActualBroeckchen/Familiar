@@ -410,6 +410,7 @@ fromType / toType — what each one IS. Pick from: ${GRAPH_ENTITY_TYPES_STR}.
 type — a short snake_case label read from→to: works_at, lives_in, married_to, parent_of, friend_of, has_condition, owns, located_in, colleague_of, and so on.
 ${followupsFieldRules}
 ### A few rules for myself
+- Whose fact is it? Only what {{user}} did, said, or felt is about {{user}}. If someone else did it — even when {{user}} is the one telling me about it — the fact is about that person: I name them in content and subjects, and I never write {{user}} as having done another person's action.
 - One entry per distinct fact. One sentence carrying two facts about two people is two entries.
 - If a fact could be two categories, I take the more sensitive one (health > emotional > relationships > whereabouts > basics).
 - I skip pleasantries and small talk — only what I'd want to remember about someone.
@@ -489,6 +490,7 @@ fromType / toType — pick from: ${GRAPH_ENTITY_TYPES_STR}. ${GRAPH_NODE_RUBRIC}
 type — a short snake_case label read from→to (lives_in, works_at, married_to, has_condition, owns, …).
 
 ### A few rules for myself
+- Whose fact is it? The [Name]: before a line is who said it; an untagged line is {{user}}. What a villager did or said is about them — named in content and subjects. I don't fold the room into {{user}}.
 - One entry per distinct fact. I skip pleasantries and small talk.
 - 1–8 facts — a shared room usually gives less that's mine to keep.
 - "relations" is [] unless a real edge touches {{user}} or someone in their Village, or it's between fictional characters. 0–5 relations, never invented.
