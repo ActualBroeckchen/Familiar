@@ -2668,7 +2668,7 @@ export function parseMemoryCreateResult(text) {
   return { id: s.match(/id=([\w-]+)/)?.[1] ?? null, merged: /merged/i.test(s) };
 }
 
-export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, contentTag, consent_pending = false, confidence = 1.0, standalone = false, register, sourceMeta }) {
+export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, contentTag, consent_pending = false, confidence = 1.0, attributionConfidence, standalone = false, register, sourceMeta }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
@@ -2680,6 +2680,10 @@ export async function createMemoryFull({ content, granularity = 'significant', d
     // it in code (never trusts the model's raw value), so pass it straight
     // through. Omitted → Phylactery derives one from the category, fail-closed.
     if (contentTag) args.content_tag = contentTag;
+    // How sure the Familiar is about WHO the fact is about (separate from
+    // `confidence` = whether it happened). Low when a referent was unresolved;
+    // recall downweights rather than drops. Omitted → fully attributed.
+    if (typeof attributionConfidence === 'number') args.attribution_confidence = attributionConfidence;
     if (standalone) args.standalone = true;
     // Standing facts (memorization's temporality='standing') land on a non-
     // episodic register — 'ward' for a standing truth about my human — so they're

@@ -306,3 +306,12 @@ test('both prompts carry the referent / degrade-dont-drop rule', () => {
     assert.match(p, /whether the thing happened, not who it's about/);
   }
 });
+
+test('both prompts describe the optional attribution_confidence field, tied to the unresolved marker', () => {
+  for (const p of [buildPrompt(MESSAGES), buildSharedRoomPrompt(MESSAGES)]) {
+    assert.match(p, /attribution_confidence — OPTIONAL/);
+    assert.match(p, /how sure I am WHO the fact is about/);
+    assert.match(p, /never drops the fact/);          // it's a downweight signal, not a cull
+    assert.match(p, /unresolved/i);                    // tied to the referent rule
+  }
+});
