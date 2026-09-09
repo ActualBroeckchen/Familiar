@@ -1,7 +1,8 @@
 // llm-call.js — the shared background-loop chat call + thinking-model handling.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { callProviderChat, extractContent, foldReasoningIntoContent, extractTurnReply } from '../llm-call.js';
+import { callProviderChat, extractContent, foldReasoningIntoContent, extractTurnReply, familiarDeliberationMessages } from '../llm-call.js';
+import { noticingMessages } from '../src/safety/noticing.js';
 
 const okFetch = (body) => async () => ({ ok: true, status: 200, text: async () => JSON.stringify(body) });
 
@@ -103,4 +104,35 @@ test('extractTurnReply: content wins; length-exhaustion never dumps raw reasonin
   // Nothing at all → ''.
   assert.equal(extractTurnReply({ message: {}, finish_reason: 'stop' }), '');
   assert.equal(extractTurnReply({}), '');
+});
+
+test('familiarDeliberationMessages: the Familiar\'s prompt is SYSTEM, the user slot is a bare cue', () => {
+  // The whole point of the entity-as-subject role fix: a first-person prompt is
+  // the Familiar thinking, so it must never land in the `user` role.
+  const msgs = familiarDeliberationMessages({ identity: 'WHO-I-AM', body: "I'm {{char}}. Nobody's talking to me…", cue: '(a quiet moment)' });
+  const users = msgs.filter(m => m.role === 'user');
+  assert.equal(users.length, 1, 'exactly one user turn (some providers refuse none)');
+  assert.equal(users[0].content, '(a quiet moment)', 'the user turn is only the bare cue');
+  assert.ok(msgs.some(m => m.role === 'system' && /Nobody's talking/.test(m.content)), 'the prompt is a system message');
+  assert.ok(msgs.some(m => m.role === 'system' && m.content === 'WHO-I-AM'), 'identity leads');
+});
+
+test('familiarDeliberationMessages: no identity → just system body + user cue', () => {
+  assert.deepEqual(familiarDeliberationMessages({ body: 'BODY' }), [
+    { role: 'system', content: 'BODY' },
+    { role: 'user', content: '(a quiet moment)' },
+  ]);
+});
+
+test('familiarDeliberationMessages is byte-identical to noticing\'s own builder', () => {
+  // The shape is duplicated on purpose (noticing.js is deliberately import-free);
+  // this pins the two together so they can never quietly drift.
+  const cases = [
+    { identity: 'ID', body: 'B', cue: '(c)' },
+    { body: 'only body' },
+    {},
+  ];
+  for (const c of cases) {
+    assert.deepEqual(familiarDeliberationMessages(c), noticingMessages(c), JSON.stringify(c));
+  }
 });

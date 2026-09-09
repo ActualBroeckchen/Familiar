@@ -27,7 +27,7 @@
  */
 
 import { resolveProviderUrl, connectionReady } from '../../providers.js';
-import { callProviderChat } from '../../llm-call.js';
+import { callProviderChat, familiarDeliberationMessages } from '../../llm-call.js';
 import { enrich, getRecentMemoryLines } from '../../thalamus.js';
 import { readSettingsSync, primaryConnectionFrom, connectionForFeature, getRecentSessionMessages, formatRecentMessagesForContext } from '../../cerebellum.js';
 import { buildTimeAnchorBlock, relativeTime } from '../../relative-time.js';
@@ -240,5 +240,12 @@ export async function decideReachoutViaLLM({
 // temperature 0.8 — warmth wants a little more life than triage's care. Cap is
 // generous so a thinking model has room past its reasoning (see llm-call.js).
 async function defaultCallLLM({ provider, apiKey, model, baseUrl, prompt }) {
-  return callProviderChat({ provider, apiKey, model, baseUrl, prompt, temperature: 0.8, maxTokens: 2000 });
+  // The reach-out deliberation is the Familiar's own thinking, so it rides as a
+  // system message with a bare user cue (see familiarDeliberationMessages), not
+  // as a `user` turn addressed TO them.
+  return callProviderChat({
+    provider, apiKey, model, baseUrl,
+    messages: familiarDeliberationMessages({ body: prompt, cue: '(a quiet moment)' }),
+    temperature: 0.8, maxTokens: 2000,
+  });
 }

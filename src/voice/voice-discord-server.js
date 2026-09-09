@@ -38,7 +38,7 @@ import {
   isGroupCall, attributeSpeaker, prefixTurn, diffRoster,
   formatPresenceNote, buildGreetingPrompt, parseGreeting,
 } from './voice-presence.js';
-import { callProviderChat } from '../../llm-call.js';
+import { callProviderChat, familiarDeliberationMessages } from '../../llm-call.js';
 import { substituteMacros } from '../../macros.js';
 import { audienceTagFor } from '../village/audience.js';
 import { createSynthesizer } from './voice-synthesize.js';
@@ -238,7 +238,13 @@ export function attachDiscordVoice(deps) {
     const conn = connectionForFeature(s, 'chat') || connectionForFeature(s, 'pondering');
     if (!connectionReady(conn)) return;
     const prompt = substituteMacros(buildGreetingPrompt({ name, event: 'joined' }), s);
-    const raw = await callProviderChat({ provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl, prompt, temperature: 0.8, maxTokens: 2000 });
+    // The greeting is the Familiar's own voice, so it rides as a system message
+    // with a bare user cue, not as a `user` turn addressed TO them.
+    const raw = await callProviderChat({
+      provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
+      messages: familiarDeliberationMessages({ body: prompt, cue: '(someone just joined the call)' }),
+      temperature: 0.8, maxTokens: 2000,
+    });
     const line = parseGreeting(raw);
     if (!line || !engine.isCallActive() || engine.currentCallId() !== callId) return;
     const spoken = await engine.speakProactive(() => synthesize(line));

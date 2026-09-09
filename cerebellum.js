@@ -38,7 +38,7 @@ import { fileURLToPath } from 'url';
 import { promises as fsp, readFileSync, mkdirSync } from 'fs';
 
 import { resolveProviderUrl, connectionReady } from './providers.js';
-import { callProviderChat } from './llm-call.js';
+import { callProviderChat, familiarDeliberationMessages } from './llm-call.js';
 import { listOwnFiles, readOwnFile, searchSessions, isSessionLogPath, readSessionLog } from './own-files.js';
 import { readCalendarCache, resolveAttribution, normalizeAttributionEntry } from './src/gcal/gcal-attribution.js';
 import { computeAvailability, formatAvailabilityLines } from './src/schedule/schedule-availability.js';
@@ -877,9 +877,17 @@ The "message" field (to the human) must be 1–2 sentences. First person. Authen
   // Resolve {{user}} / {{char}} to the configured names — the deliberating
   // Familiar must read "Open tasks I'm holding for <their name>", never a
   // literal macro token. Name rendering only; no triage logic changes.
-  const llmMessages = [];
-  if (identityContext) llmMessages.push({ role: 'system', content: identityContext });
-  llmMessages.push({ role: 'user', content: substituteMacros(prompt, s) });
+  // Entity-as-subject: this deliberation is the Familiar's OWN thinking, so it
+  // rides as a system message beside their identity — never as a `user` turn
+  // addressed TO them. A bare, non-speaking user cue is still present because
+  // several providers refuse a completion with no user turn at all. Framing
+  // only; no triage LOGIC changes (tier gates, cool-downs, the wait default all
+  // unchanged) — ward-signed off.
+  const llmMessages = familiarDeliberationMessages({
+    identity: identityContext || '',
+    body: substituteMacros(prompt, s),
+    cue: '(a quiet moment to weigh how my human is doing)',
+  });
 
   try {
     // Ward-signed fix (thinking-model empty-content): route through the shared
