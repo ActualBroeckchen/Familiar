@@ -20,6 +20,9 @@ sources:
   - id: proactive-session-js
     type: file
     path: src/sessions/proactive-session.js
+  - id: proactive-session-test
+    type: file
+    path: tests/proactive-session.test.mjs
 ---
 
 # Unified Ward Sessions
@@ -138,6 +141,44 @@ to sink the actual delivery [@proactive-session-js] [@session-log-js]. An off-sw
 export of `session-bindings.js` so both the Discord gateway's ward-DM session rollover and
 this proactive-append path use the same idle threshold and cannot drift apart
 [@proactive-session-js] [@session-bindings-js].
+
+### Exactly-once reconciliation with the web renderer (0.11.90-alpha)
+
+The web display has two surfaces for proactive items: `injectOutboxAsChatMessage` (the
+outbox-banner path, which renders a rich bubble and ping) and `pollSessionDelta` (which polls
+the session log every few seconds and appends new turns) [@app-js]. Both paths run concurrently
+when the ward has a web tab open while a proactive item fires. Before 0.11.90, the server and
+browser used different ID schemes for the same reminder — `appendWardProactiveTurn` used one
+id on the server, while `injectOutboxAsChatMessage` generated another via `generateId()` — so
+`POST /api/log` kept two copies (merging by id, but with different ids), and the reminder
+rendered twice on web (once from each path) and landed twice in Discord context (both copies
+in the session log).
+
+The fix is a **shared stable id** format `outbox:<id>` [@proactive-session-js] [@app-js]:
+
+- **Server side:** `appendWardProactiveTurn` now accepts a `messageId` parameter (passed from
+  `enqueueAndDispatch` as `proactiveMessageId(enq.id)`) and stamps it onto the message
+  [@proactive-session-js]. `proactiveMessageId(outboxId)` returns the stable `outbox:<id>` format
+  [@proactive-session-js].
+- **Browser side:** `injectOutboxAsChatMessage` mints ids the same way, prefixing each
+  `item.id` with `outbox:` [@app-js]. It checks if the id is already in `state.messages`
+  (loaded from the log on open, or a prior inject); if present, it NO-OPs on rendering but
+  still settles bookkeeping — acknowledging non-triage items — so reloading a still-pending
+  item doesn't double either [@app-js].
+- **Deduplication in the poller:** `pollSessionDelta` explicitly skips `outbox:`-prefixed
+  turns when filtering incoming messages [@app-js]. Because the outbox-injection path owns
+  their web display (it already does the ping and ack), the poller does not re-render them
+  even when they arrive from the server [@app-js].
+
+The net result: a proactive turn shows **once** on web and is in context **once** on both
+surfaces (matching the correct pre-0.11.87 behavior). The `outbox:<id>` format is hand-mirrored
+in `proactive-session.js` and `public/app.js` with sync comments on both sides — the same
+discipline the macro-name parity applies elsewhere [@proactive-session-js] [@app-js]. The
+server<->browser id contract is pinned by the `proactiveMessageId` test and the
+`messageId`-stamping test in `tests/proactive-session.test.mjs`, not by an end-to-end browser
+test (public/app.js is a classic script with no unit harness) [@proactive-session-js] [@proactive-session-test]. Live
+verification: fire a reminder with a web tab open and confirm it appears exactly once
+[@proactive-session-js].
 
 ## Live sync without disturbing the composer
 
