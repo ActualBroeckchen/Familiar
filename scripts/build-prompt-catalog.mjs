@@ -105,7 +105,7 @@ const PROMPTS = [
     title: 'Memory extraction (my human, direct)',
     purpose: "After a private conversation, I look back and pull out what's worth keeping — facts about my human, about myself, and the plain web of connections between the people and things that came up. Emits JSON; a separate consent step gates what's actually stored.",
     file: 'src/memory/memorization.js',
-    anchor: "I'm looking back over the conversation I just had with {{user}}",
+    anchor: 'Ah, some unprocessed session logs.',
   },
   {
     id: 'mem-shared', group: 'Memory',

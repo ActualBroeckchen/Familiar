@@ -32,7 +32,7 @@ test('extraction prompt asks for about_me and invites my own views', () => {
   const p = buildPrompt(msgs);
   assert.match(p, /"about_me":\s+false/);
   assert.match(p, /about_me — true when the fact is about ME/);
-  assert.match(p, /what I think, like, dislike or want/);
+  assert.match(p, /what I think, like, dislike/);
 });
 
 // ── views: a home for opinions ────────────────────────────────────
