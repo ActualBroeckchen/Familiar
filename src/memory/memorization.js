@@ -316,18 +316,57 @@ export function buildExtractionMessages({ instructions, messages, sharedRoom = f
   ];
 }
 
-// Whether to stamp `name` fields for this job — opt-in per connection, default
-// off. The ward sets `nameFieldCapable: 'yes'` on a connection they've confirmed
-// accepts the field; everything else stays off, so this can never 400 a
-// memorization on a server that rejects it. (The auto-detect that flips this
-// without a manual step is a follow-up.)
+// Whether to stamp `name` fields for this job. The ward's per-connection
+// tri-state wins (`nameFieldCapable: 'yes'|'no'`); else a per-process LEARNED
+// result (recordNameFieldResult — set when a real turn succeeds, or when a
+// name-field 400 is caught and the retry without names works); else OPTIMISTIC:
+// attempt names and learn from the outcome, the way visionCapable does. Learned
+// state is in-memory — cheap to re-learn after a restart, no dotfile to keep.
+const _nameCapCache = new Map();   // `${provider}:${model}` → 'yes' | 'no'
+const nameCapKey = (job = {}) => `${job.provider ?? ''}:${job.model ?? ''}`;
+
 export function nameFieldEnabledFor(job = {}, settings = {}) {
   const conns = Array.isArray(settings?.connections) ? settings.connections : [];
-  const match = conns.find(c =>
+  const conn = conns.find(c =>
     c?.provider === job.provider &&
     c?.model === job.model &&
     (c?.baseUrl ?? null) === (job.baseUrl ?? null));
-  return match?.nameFieldCapable === 'yes';
+  if (conn?.nameFieldCapable === 'yes') return true;
+  if (conn?.nameFieldCapable === 'no')  return false;
+  const learned = _nameCapCache.get(nameCapKey(job));
+  if (learned === 'yes') return true;
+  if (learned === 'no')  return false;
+  return true;   // optimistic: attempt + learn (a name-field 400 caches 'no' and retries bare)
+}
+
+// Record what a real turn taught us about this provider:model, so the next job
+// skips the wasted attempt. Exported for the fallback orchestrator + tests.
+export function recordNameFieldResult(job = {}, result) {
+  if (result === 'yes' || result === 'no') _nameCapCache.set(nameCapKey(job), result);
+}
+
+/** Clear the in-process learned cache. Tests only. */
+export function _resetNameFieldCache() { _nameCapCache.clear(); }
+
+// Run the extraction call with name fields, degrading gracefully if the provider
+// rejects the field: on a 400 while names were on, retry ONCE without them — a
+// success proves the name field was the culprit (learn 'no'); a second failure
+// is a real error and propagates untouched. Mirrors how visionCapable learns
+// from a modality reject. `callProviderFn(messages)` and `buildMessages(bool)`
+// are injected so this is unit-testable without processJob's world.
+export async function extractWithNameFallback({ withNames, buildMessages, callProviderFn, onLearn }) {
+  try {
+    const res = await callProviderFn(buildMessages(withNames));
+    if (withNames) onLearn?.('yes');
+    return res;
+  } catch (err) {
+    if (withNames && /returned 400\b/.test(err?.message ?? '')) {
+      const res = await callProviderFn(buildMessages(false));   // retry bare; a throw here is a real error
+      onLearn?.('no');
+      return res;
+    }
+    throw err;
+  }
 }
 
 // The content-tag field, shared by both extraction prompts (private + shared
@@ -855,15 +894,20 @@ async function processJob(job) {
   // rides after it in FAITHFUL ROLES (Familiar = assistant, others = user), so
   // the model natively reads who said what — then a neutral system cue re-anchors
   // the extraction task. Only the notes carry macros; the transcript is literal.
-  const messages = buildExtractionMessages({
-    instructions,
-    messages: visionMessages,
-    sharedRoom: promptFn !== buildPrompt,
-    wardLabel: wardName,
-    withNames: nameFieldEnabledFor(job, settings),
+  const sharedRoom = promptFn !== buildPrompt;
+  const withNames = nameFieldEnabledFor(job, settings);
+  const buildMsgs = (names) => buildExtractionMessages({
+    instructions, messages: visionMessages, sharedRoom, wardLabel: wardName, withNames: names,
   });
 
-  const { content: raw, finishReason } = await callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, baseUrl: job.baseUrl, messages });
+  // Attempt with `name` fields (optimistic auto-detect); if the provider 400s on
+  // the field, retry once WITHOUT names and remember not to try again this run.
+  const { content: raw, finishReason } = await extractWithNameFallback({
+    withNames,
+    buildMessages: buildMsgs,
+    callProviderFn: (messages) => callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, baseUrl: job.baseUrl, messages }),
+    onLearn: (result) => recordNameFieldResult(job, result),
+  });
   const facts = parseFacts(raw, finishReason);
   // Relations ride the SAME LLM response — no extra request (CLAUDE.md
   // "ride existing requests"). They're enrichment, so parseRelations never
