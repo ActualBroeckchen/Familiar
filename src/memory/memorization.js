@@ -477,7 +477,7 @@ temporality — did this HAPPEN, or is it just TRUE now?
   "standing" — a fact that's generally true now, not tied to a day: a job, where someone lives, a lasting preference, a relationship. I hold it as a fact, not a memory of one day.
   Both, or unsure → "episodic". A dated memory is the safe default; the standing truth can still surface from it.
 
-confidence — 0.0 to 1.0, how sure I am I've got it right. I drop anything below 0.4.
+confidence — 0.0 to 1.0, how sure I am I've got it right. I drop anything below 0.4. This is about whether the thing happened, not who it's about — a fuzzy referent doesn't lower it (I mark that unresolved in the note instead).
 ${scheduleRules}${scheduleLegendBlock}
 ### Field rules — relations
 
@@ -490,6 +490,7 @@ type — a short snake_case label read from→to: works_at, lives_in, married_to
 ${followupsFieldRules}
 ### A few rules for myself
 - Whose fact is it? Only what {{user}} did, said, or felt is about {{user}}. If someone else did it — even when {{user}} is the one telling me about it — the fact is about that person: I name them in content and subjects, and I never write {{user}} as having done another person's action.
+- Who's it about, really? A "you" or a "she" in someone's words points at whoever they were talking to — I get that from the turn itself (who spoke, who to), not from whoever's on my mind. If I genuinely can't tell — who a "you" meant, or even who said something — I don't guess and I don't drop it: I keep the fact, pin what I'm sure of, and mark the rest unresolved right in the note ("Alice said 'you're my favourite' — target unresolved, Bob or me?"). A hedged memory I can fix later beats a confident wrong one.
 - One entry per distinct fact. One sentence carrying two facts about two people is two entries.
 - If a fact could be two categories, I take the more sensitive one (health > emotional > relationships > whereabouts > basics).
 - I skip pleasantries and small talk — only what I'd want to remember about someone.
@@ -558,7 +559,7 @@ ${CONTENT_TAG_FIELD_RULE}
 
 temporality — "episodic" for something from this day (a mood, an event, what happened); "standing" for a fact that's just generally true now (a job, where someone lives, a lasting preference). Unsure or both → "episodic".
 
-confidence — 0.0 to 1.0. I drop anything below 0.4.
+confidence — 0.0 to 1.0. I drop anything below 0.4. This is about whether the thing happened, not who it's about — a fuzzy referent doesn't lower it (I mark that unresolved in the note instead).
 
 ### Field rules — relations
 
@@ -570,6 +571,7 @@ type — a short snake_case label read from→to (lives_in, works_at, married_to
 
 ### A few rules for myself
 - Whose fact is it? The [Name]: before a line is who said it; an untagged line is {{user}}. What a villager did or said is about them — named in content and subjects. I don't fold the room into {{user}}.
+- Who's it about, really? A "you" or a "she" in someone's words points at whoever they were talking to — I get that from the turn itself (who spoke, who to), not from whoever's on my mind. If I genuinely can't tell — who a "you" meant, or even who said something — I don't guess and I don't drop it: I keep the fact, pin what I'm sure of, and mark the rest unresolved right in the note ("Alice said 'you're my favourite' — target unresolved, Bob or me?"). A hedged memory I can fix later beats a confident wrong one.
 - One entry per distinct fact. I skip pleasantries and small talk.
 - 1–8 facts — a shared room usually gives less that's mine to keep.
 - "relations" is [] unless a real edge touches {{user}} or someone in their Village, or it's between fictional characters. 0–5 relations, never invented.

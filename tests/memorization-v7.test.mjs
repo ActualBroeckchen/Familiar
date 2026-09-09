@@ -296,3 +296,13 @@ test('extractWithNameFallback: names off → one plain call, nothing learned', a
   assert.equal(calls, 1);
   assert.equal(learned, null);
 });
+
+test('both prompts carry the referent / degrade-dont-drop rule', () => {
+  for (const p of [buildPrompt(MESSAGES), buildSharedRoomPrompt(MESSAGES)]) {
+    assert.match(p, /Who's it about, really\?/);
+    assert.match(p, /unresolved/);                              // the greppable marker
+    assert.match(p, /a hedged memory i can fix later/i);        // degrade, don't drop
+    // confidence is decoupled from attribution, so a hedged fact isn't culled.
+    assert.match(p, /whether the thing happened, not who it's about/);
+  }
+});
