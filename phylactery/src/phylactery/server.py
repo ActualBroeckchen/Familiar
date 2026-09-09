@@ -182,6 +182,7 @@ def memory_create(
     category: Optional[str] = None,
     consent_pending: Optional[bool] = None,
     confidence: Optional[float] = None,
+    attribution_confidence: Optional[float] = None,
     standalone: Optional[bool] = None,
     register: Optional[str] = None,
     source_meta: Optional[dict] = None,
@@ -203,6 +204,10 @@ def memory_create(
     content_tag is "topic:level" (e.g. medical:sensitive) and decides which of
     my human's Villagers may ever see this fact; omitted → derived from category,
     fail-closed.
+    attribution_confidence (0-1) is how sure I am about WHO the fact is about —
+    separate from confidence (whether it happened). I set it low when a referent
+    is unresolved; recall downweights it rather than dropping it. Omitted → fully
+    attributed.
     """
     result = mem.create(
         content, granularity, date_key=date, slug=slug,
@@ -212,6 +217,7 @@ def memory_create(
         category=category,
         consent_pending=bool(consent_pending),
         confidence=float(confidence) if confidence is not None else 1.0,
+        attribution_confidence=float(attribution_confidence) if attribution_confidence is not None else None,
         standalone=bool(standalone),
         register=register or "episodic",
         source_meta=source_meta if isinstance(source_meta, dict) else None,
