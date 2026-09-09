@@ -37,8 +37,9 @@ sources:
 Session memorization is the pipeline that turns a chat session (or a piece of one) into
 durable lorebook entries the Familiar can be reminded of later. It is a server-side job
 queue owned by `memorization.js`, not a synchronous save: the browser enqueues a job, and a
-single in-process worker calls the configured LLM, parses the response, and writes the
-resulting entries into a dedicated Tome [@memorization-js] [@sessions-doc]. This subsystem is
+single in-process worker runs the [extraction](session-memory-extraction) process (framing the transcript for the LLM,
+calling the configured LLM, parsing the response), and writes the resulting entries into a
+dedicated Tome [@memorization-js] [@sessions-doc]. This subsystem is
 one of the two places long-running memory lives in Proto-Familiar — the other is
 [Phylactery](phylactery), which owns the Familiar's canonical, autonomously-retrieved memory.
 Tomes are explicitly the other kind: human-editable, keyword-triggered lorebook entries (see
@@ -170,6 +171,8 @@ and the audience floor at recall time.
 
 ## Related
 
+- [Session Memory Extraction](session-memory-extraction) — how transcripts are assembled,
+  prompts are framed, attribution is fixed, and speaker names are handled during extraction.
 - [Session memorization: durable queue](../decisions/session-memorization-queue) — why the
   queue, the dedicated tome, and the trigger set are shaped the way they are.
 - [Session lifecycle](session-lifecycle) — when sessions begin, how they normally end, and the
