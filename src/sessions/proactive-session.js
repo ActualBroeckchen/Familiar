@@ -38,6 +38,14 @@ export function isWardConversationalKind(kind) {
   return WARD_CONVERSATIONAL_KINDS.has(String(kind ?? ''));
 }
 
+// The stable message id for a proactive turn, derived from its outbox item id.
+// The server append and the browser's outbox-injection BOTH use this, so the two
+// never show the same message twice (the log merges by id; pollSessionDelta skips
+// the `outbox:` prefix). Mirrored verbatim in public/app.js — keep them in sync.
+export function proactiveMessageId(outboxId) {
+  return `outbox:${outboxId}`;
+}
+
 /**
  * Append a proactive message I sent my human as an assistant turn in our UNIFIED
  * ward session (the pointer the web chat and the Discord DM share). Lands in the
@@ -53,7 +61,7 @@ export function proactiveSessionDisabled() {
   return process.env.PROTO_FAMILIAR_PROACTIVE_SESSION_DISABLED === '1';
 }
 
-export async function appendWardProactiveTurn({ text, kind = null, logsDir, bindingsFile, now = Date.now } = {}) {
+export async function appendWardProactiveTurn({ text, kind = null, messageId = null, logsDir, bindingsFile, now = Date.now } = {}) {
   try {
     if (proactiveSessionDisabled()) return { ok: false, reason: 'disabled' };
     const content = stripLlmTimestamps(String(text ?? '').trim());
@@ -75,7 +83,12 @@ export async function appendWardProactiveTurn({ text, kind = null, logsDir, bind
     }
     if (!sessionId) sessionId = sessionSlugId();
 
+    // A caller-supplied id (derived from the outbox item) is what lets the web's
+    // own outbox-injection recognise this as the SAME message rather than a
+    // second copy — the log merges by id, and the browser's pollSessionDelta
+    // skips it, so the proactive turn lands exactly once across both surfaces.
     const [msg] = stampMessages([{
+      ...(messageId ? { id: messageId } : {}),
       role: 'assistant', content, meta: { proactive: true, ...(kind ? { kind } : {}) },
     }], iso);
 

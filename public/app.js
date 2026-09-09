@@ -1791,7 +1791,13 @@ async function pollSessionDelta() {
   if (!incoming.length) return;
 
   const known = new Set(state.messages.map(m => m.id).filter(Boolean));
-  const fresh = incoming.filter(m => !(m.id && known.has(m.id)));
+  // Proactive turns (server-appended reminders / reach-outs / triage — id prefix
+  // `outbox:`) are owned by the outbox-injection path (fetchOutbox → it renders
+  // them with the ping + ack). Skipping them here is what stops the same message
+  // showing twice on web now that the server also records it in the session log.
+  const fresh = incoming.filter(m =>
+    !(m.id && known.has(m.id)) &&
+    !(typeof m.id === 'string' && m.id.startsWith('outbox:')));
   if (!fresh.length) return;
 
   const atBottom = isNearBottom();
@@ -13016,6 +13022,17 @@ async function injectOutboxAsChatMessage(item) {
   const content = stripDisplayTimestamps(formatOutboxAsMessageContent(item));
   if (!content) return;
 
+  // Shared stable id with the SERVER's proactive session-append (proactive-session.js
+  // proactiveMessageId) — so the same reminder isn't shown twice. If it's already in
+  // the transcript (loaded from the log on open, or a prior inject), don't re-render
+  // or re-ping; just settle the bookkeeping. Mirrors `outbox:<id>` — keep in sync.
+  const msgId = `outbox:${item.id}`;
+  if (state.messages.some(m => m.id === msgId)) {
+    _injectedOutboxIds.add(item.id);
+    if (item.kind !== 'triage') await acknowledgeOutboxItem(item.id);
+    return;
+  }
+
   // If this item was already SPOKEN into a live voice call (delivery recorded by
   // the voice-call push adapter, Pass 2d), my human just heard it — the chat
   // copy is a record for the session log, not something to ping about again.
@@ -13045,7 +13062,7 @@ async function injectOutboxAsChatMessage(item) {
     timestamp,
     proactive:  true,
     outboxKind: item.kind,
-    id:         generateId(),
+    id:         msgId,
   });
   el.dataset.msgIndex = String(state.messages.length - 1);
   saveHistory();
