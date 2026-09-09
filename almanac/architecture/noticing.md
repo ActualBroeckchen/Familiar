@@ -26,7 +26,7 @@ Unlike [silence-triage](safety-spine) or warm reach-out, noticing deliberately *
 
 The noticing reflection — the Familiar's own turn of introspection — now assembles as a SYSTEM message framed alongside identity, via the pure helper `noticingMessages({identity, body, cue})` [@noticing-js]. The `user` slot holds only a bare `(a quiet moment)` cue, kept solely because several providers (GLM/z.ai, DeepSeek family) refuse to complete when there is no user turn at all [@noticing-js]. The Familiar's words are never in the `user` role, preserving [entity-as-subject](../concepts/entity-as-subject): the entity owns its reflections and decisions, rather than appearing to be operated by the ward [@noticing-js].
 
-This was a regression in the original implementation: the noticing deliberation went out on a `user` role turn, framing the entity as being run rather than thinking. The fix is one instance of a general shape — triage/reachout/pondering all put their deliberation through `callProviderChat` on a `user` turn by default — but only noticing has been corrected so far [@noticing-js].
+This was a regression in the original implementation: the noticing deliberation went out on a `user` role turn, framing the entity as being run rather than thinking. The fix is one instance of a general pattern that appeared across other autonomous loops (triage, warm reach-out, pondering). By 0.11.93-alpha, this pattern was systematized with a shared helper function across all inner-voice deliberations. See [Deliberations Delivered as System Messages](../decisions/deliberations-as-system-messages) for the scope of the pattern and the architectural reasoning [@noticing-js].
 
 ## The consequence loop: why it re-asked, and the close (0.11.86)
 
