@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Any
 
 from phylactery.db import get_conn, insert_with_slug_retry, new_id, slug_id, now_iso
@@ -1025,6 +1025,8 @@ def update_memory_by_id(
     audience: str | None = None,
     care_weight: str | None = None,
     content_tag: str | None = None,
+    attribution_confidence: float | None = None,
+    subjects: list[str] | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     own_conn = conn is None
@@ -1054,12 +1056,63 @@ def update_memory_by_id(
         if care_weight is not None:
             sets.append("care_weight=?")
             params.append(care_weight if care_weight != "" else None)
+        # Re-resolution: raise attribution once a fuzzy WHO is pinned, and set the
+        # now-known subject. Clamped 0-1; unset leaves both untouched.
+        if attribution_confidence is not None:
+            sets.append("attribution_confidence=?")
+            params.append(max(0.0, min(1.0, attribution_confidence)))
+        if subjects is not None:
+            sets.append("subjects_json=?")
+            params.append(json.dumps(subjects))
         params.append(mem_id)
         with conn:
             conn.execute(f"UPDATE memories SET {', '.join(sets)} WHERE id=?", params)
         if new_content is not None:
             _upsert_embedding(conn, mem_id, new_content)
         return {"ok": True, "id": mem_id}
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def list_unresolved_attributions(
+    threshold: float = 0.5,
+    min_age_days: int = 1,
+    limit: int = 10,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    """Aging memories whose WHO is still fuzzy — attribution_confidence set and
+    below `threshold`, last touched at least `min_age_days` ago (so a just-saved
+    hedge gets a beat before it's surfaced for re-resolution). Ordered
+    most-unsure first. This is the code gate for the noticing loop's
+    re-resolution wake: no rows → no wake. Nulls (fully attributed) never match."""
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        cutoff = (datetime.utcnow() - timedelta(days=max(0, min_age_days))).isoformat()
+        rows = conn.execute(
+            "SELECT id, content, subjects_json, date_key, attribution_confidence "
+            "FROM memories "
+            "WHERE kind='narrative' AND attribution_confidence IS NOT NULL "
+            "  AND attribution_confidence < ? AND updated_at <= ? "
+            "ORDER BY attribution_confidence ASC, updated_at ASC LIMIT ?",
+            (threshold, cutoff, max(1, limit)),
+        ).fetchall()
+        items = []
+        for r in rows:
+            try:
+                subs = json.loads(r["subjects_json"]) if r["subjects_json"] else []
+            except (TypeError, ValueError):
+                subs = []
+            items.append({
+                "id": r["id"],
+                "content": r["content"] or "",
+                "subjects": subs,
+                "date": r["date_key"],
+                "attribution_confidence": r["attribution_confidence"],
+            })
+        return {"items": items}
     finally:
         if own_conn:
             conn.close()
