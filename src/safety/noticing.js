@@ -231,7 +231,7 @@ export function buildNoticingPrompt({
         const line = `- ${e.label ?? e.id}${e.agoText ? `, ${e.agoText} ago` : ''} [id ${e.id}]`;
         return e.snippet ? `${line}\n    after it, my human said: "${e.snippet}"` : line;
       }).join('\n') +
-      `\n\nDid we talk about these yet? Let me check our current conversation first — if it's not there, I look back over the last ${spanText || 'day'} of what we said. The moment I find how one went, I use ${closeTools} to record the real outcome on the graph and mark it done. If there's genuinely nothing about it, I can just ask.`
+      `\n\nDid we talk about these yet? Let me check our current conversation first — and if it's not there, I search our history with search_conversation (a since_hours covering the last ${spanText || 'day'} reads back what we said, even if it scrolled out of view). The moment I find how one went, I use ${closeTools} to record the real outcome on the graph and mark it done. If there's genuinely nothing about it, I can just ask.`
     : '';
 
   const otherSection = (Array.isArray(otherItems) && otherItems.length)

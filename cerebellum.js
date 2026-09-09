@@ -95,6 +95,7 @@ import {
 } from './src/gcal/gcal-google.js';
 import { getRecentOfferInfo, rekeySurfaceEventIds } from './src/pondering/surface-events.js';
 import { appendWardProactiveTurn, isWardConversationalKind } from './src/sessions/proactive-session.js';
+import { searchSessionLogs } from './src/sessions/session-search.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -2433,6 +2434,23 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'search_conversation',
+      description: "I look back through what my human and I have actually SAID — the raw messages in our recent sessions, not my distilled memory of them. I reach for this when I need to know how something specific went or what we decided and it isn't in front of me: I can search by words we'd likely have used, OR hand it a stretch of time (since_hours) to read back everything from then. That time mode is the reliable one right after I notice an outcome I was about to ask about — my human's answer often doesn't repeat the event's name (\"it wasn't as scary\"), so I read the window rather than guess keywords. For my distilled memories and facts I use recall instead; this is the verbatim transcript. It reads my own chats with my human and the group rooms we share (not a villager's private DM), and it only ever runs in my own private thinking — nothing it turns up is shown to anyone else.",
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Words or a phrase we\'d likely have used. Optional if I give since_hours instead.' },
+          since_hours: { type: 'number', description: 'Read back everything we said in the last this-many hours (e.g. 9 to cover since this morning). Optional — the keyword-free way to check whether my human already told me an outcome.' },
+          days: { type: 'number', description: 'How many days back to search when I don\'t give since_hours (default 14, max 60).' },
+          limit: { type: 'number', description: 'Most matches to return (default 8).' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'web_search',
       description: "I reach for this when {{user}} needs current or specific information out on the web — pages, news, sources. It hands me back a handful of titles, snippets, and links I can then open with read_webpage. For a plain definition or overview I use look_up instead.",
       parameters: {
@@ -3107,6 +3125,35 @@ export const TOOL_EXECUTORS = {
     } catch (err) {
       return `I couldn't reach my memory to look back over those days just now (${err.message}).`;
     }
+  },
+
+  // Raw-transcript search (session-search.js) — distinct from recall (memories).
+  // WARD-ONLY and fail-closed: a gated villager turn can never read ward-private
+  // transcripts through it. discordReadAudiences returns undefined only on a
+  // ward/web/noticing turn; anything else is gated → refuse.
+  search_conversation: async ({ query, since_hours, days, limit } = {}, ctx = {}) => {
+    if (discordReadAudiences(ctx) !== undefined) {
+      return 'I can only look back through my private history with my human — not from here.';
+    }
+    const q = String(query ?? '').trim();
+    const hrs = Number(since_hours);
+    const sinceMs = Number.isFinite(hrs) && hrs > 0 ? Date.now() - hrs * 3600_000 : null;
+    if (!q && sinceMs == null) {
+      return 'I need either something to search for, or a stretch of time to look back over (since_hours).';
+    }
+    let matches = [];
+    try { matches = await searchSessionLogs({ logsDir: LOGS_DIR, query: q, sinceMs, days, limit, now: Date.now }); }
+    catch (err) { return `I couldn't read back through our history just now (${err?.message ?? err}).`; }
+    if (!matches.length) {
+      return q ? `I looked back through what we've said and found nothing about "${q}".`
+               : 'I looked back over that stretch and found nothing we said in it.';
+    }
+    const lines = matches.map((m) => {
+      const when = m.when ? relativeTime(new Date(m.when).toISOString(), Date.now()) : 'some time ago';
+      const who  = m.who === 'me' ? 'Me' : (m.who && m.who !== 'them' ? m.who : 'Them');
+      return `- [${who} · ${when}] ${m.text.slice(0, 240)}`;
+    });
+    return `Looking back through what we've said:\n${lines.join('\n')}`;
   },
 
   // Villager → ward handoff. On a Discord DM with one of {{user}}'s people I have
@@ -4658,6 +4705,10 @@ const NOTICING_REGISTRY_TOOL_NAMES = [
   // the noticing turn could ask "how did it go?" but never write the answer —
   // so it asked again next tick. The whole loop-closing hinges on them.
   'schedule_resolve', 'schedule_calibrate_link',
+  // Look back through the raw transcript for how an outcome actually went —
+  // esp. an answer my human gave that scrolled out of the look-back window. The
+  // reliable "did they already tell me?" check before I ask again.
+  'search_conversation',
   // The sky in reach for a due outside-tagged intention (W-B, read-only, cheap;
   // NOT a wake condition — weather only flavours a turn already happening).
   'weather_today',
