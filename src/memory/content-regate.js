@@ -28,6 +28,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { promises as fsp, mkdirSync } from 'fs';
 import { normalizeTag } from './content-tags.js';
+import { familiarDeliberationMessages } from '../../llm-call.js';
 import { AUDIENCE_TAG_WARD_OPEN, AUDIENCE_TAG_WARD_PRIVATE } from '../village/audience.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
@@ -197,7 +198,7 @@ export async function runOneRetagTick({
   getRegistry,
   callLLM,
   updateMemory,
-  buildMessages = ({ prompt }) => [{ role: 'user', content: prompt }],
+  buildMessages = ({ prompt }) => familiarDeliberationMessages({ body: prompt, cue: '(reviewing my private notes about my human)' }),
   batchSize = DEFAULT_BATCH_SIZE,
   now = () => new Date().toISOString(),
   // State I/O — injected for isolated tests; defaults are the real dotfiles.

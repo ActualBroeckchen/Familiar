@@ -17,7 +17,7 @@ import { getRegistry } from '../village/village.js';
 import { isCallActiveFromFile } from '../voice/call-engine.js';
 import { readSettingsSync, connectionForFeature } from '../../cerebellum.js';
 import { connectionReady } from '../../providers.js';
-import { callProviderChat } from '../../llm-call.js';
+import { callProviderChat, familiarDeliberationMessages } from '../../llm-call.js';
 import { substituteMacros } from '../../macros.js';
 import { runOneRetagTick, DEFAULT_BATCH_SIZE } from './content-regate.js';
 
@@ -50,12 +50,16 @@ async function runTick() {
   const summary = await runOneRetagTick({
     getCandidates: () => listContentGateCandidates({ limit: CANDIDATE_LIMIT }),
     getRegistry:   () => getRegistry(),
-    buildMessages: ({ prompt }) => [
-      ...(identity ? [{ role: 'system', content: identity }] : []),
-      // Standalone provider prompt → macro boundary #1 (a no-op here, the prompt
-      // authors "my human" literally, but kept for consistency with the rule).
-      { role: 'user', content: substituteMacros(prompt, readSettingsSync()) },
-    ],
+    // Entity-as-subject: this reflection is the Familiar's OWN thinking, so it
+    // rides as a system message beside identity, not a `user` turn handed TO
+    // them; a bare user cue keeps providers that need a user turn happy. Macro
+    // boundary #1 (a no-op here — the prompt authors "my human" literally — kept
+    // for consistency with the rule).
+    buildMessages: ({ prompt }) => familiarDeliberationMessages({
+      identity,
+      body: substituteMacros(prompt, readSettingsSync()),
+      cue: '(reviewing my private notes about my human)',
+    }),
     // Reasoning model room (RULE A): callProviderChat gives a generous cap +
     // reasoning-content recovery. temperature low — this is careful judgment.
     callLLM: (messages) => callProviderChat({
