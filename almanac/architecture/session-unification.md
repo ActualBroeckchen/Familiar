@@ -17,6 +17,9 @@ sources:
   - id: session-log-js
     type: file
     path: src/sessions/session-log.js
+  - id: proactive-session-js
+    type: file
+    path: src/sessions/proactive-session.js
 ---
 
 # Unified Ward Sessions
@@ -99,6 +102,42 @@ designs reconciliation for competing Tome-entry writers (user, sifter, agent) an
 unimplemented; this session-log merge solves the same *shape* of problem (two writers, one
 record) for chat session logs specifically, with a much simpler union-by-id policy rather
 than the tiered field-ownership scheme proposed there.
+
+## Proactive messages land in the unified session (0.11.87-alpha)
+
+Autonomous proactive messages — reminders, event and weather alerts, reachouts, and triage
+check-ins — are now recorded as ASSISTANT turns in the unified ward-private session, not just
+pushed to the ward as banners or Discord DMs [@proactive-session-js]. Before this fix, proactive
+messages were delivered but never logged, causing two problems: the Familiar had no record it
+had already sent a reminder (so the same one re-sent), and a Discord DM reply arrived
+context-less — the next turn saw the ward's reply but not the Familiar's own preceding message
+that prompted it.
+
+`appendWardProactiveTurn` (in `src/sessions/proactive-session.js`) records the outgoing message
+by writing it to whichever session is currently bound to `WARD_PRIVATE_KEY`, the same pointer
+both the web and Discord use for unified conversation [@proactive-session-js]. It is wired
+at the single seam every proactive item passes through: `cerebellum.enqueueAndDispatch`, after
+a successful non-deduped enqueue+dispatch, and gated by message kind via `isWardConversationalKind`
+— only `WARD_CONVERSATIONAL_KINDS = {reminder, event_alert, weather_alert, reachout, triage}`
+qualify [@proactive-session-js]. Relays (a villager's words passed through the Familiar),
+page-watch notices, crisis-resource links, and outbound alerts are deliberately excluded —
+they are notifications, not the Familiar speaking as itself, so the Familiar must not read them
+back as its own turns [@proactive-session-js].
+
+When a proactive turn lands, if no session is currently bound or the bound session has idled
+past `SESSION_IDLE_ROTATE_MS`, the function mints and binds a fresh session so the ward's
+reply threads to the proactive message rather than a stale session [@proactive-session-js].
+The append itself uses merge-write semantics (the same `withSessionLock` and `mergeMessages`
+as the web/Discord multi-writer path) to reconcile safely with any concurrent appends from a
+live surface; the write never throws, because a failure in session logging cannot be allowed
+to sink the actual delivery [@proactive-session-js] [@session-log-js]. An off-switch
+`PROTO_FAMILIAR_PROACTIVE_SESSION_DISABLED=1` disables logging without affecting delivery
+[@proactive-session-js].
+
+`SESSION_IDLE_ROTATE_MS` was moved from a private constant in `discord-gateway.js` to an
+export of `session-bindings.js` so both the Discord gateway's ward-DM session rollover and
+this proactive-append path use the same idle threshold and cannot drift apart
+[@proactive-session-js] [@session-bindings-js].
 
 ## Live sync without disturbing the composer
 
