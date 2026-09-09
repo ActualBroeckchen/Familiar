@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildSharedRoomPrompt, buildPrompt, conversationMessages, buildExtractionMessages, speakerNameField, nameFieldEnabledFor } from '../src/memory/memorization.js';
+import { buildSharedRoomPrompt, buildPrompt, conversationMessages, buildExtractionMessages, speakerNameField, nameFieldEnabledFor, recordNameFieldResult, extractWithNameFallback, _resetNameFieldCache } from '../src/memory/memorization.js';
 
 const NAME_SAFE = /^[a-zA-Z0-9_-]+$/;   // the OpenAI `name` charset — no spaces/unicode
 
@@ -218,11 +218,81 @@ test('buildExtractionMessages threads withNames to the transcript turns', () => 
   assert.ok(!off.some(m => 'name' in m), 'no names when off');
 });
 
-test('nameFieldEnabledFor: only a connection explicitly marked capable opts in', () => {
-  const job = { provider: 'openai', model: 'gpt-4o', baseUrl: null };
-  assert.equal(nameFieldEnabledFor(job, { connections: [{ provider: 'openai', model: 'gpt-4o', baseUrl: null, nameFieldCapable: 'yes' }] }), true);
-  assert.equal(nameFieldEnabledFor(job, { connections: [{ provider: 'openai', model: 'gpt-4o', baseUrl: null }] }), false, 'default off');
-  assert.equal(nameFieldEnabledFor(job, { connections: [{ provider: 'openai', model: 'gpt-4o', baseUrl: null, nameFieldCapable: 'no' }] }), false);
-  assert.equal(nameFieldEnabledFor(job, { connections: [] }), false, 'no match → off');
-  assert.equal(nameFieldEnabledFor(job, {}), false);
+test('nameFieldEnabledFor: optimistic by default, ward tri-state and learned cache override', () => {
+  _resetNameFieldCache();
+  const job = { provider: 'prov-a', model: 'm1', baseUrl: null };
+  // Default: optimistic ON (attempt + learn) — no tri-state, nothing learned.
+  assert.equal(nameFieldEnabledFor(job, {}), true, 'optimistic default');
+  assert.equal(nameFieldEnabledFor(job, { connections: [] }), true);
+  // Ward tri-state wins.
+  assert.equal(nameFieldEnabledFor(job, { connections: [{ provider: 'prov-a', model: 'm1', baseUrl: null, nameFieldCapable: 'no' }] }), false);
+  assert.equal(nameFieldEnabledFor(job, { connections: [{ provider: 'prov-a', model: 'm1', baseUrl: null, nameFieldCapable: 'yes' }] }), true);
+  // A learned 'no' turns it off for that provider:model.
+  recordNameFieldResult(job, 'no');
+  assert.equal(nameFieldEnabledFor(job, {}), false, 'learned no');
+  // Ward tri-state still overrides a learned result.
+  assert.equal(nameFieldEnabledFor(job, { connections: [{ provider: 'prov-a', model: 'm1', baseUrl: null, nameFieldCapable: 'yes' }] }), true);
+  _resetNameFieldCache();
+});
+
+test('extractWithNameFallback: success caches capable; a name-field 400 retries bare and caches incapable', async () => {
+  _resetNameFieldCache();
+  // Happy path: names on, provider accepts → returns result, learns 'yes', one call.
+  let calls = 0; let learned = null;
+  const ok = await extractWithNameFallback({
+    withNames: true,
+    buildMessages: (names) => ({ names }),
+    callProviderFn: (m) => { calls++; return { content: 'ok', usedNames: m.names }; },
+    onLearn: (v) => { learned = v; },
+  });
+  assert.equal(ok.usedNames, true);
+  assert.equal(calls, 1);
+  assert.equal(learned, 'yes');
+
+  // Name-field rejection: first call (names) 400s, retry WITHOUT names succeeds → learns 'no'.
+  calls = 0; learned = null;
+  const recovered = await extractWithNameFallback({
+    withNames: true,
+    buildMessages: (names) => ({ names }),
+    callProviderFn: (m) => { calls++; if (m.names) throw new Error('Provider openai returned 400: unknown field name'); return { content: 'ok', usedNames: m.names }; },
+    onLearn: (v) => { learned = v; },
+  });
+  assert.equal(recovered.usedNames, false, 'retried without names');
+  assert.equal(calls, 2);
+  assert.equal(learned, 'no');
+});
+
+test('extractWithNameFallback: a real error is not masked by the name-field retry', async () => {
+  // 400 on BOTH (names and bare) → a genuine bad request, propagates, not learned 'no'.
+  let learned = null;
+  await assert.rejects(() => extractWithNameFallback({
+    withNames: true,
+    buildMessages: (names) => ({ names }),
+    callProviderFn: () => { throw new Error('Provider x returned 400: bad model'); },
+    onLearn: (v) => { learned = v; },
+  }), /returned 400/);
+  assert.equal(learned, null, 'never learned no when the bare retry also failed');
+
+  // A non-400 (e.g. 500) never triggers the retry — surfaces immediately.
+  let calls = 0;
+  await assert.rejects(() => extractWithNameFallback({
+    withNames: true,
+    buildMessages: (names) => ({ names }),
+    callProviderFn: () => { calls++; throw new Error('Provider x returned 500: upstream'); },
+    onLearn: () => {},
+  }), /returned 500/);
+  assert.equal(calls, 1, 'no retry on a 5xx');
+});
+
+test('extractWithNameFallback: names off → one plain call, nothing learned', async () => {
+  let calls = 0; let learned = null;
+  const res = await extractWithNameFallback({
+    withNames: false,
+    buildMessages: (names) => ({ names }),
+    callProviderFn: (m) => { calls++; return { usedNames: m.names }; },
+    onLearn: (v) => { learned = v; },
+  });
+  assert.equal(res.usedNames, false);
+  assert.equal(calls, 1);
+  assert.equal(learned, null);
 });
