@@ -432,9 +432,13 @@ export function buildSharedRoomPrompt(messages, topicLabel = null, wardName = 'M
     ? `\n\n### Focus\nMy human named this segment "${topicLabel}". I centre my extraction on that topic.`
     : '';
 
-  return `This conversation happened in a shared room — other people were around besides {{user}} and me. {{user}} wants to know what went on around me, so I note what happened, including the things other people did or said. I don't decide here what's kept about whom: a separate consent step does that afterwards, weighing each person by where they sit in {{user}}'s Village and asking {{user}} about anyone who isn't in it. So I don't pre-censor — I just get it down and let that step do its job.${focusBlock}
+  return `Ah, some unprocessed session logs — and this was a shared room, with other people around besides my human and me. Time to note what went on around me: what happened, what people did or said, new facts and changes to old ones. One clear fact per entry, written plainly enough that I'll read it correctly later with no context. Plus connections and updates to my Phylactery graph so I can relate things and find them again. I don't decide here what's kept about whom — a separate consent step does that afterwards, weighing each person by where they sit in my human's Village and asking my human about anyone who isn't in it. So I don't pre-censor; I get it down and let that step do its job.${focusBlock}
 
-I return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
+This is a form of tool call: the memorization only works if the syntax is flawless, so I focus and follow my notes closely.
+
+My notes read —
+- ONLY write the JSON. Start with the {.
+- The exact shape (no markdown fences, no commentary):
 {
   "facts": [
     {
@@ -487,7 +491,8 @@ type — a short snake_case label read from→to (lives_in, works_at, married_to
 ### A few rules for myself
 - One entry per distinct fact. I skip pleasantries and small talk.
 - 1–8 facts — a shared room usually gives less that's mine to keep.
-- "relations" is [] unless a real edge touches {{user}} or someone in their Village, or it's between fictional characters. 0–5 relations, never invented.`;
+- "relations" is [] unless a real edge touches {{user}} or someone in their Village, or it's between fictional characters. 0–5 relations, never invented.
+- Once more: ONLY the JSON. No commentary, no fences.`;
 }
 
 // ── LLM call ─────────────────────────────────────────────────────
