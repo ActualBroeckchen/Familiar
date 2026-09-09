@@ -100,3 +100,39 @@ def test_search_downweights_fuzzy_attribution_but_never_drops_it():
     # ...and it's flagged so the Familiar can see the attribution is soft.
     assert top_lo.get("attribution_confidence") == 0.3
     assert "attribution_confidence" not in top_hi   # confident one carries no flag
+
+
+# ── the re-resolution query + update (noticing loop's inputs) ─────────
+
+def test_list_unresolved_attributions_only_returns_aging_fuzzy_ones():
+    c = _conn()
+    with patch("phylactery.embed.embed_text", _fake_embed):
+        fuzzy = memory.create("Alice is a nurse", "significant", attribution_confidence=0.3, conn=c)
+        memory.create("Alice is a nurse", "significant", attribution_confidence=0.9, conn=c)  # confident
+        memory.create("Alice is a nurse", "significant", conn=c)                              # unset (null)
+    out = memory.list_unresolved_attributions(threshold=0.5, min_age_days=0, conn=c)
+    ids = [it["id"] for it in out["items"]]
+    assert ids == [fuzzy["id"]]          # only the sub-threshold one; nulls/confident excluded
+    assert out["items"][0]["attribution_confidence"] == 0.3
+
+
+def test_list_unresolved_attributions_respects_min_age():
+    c = _conn()
+    with patch("phylactery.embed.embed_text", _fake_embed):
+        memory.create("Alice is a nurse", "significant", attribution_confidence=0.3, conn=c)
+    # Freshly written → too recent to re-resolve yet.
+    assert memory.list_unresolved_attributions(threshold=0.5, min_age_days=1, conn=c)["items"] == []
+
+
+def test_update_resolves_attribution_and_subjects():
+    c = _conn()
+    with patch("phylactery.embed.embed_text", _fake_embed):
+        res = memory.create("someone said 'beloved boy' — target unresolved", "significant",
+                            attribution_confidence=0.3, conn=c)
+    memory.update_memory_by_id(res["id"], attribution_confidence=0.95, subjects=["Bob"], conn=c)
+    row = c.execute("SELECT attribution_confidence, subjects_json FROM memories WHERE id=?", (res["id"],)).fetchone()
+    assert row[0] == 0.95
+    import json as _json
+    assert _json.loads(row[1]) == ["Bob"]
+    # Resolved → no longer surfaces for re-resolution.
+    assert memory.list_unresolved_attributions(threshold=0.5, min_age_days=0, conn=c)["items"] == []
