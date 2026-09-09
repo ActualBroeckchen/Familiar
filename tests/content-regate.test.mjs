@@ -308,3 +308,27 @@ test('runOneRetagTick: no candidates at all → no_candidates, no LLM call', asy
   });
   assert.equal(result.reason, 'no_candidates');
 });
+
+test('runOneRetagTick: the reflection rides as SYSTEM, never a user turn (entity-as-subject)', async () => {
+  // The disclosure reflection is the Familiar's own thinking about its own
+  // private notes — it must not be framed as something handed TO the Familiar in
+  // a user turn. Only a bare, non-speaking cue may occupy the user slot.
+  let captured = null;
+  await runOneRetagTick({
+    getCandidates: () => ({ items: [{ id: 'note-a1', date: '2026-09-01', content: 'my human likes oat milk', content_tag: 'general:open' }] }),
+    getRegistry:   async () => ({}),
+    callLLM:       (messages) => { captured = messages; return '[]'; },  // keep everything
+    updateMemory:  () => ({ ok: true }),
+    readReviewed:  async () => new Set(),
+    writeReviewed: async () => {},
+    readNotices:   async () => [],
+    writeNotices:  async () => {},
+  });
+  assert.ok(Array.isArray(captured), 'callLLM received a messages array');
+  const users = captured.filter(m => m.role === 'user');
+  assert.equal(users.length, 1, 'exactly one user turn');
+  assert.match(users[0].content, /^\(.*\)$/, 'the sole user turn is a bare bracketed cue, not the reflection');
+  // Match a phrase unique to the reflection body (not shared with the cue).
+  assert.ok(captured.some(m => m.role === 'system' && /How I decide, honestly/.test(m.content)), 'the reflection is a system message');
+  assert.ok(!users.some(m => /How I decide, honestly/.test(m.content)), 'the reflection is never in a user turn');
+});
