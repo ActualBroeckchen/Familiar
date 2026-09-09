@@ -70,7 +70,7 @@ server.js  (Express, Node 22+, ESM)
     ├── memorization.js     ── autonomous per-fact memorization queue + worker (Pillar C)
     ├── outgoing-filter.js  ── Pillar D: post-response semantic gate before delivery
     ├── temporal-format.js  ── pure renderer for Unruh's payload
-    ├── providers.js        ── shared chat-completions URL map
+    ├── providers.js        ── shared chat-completions URL map + connection readiness (resolveProviderUrl / connectionReady / providerRequiresKey / authHeader); local + custom OpenAI-compatible endpoints, key-optional
     │
     ├── logs/               session JSON files (git-ignored)
     └── tomes/              per-Tome JSON files + state caches
@@ -1066,6 +1066,21 @@ a room) and intercepted before any turn, beside `!update`/`!call`.
     `INTERACTION_CREATE` dispatch routes by custom_id prefix
     (`pfconsent:`/`pfqueue:`/`pfconn:`). Ward `!consent` now points at both
     new commands (discoverability) rather than only the web app.
+
+*Connection resolution + readiness (0.11.91).* Every LLM call site — the
+chat proxy, both tool loops, and all autonomous loops — resolves its endpoint
+through `resolveProviderUrl(conn)` (`providers.js`) and gates on
+`connectionReady(conn)` instead of the old scattered `conn.apiKey && conn.model`
+checks. `connectionReady` requires a model and a key *only when the provider
+needs one* (`providerRequiresKey` → false for `custom` / `ollama` / `lmstudio`),
+so a keyless local or custom OpenAI-compatible endpoint is a first-class
+connection. A connection may carry a `baseUrl`; for the base-URL providers it is
+canonicalised by `normalizeBaseUrl` (bare host / `…/vN` / full endpoint all
+accepted). Outbound requests attach `Authorization: Bearer …` via
+`authHeader(apiKey)` — present only when a key is set, since local servers
+reject a malformed header rather than a missing one. This includes the triage
+deliberation (`cerebellum.decideTriageViaLLM`), so the caring spine now runs on
+a keyless local model too.
 
 *Clearance-gated tools (V10, `docs/discord-tools-build-spec.md`).*
 `handleTurn` runs a tool loop (reusing `cerebellum.runToolCallLoop`;

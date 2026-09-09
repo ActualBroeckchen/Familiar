@@ -37,7 +37,7 @@ import { slugCore } from './slug-ids.js';
 import { fileURLToPath } from 'url';
 import { promises as fsp, readFileSync, mkdirSync } from 'fs';
 
-import { PROVIDER_URLS } from './providers.js';
+import { resolveProviderUrl, connectionReady } from './providers.js';
 import { callProviderChat } from './llm-call.js';
 import { listOwnFiles, readOwnFile, searchSessions, isSessionLogPath, readSessionLog } from './own-files.js';
 import { readCalendarCache, resolveAttribution, normalizeAttributionEntry } from './src/gcal/gcal-attribution.js';
@@ -199,7 +199,7 @@ export function connectionForFeature(settings, feature) {
   const map = settings?.featureConnections;
   const id  = (map && typeof map === 'object') ? map[feature] : null;
   if (id && Array.isArray(settings?.connections)) {
-    const c = settings.connections.find(x => x?.id === id && x?.apiKey && x?.model);
+    const c = settings.connections.find(x => x?.id === id && connectionReady(x));
     if (c) return c;
   }
   return primaryConnectionFrom(settings);
@@ -686,9 +686,14 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   // Ward-assignable per-feature connection (the ward's explicit, recorded choice
   // to allow this for triage; unset → primary, so the safe default is unchanged).
   const conn = connectionForFeature(s, 'triage');
-  if (!conn?.apiKey) return { action: 'wait' };
+  // URL/readiness plumbing only — NOT a change to the triage decision, tiers, or
+  // timing. connectionReady accepts a keyless local/custom endpoint the ward
+  // chose, so a ward running only a local model still gets triage (before, the
+  // bare `!conn?.apiKey` guard silently returned 'wait' forever on such a setup —
+  // a safety gap). Still returns 'wait' when there's genuinely no usable model.
+  if (!connectionReady(conn)) return { action: 'wait' };
 
-  const url = PROVIDER_URLS[conn.provider];
+  const url = resolveProviderUrl(conn);
   if (!url) return { action: 'wait' };
 
   const nowMs = Date.now();
@@ -888,7 +893,7 @@ The "message" field (to the human) must be 1–2 sentences. First person. Authen
     let text;
     try {
       text = await callProviderChat({
-        provider: conn.provider, apiKey: conn.apiKey, model: conn.model,
+        provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
         messages: llmMessages, temperature: 0.7, maxTokens: 4000,
       });
     } catch (err) {
@@ -2726,6 +2731,7 @@ export const TOOL_EXECUTORS = {
       provider:    ctx?.sessionInfo?.provider,
       model:       ctx?.sessionInfo?.model,
       apiKey:      ctx?.apiKey,
+      baseUrl:     ctx?.baseUrl ?? ctx?.sessionInfo?.baseUrl,
       audienceTag: ctx?.audienceTag,
     });
     if (!res?.ok) {

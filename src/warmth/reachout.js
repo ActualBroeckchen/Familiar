@@ -26,7 +26,7 @@
  * stands down entirely and lets triage own the moment (see reachout-loop.js).
  */
 
-import { PROVIDER_URLS } from '../../providers.js';
+import { resolveProviderUrl, connectionReady } from '../../providers.js';
 import { callProviderChat } from '../../llm-call.js';
 import { enrich, getRecentMemoryLines } from '../../thalamus.js';
 import { readSettingsSync, primaryConnectionFrom, connectionForFeature, getRecentSessionMessages, formatRecentMessagesForContext } from '../../cerebellum.js';
@@ -180,8 +180,8 @@ export async function decideReachoutViaLLM({
 } = {}) {
   const s = readSettingsSync();
   const conn = connectionForFeature(s, 'reachout');
-  if (!conn?.apiKey || !conn?.model) return { action: 'wait' };
-  const url = PROVIDER_URLS[conn.provider];
+  if (!connectionReady(conn)) return { action: 'wait' };
+  const url = resolveProviderUrl(conn);
   if (!url) return { action: 'wait' };
 
   const nowMs = now();
@@ -229,7 +229,7 @@ export async function decideReachoutViaLLM({
 
   let raw;
   try {
-    raw = await callLLM({ provider: conn.provider, apiKey: conn.apiKey, model: conn.model, prompt });
+    raw = await callLLM({ provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl, prompt });
   } catch (err) {
     console.warn('[reachout] LLM call failed (staying quiet this tick):', err?.message ?? err);
     return { action: 'wait' };
@@ -239,6 +239,6 @@ export async function decideReachoutViaLLM({
 
 // temperature 0.8 — warmth wants a little more life than triage's care. Cap is
 // generous so a thinking model has room past its reasoning (see llm-call.js).
-async function defaultCallLLM({ provider, apiKey, model, prompt }) {
-  return callProviderChat({ provider, apiKey, model, prompt, temperature: 0.8, maxTokens: 2000 });
+async function defaultCallLLM({ provider, apiKey, model, baseUrl, prompt }) {
+  return callProviderChat({ provider, apiKey, model, baseUrl, prompt, temperature: 0.8, maxTokens: 2000 });
 }

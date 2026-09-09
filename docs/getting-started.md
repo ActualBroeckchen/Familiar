@@ -99,10 +99,11 @@ Windows equivalents (`install.bat`, `start.bat`, `stop.bat`, and the PowerShell 
 ## First-time setup
 
 1. Open the **Settings panel** (☰ icon in the top bar).
-2. Select your **Provider** (NanoGPT, Z.ai Standard, Z.ai Coding Plan, or Google AI Studio).
-3. Paste your **API key**.
-4. Select or type a **model name**.
-5. Start chatting.
+2. Select your **Provider** — a named cloud preset (NanoGPT, OpenAI, OpenRouter, DeepSeek, Groq, Mistral, Together AI, Z.ai Standard, Z.ai Coding Plan, Google AI Studio), a **local** server (Ollama, LM Studio), or **Custom (OpenAI-compatible)** for anything else.
+3. Paste your **API key** — *optional* for the local presets and Custom (most local servers ignore it; leave it blank). Required for the cloud presets.
+4. For **Custom** (and to move a local preset off its default host/port), fill in the **Base URL** field that appears — e.g. `http://localhost:11434` or `http://localhost:1234`. A bare host, a `…/v1` base, or a full `…/chat/completions` endpoint all work; the server canonicalises it.
+5. Select or type a **model name**.
+6. Start chatting.
 
 Your API key lives in `settings.json` server-side (and is mirrored to browser `localStorage` as an offline cache) and is sent only to `localhost`.
 
@@ -111,7 +112,7 @@ Your API key lives in `settings.json` server-side (and is mirrored to browser `l
 Phylactery's background consolidator (weekly / monthly / yearly memory summaries) needs an LLM API key of its own. Tell it which to use:
 
 1. In the sidebar, open the **Connections** section.
-2. Save one or more connections via **+ Save current as connection** (any provider works — `nanogpt`, `zai`, `zai-coding`, or `google`).
+2. Save one or more connections via **+ Save current as connection** (any provider works — a cloud preset, a `custom` base URL, or a keyless local server like `ollama` / `lmstudio`).
 3. Click **+ Phylactery** on the connection whose key + model Phylactery should use. The badge **Phylactery** appears next to the connection's name. Click again on the same row to clear, or on a different row to move the designation.
 
 When the designation changes, server.js detects it on the next `PUT /api/settings` and respawns the Phylactery child process with the new env (`PHYLACTERY_LLM_API_KEY`, `PHYLACTERY_LLM_BASE_URL`, `PHYLACTERY_LLM_MODEL`, `PHYLACTERY_LLM_PROVIDER`; the legacy `ENTITY_CORE_LLM_*` aliases are still set too for backward compatibility, plus `ZAI_API_KEY` / `ZAI_BASE_URL` / `ZAI_MODEL` for z.ai providers). No server restart needed — the new key takes effect on the next chat or scheduled consolidation.
@@ -257,7 +258,37 @@ Phylactery's own env vars (read by Phylactery itself, not by Proto-Familiar; doc
 - **Suggested models:** `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.0-flash`, `gemini-2.0-flash-lite`
 - **API key:** create one at [Google AI Studio](https://aistudio.google.com/apikey); it's sent as a `Bearer` token like every other provider here.
 
-All providers use the OpenAI-compatible `chat/completions` format. The server selects the correct endpoint automatically based on your provider selection.
+### More cloud presets (OpenAI-compatible)
+
+The popular chat sources SillyTavern lists that speak the same Bearer-auth `chat/completions` shape are shipped as named presets — pick one and paste its key:
+
+| Provider | Endpoint |
+|---|---|
+| OpenAI | `https://api.openai.com/v1/chat/completions` |
+| OpenRouter | `https://openrouter.ai/api/v1/chat/completions` |
+| DeepSeek | `https://api.deepseek.com/v1/chat/completions` |
+| Groq | `https://api.groq.com/openai/v1/chat/completions` |
+| Mistral | `https://api.mistral.ai/v1/chat/completions` |
+| Together AI | `https://api.together.xyz/v1/chat/completions` |
+
+(Sources that are *not* OpenAI-compatible — Anthropic's native API, Vertex, Bedrock — aren't presets here; they'd each need a separate request adapter.)
+
+### Local models (no API key needed)
+
+Run a model on your own machine and point Proto-Familiar at it — no key, no cloud, nothing leaves your computer:
+
+| Preset | Default endpoint | Notes |
+|---|---|---|
+| **Ollama (local)** | `http://localhost:11434/v1/chat/completions` | `ollama serve`; the model name is whatever you've pulled (e.g. `llama3.1`, `qwen2.5`). |
+| **LM Studio (local)** | `http://localhost:1234/v1/chat/completions` | Start LM Studio's local server; use the model id it shows. |
+
+Leave the **API key** blank for these — the local servers ignore it, and a blank key sends no `Authorization` header at all (some local servers 400 on a malformed one). To reach a server on a different host/port (a home-lab box, a NAS), fill in the **Base URL** field.
+
+### Custom (OpenAI-compatible)
+
+The catch-all: paste **any** base URL into the Base URL field and, optionally, a key. This covers every other OpenAI-compatible server — llama.cpp, KoboldCpp, TabbyAPI, oobabooga, vLLM, a self-hosted gateway, or a cloud provider not listed above. The key is optional; supply one only if your endpoint requires it.
+
+All providers use the OpenAI-compatible `chat/completions` format. The server resolves the correct endpoint from your provider selection (or your Base URL for local/custom), and sends an `Authorization: Bearer …` header only when a key is present.
 
 ---
 

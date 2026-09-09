@@ -349,6 +349,39 @@ via the launcher script (which primes uv's location); a bare
 
 ---
 
+## Local / custom connections (Ollama, LM Studio, llama.cpp, …)
+
+### "No response" or a connection error from a local model
+
+The provider is `ollama` / `lmstudio` / `custom` and nothing comes back.
+Work through it in order:
+
+- **Is the local server actually running and serving OpenAI-compat?**
+  `curl http://localhost:11434/v1/models` (Ollama) or
+  `http://localhost:1234/v1/models` (LM Studio) should return JSON. If
+  that fails, the model server is down or on a different port — start it,
+  or fix the **Base URL** field.
+- **Right port / host?** Ollama defaults to `11434`, LM Studio to `1234`.
+  A box on your LAN needs its address in the **Base URL** field
+  (`http://192.168.1.x:11434`). A bare host, a `…/v1` base, or a full
+  `…/chat/completions` endpoint are all accepted — the server appends
+  `/v1/chat/completions` when it's missing.
+- **Leave the API key blank.** Local servers ignore it, and Proto-Familiar
+  sends *no* `Authorization` header when the key is empty (a blank/garbage
+  Bearer token makes some local servers 400).
+- **Model name must match what the server has loaded** — for Ollama that's
+  a pulled tag (`ollama list`); for LM Studio the id shown in its server
+  panel. A wrong name usually surfaces as a 404 from the endpoint.
+
+### "Enter an API key" won't go away for a local/custom provider
+
+You're on an older cached copy of the web app. The key field is optional
+for `custom` / `ollama` / `lmstudio` (readiness is `providerRequiresKey`
+in `providers.js`). Hard-refresh the browser (Ctrl/Cmd-Shift-R) so the
+current `app.js` loads.
+
+---
+
 ## Unruh (temporal context)
 
 ### `[thalamus] Unruh venv missing at .../unruh/.venv — run \`cd unruh && uv sync\` to enable temporal context`

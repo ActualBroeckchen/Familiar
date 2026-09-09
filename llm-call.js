@@ -22,7 +22,7 @@
  * ward-signed and stays where it is; migrating it needs the ward's sign-off.
  */
 
-import { PROVIDER_URLS } from './providers.js';
+import { resolveProviderUrl, authHeader } from './providers.js';
 
 const DEFAULT_MAX_TOKENS = 4000;
 
@@ -84,10 +84,11 @@ export function foldReasoningIntoContent(message) {
  */
 export async function callProviderChat({
   provider, apiKey, model, prompt, messages,
+  baseUrl = null,
   maxTokens = DEFAULT_MAX_TOKENS, temperature = 0.7, fetchFn = fetch,
   reasoningEffort = null,
 }) {
-  const url = PROVIDER_URLS[provider];
+  const url = resolveProviderUrl({ provider, baseUrl });
   if (!url) throw new Error(`Unknown provider: ${provider}`);
 
   const msgs = Array.isArray(messages) ? messages : [{ role: 'user', content: prompt }];
@@ -95,7 +96,9 @@ export async function callProviderChat({
     method: 'POST',
     headers: {
       'Content-Type':  'application/json',
-      'Authorization': `Bearer ${String(apiKey ?? '').trim()}`,
+      // Omitted for a keyless local/custom endpoint (a Bearer with an empty
+      // key 400s on some servers); required cloud providers always carry one.
+      ...authHeader(apiKey),
     },
     body: JSON.stringify({
       model:       String(model ?? '').trim(),

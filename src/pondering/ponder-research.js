@@ -67,7 +67,7 @@ async function readOne(url, settings, deps) {
  * Deps are injectable for tests: { callLLM, searchWeb, lookUp, readWebpage,
  * shouldBrowserRead, browseRead, remaining, record }.
  */
-export async function researchForPonder({ topic, provider, apiKey, model, callLLM, settings = {} }, deps = {}) {
+export async function researchForPonder({ topic, provider, apiKey, model, baseUrl, callLLM, settings = {} }, deps = {}) {
   const d = {
     searchWeb, lookUp, readWebpage,
     remaining: readsRemaining, record: recordReads,
@@ -84,7 +84,7 @@ export async function researchForPonder({ topic, provider, apiKey, model, callLL
     const left = d.remaining(settings);
     if (left <= 0) break;
     let plan;
-    try { plan = parsePlan(await callLLM({ provider, apiKey, model, prompt: PLAN_PROMPT(label, sources, left) })); }
+    try { plan = parsePlan(await callLLM({ provider, apiKey, model, baseUrl, prompt: PLAN_PROMPT(label, sources, left) })); }
     catch { break; }
     if (plan.done || (!plan.searches.length && !plan.reads.length)) break;
 

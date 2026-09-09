@@ -29,6 +29,7 @@ import { createCallEngine, isCallActiveFromFile, isCallActiveFromFileSync } from
 import { createDiscordCallAdapter, loadDiscordVoiceDeps } from './voice-discord-adapter.js';
 import { discordVoiceAdapterCreator, setVoiceRosterListener, discordVoiceChannelMembers, discordBotUserId, findWardVoiceChannel, discordVoiceDisplayName, ingestDiscordMedia } from '../discord/discord-gateway.js';
 import { describeAsset } from '../vision/vision.js';
+import { connectionReady } from '../../providers.js';
 import { resolveCallAudience, wardVoiceState } from './voice-call-audience.js';
 import { createTagSegment, createRoomListenerMap } from './voice-tagging.js';
 import { registerPushAdapterFactory, formatItemForPush } from '../../cerebellum.js';
@@ -235,9 +236,9 @@ export function attachDiscordVoice(deps) {
     const threat = await getThreat({ tomesDir: path.join(rootDir, 'tomes') }).catch(() => ({ weight: 0 }));
     if ((threat?.weight ?? 0) >= THREAT_TIERS.moderate) return;   // stand down under distress
     const conn = connectionForFeature(s, 'chat') || connectionForFeature(s, 'pondering');
-    if (!(conn?.apiKey && conn?.provider && conn?.model)) return;
+    if (!connectionReady(conn)) return;
     const prompt = substituteMacros(buildGreetingPrompt({ name, event: 'joined' }), s);
-    const raw = await callProviderChat({ provider: conn.provider, apiKey: conn.apiKey, model: conn.model, prompt, temperature: 0.8, maxTokens: 2000 });
+    const raw = await callProviderChat({ provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl, prompt, temperature: 0.8, maxTokens: 2000 });
     const line = parseGreeting(raw);
     if (!line || !engine.isCallActive() || engine.currentCallId() !== callId) return;
     const spoken = await engine.speakProactive(() => synthesize(line));
@@ -376,7 +377,7 @@ export function attachDiscordVoice(deps) {
     if (!byTag) return;
     const s = readSettings();
     const conn = connectionForFeature(s, 'chat') || connectionForFeature(s, 'pondering');
-    if (!(conn?.apiKey && conn?.provider && conn?.model)) { log('call ended but no connection to memorize it with'); return; }
+    if (!connectionReady(conn)) { log('call ended but no connection to memorize it with'); return; }
     for (const [audienceTag, sess] of byTag) {
       if (!sess || sess.messages.length < 2) continue;
       // Land each audience segment as its OWN reviewable session log, STAMPED
@@ -404,7 +405,7 @@ export function attachDiscordVoice(deps) {
       try {
         const r = await enqueueSessionByDay({
           sessionId: sess.sessionId, messages: sess.messages,
-          provider: conn.provider, apiKey: conn.apiKey, model: conn.model,
+          provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
           audienceTag,
         });
         log(`voice call ${callId} ended — queued ${sess.messages.length} lines for memory at ${audienceTag} (${r.enqueued} enqueued, ${r.skipped} skipped)`);

@@ -264,7 +264,7 @@ export async function findOrCreateTomeByName(tomesDir, name, defaultStruct) {
 // to ENTITY_CORE_LLM_* aliases for continuity. The full chat-completions
 // URL (not just the base) is what these vars want — same as the old
 // Phylactery contract. Shared via ./providers.js.
-import { PROVIDER_URLS } from './providers.js';
+import { resolveProviderUrl, connectionReady } from './providers.js';
 
 /**
  * Build the env block passed to the Phylactery child process based on
@@ -308,11 +308,13 @@ function loadPhylacteryEnv() {
   if (!id) return {};
   const conn = (settings.connections ?? []).find(c => c?.id === id);
   if (!conn) return {};
+  // Keyless local/custom endpoints are allowed (consolidate.py sends whatever key
+  // it's given — empty is fine for a local server); still require a usable model + URL.
+  if (!connectionReady(conn)) return {};
   const apiKey = (conn.apiKey ?? '').trim();
-  if (!apiKey) return {};
   const provider = conn.provider ?? '';
   const model    = conn.model ?? '';
-  const baseUrl  = PROVIDER_URLS[provider] ?? '';
+  const baseUrl  = resolveProviderUrl(conn) ?? '';
 
   const env = {
     PHYLACTERY_LLM_API_KEY:  apiKey,

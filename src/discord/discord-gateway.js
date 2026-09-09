@@ -64,7 +64,7 @@ import {
   buildConnHomeView, buildFeaturesView, buildFeatureView, buildConnDoneView, buildConnText,
   buildEffortsView, buildEffortView, isSettableEffort,
 } from '../ward/ward-connections.js';
-import { PROVIDER_URLS, resolveReasoningEffort } from '../../providers.js';
+import { resolveProviderUrl, authHeader, connectionReady, resolveReasoningEffort } from '../../providers.js';
 import { scoreMessage } from '../safety/crisis-signals.js';
 import { recordThreat } from '../safety/threat-tracker.js';
 import { recordUserActivity } from '../sessions/last-activity.js';
@@ -297,9 +297,9 @@ async function fireRevisit(item) {
 
   const locConnId = regLoc?.connectionId;
   const conn = (locConnId
-    ? (settings.connections ?? []).find(c => c?.id === locConnId && c?.apiKey && c?.model)
+    ? (settings.connections ?? []).find(c => c?.id === locConnId && connectionReady(c))
     : null) ?? primaryConnectionFrom(settings);
-  if (!conn?.apiKey || !conn?.model) { console.log('[discord] revisit: no connection — dropping'); return; }
+  if (!connectionReady(conn)) { console.log('[discord] revisit: no connection — dropping'); return; }
 
   const channelId = discordChannelIdFromKey(item.locationKey);
   if (!channelId) { console.log(`[discord] revisit: can't resolve a channel from ${item.locationKey} — dropping`); return; }
@@ -1056,13 +1056,14 @@ async function sessionForLocation(locationKey, locationLabel, kind, { bindKey = 
         if (oldLog?.messages?.length >= 2) {
           const settings = readSettingsSync();
           const conn = primaryConnectionFrom(settings);
-          if (conn?.apiKey && conn?.model) {
+          if (connectionReady(conn)) {
             enqueueSessionByDay({
               sessionId: oldLog.sessionId,
               messages:  oldLog.messages,
               provider:  conn.provider,
               apiKey:    conn.apiKey,
               model:     conn.model,
+              baseUrl:   conn.baseUrl,
               audienceTag: oldLog.audienceTag ?? 'ward-private',
             }).catch(err => console.warn('[discord] memorize on rotate failed:', err.message));
           }
@@ -1128,14 +1129,15 @@ const DISCORD_MAX_TOKENS = 8000;
 const THINKING_BUDGET_NOTE = "(I ran out of room mid-thought on that one and didn't land a reply — nudge me and I'll pick it back up.)";
 
 export async function callChatRaw({ conn, messages, settings, tools }) {
-  const url = PROVIDER_URLS[conn.provider];
+  const url = resolveProviderUrl(conn);
   if (!url) throw new Error(`unknown provider: ${conn.provider}`);
   const effort = resolveReasoningEffort(conn);
   const resp = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type':  'application/json',
-      'Authorization': `Bearer ${conn.apiKey.trim()}`,
+      // Keyless local/custom endpoints carry no Authorization (empty Bearer 400s).
+      ...authHeader(conn.apiKey),
     },
     body: JSON.stringify({
       model:       conn.model.trim(),
@@ -2209,11 +2211,11 @@ async function handleTurn(gw, msg, decision) {
   const regLoc = (registry.locations ?? []).find(l => l.key === decision.locationKey);
   const locConnId = regLoc?.connectionId;
   const conn = (locConnId
-    ? (settings.connections ?? []).find(c => c?.id === locConnId && c?.apiKey && c?.model)
+    ? (settings.connections ?? []).find(c => c?.id === locConnId && connectionReady(c))
     : null)
     ?? primaryConnectionFrom(settings);
 
-  if (!conn?.apiKey || !conn?.model) {
+  if (!connectionReady(conn)) {
     gw.status.lastError = 'no connection configured — cannot reply';
     console.warn('[discord] inbound message but no connection configured; staying silent');
     return;
@@ -2487,6 +2489,7 @@ async function handleTurn(gw, msg, decision) {
       topicGrants: audienceTopics,
       grants:      audienceGrants ?? {},
       apiKey:      conn.apiKey,
+      baseUrl:     conn.baseUrl,
       viaVillager: isVillager
         ? { id: decision.villager?.id ?? null, name: decision.speakerName ?? decision.villager?.name ?? null }
         : null,

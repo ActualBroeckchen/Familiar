@@ -11,6 +11,7 @@
  */
 
 import { extractContent } from '../../llm-call.js';
+import { connectionReady } from '../../providers.js';
 
 // A hung turn must not hang the call forever. The enriched chat path can be slow
 // (an MCP cold start on the first turn, a thinking model), but it has to end so
@@ -32,7 +33,7 @@ export function createVoiceChatTurn({ port, readSettings, connectionForFeature, 
     if (!text) return null;
     const s = readSettings();
     const conn = connectionForFeature(s, 'chat') || connectionForFeature(s, 'pondering');
-    if (!(conn?.apiKey && conn?.provider && conn?.model)) {
+    if (!connectionReady(conn)) {
       log('no usable connection for a voice turn — staying silent');
       return null;
     }
@@ -46,7 +47,7 @@ export function createVoiceChatTurn({ port, readSettings, connectionForFeature, 
         headers: { 'Content-Type': 'application/json' },
         signal: ctrl.signal,
         body: JSON.stringify({
-          provider: conn.provider, apiKey: conn.apiKey, model: conn.model,
+          provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
           // NO tool loop on a call — a spoken "Eury?" wants a fast "Hey?", not a
           // 19-tool research task. That lands the request on /api/chat's RAW
           // non-stream passthrough, so we replicate BOTH of callProviderChat's

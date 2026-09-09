@@ -24,6 +24,7 @@ import path from 'node:path';
 import { WebSocketServer } from 'ws';
 
 import { createCallEngine, clearStaleCallState, callsDisabled } from './call-engine.js';
+import { connectionReady } from '../../providers.js';
 import { createWebCallAdapter } from './voice-web-adapter.js';
 import { createVoiceTurnRunner } from './voice-call-turn.js';
 import { speakableText, isLikelyNoiseTranscript } from './voice-speech.js';
@@ -119,11 +120,11 @@ export function attachVoiceCall(deps) {
       if (!r.ok) log(`session log not written: ${r.reason}`);
     }
 
-    if (!(conn?.apiKey && conn?.provider && conn?.model)) { log('call ended but no connection to memorize it with — transcript not stored'); return; }
+    if (!connectionReady(conn)) { log('call ended but no connection to memorize it with — transcript not stored'); return; }
     try {
       const r = await enqueueSessionByDay({
         sessionId: sess.sessionId, messages: sess.messages,
-        provider: conn.provider, apiKey: conn.apiKey, model: conn.model,
+        provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
         audienceTag: 'ward-private',
       });
       log(`call ${callId} ended — queued ${sess.messages.length} lines for memory (${r.enqueued} enqueued, ${r.skipped} skipped)`);

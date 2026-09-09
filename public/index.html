@@ -609,7 +609,21 @@
             <option value="zai">Z.ai — Standard API</option>
             <option value="zai-coding">Z.ai — Coding Plan</option>
             <option value="google">Google AI Studio — Gemini</option>
+            <option value="openrouter">OpenRouter</option>
+            <option value="openai">OpenAI</option>
+            <option value="deepseek">DeepSeek</option>
+            <option value="groq">Groq</option>
+            <option value="mistral">Mistral</option>
+            <option value="togetherai">Together AI</option>
+            <option value="ollama">Ollama (local)</option>
+            <option value="lmstudio">LM Studio (local)</option>
+            <option value="custom">Custom — any OpenAI-compatible URL</option>
           </select>
+        </div>
+        <div class="field" id="base-url-field" style="display:none">
+          <label for="base-url-input">Base URL</label>
+          <input type="text" id="base-url-input" placeholder="http://localhost:11434" autocomplete="off" spellcheck="false">
+          <p class="field-hint" id="base-url-hint">The server's address. A bare host or a <code>/v1</code> base both work (I add <code>/chat/completions</code>). Ollama defaults to <code>http://localhost:11434</code>, LM Studio to <code>http://localhost:1234</code>.</p>
         </div>
         <div class="field">
           <label for="api-key">API Key</label>
