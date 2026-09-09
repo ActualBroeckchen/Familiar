@@ -73,7 +73,7 @@ import { recordKnock, recordLocationKnock, recordServer } from '../village/knock
 import { filterOutgoingReply } from '../safety/outgoing-filter.js';
 import { enqueueOutbox, acknowledgePendingByKind } from '../safety/outbox.js';
 import { writeSessionLog as writeSessionLogShared } from '../sessions/session-log.js';
-import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY } from '../sessions/session-bindings.js';
+import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY, SESSION_IDLE_ROTATE_MS } from '../sessions/session-bindings.js';
 
 // Auto-unify: the ward's Discord DM shares ONE session with their web private
 // chat (both bind to the ward-private pointer). Default ON; the ward toggle
@@ -108,7 +108,6 @@ export const GATEWAY_INTENTS = (1 << 0) | (1 << 7) | (1 << 9) | (1 << 12) | (1 <
 const DISCORD_REPLY_LIMIT   = 1900;       // hard API limit 2000; headroom
 const HISTORY_LIMIT         = 30;         // messages of session history per turn
 const INPUT_CHAR_CAP        = 4000;       // per inbound message
-const SESSION_IDLE_ROTATE_MS = 6 * 3600_000; // idle gap that starts a fresh session
 const SUPERVISOR_TICK_MS    = 30_000;
 const MAX_BACKOFF_MS        = 60_000;
 

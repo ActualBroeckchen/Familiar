@@ -28,6 +28,12 @@ export const DEFAULT_BINDINGS_FILE = path.join(TOMES_DIR, '.session-bindings.jso
 
 export const WARD_PRIVATE_KEY = 'ward-private';
 
+// Idle gap after which a session is considered stale and the next turn starts a
+// fresh one. Shared so the gateway's ward-DM rollover and the proactive-append
+// path (proactive-session.js) use the SAME threshold — a proactive message must
+// land in the very session the ward's reply will continue, not a stale one.
+export const SESSION_IDLE_ROTATE_MS = 6 * 3600_000; // 6h
+
 try { mkdirSync(TOMES_DIR, { recursive: true }); } catch { /* best-effort */ }
 
 let _chain = Promise.resolve();
