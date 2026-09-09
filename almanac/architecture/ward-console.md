@@ -1,6 +1,6 @@
 ---
 title: Ward Discord Console
-topics: [architecture, memorization]
+topics: [architecture, memorization, connections]
 sources:
   - id: ward-connections-js
     type: file
@@ -124,3 +124,6 @@ settings file:
 - [Per-feature model routing](../decisions/per-feature-model-routing) — the
   connection and per-feature routing model `!connection` exposes from
   Discord.
+- [Providers and connection readiness](providers) — what `resolveReasoningEffort`
+  and the rest of `providers.js` do with a connection once `!connection` has
+  set it.

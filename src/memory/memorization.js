@@ -19,7 +19,7 @@ import { fileURLToPath } from 'url';
 import { mkdirSync, promises as fsp } from 'fs';
 import { isCallActiveFromFile } from '../voice/call-engine.js';
 import { randomUUID } from 'crypto';
-import { PROVIDER_URLS } from '../../providers.js';
+import { resolveProviderUrl, authHeader, providerRequiresKey } from '../../providers.js';
 import { extractContent } from '../../llm-call.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
@@ -463,15 +463,15 @@ ${convText}`;
 
 // ── LLM call ─────────────────────────────────────────────────────
 
-async function callProvider({ provider, apiKey, model, prompt }) {
-  const url = PROVIDER_URLS[provider];
+async function callProvider({ provider, apiKey, model, baseUrl, prompt }) {
+  const url = resolveProviderUrl({ provider, baseUrl });
   if (!url) throw new Error(`Unknown provider: ${provider}`);
 
   const resp = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type':  'application/json',
-      'Authorization': `Bearer ${apiKey.trim()}`,
+      ...authHeader(apiKey),
     },
     body: JSON.stringify({
       model:       model.trim(),
@@ -775,7 +775,7 @@ async function processJob(job) {
   const prompt = builtPrompt ? substituteMacros(builtPrompt, settings) : builtPrompt;
   if (!prompt) throw new Error('Conversation too short to memorize.');
 
-  const { content: raw, finishReason } = await callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, prompt });
+  const { content: raw, finishReason } = await callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, baseUrl: job.baseUrl, prompt });
   const facts = parseFacts(raw, finishReason);
   // Relations ride the SAME LLM response — no extra request (CLAUDE.md
   // "ride existing requests"). They're enrichment, so parseRelations never
@@ -1121,11 +1121,13 @@ export async function stopMemorizationWorker() {
 // withLock(QUEUE_FILE, ...) from thalamus so the load + dedup +
 // push + persist run as one atomic unit.
 
-export async function enqueueMemorization({ sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model, audienceTag, fullSegment = false }) {
+export async function enqueueMemorization({ sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model, baseUrl, audienceTag, fullSegment = false }) {
   await loadQueue();
   if (!sessionId || typeof sessionId !== 'string') throw new Error('sessionId is required.');
   if (!Array.isArray(messages) || messages.length < 2) throw new Error('At least 2 messages are required.');
-  if (!provider || !apiKey || !model) throw new Error('provider, apiKey, and model are required.');
+  // A key is required only for providers that need one — a keyless local/custom
+  // endpoint memorizes fine without it.
+  if (!provider || !model || (providerRequiresKey(provider) && !apiKey)) throw new Error('provider and model are required (and an API key for this provider).');
   const normScope = scope === 'topic' ? 'topic' : scope === 'day' ? 'day' : 'session';
   const normLabel = typeof topicLabel === 'string' && topicLabel.trim() ? topicLabel.trim() : null;
 
@@ -1166,6 +1168,7 @@ export async function enqueueMemorization({ sessionId, scope, topicId, topicLabe
     provider,
     apiKey,
     model,
+    baseUrl:       baseUrl ?? null,
     audienceTag:   typeof audienceTag === 'string' ? audienceTag : 'ward-private',
     status:        'pending',
     attempts:      0,
@@ -1190,7 +1193,7 @@ export async function enqueueMemorization({ sessionId, scope, topicId, topicLabe
  * Never throws (the sweep iterates many sessions): a too-short session or a
  * single bad segment is skipped, not surfaced. Returns { enqueued, skipped }.
  */
-export async function enqueueSessionByDay({ sessionId, messages, provider, apiKey, model, audienceTag }) {
+export async function enqueueSessionByDay({ sessionId, messages, provider, apiKey, model, baseUrl, audienceTag }) {
   if (!sessionId || !Array.isArray(messages) || messages.length < 2) return { enqueued: 0, skipped: 0 };
   let enqueued = 0, skipped = 0;
   for (const seg of segmentByDay(messages)) {
@@ -1200,7 +1203,7 @@ export async function enqueueSessionByDay({ sessionId, messages, provider, apiKe
       const r = await enqueueMemorization({
         sessionId, scope: 'day', topicId: seg.date,
         messageRange: { start: seg.startIdx, end: seg.endIdx },
-        messages: seg.messages, provider, apiKey, model, audienceTag,
+        messages: seg.messages, provider, apiKey, model, baseUrl, audienceTag,
       });
       if (r.deduped) skipped++; else enqueued++;
     } catch (err) {

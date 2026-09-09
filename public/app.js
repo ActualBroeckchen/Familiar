@@ -48,6 +48,17 @@ const PROVIDER_MODELS = {
     'gemini-2.0-flash',
     'gemini-2.0-flash-lite',
   ],
+  // OpenAI-compatible cloud presets (model ids are hints — the field is free-text).
+  openai:      ['gpt-4o', 'gpt-4o-mini', 'o3-mini'],
+  openrouter:  ['openai/gpt-4o-mini', 'anthropic/claude-3.5-sonnet', 'deepseek/deepseek-chat', 'meta-llama/llama-3.3-70b-instruct'],
+  deepseek:    ['deepseek-chat', 'deepseek-reasoner'],
+  groq:        ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'],
+  mistral:     ['mistral-large-latest', 'mistral-small-latest'],
+  togetherai:  ['meta-llama/Llama-3.3-70B-Instruct-Turbo', 'deepseek-ai/DeepSeek-V3'],
+  // Local / custom — free-text model; these are just common hints.
+  ollama:      ['llama3.1', 'qwen2.5', 'mistral-nemo'],
+  lmstudio:    [],
+  custom:      [],
 };
 
 const PROVIDER_DEFAULT_MODEL = {
@@ -55,7 +66,29 @@ const PROVIDER_DEFAULT_MODEL = {
   zai:          'glm-4.7',
   'zai-coding': 'glm-4.7',
   google:       'gemini-2.5-flash',
+  openai:       'gpt-4o-mini',
+  openrouter:   'openai/gpt-4o-mini',
+  deepseek:     'deepseek-chat',
+  groq:         'llama-3.3-70b-versatile',
+  mistral:      'mistral-small-latest',
+  togetherai:   'deepseek-ai/DeepSeek-V3',
+  // ollama / lmstudio / custom: no default — the user names their local model.
 };
+
+// Providers whose endpoint URL comes from a user-supplied base URL, and whose
+// API key is optional (local servers ignore it). Mirrors providers.js
+// PROVIDER_KEYLESS / BASE_URL_PROVIDERS — keep in sync (classic script, no import).
+const BASE_URL_PROVIDERS = new Set(['custom', 'ollama', 'lmstudio']);
+const KEYLESS_PROVIDERS   = new Set(['custom', 'ollama', 'lmstudio']);
+function providerNeedsKey(p) { return !KEYLESS_PROVIDERS.has(p); }
+function providerNeedsBaseUrl(p) { return p === 'custom'; }
+// Client mirror of providers.js connectionReady: a usable connection has a model,
+// a base URL when one is required (custom), and a key unless the provider is keyless.
+function connUsable(c) {
+  if (!c || !(c.model ?? '').trim()) return false;
+  if (providerNeedsBaseUrl(c.provider) && !(c.baseUrl ?? '').trim()) return false;
+  return !!((c.apiKey ?? '').trim() || !providerNeedsKey(c.provider));
+}
 
 // ── ID generation ────────────────────────────────────────────
 function generateId() {
@@ -109,6 +142,7 @@ function buildSessionInfo() {
     messageCount: state.messages.length,
     provider:     state.provider,
     model:        state.model,
+    baseUrl:      state.baseUrl,
     elapsedMsSinceLastMessage: elapsedTime,
   };
 }
@@ -165,6 +199,7 @@ const SESSION_IDLE_MS = 3 * 60 * 60 * 1000;
 const state = {
   provider:          'nanogpt',
   apiKey:            '',
+  baseUrl:           '',
   model:             'gpt-4o-mini',
   streaming:         true,
   temperature:       0.8,
@@ -501,7 +536,7 @@ const state = {
 // sessionStartedAt, …) stays local — syncing it across devices would
 // be weird (e.g. device A's idle timer applying to device B).
 const SERVER_SYNCED_KEYS = [
-  'provider', 'apiKey', 'model', 'streaming', 'temperature', 'maxTokens',
+  'provider', 'apiKey', 'baseUrl', 'model', 'streaming', 'temperature', 'maxTokens',
   'userName', 'charName',
   'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
   'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns', 'toolRoundsPerTurn',
@@ -1276,13 +1311,15 @@ async function autoResumeMostRecentSession() {
  * so the "primary connection" abstraction has something to point at.
  */
 function migrateLegacyConnection() {
-  if (state.connections.length === 0 && (state.apiKey ?? '').trim() && (state.model ?? '').trim()) {
+  if (state.connections.length === 0 && connUsable({ provider: state.provider, apiKey: state.apiKey, baseUrl: state.baseUrl, model: state.model })) {
     const conn = {
       id:       generateId(),
       name:     'Primary',
       provider: state.provider,
       apiKey:   state.apiKey,
+      baseUrl:   state.baseUrl,
       model:    state.model,
+      baseUrl:  state.baseUrl,
     };
     state.connections = [conn];
     state.primaryConnectionId = conn.id;
@@ -1333,16 +1370,16 @@ function getConnectionSequence() {
   const primary = getPrimaryConnection();
   if (primary) {
     seq.push(primary);
-  } else if ((state.apiKey ?? '').trim() && (state.model ?? '').trim()) {
+  } else if (connUsable({ provider: state.provider, apiKey: state.apiKey, baseUrl: state.baseUrl, model: state.model })) {
     seq.push({
       id: '_live', name: 'Current fields',
-      provider: state.provider, apiKey: state.apiKey, model: state.model,
+      provider: state.provider, apiKey: state.apiKey, baseUrl: state.baseUrl, model: state.model,
     });
   }
   for (const id of state.fallbackConnectionIds) {
     if (id === state.primaryConnectionId) continue;
     const c = state.connections.find(x => x.id === id);
-    if (c && c.provider && (c.apiKey ?? '').trim() && (c.model ?? '').trim()) {
+    if (c && c.provider && connUsable(c)) {
       seq.push(c);
     }
   }
@@ -1377,18 +1414,21 @@ function syncFieldsToPrimaryConnection() {
   conn.provider = state.provider;
   conn.apiKey   = state.apiKey;
   conn.model    = state.model;
+  conn.baseUrl  = state.baseUrl;
 }
 
 function saveNewConnection(name) {
   const trimmed = (name || '').trim();
   if (!trimmed) return null;
-  if (!(state.apiKey ?? '').trim() || !(state.model ?? '').trim()) return null;
+  if (!connUsable({ provider: state.provider, apiKey: state.apiKey, baseUrl: state.baseUrl, model: state.model })) return null;
   const conn = {
     id:       generateId(),
     name:     trimmed,
     provider: state.provider,
     apiKey:   state.apiKey,
+    baseUrl:   state.baseUrl,
     model:    state.model,
+    baseUrl:  state.baseUrl,
   };
   state.connections.push(conn);
   if (!state.primaryConnectionId) state.primaryConnectionId = conn.id;
@@ -3000,7 +3040,7 @@ async function askAboutClip(a) {
   try {
     const r = await (await fetch('/api/video-understand', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ assetId: a.sha || a.id, prompt: promptText, provider: conn.provider, model: conn.model, apiKey: conn.apiKey }),
+      body: JSON.stringify({ assetId: a.sha || a.id, prompt: promptText, provider: conn.provider, model: conn.model, apiKey: conn.apiKey, baseUrl: conn.baseUrl }),
     })).json();
     waiting.el.remove();
     if (!r?.ok) { appendErrorMessage(r?.error || "I couldn't watch that clip."); return; }
@@ -3506,7 +3546,7 @@ async function sendMessage(userInput) {
   if (!userInput && !attachments.length) return;
   clearPendingAttachments();
 
-  if (!state.apiKey.trim()) {
+  if (providerNeedsKey(state.provider) && !state.apiKey.trim()) {
     appendErrorMessage('Enter your API key in the Settings panel first.');
     return;
   }
@@ -3715,7 +3755,7 @@ async function generateAndStoreHandoff(messages, sessionId) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        provider: conn.provider, apiKey: conn.apiKey, model: conn.model,
+        provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
         messages: [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: recent },
@@ -3770,6 +3810,7 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
     body: JSON.stringify({
       provider:    conn.provider,
       apiKey:      conn.apiKey,
+      baseUrl:     conn.baseUrl,   // custom/local endpoint (resolved server-side)
       model:       conn.model,
       reasoningEffort: conn.reasoningEffort,   // server resolves (default low for z.ai reasoning models)
       messages:    apiMessages,
@@ -3986,6 +4027,7 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
     body: JSON.stringify({
       provider:    conn.provider,
       apiKey:      conn.apiKey,
+      baseUrl:     conn.baseUrl,   // custom/local endpoint (resolved server-side)
       model:       conn.model,
       reasoningEffort: conn.reasoningEffort,   // server resolves (default low for z.ai reasoning models)
       messages:    apiMessages,
@@ -4218,6 +4260,7 @@ function readSettingsFromUI() {
   state.provider          = $('provider-select').value;
   state.apiKey            = $('api-key').value;
   rememberProviderApiKey(state.provider, state.apiKey);
+  if ($('base-url-input')) state.baseUrl = $('base-url-input').value.trim();
   state.model             = $('model-input').value.trim();
   state.streaming         = $('streaming-toggle').checked;
   state.temperature       = parseFloat($('temperature').value);
@@ -4433,6 +4476,8 @@ function setIfNotFocused(el, prop, value) {
 function writeSettingsToUI() {
   setIfNotFocused($('provider-select'), 'value',   state.provider);
   setIfNotFocused($('api-key'),         'value',   state.apiKey);
+  if ($('base-url-input')) setIfNotFocused($('base-url-input'), 'value', state.baseUrl || '');
+  updateProviderFieldVisibility(state.provider);
   setIfNotFocused($('model-input'),     'value',   state.model);
   setIfNotFocused($('streaming-toggle'),'checked', state.streaming);
   if ($('handoff-toggle')) setIfNotFocused($('handoff-toggle'), 'checked', state.handoffEnabled !== false);
@@ -4551,6 +4596,19 @@ function writeSettingsToUI() {
   setIfNotFocused($('tome-match-whole-words'),'checked', state.tomeMatchWholeWords ?? false);
   setIfNotFocused($('max-empty-retries'),     'value',   state.maxEmptyRetries ?? 2);
   refreshModelSuggestions(state.provider);
+}
+
+// Show the Base URL field only for base-URL providers (custom + local presets),
+// and soften the API-key field's placeholder when the provider is keyless.
+function updateProviderFieldVisibility(provider) {
+  const baseField = $('base-url-field');
+  if (baseField) baseField.style.display = BASE_URL_PROVIDERS.has(provider) ? '' : 'none';
+  const baseInput = $('base-url-input');
+  if (baseInput) {
+    baseInput.placeholder = provider === 'lmstudio' ? 'http://localhost:1234' : 'http://localhost:11434';
+  }
+  const keyInput = $('api-key');
+  if (keyInput) keyInput.placeholder = providerNeedsKey(provider) ? 'Bearer token…' : 'optional for local servers';
 }
 
 function refreshModelSuggestions(provider) {
@@ -4883,7 +4941,7 @@ function showMemorizationNotice(count) {
  * Returns the jobId, or null on error / when memorization isn't possible.
  */
 async function memorizeSessionToTome(messages, sessionId, opts = {}) {
-  if (!state.apiKey.trim()) return null;
+  if (providerNeedsKey(state.provider) && !state.apiKey.trim()) return null;
   if (!Array.isArray(messages) || messages.length < 2) return null;
   const payload = {
     sessionId,
@@ -4894,6 +4952,7 @@ async function memorizeSessionToTome(messages, sessionId, opts = {}) {
     messages,
     provider:     state.provider,
     apiKey:       state.apiKey,
+    baseUrl:       state.baseUrl,
     model:        state.model,
     audienceTag:  'ward-private',
   };
@@ -4922,7 +4981,7 @@ async function memorizeSessionToTome(messages, sessionId, opts = {}) {
  * Used in the `beforeunload` handler — fetch() won't reliably deliver there.
  */
 function memorizeViaBeacon(messages, sessionId, opts = {}) {
-  if (!state.apiKey.trim()) return false;
+  if (providerNeedsKey(state.provider) && !state.apiKey.trim()) return false;
   if (!Array.isArray(messages) || messages.length < 2) return false;
   const payload = {
     sessionId,
@@ -4933,6 +4992,7 @@ function memorizeViaBeacon(messages, sessionId, opts = {}) {
     messages,
     provider:     state.provider,
     apiKey:       state.apiKey,
+    baseUrl:       state.baseUrl,
     model:        state.model,
     audienceTag:  'ward-private',
   };
@@ -6095,6 +6155,7 @@ function init() {
   $('provider-select').addEventListener('change', e => {
     const prov  = e.target.value;
     const input = $('model-input');
+    updateProviderFieldVisibility(prov);
     refreshModelSuggestions(prov);
     if (!PROVIDER_MODELS[prov]?.includes(input.value)) {
       input.value = PROVIDER_DEFAULT_MODEL[prov] || '';
@@ -6613,7 +6674,7 @@ function init() {
         setStatus('Nothing to memorize yet.');
         return;
       }
-      if (!state.apiKey.trim()) {
+      if (providerNeedsKey(state.provider) && !state.apiKey.trim()) {
         setStatus('Set an API key in Settings first.');
         return;
       }
@@ -7292,7 +7353,7 @@ function closeMemorizeChoice() {
  * Session Memories tome via memorization.js#findOrCreateSessionMemoriesTome.
  */
 async function runAutoSummarize(session) {
-  if (!state.apiKey.trim()) {
+  if (providerNeedsKey(state.provider) && !state.apiKey.trim()) {
     setMemorizeChoiceStatus('Set an API key in Settings first.', true);
     return;
   }
@@ -7332,6 +7393,7 @@ async function runAutoSummarize(session) {
         messages,
         provider:    state.provider,
         apiKey:      state.apiKey,
+        baseUrl:      state.baseUrl,
         model:       state.model,
         audienceTag: 'ward-private',
       }),
@@ -7684,6 +7746,7 @@ ${convText}`;
       body: JSON.stringify({
         provider:    state.provider,
         apiKey:      state.apiKey,
+        baseUrl:      state.baseUrl,
         model:       state.model,
         messages:    [{ role: 'user', content: prompt }],
         stream:      false,
@@ -9928,13 +9991,13 @@ function keOpenCoverageDay(date) {
 
 async function keMemorizeDay(date) {
   const status = $('ke-cov-status');
-  if (!state.apiKey.trim()) { status.textContent = 'Set an API key in Settings first.'; return; }
+  if (providerNeedsKey(state.provider) && !state.apiKey.trim()) { status.textContent = 'Set an API key in Settings first.'; return; }
   const force = !!$('ke-cov-force')?.checked;
   status.textContent = 'Queuing…';
   try {
     const res = await fetch('/api/memorize-day', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ date, force, provider: state.provider, apiKey: state.apiKey, model: state.model }),
+      body: JSON.stringify({ date, force, provider: state.provider, apiKey: state.apiKey, baseUrl: state.baseUrl, model: state.model }),
     });
     if (!res.ok) throw new Error(await keReadServerError(res));
     const { enqueued, deduped, requested } = await res.json();
@@ -10000,7 +10063,7 @@ function keCovImportBody(commit) {
     source: $('ke-cov-import-source').value,
     filename: _keImportFilename || undefined,
     fallbackDate: $('ke-cov-import-date').value || undefined,
-    ...(commit ? { commit: true, provider: state.provider, apiKey: state.apiKey, model: state.model } : {}),
+    ...(commit ? { commit: true, provider: state.provider, apiKey: state.apiKey, baseUrl: state.baseUrl, model: state.model } : {}),
   };
 }
 
@@ -10038,7 +10101,7 @@ async function keCovImportCommit() {
   if (_keBatchFiles) return keCovBatchCommit();
   const status = $('ke-cov-import-status');
   if (!_keImportPreviewed) { status.textContent = 'Preview first.'; return; }
-  if (!state.apiKey.trim()) { status.textContent = 'Set an API key in Settings first.'; return; }
+  if (providerNeedsKey(state.provider) && !state.apiKey.trim()) { status.textContent = 'Set an API key in Settings first.'; return; }
   if (!confirm(`Import ${_keImportPreviewed.days} day(s) and memorize them now? This runs ~${_keImportPreviewed.days} extraction pass(es).`)) return;
   status.textContent = 'Importing…';
   $('ke-cov-import-commit').disabled = true;
@@ -10120,7 +10183,7 @@ async function keCovBatchPreview() {
 async function keCovBatchCommit() {
   const status = $('ke-cov-import-status');
   if (!_keBatchPreview) { status.textContent = 'Preview first.'; return; }
-  if (!state.apiKey.trim()) { status.textContent = 'Set an API key in Settings first.'; return; }
+  if (providerNeedsKey(state.provider) && !state.apiKey.trim()) { status.textContent = 'Set an API key in Settings first.'; return; }
   const ready = _keBatchPreview.filter(f => f.ok && !f.needsDate && f.days);
   if (!ready.length) { status.textContent = 'No file is ready — set the missing dates and Preview again.'; return; }
   if (!confirm(`Import ${ready.length} file(s) and memorize them now? This runs one extraction pass per day.`)) return;
@@ -10133,7 +10196,7 @@ async function keCovBatchCommit() {
         files: keBatchFilesPayload(),
         selfNames: $('ke-cov-import-self').value,
         source: $('ke-cov-import-source').value,
-        commit: true, provider: state.provider, apiKey: state.apiKey, model: state.model,
+        commit: true, provider: state.provider, apiKey: state.apiKey, baseUrl: state.baseUrl, model: state.model,
       }),
     });
     if (!res.ok) throw new Error(await keReadServerError(res));

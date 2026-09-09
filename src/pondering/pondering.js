@@ -19,6 +19,7 @@ import path from 'path';
 import { SLUG_ALPHABET } from '../../slug-ids.js';
 import { fileURLToPath } from 'url';
 import { callProviderChat } from '../../llm-call.js';
+import { providerRequiresKey } from '../../providers.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -232,8 +233,8 @@ The heading must be a single markdown heading line starting with "## ". In edge_
 // model spends tokens on chain-of-thought first, so the cap is generous (a cap
 // is free for non-thinking models — they stop when done). Shared helper owns
 // the reasoning-model handling + empty-content diagnostics.
-async function defaultCallLLM({ provider, apiKey, model, prompt }) {
-  return callProviderChat({ provider, apiKey, model, prompt, temperature: 0.7, maxTokens: 4000 });
+async function defaultCallLLM({ provider, apiKey, model, baseUrl, prompt }) {
+  return callProviderChat({ provider, apiKey, model, baseUrl, prompt, temperature: 0.7, maxTokens: 4000 });
 }
 
 // ── Parsing ──────────────────────────────────────────────────────
@@ -401,6 +402,7 @@ export async function ponderOnce({
   provider,
   apiKey,
   model,
+  baseUrl = null,
   callLLM  = defaultCallLLM,
   tomesDir = DEFAULT_TOMES_DIR,
   settings = {},
@@ -415,7 +417,10 @@ export async function ponderOnce({
   if (!isReflection && (!topic || typeof topic !== 'string')) {
     throw new Error('topic is required.');
   }
-  if (!provider || !apiKey || !model)      throw new Error('provider, apiKey, and model are required.');
+  if (!provider) throw new Error('provider is required.');
+  if (!model) throw new Error('model is required.');
+  // A key is required only for providers that need one (keyless local/custom are fine without).
+  if (providerRequiresKey(provider) && !apiKey) throw new Error('apiKey is required for this provider.');
 
   // Unattended research (§8.5): on an interest ponder, the Familiar may look a
   // few things up first (read-only, budgeted, code-gated). Default ON; requires
@@ -429,7 +434,7 @@ export async function ponderOnce({
   if (ponderWebOn) {
     try {
       const { researchForPonder, sourcesBlock } = await import('./ponder-research.js');
-      const res = await researchForPonder({ topic, provider, apiKey, model, callLLM, settings });
+      const res = await researchForPonder({ topic, provider, apiKey, model, baseUrl, callLLM, settings });
       sourcesText = res.budgetSpent
         ? "\n\n(My reading budget for today is spent, so I'm thinking from what I already hold rather than looking anything up.)"
         : sourcesBlock(res.sources);
@@ -440,7 +445,7 @@ export async function ponderOnce({
   // sibling autonomous loops (reachout, tome-graduation). Without it the
   // Familiar reads its own pondering prompt with literal "{{char}}".
   const prompt = substituteMacros(buildPonderPrompt(topic, grounding, sourcesText), settings);
-  const raw    = await callLLM({ provider, apiKey, model, prompt });
+  const raw    = await callLLM({ provider, apiKey, model, baseUrl, prompt });
   const parsed = parsePondering(raw);
   const { title, content } = parsed;
   const wantsToSave = parsed.wants_to_save ?? [];

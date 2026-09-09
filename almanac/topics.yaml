@@ -111,3 +111,7 @@ topics:
     title: Session Search
     description: "Raw transcript search and distilled memory recall — two distinct tools for finding what was said versus what was learned"
     parents: [architecture, memory-and-knowledge]
+  - slug: connections
+    title: Connections
+    description: Saved LLM provider connections -- URL resolution, keyless local/custom readiness, per-feature routing, and reasoning-effort control
+    parents: [architecture, decisions]

@@ -526,7 +526,7 @@ export async function describeAsset(idOrSlug, settings = {}, { fetchFn = fetch }
       }];
       try {
         text = await callProviderChat({
-          provider: conn.provider, apiKey: conn.apiKey, model: conn.model,
+          provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
           messages, maxTokens: 700, temperature: 0.4, fetchFn,
         });
       } catch (err) {

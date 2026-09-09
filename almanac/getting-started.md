@@ -32,6 +32,7 @@ Once you understand the core stance, find what you're looking for:
 - **Acting on its own** → [Autonomous loops](architecture/autonomous-loops), [Pondering](architecture/pondering)
 - **Outside the ward** → [Village, audience gating, Discord](architecture), [Trust tiers gate reads not writes](decisions/trust-tiers-gate-reads-not-writes)
 - **Multimodal input** → [Vision and media](architecture/vision-and-media), [Browser](architecture/browser), [Voice](architecture/voice)
+- **LLM providers and connections** → [Providers and connection readiness](architecture/providers), [Per-feature model routing](decisions/per-feature-model-routing)
 - **The product philosophy** → [Concepts](concepts), [Decisions](decisions)
 
 ## Index

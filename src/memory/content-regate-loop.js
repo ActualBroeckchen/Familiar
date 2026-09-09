@@ -16,7 +16,7 @@ import { listContentGateCandidates, updateMemoryById, enrich } from '../../thala
 import { getRegistry } from '../village/village.js';
 import { isCallActiveFromFile } from '../voice/call-engine.js';
 import { readSettingsSync, connectionForFeature } from '../../cerebellum.js';
-import { PROVIDER_URLS } from '../../providers.js';
+import { connectionReady } from '../../providers.js';
 import { callProviderChat } from '../../llm-call.js';
 import { substituteMacros } from '../../macros.js';
 import { runOneRetagTick, DEFAULT_BATCH_SIZE } from './content-regate.js';
@@ -41,7 +41,7 @@ async function runTick() {
   if (!isEnabled()) return { reason: 'disabled' };
   const s = readSettingsSync();
   const conn = connectionForFeature(s, 'contentRegate');
-  if (!conn?.apiKey || !conn?.model || !PROVIDER_URLS[conn.provider]) return { reason: 'no_connection' };
+  if (!connectionReady(conn)) return { reason: 'no_connection' };
 
   // Identity rides as a leading system message so the Familiar judges in its own
   // voice; degrades to none. Fetched once per tick.
@@ -59,7 +59,7 @@ async function runTick() {
     // Reasoning model room (RULE A): callProviderChat gives a generous cap +
     // reasoning-content recovery. temperature low — this is careful judgment.
     callLLM: (messages) => callProviderChat({
-      provider: conn.provider, apiKey: conn.apiKey, model: conn.model,
+      provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
       messages, temperature: 0.2, maxTokens: 3000,
     }),
     updateMemory: ({ id, audience, contentTag }) => updateMemoryById({

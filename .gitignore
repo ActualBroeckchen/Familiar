@@ -31,6 +31,9 @@ tomes/.outbox.json.tmp
 # Silence-triage last-activity stamp (M12b).
 tomes/.last-activity.json
 tomes/.last-activity.json.tmp
+# Per-channel session bindings — runtime cache of which session each audience is on.
+tomes/.session-bindings.json
+tomes/.session-bindings.json.tmp
 # Surface-events stream (slice 2) — per-embodiment record of offers + outcomes.
 tomes/.surface-events.json
 tomes/.surface-events.json.tmp

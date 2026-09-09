@@ -22,7 +22,7 @@ import {
   searchGraphNodes, createGraphNode, createGraphEdge, getGraphSubgraph,
 } from '../../thalamus.js';
 import { readSettingsSync, primaryConnectionFrom, connectionForFeature } from '../../cerebellum.js';
-import { PROVIDER_URLS } from '../../providers.js';
+import { resolveProviderUrl, connectionReady } from '../../providers.js';
 import { callProviderChat } from '../../llm-call.js';
 import { substituteMacros } from '../../macros.js';
 import { runOneGraduationTick, EXCLUDED_TOME_NAMES } from './tome-graduation.js';
@@ -95,14 +95,14 @@ I reply with ONLY a JSON array — one object per uid, no prose:
 // copy appears, extract a shared callProvider into providers.js.)
 // temperature 0.3 — routing wants steadiness, not flourish. Cap is generous so
 // a thinking model can finish past its reasoning (see llm-call.js).
-async function callLLM({ provider, apiKey, model, prompt }) {
-  return callProviderChat({ provider, apiKey, model, prompt, temperature: 0.3, maxTokens: 3000 });
+async function callLLM({ provider, apiKey, model, baseUrl, prompt }) {
+  return callProviderChat({ provider, apiKey, model, baseUrl, prompt, temperature: 0.3, maxTokens: 3000 });
 }
 
 async function decideGraduation(candidates) {
   const s = readSettingsSync();
   const conn = connectionForFeature(s, 'tomeGraduation');
-  if (!conn?.apiKey || !conn?.model || !PROVIDER_URLS[conn.provider]) {
+  if (!connectionReady(conn)) {
     throw new Error('no usable primary connection');
   }
   const [{ static: identityContext }] = await Promise.all([
@@ -119,7 +119,7 @@ async function decideGraduation(candidates) {
     return { uid: c.uid, tomeName: c.tomeName, comment: c.entry.comment, content: c.entry.content || '', recall };
   }));
   const prompt = substituteMacros(buildGraduationPrompt({ identityContext, items }), s);
-  return callLLM({ provider: conn.provider, apiKey: conn.apiKey, model: conn.model, prompt });
+  return callLLM({ provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl, prompt });
 }
 
 async function runTick() {

@@ -93,7 +93,7 @@ export async function runMediaRetention({
       const call = llmFn
         ? llmFn([{ role: 'user', content: prompt }], { settings })
         : callProviderChat({
-            provider: conn?.provider, apiKey: conn?.apiKey, model: conn?.model,
+            provider: conn?.provider, apiKey: conn?.apiKey, model: conn?.model, baseUrl: conn?.baseUrl,
             messages: [{ role: 'user', content: prompt }], max_tokens: 4000,
           });
       const text = await call;

@@ -267,7 +267,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Provider chat-completions URLs live in providers.js so thalamus.js can
 // share them when it builds the env block for Phylactery. See that file
 // for the rationale and how to add a new provider.
-import { PROVIDER_URLS, resolveReasoningEffort } from './providers.js';
+import { PROVIDER_URLS, resolveProviderUrl, providerRequiresKey, authHeader, connectionReady, resolveReasoningEffort } from './providers.js';
 import { ensureManualTome } from './src/tomes/manual-tome.js';
 import { listProviderModels } from './provider-models.js';
 import { startBenchmark, statusOf, cancelBenchmark, resetBenchmark, reportPathsRelative } from './src/voice/voice-bench-run.js';
@@ -339,7 +339,7 @@ function chatRateLimit(req, res, next) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode, injectCorePrompts, reasoningEffort } = req.body;
+  const { provider, apiKey, baseUrl, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode, injectCorePrompts, reasoningEffort } = req.body;
   // runToolLoop: the app sends true when the user has tools enabled.
   // The server then composes the tool list (built-ins + custom) and runs
   // the multi-round tool-call loop HERE — executing via cerebellum —
@@ -357,12 +357,15 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   //   false            → none.
   const enrichMode = enrichFlag === false ? 'none' : enrichFlag === 'static' ? 'static' : 'full';
 
-  const url = PROVIDER_URLS[provider];
+  const url = resolveProviderUrl({ provider, baseUrl });
   if (!url) {
-    return res.status(400).json({ error: `Unknown provider: "${provider}". Expected one of: ${Object.keys(PROVIDER_URLS).join(', ')}.` });
+    const known = Object.keys(PROVIDER_URLS).join(', ');
+    return res.status(400).json({ error: `Unknown provider "${provider}" (or a custom provider with no base URL). Expected one of: ${known}, custom.` });
   }
-  if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
-    return res.status(400).json({ error: 'API key is required.' });
+  // A key is required only for providers that need one — local/custom endpoints
+  // (Ollama, LM Studio, a self-hosted URL) run keyless.
+  if (providerRequiresKey(provider) && (!apiKey || typeof apiKey !== 'string' || !apiKey.trim())) {
+    return res.status(400).json({ error: 'API key is required for this provider.' });
   }
   if (!model || typeof model !== 'string' || !model.trim()) {
     return res.status(400).json({ error: 'Model name is required.' });
@@ -753,6 +756,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       // Familiar can commit this conversation through the real pipeline.
       audienceTag,
       apiKey,
+      baseUrl,   // custom/local endpoint the turn is running on (memorize_now reuses it)
     };
     if (surfacing) toolCtx._requestedModules = new Set();
     // request_tools grew the set → the next round advertises the union.
@@ -778,7 +782,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     const upstreamUrl = url;
     const authHeaders = {
       'Content-Type':  'application/json',
-      'Authorization': `Bearer ${apiKey.trim()}`,
+      // Keyless local/custom endpoints send no Authorization (and `apiKey` may be
+      // absent for them — never .trim() it unguarded).
+      ...authHeader(apiKey),
     };
 
     // Abort the loop when the browser tab closes or the client disconnects.
@@ -1135,7 +1141,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey.trim()}`,
+        ...authHeader(apiKey),
       },
       body: JSON.stringify(payload),
     });
@@ -3541,7 +3547,7 @@ initCerebellumTools({
 // at the right tier, consent-gated and dedup'd. Function declaration so it can be
 // referenced in the initCerebellumTools call above (hoisted). Degrades to a
 // structured result; never throws into the tool loop.
-async function memorizeSessionNow({ sessionId, provider, apiKey, model, audienceTag }) {
+async function memorizeSessionNow({ sessionId, provider, apiKey, baseUrl, model, audienceTag }) {
   if (!isValidSessionId(sessionId)) return { ok: false, error: 'no-session' };
   let log;
   try {
@@ -3558,7 +3564,7 @@ async function memorizeSessionNow({ sessionId, provider, apiKey, model, audience
     // slices (skips dates already memorized per the coverage ledger).
     const { enqueued, skipped } = await enqueueSessionByDay({
       sessionId, messages,
-      provider: provider ?? log.provider, apiKey, model: model ?? log.model,
+      provider: provider ?? log.provider, apiKey, baseUrl: baseUrl ?? log.baseUrl, model: model ?? log.model,
       audienceTag: audienceTag ?? 'ward-private',
     });
     return { ok: true, enqueued, skipped, messageCount: readable.length };
@@ -3581,20 +3587,20 @@ app.post('/api/memorize', express.text({ type: ['text/plain', 'application/json'
   if (!body || typeof body !== 'object') {
     return res.status(400).json({ error: 'Request body required.' });
   }
-  const { sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model, audienceTag } = body;
+  const { sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, baseUrl, model, audienceTag } = body;
   if (!isValidSessionId(sessionId))
     return res.status(400).json({ error: 'Invalid session ID.' });
   try {
     if (scope === 'topic') {
       // Topic-scoped memorization stays whole-range (one summary of a slice).
       const { jobId, deduped } = await enqueueMemorization({
-        sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model, audienceTag,
+        sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, baseUrl, model, audienceTag,
       });
       res.status(202).json({ jobId, deduped });
     } else {
       // Session scope is day-anchored: one job per calendar date the session
       // touched, skipping date-slices already memorized (the coverage ledger).
-      const r = await enqueueSessionByDay({ sessionId, messages, provider, apiKey, model, audienceTag });
+      const r = await enqueueSessionByDay({ sessionId, messages, provider, apiKey, baseUrl, model, audienceTag });
       res.status(202).json(r);
     }
   } catch (err) {
@@ -3647,9 +3653,9 @@ app.post('/api/memory-backfill', async (_req, res) => {
 // Skips slices already memorized unless `force`. Client supplies the creds, same
 // as POST /api/memorize.
 app.post('/api/memorize-day', async (req, res) => {
-  const { date, force, provider, apiKey, model } = req.body ?? {};
+  const { date, force, provider, apiKey, baseUrl, model } = req.body ?? {};
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date ?? '')) return res.status(400).json({ error: 'Invalid date (YYYY-MM-DD).' });
-  if (!provider || !apiKey || !model) return res.status(400).json({ error: 'provider, apiKey, and model are required.' });
+  if (!provider || !model || (providerRequiresKey(provider) && !apiKey)) return res.status(400).json({ error: 'provider and model are required (and an API key for this provider).' });
   try {
     const slices = await collectDateSlices(date, { force: force === true });
     let enqueued = 0, deduped = 0;
@@ -3658,7 +3664,7 @@ app.post('/api/memorize-day', async (req, res) => {
         const r = await enqueueMemorization({
           sessionId, scope: 'day', topicId: date,
           messageRange: { start: seg.startIdx, end: seg.endIdx },
-          messages: seg.messages, provider, apiKey, model, audienceTag,
+          messages: seg.messages, provider, apiKey, baseUrl, model, audienceTag,
           // A forced re-memorize deliberately re-reads the whole day; otherwise
           // ingest only the un-memorized tail (the default delta behaviour).
           fullSegment: force === true,
@@ -3695,7 +3701,7 @@ function resolveImportSegs({ content, filename, fallbackDate, names }) {
 
 // Write each date-slice as an imported session log + enqueue it for ingestion.
 // Shared commit half. Returns { created, enqueued }.
-async function commitImportSegs(segs, { source, provider, apiKey, model }) {
+async function commitImportSegs(segs, { source, provider, apiKey, baseUrl, model }) {
   let created = 0, enqueued = 0;
   const tag = (typeof source === 'string' && source.trim()) ? source.trim().slice(0, 40) : 'import';
   for (const seg of segs) {
@@ -3716,7 +3722,7 @@ async function commitImportSegs(segs, { source, provider, apiKey, model }) {
       const r = await enqueueMemorization({
         sessionId, scope: 'day', topicId: seg.date,
         messageRange: { start: seg.startIdx, end: seg.endIdx },
-        messages: seg.messages, provider, apiKey, model, audienceTag: 'ward-private',
+        messages: seg.messages, provider, apiKey, baseUrl, model, audienceTag: 'ward-private',
       });
       if (!r.deduped) enqueued++;
     } catch (err) { console.warn('[import] enqueue failed:', err?.message ?? err); }
@@ -3729,7 +3735,7 @@ async function commitImportSegs(segs, { source, provider, apiKey, model }) {
 // can show the scale before spending; with `commit` it places the logs by date
 // (one imported session per date) and enqueues them for immediate ingestion.
 app.post('/api/import-logs', express.json({ limit: '32mb' }), async (req, res) => {
-  const { content, selfNames, source, commit, provider, apiKey, model, fallbackDate, filename } = req.body ?? {};
+  const { content, selfNames, source, commit, provider, apiKey, baseUrl, model, fallbackDate, filename } = req.body ?? {};
   const names = Array.isArray(selfNames) ? selfNames
     : (typeof selfNames === 'string' ? selfNames.split(',').map(s => s.trim()).filter(Boolean) : []);
 
@@ -3743,10 +3749,10 @@ app.post('/api/import-logs', express.json({ limit: '32mb' }), async (req, res) =
   if (!commit) {
     return res.json({ ok: true, preview: true, format: r.format, dates: r.dates, days: r.segs.length, messages: r.messageCount });
   }
-  if (!provider || !apiKey || !model) {
-    return res.status(400).json({ error: 'provider, apiKey, and model are required to ingest.' });
+  if (!provider || !model || (providerRequiresKey(provider) && !apiKey)) {
+    return res.status(400).json({ error: 'provider and model are required to ingest (and an API key for this provider).' });
   }
-  const { created, enqueued } = await commitImportSegs(r.segs, { source, provider, apiKey, model });
+  const { created, enqueued } = await commitImportSegs(r.segs, { source, provider, apiKey, baseUrl, model });
   res.status(202).json({ ok: true, committed: true, format: r.format, days: created, enqueued, dates: r.dates });
 });
 
@@ -3756,7 +3762,7 @@ app.post('/api/import-logs', express.json({ limit: '32mb' }), async (req, res) =
 // per-file breakdown; commit ingests every file that resolved, skipping (never
 // failing the whole batch on) any that need a date or didn't parse.
 app.post('/api/import-logs-batch', express.json({ limit: '64mb' }), async (req, res) => {
-  const { files, selfNames, source, commit, provider, apiKey, model } = req.body ?? {};
+  const { files, selfNames, source, commit, provider, apiKey, baseUrl, model } = req.body ?? {};
   if (!Array.isArray(files) || files.length === 0) return res.status(400).json({ error: 'No files provided.' });
   if (files.length > 100) return res.status(400).json({ error: 'Too many files in one batch (max 100).' });
   const names = Array.isArray(selfNames) ? selfNames
@@ -3777,8 +3783,8 @@ app.post('/api/import-logs-batch', express.json({ limit: '64mb' }), async (req, 
       })),
     });
   }
-  if (!provider || !apiKey || !model) {
-    return res.status(400).json({ error: 'provider, apiKey, and model are required to ingest.' });
+  if (!provider || !model || (providerRequiresKey(provider) && !apiKey)) {
+    return res.status(400).json({ error: 'provider and model are required to ingest (and an API key for this provider).' });
   }
 
   let totalDays = 0, totalEnqueued = 0;
@@ -3788,7 +3794,7 @@ app.post('/api/import-logs-batch', express.json({ limit: '64mb' }), async (req, 
       per.push({ filename: r.filename, skipped: true, reason: r.needsDate ? 'needs a date' : (r.error ?? 'could not parse') });
       continue;
     }
-    const { created, enqueued } = await commitImportSegs(r.segs, { source, provider, apiKey, model });
+    const { created, enqueued } = await commitImportSegs(r.segs, { source, provider, apiKey, baseUrl, model });
     totalDays += created; totalEnqueued += enqueued;
     per.push({ filename: r.filename, days: created, enqueued, dates: r.dates });
   }
@@ -4999,10 +5005,10 @@ app.post('/api/discord/apply', (_req, res) => {
 // works as a picker if this fails.
 app.post('/api/guide-chat', async (req, res) => {
   if (guideChatDisabled()) return res.status(403).json({ error: 'The in-modal guide is turned off.' });
-  const { provider, apiKey, model, messages } = req.body || {};
-  const url = PROVIDER_URLS[provider];
+  const { provider, apiKey, baseUrl, model, messages } = req.body || {};
+  const url = resolveProviderUrl({ provider, baseUrl });
   if (!url) return res.status(400).json({ error: `Unknown provider: "${provider}".` });
-  if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) return res.status(400).json({ error: 'API key is required.' });
+  if (providerRequiresKey(provider) && (!apiKey || typeof apiKey !== 'string' || !apiKey.trim())) return res.status(400).json({ error: 'API key is required for this provider.' });
   if (!model || typeof model !== 'string' || !model.trim()) return res.status(400).json({ error: 'Model name is required.' });
   if (!Array.isArray(messages) || messages.length === 0) return res.status(400).json({ error: 'Messages array is required.' });
 
@@ -5028,7 +5034,7 @@ app.post('/api/guide-chat', async (req, res) => {
   try {
     const r = await fetch(url, {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey.trim()}` },
+      headers: { 'Content-Type': 'application/json', ...authHeader(apiKey) },
       body:    JSON.stringify({ model: model.trim(), messages: finalMessages, stream: false }),
     });
     if (!r.ok) {
@@ -5546,7 +5552,7 @@ function startAutonomousPondering() {
       const s = readSettingsSync();
       if (s.ponderingEnabled === false) return false;
       const conn = connectionForFeature(s, 'pondering');
-      return !!(conn?.apiKey && conn?.provider && conn?.model);
+      return connectionReady(conn);
     },
     getIntervalScale: async () => {
       const s = readSettingsSync();
@@ -5742,6 +5748,7 @@ function startAutonomousPondering() {
         provider: conn.provider,
         apiKey:   conn.apiKey,
         model:    conn.model,
+        baseUrl:  conn.baseUrl,
         settings: s,
         grounding,
       });
@@ -6285,9 +6292,9 @@ function startPageWatches() {
     decideChange: async ({ url, label, note, oldSnapshot, newText }) => {
       const s = readSettingsSync();
       const conn = connectionForFeature(s, 'chat') || connectionForFeature(s, 'pondering');
-      if (!(conn?.apiKey && conn?.provider && conn?.model)) return { surface: true, summary: '' };   // no model → surface plainly rather than swallow the change
+      if (!connectionReady(conn)) return { surface: true, summary: '' };   // no model → surface plainly rather than swallow the change
       const prompt = substituteMacros(buildPageWatchPrompt({ url, label, note, oldSnapshot, newText }), s);
-      const raw = await callProviderChat({ provider: conn.provider, apiKey: conn.apiKey, model: conn.model, prompt, temperature: 0.4, maxTokens: 2000 });
+      const raw = await callProviderChat({ provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl, prompt, temperature: 0.4, maxTokens: 2000 });
       return parsePageWatchDecision(raw);
     },
     // Surface as a gentle banner AND push to the ward's channels (same path the
@@ -6413,7 +6420,7 @@ function startReachout() {
       const s = readSettingsSync();
       if (s.warmthEnabled === false) return false;          // default-ON (undefined = on)
       const conn = connectionForFeature(s, 'reachout');
-      return !!(conn?.apiKey && conn?.provider && conn?.model);
+      return connectionReady(conn);
     },
     getThreat,
     getLastActivity: getLastUserActivity,
@@ -6622,7 +6629,7 @@ async function gatherNoticingWakeInputs() {
 async function noticingDeliberate({ situationReport, threatTier, quietHours, conditions = [] }) {
   const s = readSettingsSync();
   const conn = connectionForFeature(s, 'noticing');
-  if (!conn?.apiKey || !conn?.model) return { toolNamesCalled: [] };
+  if (!connectionReady(conn)) return { toolNamesCalled: [] };
 
   const nowMs = Date.now();
 
@@ -6761,7 +6768,7 @@ function startNoticing() {
       const s = readSettingsSync();
       if (s.noticingEnabled === false) return false;         // default-ON (undefined = on)
       const conn = connectionForFeature(s, 'noticing');
-      return !!(conn?.apiKey && conn?.provider && conn?.model);
+      return connectionReady(conn);
     },
     getThreat,
     getWakeInputs: gatherNoticingWakeInputs,
