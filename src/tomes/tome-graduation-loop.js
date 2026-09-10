@@ -23,7 +23,7 @@ import {
 } from '../../thalamus.js';
 import { readSettingsSync, primaryConnectionFrom, connectionForFeature } from '../../cerebellum.js';
 import { resolveProviderUrl, connectionReady } from '../../providers.js';
-import { callProviderChat } from '../../llm-call.js';
+import { callProviderChat, familiarDeliberationMessages } from '../../llm-call.js';
 import { substituteMacros } from '../../macros.js';
 import { runOneGraduationTick, EXCLUDED_TOME_NAMES } from './tome-graduation.js';
 
@@ -63,7 +63,11 @@ async function loadTomes() {
 }
 
 // ── The judgment prompt (first-person; reuses the Phase 3 rubric) ──
-function buildGraduationPrompt({ identityContext, items }) {
+// Returns only the Familiar's own reflection body. Identity rides separately as
+// its own system message (familiarDeliberationMessages) — this is the Familiar
+// thinking through where its stranded knowledge belongs, never a task handed TO
+// it on a user turn.
+export function buildGraduationPrompt({ items }) {
   const rubric =
 `I'm tidying knowledge that's been sitting in my tomes, moving anything durable into its right home in my canonical self. For each entry I decide where it belongs:
 - A standing fact about who I am, as I grow and change → my self identity (home "self").
@@ -81,7 +85,7 @@ ${(it.content || '').slice(0, 1200)}
 What I remember about this:
 ${it.recall || '(nothing close)'}`).join('\n\n');
 
-  return `${identityContext ? identityContext + '\n\n' : ''}${rubric}
+  return `${rubric}
 
 The entries to review:
 
@@ -95,8 +99,19 @@ I reply with ONLY a JSON array — one object per uid, no prose:
 // copy appears, extract a shared callProvider into providers.js.)
 // temperature 0.3 — routing wants steadiness, not flourish. Cap is generous so
 // a thinking model can finish past its reasoning (see llm-call.js).
-async function callLLM({ provider, apiKey, model, baseUrl, prompt }) {
-  return callProviderChat({ provider, apiKey, model, baseUrl, prompt, temperature: 0.3, maxTokens: 3000 });
+// The graduation judgment is the Familiar's own thinking, so it rides as system
+// messages (identity + reflection body) with a bare user cue, not as a `user`
+// turn framing the tidy-up as handed TO them (see familiarDeliberationMessages).
+async function callLLM({ provider, apiKey, model, baseUrl, identity, body }) {
+  return callProviderChat({
+    provider, apiKey, model, baseUrl,
+    messages: familiarDeliberationMessages({
+      identity: identity || '',
+      body,
+      cue: '(a quiet moment to tidy my tomes)',
+    }),
+    temperature: 0.3, maxTokens: 3000,
+  });
 }
 
 async function decideGraduation(candidates) {
@@ -118,8 +133,10 @@ async function decideGraduation(candidates) {
     } catch { /* dedup context is best-effort */ }
     return { uid: c.uid, tomeName: c.tomeName, comment: c.entry.comment, content: c.entry.content || '', recall };
   }));
-  const prompt = substituteMacros(buildGraduationPrompt({ identityContext, items }), s);
-  return callLLM({ provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl, prompt });
+  // Macros resolve on the reflection body (it carries {{user}}); identity from
+  // enrich is already literal "my human" (a server-injected block), no macros.
+  const body = substituteMacros(buildGraduationPrompt({ items }), s);
+  return callLLM({ provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl, identity: identityContext, body });
 }
 
 async function runTick() {
