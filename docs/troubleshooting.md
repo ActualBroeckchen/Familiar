@@ -518,6 +518,7 @@ is not an off-switch.
 | `PROTO_FAMILIAR_VISION_DISABLED` | seeing images |
 | `PROTO_FAMILIAR_VISION_THREAT_DISABLED` | an image raising your Familiar's concern |
 | `PROTO_FAMILIAR_ZAI_VISION_DISABLED` | the z.ai Coding-Plan vision route |
+| `PROTO_FAMILIAR_GIF_AS_VIDEO_DISABLED` | sending an animated GIF to a video-capable model as video (so it sees the motion) — with it off, a gif is always a still image |
 
 **Reaching out and noticing**
 

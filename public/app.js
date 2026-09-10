@@ -467,6 +467,10 @@ const state = {
   // ride live per request (older ones degrade to text stand-ins server-side).
   visionEnabled: true,
   visionMaxLiveImages: 4,
+  // An animated GIF rides as VIDEO to a video-capable model (so I see the
+  // motion), and as a still frame to an image-only one. Off → a gif is always a
+  // plain image. Also gated server-side by PROTO_FAMILIAR_GIF_AS_VIDEO_DISABLED.
+  gifAsVideoEnabled: true,
   // Image→threat scoring (ward-signed, §15.1): a distressing image I share can
   // raise my Familiar's concern, same as if I'd typed it. Raise-only for now.
   visionThreatScoring: true,
@@ -580,7 +584,7 @@ const SERVER_SYNCED_KEYS = [
   'discordEnabled', 'discordToolsEnabled', 'discordEmotesEnabled', 'discordBotToken', 'discordWardUserId',
   'villageAutoRegisterLocations',
   'featureConnections',
-  'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring',
+  'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring', 'gifAsVideoEnabled',
   'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode', 'voiceCallOfflineTranscribe', 'voiceCallSettleMs',
   'mediaRetentionEnabled', 'voiceNoteRetentionDays', 'voiceEscalationFactor',
   'voiceGuestPolicy', 'voiceGuestThreshold', 'voiceGuestEnterSegments', 'voiceGuestExitSegments', 'voiceGuestExitQuietSec',

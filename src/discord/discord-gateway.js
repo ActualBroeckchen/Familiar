@@ -2028,6 +2028,12 @@ export function isDiscordVideoAttachment(att) {
 export function discordResizeUrl(att, edge = DISCORD_MEDIA_EDGE) {
   const base = att?.proxy_url || att?.url;
   if (!base) return '';
+  // A GIF is fetched RAW — Discord's media proxy flattens a resized gif to a
+  // single still frame, which would throw away the animation before it ever
+  // reaches me. Size is still bounded by MEDIA_MAX_BYTES at the fetch, so a
+  // huge gif is skipped rather than truncated (an over-cap gif just stands in).
+  const isGif = /image\/gif/i.test(att?.content_type || '') || /\.gif$/i.test(att?.filename || '');
+  if (isGif) return base;
   const w = Number(att.width), h = Number(att.height);
   if (att?.proxy_url && Number.isFinite(w) && Number.isFinite(h) && Math.max(w, h) > edge) {
     try {

@@ -189,6 +189,28 @@ export function readImageSize(buf) {
   return null;
 }
 
+/**
+ * Is this GIF animated (more than one frame)? Pure-code, no decoder — the same
+ * "read the header, no native lib" posture as `readImageSize`. An animated GIF
+ * precedes each frame with a Graphic Control Extension block (`0x21 0xF9 0x04
+ * …`); a still GIF carries at most one. So two or more of those blocks means
+ * motion. The 3-byte GCE header is specific enough that a stray match in pixel
+ * data is unlikely, and the only cost of a false "animated" is sending a still
+ * gif to a video model as a one-frame clip — never a wrong-content read. Returns
+ * false for a non-GIF or an unreadable buffer (so a caller can ask blindly).
+ */
+export function isAnimatedGif(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 6) return false;
+  if (!(buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46)) return false;  // "GIF"
+  let frames = 0;
+  for (let i = 0; i + 2 < buf.length; i++) {
+    if (buf[i] === 0x21 && buf[i + 1] === 0xf9 && buf[i + 2] === 0x04) {
+      if (++frames > 1) return true;
+    }
+  }
+  return false;
+}
+
 // ── Filesystem helpers (atomic writes, best-effort, never throw) ──
 async function ensureDir() {
   try { await fsp.mkdir(MEDIA_DIR, { recursive: true }); } catch { /* best effort */ }
@@ -291,6 +313,10 @@ export async function saveAsset({ buffer, mime, origin = {}, audienceTag = 'ward
   // Dimensions are an image idea; audio has none, and asking for them would
   // just parse a wav header as a png one.
   const size = kind === 'image' ? (readImageSize(buffer) || {}) : {};
+  // An animated GIF is an image that also carries motion. The flag is minted
+  // here in code (never guessed from a name) so the materializer can route it as
+  // video to a video-capable model while it stays a plain image everywhere else.
+  const animated = (kind === 'image' && mime === 'image/gif') ? isAnimatedGif(buffer) : false;
   // How long a voice note runs is the one fact about it a stand-in can carry
   // before anyone has listened, so it is read at arrival. Only wav can be
   // measured without a decoder; anything else honestly reports null rather
@@ -309,6 +335,7 @@ export async function saveAsset({ buffer, mime, origin = {}, audienceTag = 'ward
     width: size.width ?? null,
     height: size.height ?? null,
     durationSec,
+    ...(animated ? { animated: true } : {}),
     receivedAt: new Date().toISOString(),
     origin: {
       surface:   origin.surface ?? null,

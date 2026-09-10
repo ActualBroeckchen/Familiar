@@ -600,6 +600,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   const preVisionMessages = enrichedMessages;   // kept for the mid-turn stand-in retry
   const visionGate = audienceTag && audienceTag !== 'ward-private' ? audienceVisible : null;
   let imagesLiveThisTurn = 0;
+  let gifsAsVideoThisTurn = 0;   // animated gifs sent as video_url parts this turn
   let visionFellBack = false;
   let visionCapableTurn = false;   // does THIS turn's connection see? (gates view_image)
   // Re-materialize forcing stand-ins — the mid-turn hard fallback when a
@@ -608,8 +609,11 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     try {
       const s = readSettingsSync() || {};
       const conn = findConnection(s, { provider, model }) || { provider, model };
+      // Force BOTH modalities off: whatever the provider just rejected (a live
+      // image, or an animated-gif-as-video part) must NOT be re-emitted on the
+      // retry, or we'd hit the same reject. Everything stands in as text.
       const mat = await materializeAttachments(preVisionMessages, {
-        connection: { ...conn, visionCapable: 'no' }, settings: s, visibleAudiences: visionGate,
+        connection: { ...conn, visionCapable: 'no', videoCapable: 'no' }, settings: s, visibleAudiences: visionGate,
       });
       return mat.messages;
     } catch { return preVisionMessages; }
@@ -664,9 +668,11 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       });
       enrichedMessages = mat.messages;
       imagesLiveThisTurn = mat.imagesLive;
+      gifsAsVideoThisTurn = mat.gifsAsVideo || 0;
       if (mat.imagesLive || mat.imagesStoodIn) {
         console.log(`[vision] materialized ${mat.imagesLive} live + ${mat.imagesStoodIn} stand-in image(s)`);
       }
+      if (gifsAsVideoThisTurn) console.log(`[vision] ${gifsAsVideoThisTurn} animated gif(s) sent as video`);
       // Anything still undescribed (over the sync cap, or a live-connection's
       // over-budget older image) gets a background look so NEXT time it carries
       // real words. Never blocks this turn.
@@ -901,10 +907,17 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         try {
           loopOutcome = await runLoop(enrichedMessages);
         } catch (err) {
-          if (!visionFellBack && imagesLiveThisTurn > 0 && isModalityError(err.status, err.body)) {
+          if (!visionFellBack && (imagesLiveThisTurn > 0 || gifsAsVideoThisTurn > 0) && isModalityError(err.status, err.body)) {
             visionFellBack = true;
-            await cacheVisionCapability(provider, model, 'no');
-            console.warn(`[vision] ${provider}:${model} rejected image modality — retried with stand-ins; capability cached 'no'`);
+            // Only a rejected live IMAGE means the connection can't see — cache
+            // that. A rejected gif-as-video means only that it won't take a gif
+            // through video_url; it must NOT blind the connection to images.
+            if (imagesLiveThisTurn > 0) {
+              await cacheVisionCapability(provider, model, 'no');
+              console.warn(`[vision] ${provider}:${model} rejected image modality — retried with stand-ins; capability cached 'no'`);
+            } else {
+              console.warn(`[vision] ${provider}:${model} rejected an animated-gif-as-video part — retried with the gif stood in (vision capability left untouched)`);
+            }
             loopOutcome = await runLoop(await fallbackToStandins());
           } else { throw err; }
         }
@@ -1016,10 +1029,16 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         // has streamed — rebuild this round's messages as stand-ins, flip the
         // capability cache, and retry the same round with degraded sight
         // instead of erroring my human's turn.
-        if (!headersSent && !visionFellBack && imagesLiveThisTurn > 0 && isModalityError(upstream.status, text)) {
+        if (!headersSent && !visionFellBack && (imagesLiveThisTurn > 0 || gifsAsVideoThisTurn > 0) && isModalityError(upstream.status, text)) {
           visionFellBack = true;
-          await cacheVisionCapability(provider, model, 'no');
-          console.warn(`[vision] ${provider}:${model} rejected image modality — retrying stream with stand-ins; capability cached 'no'`);
+          // Only a rejected live IMAGE caches 'no' (the connection can't see); a
+          // rejected gif-as-video part leaves vision capability untouched.
+          if (imagesLiveThisTurn > 0) {
+            await cacheVisionCapability(provider, model, 'no');
+            console.warn(`[vision] ${provider}:${model} rejected image modality — retrying stream with stand-ins; capability cached 'no'`);
+          } else {
+            console.warn(`[vision] ${provider}:${model} rejected an animated-gif-as-video part — retrying stream with the gif stood in (vision capability left untouched)`);
+          }
           currentMsgs = await fallbackToStandins();
           round--;   // re-run this round with the stand-in messages
           continue;

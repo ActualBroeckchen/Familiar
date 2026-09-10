@@ -218,6 +218,22 @@ export async function resolveVideoCapable(connection, settings) {
 
 export const DEFAULT_MAX_LIVE_VIDEOS = 1;   // video is expensive; one live clip per request
 
+/**
+ * An animated GIF is really a short silent video wearing an image mime. On a
+ * video-capable model I send it AS video (a `video_url` part) so I see the
+ * motion — GLM 5.3 Flash / GLM-4.6V accept an animated GIF that way. On an
+ * image-only model it rides as a normal image and the provider first-frames it
+ * (the still "gifst"). Default ON; off with `gifAsVideoEnabled:false` or
+ * PROTO_FAMILIAR_GIF_AS_VIDEO_DISABLED=1 (then a gif is always a plain image).
+ */
+export function gifAsVideoEnabled(settings = {}) {
+  return process.env.PROTO_FAMILIAR_GIF_AS_VIDEO_DISABLED !== '1'
+    && settings?.gifAsVideoEnabled !== false;
+}
+
+/** Is this the meta of an animated GIF — an image asset that also carries motion? */
+const isAnimatedGifMeta = (m) => m?.kind === 'image' && m?.mime === 'image/gif' && m?.animated === true;
+
 function dataUrl(mime, buffer) {
   return `data:${mime};base64,${buffer.toString('base64')}`;
 }
@@ -245,6 +261,8 @@ export async function materializeAttachments(apiMessages, {
 
   const capable = await resolveVisionCapable(connection, settings);
   const videoCapable = await resolveVideoCapable(connection, settings);
+  // An animated GIF may ride as video when the connection can watch video.
+  const gifVideo = videoCapable && gifAsVideoEnabled(settings);
   const budget = Number.isFinite(maxLive) ? maxLive
     : Number.isFinite(settings?.visionMaxLiveImages) ? settings.visionMaxLiveImages
     : DEFAULT_MAX_LIVE_IMAGES;
@@ -272,9 +290,15 @@ export async function materializeAttachments(apiMessages, {
   // (§9). Gating it here rather than at the use site means a future audio
   // modality is one condition to relax, not a bug to find.
   const liveIds = new Set();
-  if (capable && budget > 0) {
+  if (budget > 0) {
     for (let i = refs.length - 1; i >= 0 && liveIds.size < budget; i--) {
-      if (refs[i].meta?.kind === 'image') liveIds.add(`${refs[i].mi}:${refs[i].id}`);
+      const m = refs[i].meta;
+      if (m?.kind !== 'image') continue;
+      // Images ride live on a vision-capable connection; an animated GIF ALSO
+      // rides live on a video-capable one (sent as video below), even if that
+      // connection can't take still images — a video model that reads a gif's
+      // motion shouldn't be forced to stand it in.
+      if (capable || (gifVideo && isAnimatedGifMeta(m))) liveIds.add(`${refs[i].mi}:${refs[i].id}`);
     }
   }
   // Video rides its own newest-first budget on a video-capable connection.
@@ -295,7 +319,7 @@ export async function materializeAttachments(apiMessages, {
   // stand-in) here. Some strict providers reject unknown message fields.
   const stripAtt = (m) => { if (!m || !('attachments' in m)) return m; const { attachments, ...rest } = m; return rest; };
 
-  let imagesLive = 0, imagesStoodIn = 0, notesStoodIn = 0, videosLive = 0, videosStoodIn = 0;
+  let imagesLive = 0, imagesStoodIn = 0, notesStoodIn = 0, videosLive = 0, videosStoodIn = 0, gifsAsVideo = 0;
   let blindImageStandins = 0;      // image/video stand-ins carrying NO description (confabulation risk)
   const stoodInUndescribed = [];   // asset ids stood in with no description yet
   const out = [];
@@ -314,6 +338,17 @@ export async function materializeAttachments(apiMessages, {
         const got = await getAsset(ref.id);
         if (got?.buffer && got?.meta) {
           if (isVideo) { mediaParts.push({ type: 'video_url', video_url: { url: dataUrl(got.meta.mime, got.buffer) } }); videosLive++; }
+          else if (gifVideo && isAnimatedGifMeta(got.meta)) {
+            // Animated GIF on a video-capable model → send as video so the motion
+            // reads, not a frozen first frame. It's a video_url part, NOT an
+            // image_url one, so it counts only toward gifsAsVideo — never
+            // imagesLive. That distinction matters at the reject boundary: if a
+            // provider refuses this part, it means it won't take a gif-as-video,
+            // NOT that it can't see images, so the caller must not flip the
+            // connection's vision capability off on a gif rejection.
+            mediaParts.push({ type: 'video_url', video_url: { url: dataUrl(got.meta.mime, got.buffer) } });
+            gifsAsVideo++;
+          }
           else { mediaParts.push({ type: 'image_url', image_url: { url: dataUrl(got.meta.mime, got.buffer) } }); imagesLive++; }
           continue;
         }
@@ -388,7 +423,7 @@ export async function materializeAttachments(apiMessages, {
       content: '[This is only about images marked "I haven\'t looked at this one yet" or "I have no way to look at images right now" — those specifically I genuinely cannot see and have no description of, so for THOSE I don\'t describe them, guess their contents, or name who or what is in them; I say plainly I can\'t see it (yet) and ask what\'s in it if it matters. It does NOT apply to an image marked "what I saw when I looked: …" — that description IS my sight of it, and I talk about it normally, in full, as something I saw. A text description still counts as having seen the image. Inventing what an unseen image shows would be a serious breach — I never do that.]',
     });
   }
-  return { messages: out, imagesLive, imagesStoodIn, notesStoodIn, videosLive, videosStoodIn, stoodInUndescribed, blindImageStandins };
+  return { messages: out, imagesLive, imagesStoodIn, notesStoodIn, videosLive, videosStoodIn, gifsAsVideo, stoodInUndescribed, blindImageStandins };
 }
 
 /**

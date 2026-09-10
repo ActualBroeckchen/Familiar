@@ -14,6 +14,13 @@ function gif(w, h) {
   return b;
 }
 
+// Same header, but with two Graphic Control Extension blocks (0x21 0xF9 0x04 …)
+// — the marker isAnimatedGif counts, so this reads as MORE THAN ONE frame.
+function animGif(w, h) {
+  const gce = Buffer.from([0x21, 0xf9, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00]);
+  return Buffer.concat([gif(w, h), gce, gce]);
+}
+
 const created = [];
 let _seq = 100;   // unique dimensions per call → unique bytes → unique sha (no dedup collisions)
 async function mk(label, over = {}) {
@@ -118,6 +125,64 @@ test('materialize: video budget is newest-first (only the newest rides live)', a
   const r = await materializeAttachments(msgs, { connection: { provider: 'google', model: 'gemini-1.5-pro' }, settings: {} });
   assert.equal(r.videosLive, 1);       // DEFAULT_MAX_LIVE_VIDEOS
   assert.equal(r.videosStoodIn, 1);
+});
+
+// ── Animated GIF → video on a video-capable model ─────────────────
+async function mkAnimGif(label, over = {}) {
+  const w = over.w ?? _seq++, h = over.h ?? _seq++;
+  const m = await saveAsset({ buffer: animGif(w, h), mime: 'image/gif', label });
+  created.push(m.id);
+  return m;
+}
+
+test('saveAsset stamps animated:true on an animated gif, and leaves a still gif unflagged', async () => {
+  const moving = await mkAnimGif('reaction');
+  const still  = await mk('static');
+  assert.equal(moving.animated, true, 'the multi-frame gif is flagged animated');
+  assert.equal(still.animated, undefined, 'a single-frame gif carries no flag');
+});
+
+test('materialize: an animated gif rides as VIDEO on a video-capable model (sees the motion)', async () => {
+  const g = await mkAnimGif('wiggle');
+  const msgs = [{ role: 'user', content: 'look', attachments: [{ id: g.id }] }];
+  const r = await materializeAttachments(msgs, { connection: { provider: 'google', model: 'gemini-1.5-pro' }, settings: {} });
+  assert.equal(r.gifsAsVideo, 1, 'delivered as a gif-as-video');
+  assert.equal(r.imagesLive, 0, 'a video_url part is NOT counted as a live image (keeps the vision-reject gate honest)');
+  const parts = r.messages[0].content;
+  const vp = parts.find(p => p.type === 'video_url');
+  assert.ok(vp && /^data:image\/gif;base64,/.test(vp.video_url.url), 'the gif bytes ride a video_url part');
+  assert.ok(!parts.some(p => p.type === 'image_url'), 'not also sent as an image');
+});
+
+test('materialize: an animated gif on an image-only model stays an image (the still "gifst")', async () => {
+  const g = await mkAnimGif('wiggle2');
+  const msgs = [{ role: 'user', content: 'look', attachments: [{ id: g.id }] }];
+  // vision yes, video no → the provider first-frames the gif itself.
+  const r = await materializeAttachments(msgs, { connection: { visionCapable: 'yes', videoCapable: 'no' }, settings: {} });
+  assert.equal(r.gifsAsVideo, 0);
+  assert.equal(r.imagesLive, 1);
+  const parts = r.messages[0].content;
+  assert.ok(parts.find(p => p.type === 'image_url'), 'sent as an image_url part');
+  assert.ok(!parts.some(p => p.type === 'video_url'), 'never a video part on an image-only model');
+});
+
+test('materialize: gif-as-video off (setting) → a gif is a plain image even on a video model', async () => {
+  const g = await mkAnimGif('wiggle3');
+  const msgs = [{ role: 'user', content: 'look', attachments: [{ id: g.id }] }];
+  const r = await materializeAttachments(msgs, {
+    connection: { provider: 'google', model: 'gemini-1.5-pro' },
+    settings: { gifAsVideoEnabled: false },
+  });
+  assert.equal(r.gifsAsVideo, 0);
+  assert.ok(r.messages[0].content.find(p => p.type === 'image_url'), 'stays an image when the feature is off');
+});
+
+test('materialize: a STILL gif on a video model is a plain image, not a one-frame video', async () => {
+  const g = await mk('static-on-video');   // single-frame gif → not animated
+  const msgs = [{ role: 'user', content: 'look', attachments: [{ id: g.id }] }];
+  const r = await materializeAttachments(msgs, { connection: { provider: 'google', model: 'gemini-1.5-pro' }, settings: {} });
+  assert.equal(r.gifsAsVideo, 0, 'only ANIMATED gifs route to video');
+  assert.ok(r.messages[0].content.find(p => p.type === 'image_url'));
 });
 
 test('a z.ai-coding connection is capability-by-MODEL: text/code blind, GLM 5.3 Flash sees; still chosen for describe', async () => {

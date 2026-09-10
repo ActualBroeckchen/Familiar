@@ -167,6 +167,47 @@ long clip. And the **live shakeout** — I could not exercise the real Google AP
   machine to the provider — same disclosure class as any outbound media), and a
   failed upload degrades to the inline/stand-in path.
 
+## 4.5. Animated GIF → video (0.11.115)
+
+An animated GIF is really a short silent clip wearing an `image/gif` mime. On a
+video-capable model I now send it AS video so I see the motion, not a frozen
+first frame; on an image-only model it stays a still image (the provider
+first-frames it — "the gifst"). This rides the exact rails above with no new
+seam: a gif is still stored as `kind:'image'`, and the split happens only at the
+`materializeAttachments` content-part boundary.
+
+- **Detection is pure-code (`media.isAnimatedGif`).** An animated GIF precedes
+  each frame with a Graphic Control Extension (`0x21 0xF9 0x04 …`); two or more
+  means motion. `saveAsset` stamps `animated:true` on the gif's meta — code mints
+  the flag, never a guess from a name (the exact-values rule).
+- **The materializer routes it.** When the connection is video-capable AND
+  `gifAsVideoEnabled` (default ON), an animated gif's bytes ride a
+  `{type:'video_url', video_url:{url:data:image/gif;base64,…}}` part instead of
+  `image_url`. It occupies an image budget slot (it IS an image asset) but is
+  counted only as `gifsAsVideo`, never `imagesLive` — see the reject note below.
+  GLM-5.3-Flash / GLM-4.6V accept an animated gif this way (docs: Video is a
+  native input modality; a Base64 data-URL is the documented image form on the
+  same OpenAI-compat gateway, and the video parallel accepts it too).
+- **Reject boundary — a gif rejection must not blind the connection to images.**
+  A `video_url` gif part is video, not image, so the web reject-fallback flips
+  the VISION capability cache to `'no'` ONLY when a real `image_url` part was
+  rejected (`imagesLiveThisTurn > 0`); a gif-as-video rejection leaves vision
+  capability untouched and just stands the gif in. `fallbackToStandins` forces
+  BOTH `visionCapable:'no'` and `videoCapable:'no'` so the retry never re-emits
+  the exact part the provider rejected. (Discord has no capability-poisoning
+  fallback — it materializes and passes through — so the guard is web-only; the
+  gif-as-video part itself works on both surfaces via the shared materializer.)
+- **Discord preserves the animation.** `discordResizeUrl` skips the media-proxy
+  resize for gifs — a resized gif comes back as a single still frame from
+  Discord's proxy, which would throw the motion away before it ever reached me.
+  A gif is fetched raw, bounded by `MEDIA_MAX_BYTES` (an over-cap gif stands in).
+  The web composer already sent gifs as-is (no canvas flatten), so both surfaces
+  deliver an animated gif intact.
+- **Off-switch:** settings `gifAsVideoEnabled` (default ON, synced) or
+  `PROTO_FAMILIAR_GIF_AS_VIDEO_DISABLED=1`. Off → a gif is always a still image.
+  Also inert when video is off (`resolveVideoCapable` returns false), so a gif
+  falls back to an image with no special-casing.
+
 ## 5. Out of scope
 
 - Video generation/editing; frame-accurate seeking; streaming/live video.

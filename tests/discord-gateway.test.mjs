@@ -1039,6 +1039,14 @@ describe('Discord image ingest helpers (vision Pass 3)', () => {
     assert.equal(discordResizeUrl({ url: 'https://cdn/x/s.png' }, 1568), 'https://cdn/x/s.png');   // no proxy_url → no resize
     assert.equal(discordResizeUrl({}), '');
   });
+
+  it('discordResizeUrl never resizes a gif (Discord flattens a resized gif to a still) — animation survives', () => {
+    // A large gif that WOULD otherwise be downscaled: by mime, and by extension.
+    const byMime = discordResizeUrl({ proxy_url: 'https://m/x/big.gif', content_type: 'image/gif', width: 4000, height: 2000 }, 1568);
+    assert.equal(byMime, 'https://m/x/big.gif', 'raw url, no width/height params → the animated bytes come back');
+    const byExt = discordResizeUrl({ proxy_url: 'https://m/x/big.gif', filename: 'party.GIF', width: 4000, height: 2000 }, 1568);
+    assert.equal(byExt, 'https://m/x/big.gif');
+  });
 });
 
 // ── availabilityBlockFor: the villager scheduling coordination block ──────────
