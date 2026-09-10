@@ -231,7 +231,25 @@ A custom Discord emote arrives in message content as an opaque token — `<:name
 
 **Viewed once, then saved, never blocking a turn**: in `discord-gateway.js`, the model-facing content — both the replayed history and the current turn — is rewritten from the cache via `rewriteEmotes()` just before the API message array is assembled, while the *stored* session turn keeps the raw `<:name:id>` token so replays stay accurate as descriptions land later [@discord-emotes-js]. An emote not yet in the cache is described in the background (`describeUnseenEmotes(...).catch(() => {})`, fire-and-forget) so the description is ready by its next use; the first sighting of a new emote therefore still reads as the plain `:name:` shorthand, and the alt-text only appears from the following use onward [@discord-emotes-js].
 
-**Fail-soft and gating**: any fetch, describe, or cache-write hiccup leaves the plain `:name:` shorthand — still legible, never a broken turn [@discord-emotes-js]. The feature defaults ON; it is disabled via the `discordEmotesEnabled` setting or `PROTO_FAMILIAR_DISCORD_EMOTES_DISABLED=1` [@discord-emotes-js]. It is a sibling of the same Discord-media improvement pass that fixed text-less image turns at 0.11.112; Discord GIF handling remains an open piece of that pass.
+**Fail-soft and gating**: any fetch, describe, or cache-write hiccup leaves the plain `:name:` shorthand — still legible, never a broken turn [@discord-emotes-js]. The feature defaults ON; it is disabled via the `discordEmotesEnabled` setting or `PROTO_FAMILIAR_DISCORD_EMOTES_DISABLED=1` [@discord-emotes-js]. It is a sibling of the same Discord-media improvement pass that fixed text-less image turns at 0.11.112; that pass's Discord-media batch (text-less image turns → custom-emote alt-text → animated-gif-as-video) completes with the gif handling below.
+
+## Animated GIF as video (0.11.115-alpha)
+
+An animated GIF is a short silent clip wearing an `image/gif` MIME type. On a video-capable connection, the Familiar now sends it AS video — a `video_url` content part — so it reads the motion instead of a frozen first frame; on an image-only connection it still rides as a plain image and the provider first-frames it (the "gifst") [@vision-js].
+
+**Rides the existing image/video split, not a new seam.** A gif is still stored as `kind:'image'` in the media store; nothing about ingest or storage changes. The image/video fork happens only at the `materializeAttachments()` content-part boundary in `vision.js` — the same seam the Video media section above added for the `video` kind. Sending a gif as video is a materializer branch, not a message-format change, consistent with [Message attachments ride beside content](../decisions/message-attachments-format) [@vision-js].
+
+**Detection is pure code, minted at save time.** `isAnimatedGif(buf)` counts GIF Graphic Control Extension blocks (the 3-byte `0x21 0xF9 0x04` header that precedes each frame); two or more means motion, matching the same "read the header, no native decoder" posture as the image-dimension readers described above [@media-js]. `saveAsset()` calls it once, at save time, and stamps `animated: true` on the gif's metadata only when `kind === 'image'` and `mime === 'image/gif'` [@media-js]. Per [Exact values are minted in code, not guessed](../decisions/exact-values-in-code), the flag is never inferred from a filename.
+
+**Why a gif-as-video must not poison the vision cache.** A `video_url` gif part is video, not image, so a provider rejecting it says nothing about whether the connection can see ordinary images. `materializeAttachments()` therefore tracks a gif routed as video in its own `gifsAsVideo` counter, separate from `imagesLive` [@vision-js]. In `server.js`, the mid-turn modality-reject fallback (both the non-streaming and streaming chat loops) fires on either counter being positive (`imagesLiveThisTurn > 0 || gifsAsVideoThisTurn > 0`), but caches vision capability `'no'` only when a real image was rejected (`imagesLiveThisTurn > 0`); a rejected gif-as-video part leaves the connection's vision capability untouched [@server-js]. Without this split, one gif refused through `video_url` would silently blind the connection to every future image.
+
+**The retry must not re-offer the same rejected part.** `fallbackToStandins()` in `server.js` now forces both `visionCapable:'no'` and `videoCapable:'no'` on the retry materialization, so the re-run never re-emits the exact content part the provider just rejected — whether that was a live image or a gif-as-video [@server-js]. This also closed a pre-existing gap where the fallback forced vision off but left video live, which would have retried a rejected video part unchanged.
+
+**Discord's media proxy would destroy the motion.** `discordResizeUrl()` skips the media-proxy resize specifically for gifs and fetches the asset raw instead, because Discord's proxy returns a resized gif as a single still frame — applying the normal downscale would throw away the animation before it ever reached the Familiar [@discord-gateway-js]. The raw fetch is still bounded by `MEDIA_MAX_BYTES`; an over-cap gif stands in as text like any oversized attachment. The web composer already sent gifs unmodified (no canvas flatten; `downscaleImage` short-circuits `image/gif`), so both surfaces now deliver an animated gif intact.
+
+**Off-switch**: `gifAsVideoEnabled()` defaults ON, controlled by the `gifAsVideoEnabled` setting (synced via `SERVER_SYNCED_KEYS`) or `PROTO_FAMILIAR_GIF_AS_VIDEO_DISABLED=1`; when off, a gif is always sent as a plain still image [@vision-js]. The feature is also inert whenever `resolveVideoCapable()` returns false for the connection, since gif-as-video only ever activates on top of an already video-capable connection [@vision-js].
+
+**Out of scope**: Tenor/Giphy embed links (a URL appearing in message content, not a Discord attachment) need a separate external-URL-fetch-and-preview flow and are not covered here; this only handles actual gif attachments and composer-uploaded gifs.
 
 ## Image descriptions feeding threat scoring
 
@@ -267,6 +285,9 @@ The feature is known to false-positive on fictional violence (horror film stills
 - **Custom Discord emote alt-text** (0.11.113-alpha): custom emote tokens are rewritten into
   described alt-text for the model, riding the existing describe pipeline — see Custom Discord
   emote alt-text above [@discord-emotes-js].
+- **Animated GIF as video** (0.11.115-alpha): an animated gif is sent as a `video_url` part to a
+  video-capable connection instead of a frozen first frame, completing the Discord-media
+  improvement pass — see Animated GIF as video above [@vision-js, @media-js, @server-js].
 
 Later passes (group-call presence, voiceprint enrolment, room-sound tagging) belong to the voice
 milestone rather than this one; see [Voice](voice) for those.
