@@ -14,7 +14,7 @@
  * strips on doubt), and nothing here throws into a caller. Images are untouched.
  */
 
-import { callProviderChat } from '../../llm-call.js';
+import { callProviderChat, familiarDeliberationMessages } from '../../llm-call.js';
 import { substituteMacros } from '../../macros.js';
 import { connectionForFeature } from '../../cerebellum.js';
 import { listAssets, stripAudio, markAudioKeep } from './media.js';
@@ -86,15 +86,19 @@ export async function runMediaRetention({
 
     // Decide which SOUNDS to keep. One batched call; a reasoning model parks its
     // answer in reasoning_content, which callProviderChat's extract handles.
+    // The judgment is my own thinking about my own kept clips, so it rides as a
+    // system message with a bare user cue (familiarDeliberationMessages), never
+    // as a `user` turn framing the deliberation as handed TO me.
     let keepRefs = new Set();
     try {
       const conn = connectionForFeature(settings, 'pondering') || connectionForFeature(settings, 'chat');
       const prompt = substituteMacros(JUDGMENT_PROMPT(list), settings);
+      const messages = familiarDeliberationMessages({ body: prompt, cue: '(a quiet moment with old voice clips)' });
       const call = llmFn
-        ? llmFn([{ role: 'user', content: prompt }], { settings })
+        ? llmFn(messages, { settings })
         : callProviderChat({
             provider: conn?.provider, apiKey: conn?.apiKey, model: conn?.model, baseUrl: conn?.baseUrl,
-            messages: [{ role: 'user', content: prompt }], max_tokens: 4000,
+            messages, max_tokens: 4000,
           });
       const text = await call;
       const parsed = parseKeepRefs(text);

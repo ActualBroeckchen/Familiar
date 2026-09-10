@@ -59,6 +59,28 @@ test('keeps the sounds the judgment names, lets the rest go to transcript', asyn
   assert.deepEqual(stripped, ['milk-x2'], 'the errand reminder drops to transcript');
 });
 
+test('the retention judgment rides as SYSTEM (my own thinking), user slot is a bare cue', async () => {
+  // The voice-pass conversion: the keep/let-go judgment is the Familiar's own
+  // deliberation about its own clips, so the prompt must land in `system`, never
+  // in a `user` turn framing it as handed TO the Familiar.
+  const assets = [audio({ id: 'a', slugs: ['a-laugh-x1'], description: { text: 'a long warm laugh' } })];
+  let seen = null;
+  await runMediaRetention({
+    settings: { voiceNoteRetentionDays: 14 },
+    now: NOW,
+    selectFn: (o) => selectRetentionCandidates({ ...o, listAssetsFn: async () => assets }),
+    llmFn: async (messages) => { seen = messages; return JSON.stringify({ keep: [] }); },
+    stripFn: async () => ({ ok: true }),
+    keepFn: async () => ({ ok: true }),
+  });
+  assert.ok(Array.isArray(seen), 'the judgment was called with a messages array');
+  const users = seen.filter(m => m.role === 'user');
+  assert.equal(users.length, 1, 'exactly one user turn');
+  assert.equal(users[0].content, '(a quiet moment with old voice clips)', 'the user turn is only the bare cue');
+  assert.ok(seen.some(m => m.role === 'system' && /going back through some voice clips/.test(m.content)),
+    'the first-person judgment body is a system message, not a user turn');
+});
+
 test('a garbled judgment keeps EVERYTHING — a wrong response never strips a sound', async () => {
   const assets = [audio({ id: 'a' })];
   const stripped = [];
