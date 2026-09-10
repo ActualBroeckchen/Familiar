@@ -51,6 +51,7 @@ import {
 } from './thalamus.js';
 import { scoreMessage } from './src/safety/crisis-signals.js';
 import { foldReasoningIntoContent, callProviderChat, familiarDeliberationMessages } from './llm-call.js';
+import { hydrateNameFieldCache } from './name-field.js';
 import { fetchReadable } from './src/search/websearch.js';
 import { startPageWatchLoop, stopPageWatchLoop, isRunning as pageWatchRunning } from './src/browser/page-watch-loop.js';
 import { buildPageWatchPrompt, parsePageWatchDecision } from './src/browser/page-watch.js';
@@ -5390,6 +5391,10 @@ const httpServer = app.listen(PORT, HOST, async () => {
       else if (r.reason === 'ward-edited') console.log('[manual] a newer manual shipped, but yours is edited — leaving it as-is');
     })
     .catch(err => console.error('[manual] seed failed (skipping):', err?.message ?? err));
+  // Load the learned `name`-field capability cache (provider:model → yes/no) and
+  // enable write-through, so a provider that 400'd on the field stays bare across
+  // restarts until its model changes. Optimistic until something is learned.
+  hydrateNameFieldCache();
   startMemorizationWorker();
   startAutonomousPondering();
   startRemindersScheduler();

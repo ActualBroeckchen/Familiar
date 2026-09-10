@@ -12,6 +12,8 @@ browser/
 # Vision capability cache (provider:model → yes/no) — advisory, rebuildable.
 tomes/.vision-capability.json
 tomes/.vision-capability.json.tmp
+tomes/.name-field-capability.json
+tomes/.name-field-capability.json.tmp
 tomes/.memorization-queue.json
 tomes/.memorization-queue.json.tmp
 # Threat-tracker state (step 4b) — local, decaying scalar; never committed.

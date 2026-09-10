@@ -24,6 +24,13 @@ import { extractContent } from '../../llm-call.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
 import { slugifyLabel } from '../../slug-ids.js';
+// The `name`-field machinery now lives in the shared module so every user-role
+// surface uses one implementation (not a memorization-local copy). Re-exported
+// below for back-compat with callers/tests that import it from here.
+import {
+  speakerNameField, nameFieldEnabledFor, recordNameFieldResult,
+  _resetNameFieldCache, withNameFieldFallback,
+} from '../../name-field.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOMES_DIR  = path.join(REPO_ROOT, 'tomes');
 const QUEUE_FILE = path.join(TOMES_DIR, '.memorization-queue.json');
@@ -258,28 +265,13 @@ function filterReadable(messages) {
 // get a role, so their lines keep an inline `[Name]:` / ward label to stay
 // distinct (the Familiar still lands correctly on assistant). Exported for the
 // pipeline test.
-// The OpenAI `name` field value for a transcript turn — a CODE-MINTED handle, so
-// a real name's spaces/unicode can never trip the field's charset and 400 the
-// whole request (the reason we slug rather than pass a raw name). The Familiar's
-// own turns (assistant) get none — the role already carries them. A villager or
-// stranger gets their slugified name; the ward (a user turn with no speaker) gets
-// `ward-<slug>` — the `ward-` prefix marks the bond, the name keeps them a
-// specific person, never flattened into a bare role (CLAUDE.md: name the human).
-// Material with no live speaker (an archived log dropped on a user turn) gets
-// `session-archive`, so it can't read as someone addressing the Familiar.
-export function speakerNameField({ role, speaker, wardName = 'My human', material = false } = {}) {
-  if (role !== 'user') return undefined;              // assistant = the Familiar
-  if (material) return 'session-archive';
-  const name = String(speaker ?? '').trim();
-  if (name) return slugifyLabel(name) || undefined;   // villager / stranger
-  const w = slugifyLabel(wardName);                    // no speaker → the ward
-  return w ? `ward-${w}` : 'ward';
-}
+// `speakerNameField` now lives in ../../name-field.js (shared). Re-exported at
+// the bottom of this file for back-compat.
 
-// The conversation as faithful role-tagged turns. `withNames` (off by default,
-// opt-in per connection because not every OpenAI-compatible server accepts the
-// field) additionally stamps each user turn with a name-safe `name` handle so the
-// model gets a first-class sender id, not just the inline `[Name]:` text.
+// The conversation as faithful role-tagged turns. `withNames` (optimistic by
+// default now — see name-field.js; a provider that 400s on the field is learned
+// and falls back to bare) stamps each user turn with a name-safe `name` handle so
+// the model gets a first-class sender id, not just the inline `[Name]:` text.
 export function conversationMessages(messages, { sharedRoom = false, wardLabel = 'My human', withNames = false } = {}) {
   return filterReadable(messages).map(m => {
     if (m.role !== 'user') return { role: 'assistant', content: m.content ?? '' };
@@ -316,58 +308,13 @@ export function buildExtractionMessages({ instructions, messages, sharedRoom = f
   ];
 }
 
-// Whether to stamp `name` fields for this job. The ward's per-connection
-// tri-state wins (`nameFieldCapable: 'yes'|'no'`); else a per-process LEARNED
-// result (recordNameFieldResult — set when a real turn succeeds, or when a
-// name-field 400 is caught and the retry without names works); else OPTIMISTIC:
-// attempt names and learn from the outcome, the way visionCapable does. Learned
-// state is in-memory — cheap to re-learn after a restart, no dotfile to keep.
-const _nameCapCache = new Map();   // `${provider}:${model}` → 'yes' | 'no'
-const nameCapKey = (job = {}) => `${job.provider ?? ''}:${job.model ?? ''}`;
-
-export function nameFieldEnabledFor(job = {}, settings = {}) {
-  const conns = Array.isArray(settings?.connections) ? settings.connections : [];
-  const conn = conns.find(c =>
-    c?.provider === job.provider &&
-    c?.model === job.model &&
-    (c?.baseUrl ?? null) === (job.baseUrl ?? null));
-  if (conn?.nameFieldCapable === 'yes') return true;
-  if (conn?.nameFieldCapable === 'no')  return false;
-  const learned = _nameCapCache.get(nameCapKey(job));
-  if (learned === 'yes') return true;
-  if (learned === 'no')  return false;
-  return true;   // optimistic: attempt + learn (a name-field 400 caches 'no' and retries bare)
-}
-
-// Record what a real turn taught us about this provider:model, so the next job
-// skips the wasted attempt. Exported for the fallback orchestrator + tests.
-export function recordNameFieldResult(job = {}, result) {
-  if (result === 'yes' || result === 'no') _nameCapCache.set(nameCapKey(job), result);
-}
-
-/** Clear the in-process learned cache. Tests only. */
-export function _resetNameFieldCache() { _nameCapCache.clear(); }
-
-// Run the extraction call with name fields, degrading gracefully if the provider
-// rejects the field: on a 400 while names were on, retry ONCE without them — a
-// success proves the name field was the culprit (learn 'no'); a second failure
-// is a real error and propagates untouched. Mirrors how visionCapable learns
-// from a modality reject. `callProviderFn(messages)` and `buildMessages(bool)`
-// are injected so this is unit-testable without processJob's world.
-export async function extractWithNameFallback({ withNames, buildMessages, callProviderFn, onLearn }) {
-  try {
-    const res = await callProviderFn(buildMessages(withNames));
-    if (withNames) onLearn?.('yes');
-    return res;
-  } catch (err) {
-    if (withNames && /returned 400\b/.test(err?.message ?? '')) {
-      const res = await callProviderFn(buildMessages(false));   // retry bare; a throw here is a real error
-      onLearn?.('no');
-      return res;
-    }
-    throw err;
-  }
-}
+// The `name`-field capability policy (nameFieldEnabledFor / recordNameFieldResult
+// / _resetNameFieldCache) and the 400-fallback orchestrator (withNameFieldFallback,
+// formerly extractWithNameFallback) now live in ../../name-field.js, shared across
+// every user-role surface. Re-exported here (incl. the old name) for back-compat
+// with callers/tests that import them from this module.
+export { speakerNameField, nameFieldEnabledFor, recordNameFieldResult, _resetNameFieldCache };
+export { withNameFieldFallback as extractWithNameFallback };
 
 // The content-tag field, shared by both extraction prompts (private + shared
 // room) so the two never drift. It's a "topic:level" tag that decides, later,
@@ -908,7 +855,7 @@ async function processJob(job) {
 
   // Attempt with `name` fields (optimistic auto-detect); if the provider 400s on
   // the field, retry once WITHOUT names and remember not to try again this run.
-  const { content: raw, finishReason } = await extractWithNameFallback({
+  const { content: raw, finishReason } = await withNameFieldFallback({
     withNames,
     buildMessages: buildMsgs,
     callProviderFn: (messages) => callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, baseUrl: job.baseUrl, messages }),
