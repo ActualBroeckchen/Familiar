@@ -115,26 +115,39 @@ export async function fetchEmoteImage(emote, { fetchFn = fetch, timeoutMs = 8000
 }
 
 /**
- * View + cache the description of each not-yet-described emote, ONCE. Fire-and-
- * forget from the caller (it never blocks a turn). Each emote's bytes ride the
- * shared media pipeline (`saveAsset` → `describeAsset`), so the description is
- * injection-guarded and cached there too; this only keeps the id → description
- * map the text rewrite reads. Deps injected so it's testable without the store.
- * Never throws.
+ * View + cache the description of each not-yet-described emote, ONCE. The caller
+ * AWAITS this before assembling the turn (bounded, so a slow describe can't hang
+ * it) — mirroring `ensureDescribed` for images — so the FIRST message carrying a
+ * new emote already reads its alt-text, not a bare `:name:`. Cached forever after
+ * (the media store + this map), so only a brand-new emote ever pays the describe.
+ *
+ * Each emote's bytes ride the shared media pipeline (`saveAsset` →
+ * `describeAsset`), inheriting content-dedup, the injection-guard on the
+ * description, z.ai-coding routing, and the describe-once cache; this only keeps
+ * the id → description map the text rewrite reads. Deps injected for tests.
+ *
+ * Observable, not silent (CLAUDE.md: failures that matter are observable): every
+ * describe outcome — success, or the reason it produced nothing — is logged, so a
+ * "why don't my emotes get described" is answerable from the logs instead of a
+ * dead `catch {}`. Never throws; a failure leaves the plain `:name:` shorthand.
  */
 export async function describeUnseenEmotes(emotes, {
   settings = {}, cacheFile = EMOTES_FILE,
   fetchEmote = fetchEmoteImage, saveAsset, describeAsset,
+  max = 6, timeoutMs = 20000, log = console,
 } = {}) {
   if (!Array.isArray(emotes) || !emotes.length) return;
-  if (typeof saveAsset !== 'function' || typeof describeAsset !== 'function') return;
+  if (typeof saveAsset !== 'function' || typeof describeAsset !== 'function') {
+    log?.warn?.('[discord-emotes] describe skipped — media pipeline unavailable');
+    return;
+  }
   const cache = await readEmoteCache(cacheFile);
+  const todo = emotes.filter(e => !cache[e.id]?.description).slice(0, max);
   let changed = false;
-  for (const e of emotes) {
-    if (cache[e.id]?.description) continue;               // described already
+  for (const e of todo) {
     try {
       const got = await fetchEmote(e, { settings });
-      if (!got?.buffer) continue;
+      if (!got?.buffer) { log?.warn?.(`[discord-emotes] :${e.name}: (${e.id}) — image fetch failed; leaving bare shorthand`); continue; }
       const meta = await saveAsset({
         buffer: got.buffer, mime: got.mime,
         origin: { surface: 'discord-emote', speaker: null },
@@ -142,13 +155,30 @@ export async function describeUnseenEmotes(emotes, {
         label: `:${e.name}:`,
       });
       const assetId = meta?.slugs?.[0] ?? meta?.id;
-      if (!assetId) continue;
-      const desc = await describeAsset(assetId, settings);
+      if (!assetId) { log?.warn?.(`[discord-emotes] :${e.name}: — saveAsset returned no id`); continue; }
+      // Bound the describe so a slow/hung vision call never stalls the turn; a
+      // timeout leaves it bare this turn and it retries next time (uncached). The
+      // timer is cleared + unref'd on the winning branch — an uncleared race timer
+      // leaks the event loop (the 25s test-hang lesson).
+      let timer;
+      const desc = await Promise.race([
+        Promise.resolve(describeAsset(assetId, settings)).then((r) => { clearTimeout(timer); return r; }),
+        new Promise((resolve) => { timer = setTimeout(() => resolve({ ok: false, reason: 'describe-timeout' }), timeoutMs); timer.unref?.(); }),
+      ]);
       const text = desc?.description?.text
         ?? (typeof desc?.description === 'string' ? desc.description : null);
-      cache[e.id] = { name: e.name, assetId, description: text || null, at: new Date().toISOString() };
+      if (!text) {
+        // The most useful line for "why don't emotes work": the describe ran but
+        // produced nothing — usually no vision connection assigned, or a reject.
+        log?.warn?.(`[discord-emotes] :${e.name}: not described (${desc?.reason ?? 'no description returned'}) — is a vision connection configured?`);
+        continue;
+      }
+      cache[e.id] = { name: e.name, assetId, description: text, at: new Date().toISOString() };
       changed = true;
-    } catch { /* fail-soft: leave uncached; the plain :name: still reads, retry next time */ }
+      log?.log?.(`[discord-emotes] described :${e.name}: → "${text.slice(0, 60)}${text.length > 60 ? '…' : ''}"`);
+    } catch (err) {
+      log?.warn?.(`[discord-emotes] :${e.name}: describe threw (${err?.message ?? err}) — leaving bare shorthand`);
+    }
   }
   if (changed) await writeEmoteCache(cache, cacheFile);
 }

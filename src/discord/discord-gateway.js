@@ -2443,16 +2443,23 @@ async function handleTurn(gw, msg, decision) {
 
   // Custom emotes → readable alt-text for the model. The stored userTurn keeps
   // the raw <:name:id> tokens (so the rewrite stays accurate as descriptions
-  // land); only what the model reads is rewritten. Any unseen emote is described
-  // once in the background, so its description lands for next time. Fail-soft: a
-  // hiccup leaves the plain :name: shorthand, never breaks the turn.
+  // land); only what the model reads is rewritten. Unseen emotes are described
+  // SYNCHRONOUSLY here (bounded, like ensureDescribed for images) so the FIRST
+  // message carrying a new emote already reads its alt-text, not a bare :name:.
+  // Fail-soft: any hiccup leaves the plain :name: shorthand, never breaks the
+  // turn (and describeUnseenEmotes logs why, so a silent miss is diagnosable).
   let emoteCache = {};
   if (!emotesDisabled(settings)) {
     try {
-      emoteCache = await readEmoteCache();
       const emotes = parseEmotes(content);
-      if (emotes.length) describeUnseenEmotes(emotes, { settings, saveAsset, describeAsset }).catch(() => {});
-    } catch { emoteCache = {}; }
+      if (emotes.length) {
+        await describeUnseenEmotes(emotes, { settings, saveAsset, describeAsset });
+      }
+      emoteCache = await readEmoteCache();
+    } catch (err) {
+      console.warn('[discord] emote alt-text step failed (using bare shorthands):', err?.message ?? err);
+      emoteCache = await readEmoteCache().catch(() => ({}));
+    }
   }
   const emoteText = (t) => rewriteEmotes(t, emoteCache);
 

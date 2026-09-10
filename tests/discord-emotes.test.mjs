@@ -71,19 +71,40 @@ test('describeUnseenEmotes: describes an unseen emote once and caches by id', as
   await fsp.rm(path.dirname(cacheFile), { recursive: true, force: true });
 });
 
+const quiet = { warn() {}, log() {} };
+
 test('describeUnseenEmotes: fail-soft — a fetch miss leaves it uncached, never throws', async () => {
   const cacheFile = path.join(await fsp.mkdtemp(path.join(os.tmpdir(), 'emotes-')), 'c.json');
   await describeUnseenEmotes(
     [{ id: '404', name: 'gone', animated: false }],
-    { cacheFile, fetchEmote: async () => null, saveAsset: async () => ({ id: 'x' }), describeAsset: async () => ({}) },
+    { cacheFile, fetchEmote: async () => null, saveAsset: async () => ({ id: 'x' }), describeAsset: async () => ({}), log: quiet },
   );
   const cache = await readEmoteCache(cacheFile);
   assert.equal(cache['404'], undefined, 'nothing cached when the fetch fails');
   await fsp.rm(path.dirname(cacheFile), { recursive: true, force: true });
 });
 
+test('describeUnseenEmotes: a describe that returns no text is LOGGED (not silent) and left uncached', async () => {
+  const cacheFile = path.join(await fsp.mkdtemp(path.join(os.tmpdir(), 'emotes-')), 'c.json');
+  const warnings = [];
+  await describeUnseenEmotes(
+    [{ id: '555', name: 'feral', animated: false }],
+    {
+      cacheFile,
+      fetchEmote: async () => ({ buffer: Buffer.from('png'), mime: 'image/png' }),
+      saveAsset: async () => ({ id: 'a', slugs: ['feral-x1'] }),
+      describeAsset: async () => ({ ok: false, reason: 'no-vision-connection' }),   // e.g. no vision configured
+      log: { warn: (m) => warnings.push(m), log() {} },
+    },
+  );
+  assert.equal((await readEmoteCache(cacheFile))['555'], undefined, 'not cached without a description');
+  assert.ok(warnings.some(w => /feral/.test(w) && /no-vision-connection/.test(w)),
+    'the reason it produced nothing is logged, so the miss is diagnosable');
+  await fsp.rm(path.dirname(cacheFile), { recursive: true, force: true });
+});
+
 test('describeUnseenEmotes: missing deps or empty list → no-op, no throw', async () => {
-  await describeUnseenEmotes([], {});                                  // empty
-  await describeUnseenEmotes([{ id: '1', name: 'x' }], {});            // no saveAsset/describeAsset
+  await describeUnseenEmotes([], {});                                             // empty
+  await describeUnseenEmotes([{ id: '1', name: 'x' }], { log: quiet });           // no saveAsset/describeAsset
   assert.ok(true, 'returned without throwing');
 });
