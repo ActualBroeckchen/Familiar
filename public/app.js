@@ -449,6 +449,9 @@ const state = {
   // Familiar can read (:tiredcat: [= a tired cat]). Default ON; off via this key
   // or PROTO_FAMILIAR_DISCORD_EMOTES_DISABLED=1 on the server.
   discordEmotesEnabled: true,
+  // Tenor/Giphy gifs (gifv embeds, served as mp4) become watchable media — the
+  // mp4 to a video-capable model, a still frame otherwise. Off → they stay a link.
+  discordGifEmbedsEnabled: true,
   discordBotToken:   '',
   discordWardUserId: '',
   // Auto-register a new guild channel as a Location the moment it's seen,
@@ -581,7 +584,7 @@ const SERVER_SYNCED_KEYS = [
   'gcalWriteEnabled', 'gcalWriteCommand',
   'gcalCalendarAttribution', 'gcalIcalUrls', 'gcalCliCalendars',
   'trustedContacts', 'userDiscordWebhook',
-  'discordEnabled', 'discordToolsEnabled', 'discordEmotesEnabled', 'discordBotToken', 'discordWardUserId',
+  'discordEnabled', 'discordToolsEnabled', 'discordEmotesEnabled', 'discordGifEmbedsEnabled', 'discordBotToken', 'discordWardUserId',
   'villageAutoRegisterLocations',
   'featureConnections',
   'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring', 'gifAsVideoEnabled',

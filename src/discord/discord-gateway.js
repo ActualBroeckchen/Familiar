@@ -43,6 +43,7 @@ import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCa
 import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, VIDEO_MIME_EXT, VIDEO_MAX_BYTES, MAX_IMAGES_PER_MESSAGE } from '../vision/media.js';
 import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from '../vision/vision.js';
 import { parseEmotes, rewriteEmotes, readEmoteCache, describeUnseenEmotes, emotesDisabled } from './discord-emotes.js';
+import { parseGifEmbeds, labelFromGifPage, mediaFilename, gifEmbedsDisabled } from './discord-gif-embeds.js';
 import { hearVoiceNotes } from '../voice/voice-transcribe.js';
 import { extractTurnReply } from '../../llm-call.js';
 import { sendWithNames } from '../../name-field.js';
@@ -2120,6 +2121,7 @@ export async function ingestDiscordMedia(msg, decision, { audienceTag, sessionId
   if (discordVisionOff()) return { attachments: [], failed: 0 };
   // Ward always; registered villager yes; stranger never.
   if (!decision.isWard && !decision.villager) return { attachments: [], failed: 0 };
+  const settings = readSettingsSync() || {};
   const atts = Array.isArray(msg.attachments) ? msg.attachments : [];
   const videoOff = process.env.PROTO_FAMILIAR_VIDEO_DISABLED === '1';
   // Images first, then video — a mixed message favours the pictures under the cap.
@@ -2127,11 +2129,26 @@ export async function ingestDiscordMedia(msg, decision, { audienceTag, sessionId
     ...atts.filter(isDiscordImageAttachment).map(a => ({ att: a, kind: 'image' })),
     ...(videoOff ? [] : atts.filter(a => !isDiscordImageAttachment(a) && isDiscordVideoAttachment(a)).map(a => ({ att: a, kind: 'video' }))),
   ];
+  // Tenor/Giphy gifs aren't attachments — they arrive as gifv EMBEDS, served as
+  // mp4. Ingest the mp4 as a video (motion for a video-capable model, same as an
+  // uploaded animated gif); when video is off or the embed only has a poster,
+  // take the still thumbnail as an image. A pseudo-attachment ({url,filename})
+  // rides the same fetchers as a real attachment.
+  if (!gifEmbedsDisabled(settings)) {
+    for (const g of parseGifEmbeds(msg)) {
+      const label = labelFromGifPage(g.page);
+      if (!videoOff && g.videoUrl) {
+        items.push({ att: { url: g.videoUrl, width: g.width, height: g.height, filename: mediaFilename(g.videoUrl, 'gif.mp4') }, kind: 'video', label });
+      } else if (g.imageUrl) {
+        items.push({ att: { url: g.imageUrl, width: g.width, height: g.height, filename: mediaFilename(g.imageUrl, 'gif.png') }, kind: 'image', label });
+      }
+    }
+  }
   if (!items.length) return { attachments: [], failed: 0 };
-  const cap = clampDiscordMediaPerHour(readSettingsSync()?.discordMediaPerHour);
+  const cap = clampDiscordMediaPerHour(settings.discordMediaPerHour);
   const out = [];
   let failed = 0;
-  for (const { att: a, kind } of items.slice(0, MAX_IMAGES_PER_MESSAGE)) {
+  for (const { att: a, kind, label } of items.slice(0, MAX_IMAGES_PER_MESSAGE)) {
     if (discordMediaHourCount(decision.locationKey) >= cap) break;
     const got = kind === 'video' ? await fetchDiscordVideo(a) : await fetchDiscordImage(a);
     if (!got) { failed++; continue; }
@@ -2139,7 +2156,7 @@ export async function ingestDiscordMedia(msg, decision, { audienceTag, sessionId
       buffer: got.buffer, mime: got.mime,
       origin: { surface: 'discord', sessionId: sessionId ?? null, speaker: decision.isWard ? null : (decision.speakerName ?? null) },
       audienceTag: audienceTag || 'ward-private',
-      label: a.filename || '',
+      label: label || a.filename || '',
     });
     if (meta?.id) { out.push({ id: meta.slugs?.[0] ?? meta.id, kind: meta.kind, mime: meta.mime }); noteDiscordMediaIngest(decision.locationKey); }
     else failed++;

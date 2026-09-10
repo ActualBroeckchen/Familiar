@@ -208,6 +208,41 @@ seam: a gif is still stored as `kind:'image'`, and the split happens only at the
   Also inert when video is off (`resolveVideoCapable` returns false), so a gif
   falls back to an image with no special-casing.
 
+## 4.6. Tenor / Giphy gifs on Discord (0.11.116)
+
+The gifs people actually use on Discord aren't uploaded `.gif` files — they're
+picked from the Tenor/Giphy picker (or pasted as a link) and arrive as a
+`type:'gifv'` **embed**, NOT in `msg.attachments`. Discord resolves each one and
+serves the motion as an **mp4** (`embed.video`), with a still poster in
+`embed.thumbnail`. Before this the gateway only read `attachments`, so those gifs
+were invisible — the Familiar saw a bare link.
+
+- **`src/discord/discord-gif-embeds.js`** (new, pure) reads a message's embeds and
+  returns one fetchable reference per gif: `isGifEmbed` (gate on `type:'gifv'` /
+  Tenor-Giphy provider / a known gif host / a direct `.gif` image — an article
+  preview is never ingested), `directMediaUrl` (prefer Discord's proxied
+  `proxy_url`; a bare `url` only when it points at a media file, since a
+  `video.url` is sometimes the tenor PAGE), `labelFromGifPage` (the descriptive
+  slug → a meaning-bearing asset label + a hint before any describe), and
+  `parseGifEmbeds` (deduped). Nothing here touches the network.
+- **`ingestDiscordMedia` folds them in** beside attachments: the mp4 as a
+  `video` (so a video-capable model watches the motion, exactly like an uploaded
+  animated gif), or the still thumbnail as an `image` when video is off or the
+  embed has only a poster. A pseudo-attachment `{url,filename}` rides the SAME
+  `fetchDiscordVideo`/`fetchDiscordImage` (timeout, cap, content-type + ext
+  fallback), the SAME audience rule (ward always / villager yes / stranger
+  never), and the SAME per-message + hourly caps. Both the live-turn and the
+  lurk (`observeMessage`) paths get it, since both call `ingestDiscordMedia`.
+- **Off-switch:** settings `discordGifEmbedsEnabled` (default ON, synced) or
+  `PROTO_FAMILIAR_DISCORD_GIF_EMBEDS_DISABLED=1`.
+- **Known limitations (v1):** (a) only `MESSAGE_CREATE` is handled, so a gif
+  whose embed resolves late via `MESSAGE_UPDATE` is missed — Discord's own picker
+  attaches the `gifv` embed on create, so the common path works, and the tenor
+  link still sits in the message text (its slug names the gif) either way.
+  (b) An image-only model gets the mp4's honest "I can't watch it" stand-in, not
+  a frame — the free thumbnail COULD be described onto the video (`buildStandin`
+  already renders a video description) for full parity; deferred.
+
 ## 5. Out of scope
 
 - Video generation/editing; frame-accurate seeking; streaming/live video.

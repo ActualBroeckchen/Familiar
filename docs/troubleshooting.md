@@ -569,6 +569,7 @@ is not an off-switch.
 | `PROTO_FAMILIAR_DISCORD_DISABLED` | the Discord gateway |
 | `PROTO_FAMILIAR_DISCORD_TOOLS_DISABLED` | tools on Discord turns |
 | `PROTO_FAMILIAR_DISCORD_EMOTES_DISABLED` | describing custom emotes into alt-text (`:tiredcat:` stays a bare shorthand) |
+| `PROTO_FAMILIAR_DISCORD_GIF_EMBEDS_DISABLED` | ingesting Tenor/Giphy gifs (they stay a bare link instead of watchable media) |
 | `PROTO_FAMILIAR_DISCORD_BATCH_DISABLED` | coalescing a burst into one reply |
 | `PROTO_FAMILIAR_SESSION_UNIFY_DISABLED` | unifying the ward's Discord DM with their web chat (one shared session) |
 | `PROTO_FAMILIAR_WEBSEARCH_DISABLED` | web search |

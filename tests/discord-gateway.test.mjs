@@ -30,7 +30,9 @@ import {
   discordResizeUrl,
   attributeUserContent,
   availabilityBlockFor,
+  ingestDiscordMedia,
 } from '../src/discord/discord-gateway.js';
+import { deleteAsset } from '../src/vision/media.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────
 
@@ -1038,6 +1040,37 @@ describe('Discord image ingest helpers (vision Pass 3)', () => {
     assert.equal(discordResizeUrl({ proxy_url: 'https://m/x/s.png', width: 800, height: 600 }, 1568), 'https://m/x/s.png');
     assert.equal(discordResizeUrl({ url: 'https://cdn/x/s.png' }, 1568), 'https://cdn/x/s.png');   // no proxy_url → no resize
     assert.equal(discordResizeUrl({}), '');
+  });
+
+  it('ingestDiscordMedia folds a Tenor gifv embed into a saved video asset (the mp4)', async () => {
+    const realFetch = globalThis.fetch;
+    const created = [];
+    // A tiny fake mp4, served with a video content-type.
+    globalThis.fetch = async () => ({
+      ok: true,
+      headers: { get: (h) => (String(h).toLowerCase() === 'content-type' ? 'video/mp4' : null) },
+      arrayBuffer: async () => new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109]).buffer,
+    });
+    try {
+      const msg = {
+        attachments: [],
+        embeds: [{
+          type: 'gifv',
+          url: 'https://tenor.com/view/cat-flopping-over-gif-12345678',
+          provider: { name: 'Tenor' },
+          video: { proxy_url: 'https://media.discordapp.net/external/h2/https/media.tenor.com/abc/cat.mp4', width: 220, height: 220 },
+          thumbnail: { proxy_url: 'https://media.discordapp.net/external/h1/https/media.tenor.com/abc/cat.png', width: 220, height: 220 },
+        }],
+      };
+      const decision = { isWard: true, villager: null, speakerName: null, locationKey: `test-gif-${Date.now()}` };
+      const res = await ingestDiscordMedia(msg, decision, { audienceTag: 'ward-private', sessionId: null });
+      assert.equal(res.attachments.length, 1, 'the gif embed became one media asset');
+      assert.equal(res.attachments[0].kind, 'video', 'the mp4 is stored as a video');
+      created.push(res.attachments[0].id);
+    } finally {
+      globalThis.fetch = realFetch;
+      for (const id of created) { try { await deleteAsset(id); } catch { /* best-effort */ } }
+    }
   });
 
   it('discordResizeUrl never resizes a gif (Discord flattens a resized gif to a still) — animation survives', () => {
