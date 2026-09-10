@@ -106,3 +106,4 @@ The message `speaker` field already carries the same information that the inline
 - [Tomes and keyword lore](tomes-and-lore) — the entry format and keyword activation engine that extracted memories feed into.
 - [Session lifecycle](session-lifecycle) — when sessions begin and when memorization is triggered.
 - [Attribution confidence: degrade the attribution, not the fact](../decisions/attribution-confidence-degrades-not-drops) — the follow-on decision for a referent the three-layer fix above still can't resolve: mark it unresolved rather than guess or drop it, and let [Phylactery](phylactery) recall and [Noticing](noticing) carry the correction.
+- [Deliberations delivered as system messages](../decisions/deliberations-as-system-messages) — the role-faithful transcript assembly on this page is the reference implementation of that decision's "Familiar spoken output rides as `assistant`" axis.
