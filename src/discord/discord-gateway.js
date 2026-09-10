@@ -42,6 +42,7 @@ import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom }
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from '../../cerebellum.js';
 import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, VIDEO_MIME_EXT, VIDEO_MAX_BYTES, MAX_IMAGES_PER_MESSAGE } from '../vision/media.js';
 import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from '../vision/vision.js';
+import { parseEmotes, rewriteEmotes, readEmoteCache, describeUnseenEmotes, emotesDisabled } from './discord-emotes.js';
 import { hearVoiceNotes } from '../voice/voice-transcribe.js';
 import { extractTurnReply } from '../../llm-call.js';
 import { sendWithNames } from '../../name-field.js';
@@ -2440,13 +2441,28 @@ async function handleTurn(gw, msg, decision) {
   await writeSessionLog(session);
   await touchLocation(decision.locationKey, session.sessionId, { bindKey });
 
+  // Custom emotes → readable alt-text for the model. The stored userTurn keeps
+  // the raw <:name:id> tokens (so the rewrite stays accurate as descriptions
+  // land); only what the model reads is rewritten. Any unseen emote is described
+  // once in the background, so its description lands for next time. Fail-soft: a
+  // hiccup leaves the plain :name: shorthand, never breaks the turn.
+  let emoteCache = {};
+  if (!emotesDisabled(settings)) {
+    try {
+      emoteCache = await readEmoteCache();
+      const emotes = parseEmotes(content);
+      if (emotes.length) describeUnseenEmotes(emotes, { settings, saveAsset, describeAsset }).catch(() => {});
+    } catch { emoteCache = {}; }
+  }
+  const emoteText = (t) => rewriteEmotes(t, emoteCache);
+
   const phMsg = postHistoryMessage(settings);
   let apiMessages = [
     ...(systemContent ? [{ role: 'system', content: systemContent }] : []),
-    ...history,
+    ...history.map(h => ({ ...h, content: emoteText(h.content) })),
     ...(enriched.dynamic ? [{ role: 'system', content: enriched.dynamic }] : []),
     ...(lore.atDepth ? [{ role: 'system', content: lore.atDepth }] : []),
-    { role: 'user', content: userContent, ...(!decision.isWard && turnSpeaker ? { speaker: turnSpeaker } : {}), ...turnAttField },
+    { role: 'user', content: emoteText(userContent), ...(!decision.isWard && turnSpeaker ? { speaker: turnSpeaker } : {}), ...turnAttField },
     ...(phMsg ? [phMsg] : []),
   ];
 

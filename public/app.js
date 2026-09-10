@@ -445,6 +445,10 @@ const state = {
   // is server-synced so the gateway (which runs server-side) can read it.
   discordEnabled:    false,
   discordToolsEnabled: true,   // clearance-gated tools on Discord turns; default ON
+  // Custom Discord emotes viewed once, described, and rewritten to alt-text the
+  // Familiar can read (:tiredcat: [= a tired cat]). Default ON; off via this key
+  // or PROTO_FAMILIAR_DISCORD_EMOTES_DISABLED=1 on the server.
+  discordEmotesEnabled: true,
   discordBotToken:   '',
   discordWardUserId: '',
   // Auto-register a new guild channel as a Location the moment it's seen,
@@ -573,7 +577,7 @@ const SERVER_SYNCED_KEYS = [
   'gcalWriteEnabled', 'gcalWriteCommand',
   'gcalCalendarAttribution', 'gcalIcalUrls', 'gcalCliCalendars',
   'trustedContacts', 'userDiscordWebhook',
-  'discordEnabled', 'discordToolsEnabled', 'discordBotToken', 'discordWardUserId',
+  'discordEnabled', 'discordToolsEnabled', 'discordEmotesEnabled', 'discordBotToken', 'discordWardUserId',
   'villageAutoRegisterLocations',
   'featureConnections',
   'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring',
