@@ -8,6 +8,18 @@ sources:
   - id: name-field-js
     type: file
     path: name-field.js
+  - id: server-js
+    type: file
+    path: server.js
+  - id: discord-gateway-js
+    type: file
+    path: src/discord/discord-gateway.js
+  - id: voice-chat-turn-js
+    type: file
+    path: src/voice/voice-chat-turn.js
+  - id: app-js
+    type: file
+    path: public/app.js
 ---
 
 # Session Memory Extraction
@@ -64,7 +76,9 @@ These three layers resolve attribution whenever the transcript makes the actor i
 
 The OpenAI `name` field lets the model get a first-class sender identifier per message turn, not only the inline `[Name]:` text in the message content. But the field has constraints that make it tricky to use with real names.
 
-As of 0.11.109-alpha (PR #406) this machinery lives in a shared root module, `name-field.js` (beside `llm-call.js`), not inside `memorization.js`. The ward asked for the same name-field policy to apply across every surface that puts a person's turn in a `user` role, not just the memorization worker, so it was extracted into one shared implementation instead of copied per surface. `memorization.js` imports from `name-field.js` and re-exports the same names for back-compat, so existing callers and tests that import from `memorization.js` keep working [@memorization-js] [@name-field-js]. Memorization is currently the only caller wired onto the shared module; the live web chat path (`/api/chat`), Discord turns, voice turns, and the browser tome-writer (`generateTopicSummary`) are a per-surface follow-up, each sending `speaker` on its user turns and routing its provider call through `withNameFieldFallback`. The live chat path is the highest-stakes of these because its 400-fallback must never break a turn, streaming included.
+As of 0.11.109-alpha (PR #406) this machinery lives in a shared root module, `name-field.js` (beside `llm-call.js`), not inside `memorization.js`. The ward asked for the same name-field policy to apply across every surface that puts a person's turn in a `user` role, not just the memorization worker, so it was extracted into one shared implementation instead of copied per surface. `memorization.js` imports from `name-field.js` and re-exports the same names for back-compat, so existing callers and tests that import from `memorization.js` keep working [@memorization-js] [@name-field-js].
+
+The rollout landed in two further passes, 0.11.110–0.11.111-alpha (PR #408 for the server-side surfaces, PR #409 for the browser). Every server + browser surface that puts a person's turn in a `user` role now stamps names through this shared module: memorization (the original caller), the live web chat path (`/api/chat`, covering both web chat and voice), Discord, voice, and the browser tome-writer. See [Per-surface integration](#per-surface-integration) below for how each surface wires in [@server-js] [@discord-gateway-js] [@voice-chat-turn-js] [@app-js].
 
 ### The constraint
 
@@ -99,6 +113,24 @@ The function `withNameFieldFallback({withNames, buildMessages, callProviderFn, o
 - On non-400 errors, never retry — propagate immediately.
 
 This design mirrors the `visionCapable` learning pattern in [Vision capability defaults to BLIND; prove capability via allowlist](../decisions/vision-capability-defaults). The net result: names switch on for capable providers with zero configuration. A strict server costs one wasted attempt, then stays bare. Memorization never fails over the name field itself. If a third capability cache appears elsewhere, that is the signal to extract one shared cap-cache helper — two small parallel copies (vision, name-field) don't yet earn the abstraction [@name-field-js].
+
+`sendWithNames({job, settings, messages, wardName, send})` [@name-field-js] is the one-call seam a non-streaming surface uses instead of wiring `withNameFieldFallback` by hand: it resolves the policy (the shared off-switch `PROTO_FAMILIAR_NAME_FIELDS_DISABLED=1` → the ward's per-connection tri-state → the learned verdict → optimistic), stamps the messages with `stampNamesOnTurns`, and runs the same fallback and learning step. The caller's `send(messages)` must throw an error whose message contains `"returned 400"` on a name-field rejection, which is what triggers the bare retry [@name-field-js].
+
+### Per-surface integration
+
+Every surface resolves to the same policy and the same code-minted handles, but each wires the fallback differently because each surface calls the provider differently:
+
+- **Memorization** — unchanged in behavior; it is the original caller, now routed through the shared module instead of its own copy [@memorization-js].
+- **`/api/chat`** — covers both web chat and voice, because the voice turn (`runVoiceTurn` in `voice-chat-turn.js`) POSTs to `/api/chat` rather than calling a provider directly. Its turns are the ward's (villagers arrive over Discord, not this endpoint), so they resolve to `ward-<slug>`. See [the non-uniformity note](#the-one-deliberate-non-uniformity) below for why this surface hand-rolls its retry instead of calling `sendWithNames` [@server-js].
+- **Discord** — `callChatRaw`, the single turn-send seam (deliberations use `callProviderChat` instead, and are unaffected), routes through `sendWithNames` directly. The turn's `speaker` is threaded onto the messages (history and the current turn) so the stamp resolves ward vs. villager; Discord's existing inline `[Name]:`/`(WARD)` labels stay as belt-and-suspenders on top [@discord-gateway-js].
+- **Voice** — `runVoiceTurn` gained an optional `speaker` parameter, so a diarized non-ward open-mic voice is labelled as that villager on the live turn instead of implying the ward said it; the actual provider round-trip still rides `/api/chat`, so the stamping happens there [@voice-chat-turn-js].
+- **Browser tome-writer** (`generateTopicSummary`) — also POSTs to `/api/chat`, so it inherits ward stamping for free; it threads `speaker` onto its shared-room villager turns so those resolve to the villager's slug rather than defaulting to the ward [@app-js].
+
+### The one deliberate non-uniformity
+
+Discord and memorization call `sendWithNames` directly. Voice and the browser tome-writer never call it themselves — both send their turns to `/api/chat`, so they inherit whatever that endpoint does. `/api/chat` is the one surface that hand-rolls the retry inline at its two send points — the non-streaming `fetch` (serving both streaming and non-streaming replies) and the tool-loop's `callUpstream` — rather than calling `sendWithNames` [@server-js] [@app-js] [@voice-chat-turn-js].
+
+This is deliberate, not an oversight: the live chat path has two constraints the throw-based helper cannot meet at once. A genuine 400 has to pass through to the client unchanged, never turned into a 502; and streaming must not be disturbed by a bare retry that then has to resume piping the same response shape. `/api/chat` still reuses the shared `stampNamesOnTurns` and `recordNameFieldResult` primitives, and learns `'no'` only when the bare retry actually succeeds, so an unrelated 400 never permanently disables names for that connection [@server-js]. The primitives it calls are covered by `name-field.js`'s own tests, but the inline retry logic in `server.js` is not covered by the shared-helper test suite. If a third streaming caller ever needs this fallback, that repetition is the signal to extract a streaming-safe variant of `sendWithNames` rather than hand-rolling a third copy.
 
 ### Why not split roles differently
 
