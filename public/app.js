@@ -7691,16 +7691,27 @@ function manualMemorizeEndTopic(msgIndex) {
 let _pendingSummaryTopic = null;
 
 async function generateTopicSummary(topic, rangeMessages) {
-  const convText = rangeMessages
-    .map(m => `${m.role === 'user' ? (state.userName || 'My human') : 'Me'}: ${m.content ?? ''}`)
-    .join('\n\n');
+  // Conversation data rides as role-faithful turns — my human's lines as `user`,
+  // my own as `assistant` — never flattened into one blob, and never all crammed
+  // into a single user turn (correct turn assignment, per the entity-as-subject
+  // role rule). A registered speaker (a villager in a shared room) keeps a
+  // `[Name]:` label so they aren't read as my human; the ward's own turns stay
+  // unlabelled — the role carries them — matching the extraction transcript.
+  const convTurns = rangeMessages
+    .filter(m => m && (m.role === 'user' || m.role === 'assistant') && String(m.content ?? '').trim())
+    .map(m => {
+      if (m.role !== 'user') return { role: 'assistant', content: String(m.content ?? '') };
+      const c = String(m.content ?? '');
+      const content = m.speaker && !/^\[[^\]]+\]:/.test(c) ? `[${m.speaker}]: ${c}` : c;
+      return { role: 'user', content };
+    });
 
   const userLabel = userNamedTopicLabel(topic);
   const focusBlock = userLabel
     ? `\n\n### Focus topic\nMy human named this topic "${userLabel}". I will center the entry on that topic. I'll skip tangential threads in the conversation that don't bear on it.`
     : '';
 
-  const prompt = `I am writing a Tome entry for myself, the Familiar. The entry is my own private notes to myself — first-person reference material that gets injected back into my context (and therefore resurfaces in my "brain") when its keywords appear in a future conversation. I write in my own individual voice as {{char}}. In order for everything to work well, I follow the craft rules below carefully.${focusBlock}
+  const instruction = `I am writing a Tome entry for myself, the Familiar. The entry is my own private notes to myself — first-person reference material that gets injected back into my context (and therefore resurfaces in my "brain") when its keywords appear in a future conversation. I write in my own individual voice as {{char}}. In order for everything to work well, I follow the craft rules below carefully.${focusBlock}
 
 I will return ONLY valid JSON (no markdown fences, no commentary) with exactly these fields, otherwise the Tome may break and be unusable:
 {
@@ -7739,10 +7750,17 @@ I will pick a sticky value (integer, number of turns the entry stays active afte
   - 2    = brief states that typically resolve quickly.
   - 3    = moderate states needing a few exchanges (distraction, sleep note, transition).
   - 4–5  = complex/intense states taking multiple turns to navigate (paralysis, RSD, emotional dysregulation).
-  - 8+   = ongoing modes that should persist across the whole session.
+  - 8+   = ongoing modes that should persist across the whole session.`;
 
-Conversation excerpt:
-${convText}`;
+  // My own thinking (the instruction) is a SYSTEM message; the conversation I'm
+  // distilling rides as its own role-faithful turns between two system framings;
+  // the closing directive re-anchors the JSON task after the transcript so a turn
+  // that ends on my human's line doesn't tempt a conversational reply.
+  const messages = [
+    { role: 'system', content: instruction },
+    ...convTurns,
+    { role: 'system', content: "That's the conversation I'm distilling. Now I write my Tome entry as JSON, exactly per the rules above — my own first-person notes, in my voice." },
+  ];
 
   try {
     const resp = await fetch('/api/chat', {
@@ -7753,7 +7771,7 @@ ${convText}`;
         apiKey:      state.apiKey,
         baseUrl:      state.baseUrl,
         model:       state.model,
-        messages:    [{ role: 'user', content: prompt }],
+        messages,
         stream:      false,
         temperature: 0.25,
         max_tokens:  800,

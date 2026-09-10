@@ -56,10 +56,22 @@ def _llm_config() -> dict[str, str] | None:
 def _call_llm(cfg: dict, prompt: str) -> str:
     import httpx
 
+    # The consolidation prompt is the Familiar's own first-person thinking about
+    # its own memories, so it rides as a SYSTEM message with a bare, non-speaking
+    # user cue — never as a `user` turn, which would frame the entity as being
+    # handed the task rather than doing its own consolidating. This mirrors the
+    # Node side's familiarDeliberationMessages; Phylactery can't import it, so the
+    # shape is built locally. (The memory entries to fold in ride as reference
+    # text inside the system body — they are the Familiar's own notes reasoned
+    # over, not a conversation, so no user/assistant turn split applies.)
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": "(a quiet moment to consolidate my notes)"},
+    ]
     resp = httpx.post(
         cfg["base_url"],
         headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"},
-        json={"model": cfg["model"], "messages": [{"role": "user", "content": prompt}],
+        json={"model": cfg["model"], "messages": messages,
               "temperature": 0.2, "max_tokens": 4000},
         timeout=60.0,
     )
