@@ -55,6 +55,8 @@ A reported bug in early versions: the Familiar saved memories crediting the ward
 
 3. **Name-field speaker handles** (described below): Fixes the ward-vs-other-humans axis by stamping each turn with a first-class sender ID.
 
+These three layers resolve attribution whenever the transcript makes the actor identifiable. They do not close every case: a `"you"` or a bare pronoun in someone's words can still point at either the ward or whoever they were addressing with no way to tell from the turn itself. [Attribution confidence: degrade the attribution, not the fact](../decisions/attribution-confidence-degrades-not-drops) covers what the extraction does with that residual case — mark the referent unresolved, emit an optional `attribution_confidence` on the fact, and let recall and a later noticing sweep carry the correction instead of guessing or dropping the fact outright.
+
 ## Speaker name field handling
 
 The OpenAI `name` field lets the model get a first-class sender identifier per message turn, not only the inline `[Name]:` text in the message content. But the field has constraints that make it tricky to use with real names. [@memorization-js]
@@ -103,3 +105,4 @@ The message `speaker` field already carries the same information that the inline
 - [Content-based memory gating](content-gating) — how extracted facts are filtered and gated by villager tier and consent status.
 - [Tomes and keyword lore](tomes-and-lore) — the entry format and keyword activation engine that extracted memories feed into.
 - [Session lifecycle](session-lifecycle) — when sessions begin and when memorization is triggered.
+- [Attribution confidence: degrade the attribution, not the fact](../decisions/attribution-confidence-degrades-not-drops) — the follow-on decision for a referent the three-layer fix above still can't resolve: mark it unresolved rather than guess or drop it, and let [Phylactery](phylactery) recall and [Noticing](noticing) carry the correction.

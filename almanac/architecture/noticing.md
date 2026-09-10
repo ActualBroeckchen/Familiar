@@ -14,6 +14,15 @@ sources:
   - id: claude-md
     type: file
     path: CLAUDE.md
+  - id: server-js
+    type: file
+    path: server.js
+  - id: cerebellum-js
+    type: file
+    path: cerebellum.js
+  - id: memory-module
+    type: file
+    path: phylactery/src/phylactery/memory.py
 ---
 
 # Noticing
@@ -73,8 +82,37 @@ Noticing only deliberates when a **code-evaluated wake condition** fires [@notic
 - An aging untriggered intention or tell (older than `AGING_INTENT_MS` ≈ 5 days)
 - An aging unresolved floating task (older than `AGING_TASK_MS` ≈ 7 days)
 - An overdue event (past its time for ≥ 6 hours, still unresolved)
+- A memory saved with fuzzy attribution, now aged enough to re-resolve (`unresolved_attribution`, below)
 
 No wake condition → no turn, ever [@noticing-js]. The situation report is code-built and capped to prevent habituation [@noticing-js]. Condition vocabulary on due intentions is code-evaluated (tripwires like "contact gap past p90" or "a specific need is missed"), not left to the model [@noticing-js].
+
+## Re-resolving fuzzy attribution
+
+[Session Memory Extraction](session-memory-extraction) sometimes files a fact with the actor
+unresolved rather than guessing or dropping it, marking the row with a low
+`attribution_confidence` that [Phylactery](phylactery) downweights in recall but never removes.
+That downweight is a holding pattern, not a fix — the noticing loop is where the correction
+actually happens. `gatherNoticingWakeInputs` (server.js) calls
+`listUnresolvedAttributions({threshold: 0.5, minAgeDays: 1, limit: 3})`, Phylactery's read path
+for memories whose attribution is still fuzzy and old enough (≥1 day) that the moment has
+settled [@server-js] [@memory-module]. Each result becomes an `unresolved_attribution` wake
+condition, rendered in the situation report with the memory's snippet, id, and any tentatively-
+pinned subjects, directing the Familiar to fix the subjects and firm up the attribution with
+`update_memory_by_id` if it can now tell, or leave the entry alone if it still can't [@noticing-js].
+
+The sweep is gated separately from the rest of noticing: `s?.noticingAttributionResweepEnabled`
+(default on) and `PROTO_FAMILIAR_ATTRIBUTION_RESWEEP_DISABLED=1` turn it off, degrading to an
+empty condition list on failure or when disabled rather than blocking the rest of the wake check
+[@server-js]. It rides noticing's existing wake/tick cadence instead of running its own schedule —
+code decides when a shaky memory has settled enough to be worth revisiting, and only then does a
+turn happen, so the sweep adds no standing LLM cost of its own [@server-js].
+
+The wake condition shipped together with the tools it needs to act: `recall`, `read_memory_by_id`,
+and `update_memory_by_id` were added to `NOTICING_REGISTRY_TOOL_NAMES`, and `update_memory_by_id`
+was taught to accept `subjects` and `attribution_confidence` so the correction can actually be
+written, not just noticed [@cerebellum-js]. See
+[Attribution confidence: degrade the attribution, not the fact](../decisions/attribution-confidence-degrades-not-drops)
+for the full three-layer decision this wake condition is the closing layer of.
 
 ## Cadence and self-pacing
 
@@ -91,3 +129,5 @@ Noticing runs on self-paced cadence via `set_next_check`, clamped to 5 minutes (
 - [Proactivity over caution](../decisions/proactivity-over-caution) — the incident and rules that frame noticing as a safety-significant, ward-signed feature.
 - [Wait-streak experiment](../decisions/wait-streak-experiment) — the shared self-observation counter noticing uses.
 - [Contact-rhythm baselines](../decisions/contact-rhythm-baselines) — the p90 contact gap signal noticing reads.
+- [Attribution confidence: degrade the attribution, not the fact](../decisions/attribution-confidence-degrades-not-drops) — the decision behind the re-resolution sweep described above.
+- [Session Memory Extraction](session-memory-extraction) — where a fact first gets filed with fuzzy attribution.

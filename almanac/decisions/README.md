@@ -14,7 +14,7 @@ implemented**, or **proposed**. A "proposed" or "not yet implemented" status is 
 the page's honest record of how far the decision has actually traveled from conversation into
 code.
 
-Twenty-five decisions live here. Grouped by the question each one answers:
+Twenty-six decisions live here. Grouped by the question each one answers:
 
 ## Naming and module identity
 
@@ -83,6 +83,10 @@ and of what is normal for its bond with the ward:
   reconciliation policy for a Tome receiving writes from more than one source.
 - [Per-feature model routing](per-feature-model-routing) — letting the ward bind each background
   LLM job to its own saved connection instead of one shared provider.
+- [Attribution confidence: degrade the attribution, not the fact](attribution-confidence-degrades-not-drops)
+  — why a memory whose subject is unclear is downweighted in recall rather than dropped or
+  guessed at, and the three-layer stack (extraction, Phylactery recall, a noticing re-resolution
+  sweep) that implements it.
 
 ## Vision and multimodal input
 
