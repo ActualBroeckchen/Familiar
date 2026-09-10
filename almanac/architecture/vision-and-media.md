@@ -38,6 +38,9 @@ sources:
   - id: video-build-spec
     type: file
     path: docs/video-build-spec.md
+  - id: discord-emotes-js
+    type: file
+    path: src/discord/discord-emotes.js
 ---
 
 # Vision and Media Input
@@ -220,6 +223,16 @@ This is separate from describe-capability: `isDescribeCapable()` still returns `
 
 **Unverified**: the real @z_ai/mcp-server spawn was NOT tested end-to-end (requires a coding key + network access) [@zai-vision-js]. Built defensively with runtime schema discovery and graceful degradation; the `analyze_image` param name/shape is the main unknown. All failures degrade to `description=null`, never breaking the chat path.
 
+## Custom Discord emote alt-text (0.11.113-alpha)
+
+A custom Discord emote arrives in message content as an opaque token — `<:name:id>` (static) or `<a:name:id>` (animated) — that carries no visible meaning; unicode emoji need no help because the model reads them directly [@discord-emotes-js]. `src/discord/discord-emotes.js` makes custom emotes readable by riding the same describe pipeline images use, rather than adding a second vision path: `parseEmotes()` extracts the distinct emotes in a message (deduped by id), `emoteCdnUrl()` builds the Discord CDN URL (animated → gif, static → png, at `cdn.discordapp.com/emojis/`), and `rewriteEmotes()` turns a described emote's token into alt-text the model reads as ordinary words — `<:tiredcat:123>` becomes `:tiredcat: [= a very tired-looking cat]` [@discord-emotes-js].
+
+**Reuse over reinvention**: `describeUnseenEmotes()` fetches an emote's image bytes and hands them to the existing `saveAsset()` → `describeAsset()` pipeline (the same one the Image description caching section above uses for photos), tagged `origin.surface: 'discord-emote'` and `audienceTag: 'ward-private'` [@discord-emotes-js]. This means an emote description automatically inherits content-dedup, the injection-guard sanitization on the description text, z.ai-coding vision routing, and the describe-once cache — none of that logic is duplicated. The module itself owns only parsing, the CDN URL shape, and a small persisted map at `tomes/.discord-emotes.json` (emote id → `{name, assetId, description}`) that the text rewrite reads [@discord-emotes-js].
+
+**Viewed once, then saved, never blocking a turn**: in `discord-gateway.js`, the model-facing content — both the replayed history and the current turn — is rewritten from the cache via `rewriteEmotes()` just before the API message array is assembled, while the *stored* session turn keeps the raw `<:name:id>` token so replays stay accurate as descriptions land later [@discord-emotes-js]. An emote not yet in the cache is described in the background (`describeUnseenEmotes(...).catch(() => {})`, fire-and-forget) so the description is ready by its next use; the first sighting of a new emote therefore still reads as the plain `:name:` shorthand, and the alt-text only appears from the following use onward [@discord-emotes-js].
+
+**Fail-soft and gating**: any fetch, describe, or cache-write hiccup leaves the plain `:name:` shorthand — still legible, never a broken turn [@discord-emotes-js]. The feature defaults ON; it is disabled via the `discordEmotesEnabled` setting or `PROTO_FAMILIAR_DISCORD_EMOTES_DISABLED=1` [@discord-emotes-js]. It is a sibling of the same Discord-media improvement pass that fixed text-less image turns at 0.11.112; Discord GIF handling remains an open piece of that pass.
+
 ## Image descriptions feeding threat scoring
 
 Starting in 0.9.2-alpha (PR #219), image descriptions are also consumed by the safety spine: `scoreImageDescriptionThreat()` scores the description using the same crisis-signals pattern matcher that scores typed text, then feeds any positive delta through `recordThreat()` with `source:'vision'` [@vision-js]. The mechanism is orchestration around existing `crisis-signals.js` and `threat-tracker.js`; neither scorer nor tracker changed [@vision-js]. Three constraints are ward-signed: full weighting (image signals count the same as typed distress, no damping), raise-only (images can only increase threat, never lower it), and ward-images-only (only images marked `audienceTag === 'ward-private'` move threat, so villagers' shared bytes never alter the ward's safety state) [@vision-js].
@@ -251,6 +264,9 @@ The feature is known to false-positive on fictional violence (horror film stills
 - **z.ai coding-plan vision/video by model, not blanket-blind** (0.11.40): GLM 5.3 Flash watches
   image and video live on the coding plan; older coding models stay blind and describe-only — see
   the z.ai Coding Plan section above [@video-build-spec].
+- **Custom Discord emote alt-text** (0.11.113-alpha): custom emote tokens are rewritten into
+  described alt-text for the model, riding the existing describe pipeline — see Custom Discord
+  emote alt-text above [@discord-emotes-js].
 
 Later passes (group-call presence, voiceprint enrolment, room-sound tagging) belong to the voice
 milestone rather than this one; see [Voice](voice) for those.
