@@ -41,6 +41,9 @@ sources:
   - id: discord-emotes-js
     type: file
     path: src/discord/discord-emotes.js
+  - id: discord-gif-embeds-js
+    type: file
+    path: src/discord/discord-gif-embeds.js
 ---
 
 # Vision and Media Input
@@ -249,7 +252,29 @@ An animated GIF is a short silent clip wearing an `image/gif` MIME type. On a vi
 
 **Off-switch**: `gifAsVideoEnabled()` defaults ON, controlled by the `gifAsVideoEnabled` setting (synced via `SERVER_SYNCED_KEYS`) or `PROTO_FAMILIAR_GIF_AS_VIDEO_DISABLED=1`; when off, a gif is always sent as a plain still image [@vision-js]. The feature is also inert whenever `resolveVideoCapable()` returns false for the connection, since gif-as-video only ever activates on top of an already video-capable connection [@vision-js].
 
-**Out of scope**: Tenor/Giphy embed links (a URL appearing in message content, not a Discord attachment) need a separate external-URL-fetch-and-preview flow and are not covered here; this only handles actual gif attachments and composer-uploaded gifs.
+This section originally scoped out Tenor/Giphy picker gifs (a link embed, not an attachment); the next section closes that gap.
+
+## Tenor/Giphy gif embeds as watchable media (0.11.116-alpha)
+
+The gifs people actually pick on Discord — from the Tenor/Giphy picker, or a pasted tenor.com/giphy.com link — are not message attachments at all. Discord resolves the pick into a `type: 'gifv'` **embed** on the message (`msg.embeds`), serves the motion as an **mp4** (`embed.video`), and carries a still poster in `embed.thumbnail` [@discord-gif-embeds-js]. Before this pass the gateway only read `msg.attachments`, so these gifs were invisible: the Familiar saw a bare tenor.com link in the text and nothing else.
+
+**A new pure module mirrors the emote split.** `src/discord/discord-gif-embeds.js` follows the same pure-parsing-only shape as `discord-emotes.js` above — the gateway alone touches the network [@discord-gif-embeds-js]:
+
+- `isGifEmbed(embed)` gates on Discord's own `type:'gifv'`, a Tenor/Giphy `provider.name`, a known gif host (`tenor.com`, `giphy.com`, `gfycat.com`), or a direct `.gif` URL rendered as an image embed. The gate is deliberately conservative so an ordinary link-preview/article embed — which also carries a `thumbnail` — is never mistaken for media [@discord-gif-embeds-js].
+- `directMediaUrl(node)` picks which URL to fetch bytes from, preferring Discord's proxied `proxy_url` over a bare `url`, because `embed.video.url` is sometimes the tenor *page* rather than the media file (which would fetch as HTML) [@discord-gif-embeds-js]. This is [Exact values are minted in code, not guessed](../decisions/exact-values-in-code) applied to an uncertain third-party API shape: validate and prefer the reliably-direct field instead of trusting one guess.
+- `labelFromGifPage(pageUrl)` recovers a descriptive slug from the page URL (`.../view/cat-flopping-over-gif-12345` → `"cat flopping over"`), stripping a trailing `-gif-<id>` (Tenor) or a mixed letter+digit id (Giphy), and returning `''` for a slug-less URL so an asset is never labelled `"view"` [@discord-gif-embeds-js]. The label seeds the saved asset's meaning-bearing slug and doubles as a hint before any describe pass runs.
+- `parseGifEmbeds(msg)` returns the deduplicated, fetchable media references for a message; it does no network I/O itself.
+
+**Wiring rides the same rails as a real attachment.** `ingestDiscordMedia()` in `discord-gateway.js` (the function `ingestDiscordImages()` became when video landed) folds each parsed gif embed in beside real attachments as a pseudo-attachment `{url, filename}`: the mp4 as a `video` item when a video-capable connection and `PROTO_FAMILIAR_VIDEO_DISABLED` allow it — so it plays as motion exactly like an uploaded gif sent as video (see Animated GIF as video above) — or the still thumbnail as an `image` item otherwise [@discord-gateway-js]. The pseudo-attachment is fetched through the identical `fetchDiscordVideo`/`fetchDiscordImage` helpers (timeout, byte cap, content-type-with-extension-fallback) and saved through the same `saveAsset()` call, so it inherits the same ward-always / registered-villager-yes / stranger-never audience rule (see Discord image ingest above) and the same per-message (`MAX_IMAGES_PER_MESSAGE`) and hourly (`discordMediaPerHour`) caps a real attachment uses [@discord-gateway-js]. Both `handleTurn()` (live turns) and `observeMessage()` (lurked rooms) call `ingestDiscordMedia()`, so both paths gain gif-embed ingest for free.
+
+**Off-switch**: setting `discordGifEmbedsEnabled` (default ON, synced via `SERVER_SYNCED_KEYS`) or `PROTO_FAMILIAR_DISCORD_GIF_EMBEDS_DISABLED=1` [@discord-gif-embeds-js].
+
+**Known v1 limitations, named rather than silently deferred** [@discord-gif-embeds-js]:
+
+1. Only `MESSAGE_CREATE` is handled. A gif embed that Discord resolves *late* via a `MESSAGE_UPDATE` (the picker sometimes fills the embed in asynchronously after the bare-link message arrives) is missed on this pass. The common picker path attaches the `gifv` embed at create time, and the tenor/giphy link still sits in the message text either way, so the gif's identity is not fully lost even when the media ingest is.
+2. An image-only connection gets the mp4's honest "I can't watch it" stand-in text, not a substitute frame, when the embed carries no usable thumbnail. `buildStandin()` already renders a video-description line once one is cached, so describing the free thumbnail onto the video asset would close this gap — deferred, not a bug.
+
+**Testing**: pure-module tests for `discord-gif-embeds.js` plus a pipeline test that feeds `ingestDiscordMedia()` a real `gifv` embed shape with a stubbed `fetch` and asserts a saved `video` asset comes out — exercising the wiring, not just the pure functions, per CLAUDE.md's pipeline-test discipline [@claude-md] (see also [Voice](voice)).
 
 ## Image descriptions feeding threat scoring
 
@@ -288,6 +313,9 @@ The feature is known to false-positive on fictional violence (horror film stills
 - **Animated GIF as video** (0.11.115-alpha): an animated gif is sent as a `video_url` part to a
   video-capable connection instead of a frozen first frame, completing the Discord-media
   improvement pass — see Animated GIF as video above [@vision-js, @media-js, @server-js].
+- **Tenor/Giphy gif embeds as watchable media** (0.11.116-alpha): a picker gif's `gifv` embed is
+  ingested as a video or thumbnail image, closing the gap the 0.11.115 pass left open — see Tenor/
+  Giphy gif embeds as watchable media above [@discord-gif-embeds-js, @discord-gateway-js].
 
 Later passes (group-call presence, voiceprint enrolment, room-sound tagging) belong to the voice
 milestone rather than this one; see [Voice](voice) for those.
