@@ -1359,14 +1359,16 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_memory_by_id',
-      description: "I correct one specific memory by its id — the safe way to fix a single per-fact memory. Because a whole day's extracted facts share one date, update_memory (by date) can't target just one of them; this can. I pass the new full content (it REPLACES the old — I include everything I want to keep). I get the id from recall or list_memories.",
+      description: "I correct one specific memory by its id — the safe way to fix a single per-fact memory. Because a whole day's extracted facts share one date, update_memory (by date) can't target just one of them; this can. I pass the new full content (it REPLACES the old — I include everything I want to keep). I can also, or instead, fix WHO a fact is about: `subjects` sets the people it's really about, and `attribution_confidence` (0 to 1) says how sure I am of that — when I've worked out whose action something was after saving it unsure, I firm it up here so recall stops down-ranking it. I get the id from recall or list_memories.",
       parameters: {
         type: 'object',
         properties: {
           id:      { type: 'string', description: 'The memory id to correct, from a recall or list_memories result.' },
-          content: { type: 'string', description: 'The full new contents. This REPLACES the entry — I include everything I want to keep.' },
+          content: { type: 'string', description: 'The full new contents. This REPLACES the entry — I include everything I want to keep. Optional if I\'m only fixing the attribution.' },
+          subjects: { type: 'array', items: { type: 'string' }, description: 'Who the fact is really about — replaces the stored subjects. I set this when I\'ve figured out whose action or experience it was.' },
+          attribution_confidence: { type: 'number', description: 'How sure I am of who it\'s about, 0 to 1. I raise this toward 1 once I\'ve resolved a memory I\'d saved unsure; 1 (or leaving it out) means fully certain.' },
         },
-        required: ['id', 'content'],
+        required: ['id'],
       },
     },
   },
@@ -3010,13 +3012,35 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to move memory: ${err.message}`; }
   },
 
-  update_memory_by_id: async ({ id, content } = {}) => {
+  update_memory_by_id: async ({ id, content, subjects, attribution_confidence } = {}) => {
     const mid = String(id ?? '').trim();
     if (!mid) return 'I need the memory id to correct — I get it from a recall or list_memories result.';
-    if (typeof content !== 'string' || !content.trim()) return 'I need the new content to write into this memory.';
-    if (content.length > 16384) return 'That content is too long (over 16 KB).';
+    const hasContent = typeof content === 'string' && content.trim();
+    const hasSubjects = Array.isArray(subjects);
+    const hasAttr = attribution_confidence !== undefined && attribution_confidence !== null;
+    // content is optional now (an attribution-only fix carries no new content),
+    // but SOMETHING has to change or there's nothing to do.
+    if (!hasContent && !hasSubjects && !hasAttr) {
+      return 'Nothing to change — I pass new content, or subjects, or an attribution_confidence.';
+    }
+    if (typeof content === 'string' && content.length > 16384) return 'That content is too long (over 16 KB).';
+    let attr;
+    if (hasAttr) {
+      attr = Number(attribution_confidence);
+      if (!Number.isFinite(attr)) return 'attribution_confidence has to be a number from 0 to 1.';
+      attr = Math.max(0, Math.min(1, attr));
+    }
+    // Subjects are cleaned to a plain string list; an empty array clears them.
+    const subj = hasSubjects
+      ? subjects.map(s => String(s ?? '').trim()).filter(Boolean)
+      : undefined;
     try {
-      const res = await updateMemoryById({ id: mid, content: content.trim() });
+      const res = await updateMemoryById({
+        id: mid,
+        ...(hasContent ? { content: content.trim() } : {}),
+        ...(subj !== undefined ? { subjects: subj } : {}),
+        ...(attr !== undefined ? { attributionConfidence: attr } : {}),
+      });
       if (!res.ok) return `Failed to update memory ${mid}: ${res.error}`;
       return quietOk(`Memory ${mid} updated.`);
     } catch (err) { return `Failed to update memory by id: ${err.message}`; }
@@ -4726,6 +4750,12 @@ const NOTICING_REGISTRY_TOOL_NAMES = [
   // esp. an answer my human gave that scrolled out of the look-back window. The
   // reliable "did they already tell me?" check before I ask again.
   'search_conversation',
+  // Re-resolving fuzzy attribution (the unresolved_attribution wake): recall/
+  // read the memory and my history to work out whose action a fact really was,
+  // then update_memory_by_id to fix the subjects + firm up attribution_confidence
+  // (or leave it if I still can't tell). Without the write tool the sweep could
+  // notice a shaky memory but never correct it.
+  'recall', 'read_memory_by_id', 'update_memory_by_id',
   // The sky in reach for a due outside-tagged intention (W-B, read-only, cheap;
   // NOT a wake condition — weather only flavours a turn already happening).
   'weather_today',

@@ -21,6 +21,7 @@ import {
   enrich, createMemory, appendIdentity, updateIdentitySection,
   // Reads for the Knowledge editor UI
   listMemories, readMemory, readMemoryById, getIdentityAll, listGraphNodes, searchGraphNodes, getGraphSubgraph, getFullGraph,
+  listUnresolvedAttributions,
   listSnapshots,
   // Writes (each auto-snapshots before the destructive op)
   updateMemory, deleteMemory, updateMemoryById, deleteMemoryById, moveMemoryDate, rewriteIdentitySection,
@@ -6607,6 +6608,18 @@ async function gatherNoticingWakeInputs() {
   if (JSON.stringify(prunedAsked) !== JSON.stringify(askedMap)) writeAskedMap(TOMES_DIR, prunedAsked).catch(() => {});
   const overdueEvents = filterRecentlyAsked(allOverdue, prunedAsked, { now: nowMs }).slice(0, 3);
 
+  // Fuzzy-attribution re-sweep: memories saved unsure who did what (a real
+  // attribution_confidence below threshold), aged a day so the moment has
+  // settled — surfaced to be re-resolved. Gated (default-ON): toggle
+  // noticingAttributionResweepEnabled or PROTO_FAMILIAR_ATTRIBUTION_RESWEEP_DISABLED=1.
+  // Best-effort → [] on failure or when off, so it just doesn't wake the turn.
+  const attributionResweepOn =
+    s?.noticingAttributionResweepEnabled !== false &&
+    process.env.PROTO_FAMILIAR_ATTRIBUTION_RESWEEP_DISABLED !== '1';
+  const unresolvedAttributions = attributionResweepOn
+    ? (await listUnresolvedAttributions({ threshold: 0.5, minAgeDays: 1, limit: 3 }).catch(() => ({ items: [] })))?.items ?? []
+    : [];
+
   return {
     dueIntentions: Array.isArray(dueRes?.due) ? dueRes.due : [],
     // Live signals for the condition code-gate. contactGapMs is wired;
@@ -6619,6 +6632,7 @@ async function gatherNoticingWakeInputs() {
     agingIntents,
     agingTasks,
     overdueEvents,
+    unresolvedAttributions,
     weekdayClass: weekdayClass(nowMs, tz),
   };
 }

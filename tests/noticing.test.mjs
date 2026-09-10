@@ -93,6 +93,18 @@ test('gather: aging floating tasks and overdue events wake', () => {
   assert.equal(g.conditions.filter(c => c.kind === 'overdue_event').length, 1);
 });
 
+test('gather: an unresolved-attribution memory wakes the turn', () => {
+  const g = gatherWakeConditions({
+    unresolvedAttributions: [
+      { id: 'mem-x7', content: 'took out the recycling', subjects: ['Alice'], attribution_confidence: 0.3 },
+    ],
+  });
+  assert.equal(g.any, true);
+  const attr = g.conditions.filter(c => c.kind === 'unresolved_attribution');
+  assert.equal(attr.length, 1);
+  assert.equal(attr[0].memory.id, 'mem-x7');
+});
+
 // ── buildSituationReport ─────────────────────────────────────────────
 
 test('report: renders each kind, caps at 5, due intentions first', () => {
@@ -119,6 +131,18 @@ test('report: overdue events are NOT in the report (they render in the notepad);
   const joined = lines.join('\n');
   assert.doesNotMatch(joined, /Therapy 2nd session/);   // events are handled by buildNoticingPrompt now
   assert.match(joined, /floated without a time.*housing form/);
+});
+
+test('report: an unresolved-attribution memory renders with its id, snippet, pinned subject, and the fix tool', () => {
+  const lines = buildSituationReport([
+    { kind: 'unresolved_attribution', memory: { id: 'mem-x7', content: 'took out the recycling before work', subjects: ['Alice'], attribution_confidence: 0.3 } },
+  ], { relInterval: (ms) => `${Math.round(ms / HOUR)}h` });
+  const joined = lines.join('\n');
+  assert.match(joined, /unsure who did what/);
+  assert.match(joined, /pinned it on Alice/);
+  assert.match(joined, /took out the recycling before work/);
+  assert.match(joined, /\[id mem-x7\]/);
+  assert.match(joined, /update_memory_by_id/);
 });
 
 // ── buildNoticingPrompt ──────────────────────────────────────────────

@@ -26,7 +26,9 @@
  *
  * Wake conditions are all arithmetic (gate in code): a due intention, a
  * contact gap past the baseline p90, a readiness gap, an aging untriggered
- * intention/tell. No wake condition → no turn, ever. The situation report is
+ * intention/tell, an aging floating task, an overdue event, or a memory filed
+ * with shaky attribution now settled enough to re-resolve. No wake condition →
+ * no turn, ever. The situation report is
  * code-built and capped (habituation kills salience). The condition
  * vocabulary on due intentions IS code-evaluated here (no human reads this
  * turn, so the tripwire can't be left to the model).
@@ -101,6 +103,7 @@ function toSet(v) {
  * @param {Array}  p.agingIntents    intentions/tells older than AGING_INTENT_MS
  * @param {Array}  p.agingTasks      floating ward tasks older than AGING_TASK_MS
  * @param {Array}  p.overdueEvents   past unresolved events (edge-bearing) to record
+ * @param {Array}  p.unresolvedAttributions  memories filed with shaky attribution to re-resolve
  * @param {string} p.weekdayClass    'weekday'|'weekend' for baseline lookup
  */
 export function gatherWakeConditions({
@@ -112,6 +115,7 @@ export function gatherWakeConditions({
   agingIntents = [],
   agingTasks = [],
   overdueEvents = [],
+  unresolvedAttributions = [],
   weekdayClass = 'weekday',
 } = {}) {
   const conditions = [];
@@ -134,6 +138,9 @@ export function gatherWakeConditions({
   for (const a of agingIntents) conditions.push({ kind: 'aging_intent', intent: a });
   // A floating task of my human's that's been drifting without a time.
   for (const t of agingTasks) conditions.push({ kind: 'aging_task', task: t });
+  // A memory I saved unsure who did what — worth a look now that the moment has
+  // settled, to work out whose action it really was and firm it up (or leave it).
+  for (const m of unresolvedAttributions) conditions.push({ kind: 'unresolved_attribution', memory: m });
 
   return { any: conditions.length > 0, conditions };
 }
@@ -155,6 +162,7 @@ export function buildSituationReport(conditions, { relInterval } = {}) {
   const order = {
     due_intention: 0, rhythm_deviation: 2,
     readiness_gap: 3, aging_intent: 4, aging_task: 5,
+    unresolved_attribution: 6,
   };
   const sorted = conditions.slice().sort((a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9));
   for (const c of sorted) {
@@ -179,6 +187,11 @@ export function buildSituationReport(conditions, { relInterval } = {}) {
       const t = c.task;
       const age = t.created_at ? fmt(Math.max(0, Date.now() - Date.parse(t.created_at))) : 'a while';
       lines.push(`- A task I've been holding has floated without a time for ${age}: ${t.label ?? t.id}. Worth pinning a time, doing it, or checking whether it's still wanted.`);
+    } else if (c.kind === 'unresolved_attribution') {
+      const m = c.memory ?? {};
+      const snippet = String(m.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 140);
+      const who = Array.isArray(m.subjects) && m.subjects.length ? ` (I'd pinned it on ${m.subjects.join(', ')})` : '';
+      lines.push(`- A memory I saved unsure who did what${who}: "${snippet}" [id ${m.id}]. If I can now tell whose it really was, I fix the subjects and firm up its attribution with update_memory_by_id; if I still can't, I leave it.`);
     }
   }
   return lines;

@@ -3174,6 +3174,27 @@ export async function readMemoryById({ id }) {
   return callTool('memory_read_by_id', { id });
 }
 
+// The noticing re-sweep's read path: memories I filed with shaky attribution
+// (a real attribution_confidence below the threshold), aged past min_age_days
+// so the moment has settled. Best-effort — a failure just doesn't wake that
+// condition, never throws into the noticing tick.
+export async function listUnresolvedAttributions({ threshold, minAgeDays, limit } = {}) {
+  await startThalamus();
+  if (!mcpClient) return { items: [] };
+  try {
+    const args = {
+      ...(threshold  !== undefined ? { threshold }             : {}),
+      ...(minAgeDays !== undefined ? { min_age_days: minAgeDays } : {}),
+      ...(limit      !== undefined ? { limit }                 : {}),
+    };
+    const res = await callTool('memory_list_unresolved_attributions', args);
+    return res && Array.isArray(res.items) ? res : { items: [] };
+  } catch (err) {
+    console.error('[thalamus] listUnresolvedAttributions failed:', err.message);
+    return { items: [] };
+  }
+}
+
 export async function moveMemoryDate({ id, date }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
@@ -3187,7 +3208,7 @@ export async function moveMemoryDate({ id, date }) {
   }
 }
 
-export async function updateMemoryById({ id, content, audience, careWeight, contentTag }) {
+export async function updateMemoryById({ id, content, audience, careWeight, contentTag, attributionConfidence, subjects }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
@@ -3196,6 +3217,11 @@ export async function updateMemoryById({ id, content, audience, careWeight, cont
       ...(audience  !== undefined ? { audience }  : {}),
       ...(careWeight !== undefined ? { careWeight } : {}),
       ...(contentTag !== undefined ? { content_tag: contentTag } : {}),
+      // Re-resolving fuzzy attribution: correct who a fact is really about
+      // (subjects) and firm up how sure I am (attribution_confidence). Both
+      // ride the same by-id update — the noticing re-sweep's write path.
+      ...(attributionConfidence !== undefined ? { attribution_confidence: attributionConfidence } : {}),
+      ...(subjects !== undefined ? { subjects } : {}),
     };
     const result = await callTool('memory_update_by_id', args);
     console.log(`[thalamus] updateMemoryById ${id}`);

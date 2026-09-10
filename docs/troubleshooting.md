@@ -524,6 +524,7 @@ is not an off-switch.
 | Switch | Stops |
 |---|---|
 | `PROTO_FAMILIAR_NOTICING_DISABLED` | noticing on its own |
+| `PROTO_FAMILIAR_ATTRIBUTION_RESWEEP_DISABLED` | only the noticing re-sweep that resurfaces fuzzy-attribution memories (noticing keeps running) |
 | `PROTO_FAMILIAR_WARMTH_DISABLED` | warm reach-outs |
 | `PROTO_FAMILIAR_TRIAGE_DISABLED` | silence triage (**safety** — read §10 of the voice spec first) |
 | `PROTO_FAMILIAR_THREAT_DISABLED` | crisis-signal scoring (**safety**) |

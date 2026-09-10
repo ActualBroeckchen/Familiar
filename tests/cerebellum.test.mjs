@@ -325,8 +325,21 @@ test('move_memory_date: a missing id and a bad date are each caught before any s
 
 test('update_memory_by_id / delete_memory_by_id: missing args are caught before any store call', async () => {
   assert.match(await executeToolCall('update_memory_by_id', JSON.stringify({ content: 'x' })), /need the memory id/i);
-  assert.match(await executeToolCall('update_memory_by_id', JSON.stringify({ id: 'abc' })), /need the new content/i);
+  // id alone with no field to change → nothing to do (content is optional now
+  // that an attribution-only fix carries none).
+  assert.match(await executeToolCall('update_memory_by_id', JSON.stringify({ id: 'abc' })), /nothing to change/i);
+  // A non-numeric attribution_confidence is caught before any store call.
+  assert.match(await executeToolCall('update_memory_by_id', JSON.stringify({ id: 'abc', attribution_confidence: 'high' })), /number from 0 to 1/i);
   assert.match(await executeToolCall('delete_memory_by_id', '{}'), /need the memory id/i);
+});
+
+test('noticing toolset: the fuzzy-attribution re-sweep can recall, read, and correct a memory', async () => {
+  const { composeNoticingTools } = await import('../cerebellum.js');
+  const names = composeNoticingTools({}).map(t => t.function.name);
+  // Without the write tool the sweep could notice a shaky memory but never fix it.
+  for (const t of ['recall', 'read_memory_by_id', 'update_memory_by_id']) {
+    assert.ok(names.includes(t), `noticing toolset is missing ${t}`);
+  }
 });
 
 test('schedule_delete: a missing id is caught before any Unruh call', async () => {

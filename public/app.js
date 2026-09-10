@@ -313,6 +313,11 @@ const state = {
   // wake-condition-gated turns to notice and act. Off via this toggle or
   // PROTO_FAMILIAR_NOTICING_DISABLED=1 on the server.
   noticingEnabled:         true,
+  // Fuzzy-attribution re-sweep: a noticing wake condition that resurfaces
+  // memories saved unsure who did what, for the Familiar to re-resolve. Rides
+  // the noticing loop (only active when noticing is on). Default-ON; off via
+  // this key or PROTO_FAMILIAR_ATTRIBUTION_RESWEEP_DISABLED=1 on the server.
+  noticingAttributionResweepEnabled: true,
   // Weather sense (W-A). Default-ON but inert until the ward adds a location.
   // Off via this toggle or PROTO_FAMILIAR_WEATHER_DISABLED=1 on the server.
   weatherEnabled:          true,
@@ -555,7 +560,7 @@ const SERVER_SYNCED_KEYS = [
   'ponderingEnabled', 'ponderingIntervalScale', 'ponderThreadChance', 'followupsEnabled',
   'ponderWebEnabled', 'ponderWebRoundsPerTick', 'ponderWebReadsPerDay',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
-  'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'weatherEnabled', 'weatherUnit',
+  'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'noticingAttributionResweepEnabled', 'weatherEnabled', 'weatherUnit',
   'intentionStandingPerPhase', 'intentionOpenOneShots',
   'memorySweepEnabled', 'sessionUnifyEnabled', 'uiShowAdvanced', 'organStatusBlock',
   'redditReaderEnabled', 'redditUserAgent', 'redditClientId', 'redditClientSecret', 'redditUsername', 'redditPassword',
