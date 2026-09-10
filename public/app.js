@@ -7697,13 +7697,15 @@ async function generateTopicSummary(topic, rangeMessages) {
   // role rule). A registered speaker (a villager in a shared room) keeps a
   // `[Name]:` label so they aren't read as my human; the ward's own turns stay
   // unlabelled — the role carries them — matching the extraction transcript.
+  // The `speaker` rides through too, so the server's name-field stamp resolves a
+  // villager turn to their slug instead of defaulting it to ward-<slug>.
   const convTurns = rangeMessages
     .filter(m => m && (m.role === 'user' || m.role === 'assistant') && String(m.content ?? '').trim())
     .map(m => {
       if (m.role !== 'user') return { role: 'assistant', content: String(m.content ?? '') };
       const c = String(m.content ?? '');
       const content = m.speaker && !/^\[[^\]]+\]:/.test(c) ? `[${m.speaker}]: ${c}` : c;
-      return { role: 'user', content };
+      return m.speaker ? { role: 'user', content, speaker: m.speaker } : { role: 'user', content };
     });
 
   const userLabel = userNamedTopicLabel(topic);
