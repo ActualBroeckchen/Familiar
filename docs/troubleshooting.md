@@ -532,6 +532,7 @@ is not an off-switch.
 | `PROTO_FAMILIAR_PONDERING_DISABLED` | autonomous pondering |
 | `PROTO_FAMILIAR_PONDER_WEB_DISABLED` | looking things up on the web while pondering |
 | `PROTO_FAMILIAR_WAIT_STREAK_DISABLED` | the wait-streak nudge |
+| `PROTO_FAMILIAR_NAME_FIELDS_DISABLED` | stamping `name` handles on user turns (ward/villager attribution) across chat, Discord, and voice — turns go bare |
 
 **Time, reminders, calendar**
 

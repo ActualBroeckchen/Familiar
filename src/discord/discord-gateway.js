@@ -44,6 +44,7 @@ import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, VIDEO_MIME_EXT, VIDEO_MAX_B
 import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from '../vision/vision.js';
 import { hearVoiceNotes } from '../voice/voice-transcribe.js';
 import { extractTurnReply } from '../../llm-call.js';
+import { sendWithNames } from '../../name-field.js';
 import { logDiscordWrite } from './discord-write-log.js';
 import { enqueueSessionByDay, readConsentPending, pruneConsentPending } from '../memory/memorization.js';
 import {
@@ -337,6 +338,10 @@ async function fireRevisit(item) {
       return {
         role: m.role,
         content: m.timestamp ? `[${formatMsgTime(m.timestamp)}] ${clean}` : clean,
+        // Speaker rides through so the name-field stamp resolves who said it: the
+        // ward's stored turns carry no speaker (→ ward-<slug>), a villager's carries
+        // their name (→ their slug). Assistant turns ignore it (role carries them).
+        ...(m.role === 'user' && m.speaker ? { speaker: m.speaker } : {}),
         // Media references ride beside content into the materializer (§5) so a
         // past image message replays as a live image or a stand-in, not lost.
         ...(Array.isArray(m.attachments) && m.attachments.length ? { attachments: m.attachments } : {}),
@@ -1132,28 +1137,39 @@ export async function callChatRaw({ conn, messages, settings, tools }) {
   const url = resolveProviderUrl(conn);
   if (!url) throw new Error(`unknown provider: ${conn.provider}`);
   const effort = resolveReasoningEffort(conn);
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type':  'application/json',
-      // Keyless local/custom endpoints carry no Authorization (empty Bearer 400s).
-      ...authHeader(conn.apiKey),
-    },
-    body: JSON.stringify({
-      model:       conn.model.trim(),
-      messages,
-      stream:      false,
-      temperature: Number.isFinite(settings?.temperature) ? settings.temperature : 0.8,
-      max_tokens:  DISCORD_MAX_TOKENS,
-      ...(effort ? { reasoning_effort: effort } : {}),
-      ...(Array.isArray(tools) && tools.length ? { tools, tool_choice: 'auto' } : {}),
-    }),
-  });
-  const text = await resp.text();
-  if (!resp.ok) throw new Error(`provider ${conn.provider} returned ${resp.status}: ${text.slice(0, 200)}`);
-  const data = JSON.parse(text);
-  if (data.error) throw new Error(typeof data.error === 'string' ? data.error : (data.error.message ?? 'provider error'));
-  return data;
+  // Name the human on their own turns + label villagers (entity-as-subject rule,
+  // across every user-role surface). Every callChatRaw caller here is a real turn
+  // (deliberations use callProviderChat), so the shared sendWithNames seam is safe
+  // to apply centrally: it stamps the turns, and on a name-field 400 retries bare
+  // once + learns the verdict for this provider:model. The turns carry `speaker`
+  // (ward → null → ward-<slug>, villager → their slug), threaded in handleTurn.
+  const job = { provider: conn.provider, model: conn.model, baseUrl: conn.baseUrl ?? null };
+  const wardName = (settings?.userName || '').trim() || 'my human';
+  const send = async (msgs) => {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        // Keyless local/custom endpoints carry no Authorization (empty Bearer 400s).
+        ...authHeader(conn.apiKey),
+      },
+      body: JSON.stringify({
+        model:       conn.model.trim(),
+        messages:    msgs,
+        stream:      false,
+        temperature: Number.isFinite(settings?.temperature) ? settings.temperature : 0.8,
+        max_tokens:  DISCORD_MAX_TOKENS,
+        ...(effort ? { reasoning_effort: effort } : {}),
+        ...(Array.isArray(tools) && tools.length ? { tools, tool_choice: 'auto' } : {}),
+      }),
+    });
+    const text = await resp.text();
+    if (!resp.ok) throw new Error(`provider ${conn.provider} returned ${resp.status}: ${text.slice(0, 200)}`);
+    const data = JSON.parse(text);
+    if (data.error) throw new Error(typeof data.error === 'string' ? data.error : (data.error.message ?? 'provider error'));
+    return data;
+  };
+  return sendWithNames({ job, settings, messages, wardName, send });
 }
 
 function discordTomesOff() {
@@ -2379,6 +2395,10 @@ async function handleTurn(gw, msg, decision) {
       return {
         role: m.role,
         content: m.timestamp ? `[${formatMsgTime(m.timestamp)}] ${clean}` : clean,
+        // Speaker rides through so the name-field stamp resolves who said it: the
+        // ward's stored turns carry no speaker (→ ward-<slug>), a villager's carries
+        // their name (→ their slug). Assistant turns ignore it (role carries them).
+        ...(m.role === 'user' && m.speaker ? { speaker: m.speaker } : {}),
         // Media references ride beside content into the materializer (§5) so a
         // past image message replays as a live image or a stand-in, not lost.
         ...(Array.isArray(m.attachments) && m.attachments.length ? { attachments: m.attachments } : {}),
@@ -2419,7 +2439,7 @@ async function handleTurn(gw, msg, decision) {
     ...history,
     ...(enriched.dynamic ? [{ role: 'system', content: enriched.dynamic }] : []),
     ...(lore.atDepth ? [{ role: 'system', content: lore.atDepth }] : []),
-    { role: 'user', content: userContent, ...turnAttField },
+    { role: 'user', content: userContent, ...(!decision.isWard && turnSpeaker ? { speaker: turnSpeaker } : {}), ...turnAttField },
     ...(phMsg ? [phMsg] : []),
   ];
 

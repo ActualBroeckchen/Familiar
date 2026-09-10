@@ -28,7 +28,7 @@ const VOICE_TURN_TIMEOUT_MS = 90_000;
  * @returns {function} runVoiceTurn({ transcript, history?, sessionAudience? }) => Promise<string|null>
  */
 export function createVoiceChatTurn({ port, readSettings, connectionForFeature, log = () => {}, fetchFn = fetch } = {}) {
-  return async function runVoiceTurn({ transcript, history = [], sessionAudience = 'ward-private' } = {}) {
+  return async function runVoiceTurn({ transcript, history = [], sessionAudience = 'ward-private', speaker = null } = {}) {
     const text = String(transcript ?? '').trim();
     if (!text) return null;
     const s = readSettings();
@@ -37,7 +37,11 @@ export function createVoiceChatTurn({ port, readSettings, connectionForFeature, 
       log('no usable connection for a voice turn — staying silent');
       return null;
     }
-    const messages = [...history, { role: 'user', content: text }];
+    // A diarized non-ward voice (open-mic §8.3) rides its speaker through so
+    // /api/chat's name-field stamp labels it as that villager, not my human; a
+    // ward turn carries no speaker (→ ward-<slug>).
+    const userTurn = speaker ? { role: 'user', content: text, speaker } : { role: 'user', content: text };
+    const messages = [...history, userTurn];
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), VOICE_TURN_TIMEOUT_MS);
     const started = Date.now();

@@ -51,7 +51,7 @@ import {
 } from './thalamus.js';
 import { scoreMessage } from './src/safety/crisis-signals.js';
 import { foldReasoningIntoContent, callProviderChat, familiarDeliberationMessages } from './llm-call.js';
-import { hydrateNameFieldCache } from './name-field.js';
+import { hydrateNameFieldCache, nameFieldEnabledFor, recordNameFieldResult, stampNamesOnTurns } from './name-field.js';
 import { fetchReadable } from './src/search/websearch.js';
 import { startPageWatchLoop, stopPageWatchLoop, isRunning as pageWatchRunning } from './src/browser/page-watch-loop.js';
 import { buildPageWatchPrompt, parsePageWatchDecision } from './src/browser/page-watch.js';
@@ -695,6 +695,19 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   }
 
   const payload = { model: model.trim(), messages: enrichedMessages, stream: !!stream };
+  // Name the human on their own turns (entity-as-subject "name the human" rule,
+  // now applied on this surface too). /api/chat turns are the ward's — villagers
+  // arrive via Discord, never here — so these resolve to `ward-<slug>`. Optimistic:
+  // stamp unless the off-switch is set or this provider:model has learned a 400 on
+  // the field. Both send points below retry bare + learn on a name-field 400.
+  // (This path can't use withNameFieldFallback: it must pass a genuine 400 through
+  // to the client and must not disturb streaming — so the retry is inline, reusing
+  // the shared stampNamesOnTurns + recordNameFieldResult primitives.)
+  const nameJob = { provider, model, baseUrl: baseUrl ?? null };
+  const nameWard = (readSettingsSync()?.userName || '').trim() || 'my human';
+  const nameFieldsOn = process.env.PROTO_FAMILIAR_NAME_FIELDS_DISABLED !== '1'
+    && nameFieldEnabledFor(nameJob, readSettingsSync());
+  if (nameFieldsOn) payload.messages = stampNamesOnTurns(enrichedMessages, { wardName: nameWard });
   if (typeof temperature === 'number') payload.temperature = temperature;
   if (typeof max_tokens === 'number' && max_tokens > 0) payload.max_tokens = max_tokens;
   // Reasoning effort for always-on-thinking models (GLM-5.3+): resolved from the
@@ -834,17 +847,25 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
             // model must answer in text — a silent tool-hungry turn is worse
             // than a bounded answer.
             const { tools: _pt, tool_choice: _ptc, ...basePayload } = payload;
-            const body = opts?.forceText
-              ? { ...basePayload, messages: msgs, stream: false }
-              : { ...payload, messages: msgs, ...(roundTools ? { tools: roundTools } : {}), stream: false };
+            const mkBody = (m) => opts?.forceText
+              ? { ...basePayload, messages: m, stream: false }
+              : { ...payload, messages: m, ...(roundTools ? { tools: roundTools } : {}), stream: false };
+            // Loop mode passes its own evolving `msgs`, so the payload-level name
+            // stamping doesn't reach here — stamp the ward's turns per round, and
+            // retry bare on a name-field 400 (learn 'no' only if bare succeeds).
+            const fetchOnce = (m) => fetch(upstreamUrl, {
+              method: 'POST', headers: authHeaders, body: JSON.stringify(mkBody(m)), signal: ac.signal,
+            });
             let r;
             try {
-              r = await fetch(upstreamUrl, {
-                method:  'POST',
-                headers: authHeaders,
-                body:    JSON.stringify(body),
-                signal:  ac.signal,
-              });
+              r = await fetchOnce(nameFieldsOn ? stampNamesOnTurns(msgs, { wardName: nameWard }) : msgs);
+              if (r.status === 400 && nameFieldsOn) {
+                const bare = await fetchOnce(stampNamesOnTurns(msgs, { stamp: false }));
+                if (bare.ok) recordNameFieldResult(nameJob, 'no');
+                r = bare;
+              } else if (r.ok && nameFieldsOn) {
+                recordNameFieldResult(nameJob, 'yes');
+              }
             } catch (err) {
               if (err.name === 'AbortError') {
                 const e = new Error('client disconnected');
@@ -1138,15 +1159,26 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   }
 
   let upstream;
+  const sendUpstream = (msgs) => fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader(apiKey) },
+    body: JSON.stringify(msgs ? { ...payload, messages: msgs } : payload),
+  });
   try {
-    upstream = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...authHeader(apiKey),
-      },
-      body: JSON.stringify(payload),
-    });
+    upstream = await sendUpstream();
+    // Name-field 400 handling: a provider that rejects the `name` field 400s the
+    // whole request. Retry ONCE bare; learn 'no' only if the bare retry actually
+    // succeeds (so an unrelated 400 never permanently disables names). A bare
+    // retry that still fails surfaces its real error, exactly as before.
+    if (upstream.status === 400 && nameFieldsOn) {
+      const bare = await sendUpstream(stampNamesOnTurns(enrichedMessages, { stamp: false })).catch(() => null);
+      if (bare) {
+        if (bare.ok) recordNameFieldResult(nameJob, 'no');
+        upstream = bare;
+      }
+    } else if (upstream.ok && nameFieldsOn) {
+      recordNameFieldResult(nameJob, 'yes');
+    }
   } catch (err) {
     return res.status(502).json({ error: `Network error reaching ${provider}: ${err.message}` });
   }

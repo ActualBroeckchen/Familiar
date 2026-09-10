@@ -286,18 +286,17 @@ export function attachVoiceCall(deps) {
     }
     if (notes.length) turnHistory = [...hist, ...notes.map((content) => ({ role: 'system', content }))];
 
-    const reply = await runVoiceChatTurn({ transcript, history: turnHistory, sessionAudience });
+    // A ward turn is unattributed; a diarized non-ward voice (open-mic §8.3) is
+    // labelled, so both the name-field stamp on the live turn AND the stored
+    // transcript read "<villager> said …" instead of implying my human said it.
+    const speakerLabel = isWard ? null : (ctx.speakerName || (String(speaker).startsWith('guest') ? 'someone' : String(speaker)));
+    const reply = await runVoiceChatTurn({ transcript, history: turnHistory, sessionAudience, speaker: speakerLabel });
     if (reply) {
       const messages = [...hist, { role: 'user', content: transcript }];
       const next = [...messages, { role: 'assistant', content: reply }];
       histories.set(ctx.callId, next.slice(-HISTORY_MAX));
       // Accumulate the FULL exchange for the end-of-call memorization (uncapped).
       const sess = callSessions.get(ctx.callId);
-      // Stamp at accumulation time. A ward turn is unattributed (speaker omitted),
-      // like Discord text's ward turns; a diarized non-ward voice (open-mic §8.3)
-      // is labelled so the stored transcript reads "someone / <villager> said …"
-      // instead of implying my human said it.
-      const speakerLabel = isWard ? null : (ctx.speakerName || (String(speaker).startsWith('guest') ? 'someone' : String(speaker)));
       if (sess) sess.messages.push(...turnMessages(transcript, reply, { speaker: speakerLabel }));
     }
     return reply;
