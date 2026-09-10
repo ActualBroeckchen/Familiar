@@ -25,7 +25,14 @@ function clampRounds(settings) {
   return Number.isFinite(n) && n >= 1 ? Math.min(Math.floor(n), 10) : 4;
 }
 
-const PLAN_PROMPT = (topic, found, left) =>
+// The research-plan judgment (what to look up next), the Familiar's own
+// first-person thinking. It rides as a SYSTEM message, not a `user` turn — but
+// that delivery is INHERITED, not chosen here: researchForPonder is always
+// handed pondering's `defaultCallLLM`, which wraps the prompt in
+// familiarDeliberationMessages (system + bare cue). Exported + pinned by test so
+// a second-person rewrite here, or a caller wiring a raw user-role callLLM,
+// shows up as a failure rather than a silent regression.
+export const PLAN_PROMPT = (topic, found, left) =>
 `I'm pondering "${topic}" in a free cycle, and I can look a few things up before I write. I have ${left} read(s) left today.
 
 ${found.length ? `What I've already pulled:\n${found.map((s, i) => `${i + 1}. ${s.ref} — ${String(s.excerpt).slice(0, 200)}`).join('\n')}\n` : 'I haven\'t looked at anything yet.\n'}
@@ -84,6 +91,8 @@ export async function researchForPonder({ topic, provider, apiKey, model, baseUr
     const left = d.remaining(settings);
     if (left <= 0) break;
     let plan;
+    // callLLM is pondering's defaultCallLLM (familiarDeliberationMessages →
+    // system). The prompt is the Familiar's own reflection, never a user turn.
     try { plan = parsePlan(await callLLM({ provider, apiKey, model, baseUrl, prompt: PLAN_PROMPT(label, sources, left) })); }
     catch { break; }
     if (plan.done || (!plan.searches.length && !plan.reads.length)) break;

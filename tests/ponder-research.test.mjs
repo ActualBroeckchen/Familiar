@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { researchForPonder, sourcesBlock } from '../src/pondering/ponder-research.js';
+import { researchForPonder, sourcesBlock, PLAN_PROMPT } from '../src/pondering/ponder-research.js';
+import { familiarDeliberationMessages } from '../llm-call.js';
 
 // A fake shared budget so the loop's real file I/O never runs in tests.
 function fakeBudget(start) {
@@ -131,4 +132,32 @@ test('sourcesBlock renders nothing for empty, cites entries otherwise', () => {
   const block = sourcesBlock([{ kind: 'read', ref: 'https://x', excerpt: 'a fact  with   spaces' }]);
   assert.match(block, /\[1\] \(read\) https:\/\/x/);
   assert.match(block, /a fact with spaces/);        // whitespace collapsed
+});
+
+// ── The research-plan judgment is the Familiar's own thinking (system role) ──
+
+test('PLAN_PROMPT is first-person cognition and composes into a system message', () => {
+  const body = PLAN_PROMPT('the nature of tides', [], 3);
+  assert.match(body, /I'm pondering/);                 // first-person, not "you are pondering"
+  assert.match(body, /I answer ONLY with JSON/);
+  // Delivered via familiarDeliberationMessages (as pondering's defaultCallLLM
+  // does): the body must land in `system`, the user slot only a bare cue.
+  const msgs = familiarDeliberationMessages({ body, cue: '(a quiet moment to think)' });
+  assert.equal(msgs.filter(m => m.role === 'user').length, 1);
+  assert.ok(msgs.some(m => m.role === 'system' && /I'm pondering/.test(m.content)),
+    'the plan body is a system message, never a user turn');
+});
+
+test('researchForPonder hands the plan prompt to its callLLM as the Familiar body (caller wraps it system)', async () => {
+  // The inherited-delivery contract: research passes PLAN_PROMPT through whatever
+  // callLLM it's given. In production that callLLM is pondering's system-role
+  // wrapper; this pins that the prompt reaching it is the first-person body, so a
+  // regression to a second-person prompt (or a raw user-role send) is visible.
+  let seenPrompt = null;
+  await researchForPonder(
+    { topic: 'tides', callLLM: async ({ prompt }) => { seenPrompt = prompt; return '{"done": true}'; },
+      settings: { ponderWebEnabled: true, ponderWebReadsPerDay: 5, ponderWebRoundsPerTick: 1 } },
+    { remaining: () => 5, record: () => {} },
+  );
+  assert.ok(seenPrompt && /I'm pondering/.test(seenPrompt), 'callLLM received the first-person plan body');
 });

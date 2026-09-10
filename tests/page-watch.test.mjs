@@ -9,6 +9,7 @@ import {
   normalizeForHash, hashText, dueWatches, runOnePageWatchTick,
   buildPageWatchPrompt, parsePageWatchDecision, DEFAULT_WATCH_INTERVAL_MS,
 } from '../src/browser/page-watch.js';
+import { familiarDeliberationMessages } from '../llm-call.js';
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'pagewatch-'));
@@ -152,6 +153,20 @@ test('buildPageWatchPrompt names the page and carries {{user}}; parse reads the 
   assert.deepEqual(parsePageWatchDecision('{"surface": true, "summary": "it changed"}'), { surface: true, summary: 'it changed' });
   assert.deepEqual(parsePageWatchDecision('nonsense'), { surface: false, summary: '' });
   assert.equal(parsePageWatchDecision('{"surface": false}').surface, false);
+});
+
+test('the change judgment is first-person and rides as SYSTEM (my own thinking), not a user turn', () => {
+  // Voice pass: the is-this-worth-a-nudge judgment is the Familiar's own
+  // deliberation about a page it watches. The body must be first-person, and
+  // (via familiarDeliberationMessages, the helper server.js's decideChange now
+  // uses) it must land in `system` with only a bare cue in the `user` slot.
+  const body = buildPageWatchPrompt({ url: 'https://x', label: 'X', note: 'why', oldSnapshot: 'a', newText: 'b' });
+  assert.match(body, /\bI\b/);                                    // first-person cognition, not "you are…"
+  const msgs = familiarDeliberationMessages({ body, cue: '(a quiet moment checking a page I watch)' });
+  const users = msgs.filter(m => m.role === 'user');
+  assert.equal(users.length, 1);
+  assert.equal(users[0].content, '(a quiet moment checking a page I watch)');
+  assert.ok(msgs.some(m => m.role === 'system' && m.content === body), 'the judgment body is a system message');
 });
 
 test('DEFAULT_WATCH_INTERVAL_MS is a sane multi-hour default', () => {

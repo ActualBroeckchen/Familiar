@@ -50,7 +50,7 @@ import {
   setIntention, roundsForWard, listIntentions, getDueIntentions,
 } from './thalamus.js';
 import { scoreMessage } from './src/safety/crisis-signals.js';
-import { foldReasoningIntoContent, callProviderChat } from './llm-call.js';
+import { foldReasoningIntoContent, callProviderChat, familiarDeliberationMessages } from './llm-call.js';
 import { fetchReadable } from './src/search/websearch.js';
 import { startPageWatchLoop, stopPageWatchLoop, isRunning as pageWatchRunning } from './src/browser/page-watch-loop.js';
 import { buildPageWatchPrompt, parsePageWatchDecision } from './src/browser/page-watch.js';
@@ -6295,7 +6295,15 @@ function startPageWatches() {
       const conn = connectionForFeature(s, 'chat') || connectionForFeature(s, 'pondering');
       if (!connectionReady(conn)) return { surface: true, summary: '' };   // no model → surface plainly rather than swallow the change
       const prompt = substituteMacros(buildPageWatchPrompt({ url, label, note, oldSnapshot, newText }), s);
-      const raw = await callProviderChat({ provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl, prompt, temperature: 0.4, maxTokens: 2000 });
+      // The is-this-worth-a-nudge judgment is my own thinking about a page I
+      // watch, so it rides as a system message with a bare user cue
+      // (familiarDeliberationMessages), never as a `user` turn framing it as
+      // handed TO me.
+      const raw = await callProviderChat({
+        provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
+        messages: familiarDeliberationMessages({ body: prompt, cue: '(a quiet moment checking a page I watch)' }),
+        temperature: 0.4, maxTokens: 2000,
+      });
       return parsePageWatchDecision(raw);
     },
     // Surface as a gentle banner AND push to the ward's channels (same path the
