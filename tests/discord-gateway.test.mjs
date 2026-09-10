@@ -100,6 +100,22 @@ describe('classifyMessage — universal ignores', () => {
     assert.equal(d.action, 'ignore');
     assert.equal(d.reason, 'no-content');
   });
+  it('empty content but an image attachment is NOT ignored (text-less image)', () => {
+    const d = classifyMessage(
+      dmFrom(WARD_ID, '', { attachments: [{ filename: 'cat.png', content_type: 'image/png' }] }),
+      ctx(),
+    );
+    assert.equal(d.action, 'respond', 'a ward DM with only an image still gets a turn');
+    assert.equal(d.kind, 'ward-dm');
+  });
+  it('empty content with a non-media attachment is still ignored', () => {
+    const d = classifyMessage(
+      dmFrom(WARD_ID, '', { attachments: [{ filename: 'notes.txt', content_type: 'text/plain' }] }),
+      ctx(),
+    );
+    assert.equal(d.action, 'ignore');
+    assert.equal(d.reason, 'no-content');
+  });
   it('malformed payload ignored', () => {
     assert.equal(classifyMessage(null, ctx()).action, 'ignore');
   });

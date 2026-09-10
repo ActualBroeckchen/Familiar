@@ -591,7 +591,14 @@ export function classifyMessage(msg, { registry, botUserId, wardUserId }) {
     if (loc?.readBots !== true) return { action: 'ignore', reason: 'bot-author' };
   }
   const content = typeof msg.content === 'string' ? msg.content.trim() : '';
-  if (!content) return { action: 'ignore', reason: 'no-content' };
+  // A message with no text but WITH an image/video is still a message — my human
+  // sending a picture with no caption used to be dropped here entirely, so the
+  // Familiar never registered it (the reported text-less-image bug). Let it
+  // through when it carries media; the normal respond/observe classification and
+  // the arrival-time ingest take over from there.
+  const hasMedia = Array.isArray(msg.attachments)
+    && msg.attachments.some(a => isDiscordImageAttachment(a) || isDiscordVideoAttachment(a));
+  if (!content && !hasMedia) return { action: 'ignore', reason: 'no-content' };
 
   const isWard = !!(wardUserId && author.id === wardUserId);
   const villager = isWard ? null : (registry?.villagers ?? []).find(v =>
