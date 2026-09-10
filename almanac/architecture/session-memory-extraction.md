@@ -5,6 +5,9 @@ sources:
   - id: memorization-js
     type: file
     path: src/memory/memorization.js
+  - id: name-field-js
+    type: file
+    path: name-field.js
 ---
 
 # Session Memory Extraction
@@ -59,7 +62,9 @@ These three layers resolve attribution whenever the transcript makes the actor i
 
 ## Speaker name field handling
 
-The OpenAI `name` field lets the model get a first-class sender identifier per message turn, not only the inline `[Name]:` text in the message content. But the field has constraints that make it tricky to use with real names. [@memorization-js]
+The OpenAI `name` field lets the model get a first-class sender identifier per message turn, not only the inline `[Name]:` text in the message content. But the field has constraints that make it tricky to use with real names.
+
+As of 0.11.109-alpha (PR #406) this machinery lives in a shared root module, `name-field.js` (beside `llm-call.js`), not inside `memorization.js`. The ward asked for the same name-field policy to apply across every surface that puts a person's turn in a `user` role, not just the memorization worker, so it was extracted into one shared implementation instead of copied per surface. `memorization.js` imports from `name-field.js` and re-exports the same names for back-compat, so existing callers and tests that import from `memorization.js` keep working [@memorization-js] [@name-field-js]. Memorization is currently the only caller wired onto the shared module; the live web chat path (`/api/chat`), Discord turns, voice turns, and the browser tome-writer (`generateTopicSummary`) are a per-surface follow-up, each sending `speaker` on its user turns and routing its provider call through `withNameFieldFallback`. The live chat path is the highest-stakes of these because its 400-fallback must never break a turn, streaming included.
 
 ### The constraint
 
@@ -67,7 +72,7 @@ OpenAI validates the `name` field against `^[^\s]+$` — no whitespace or non-AS
 
 ### Code-minted name-safe handles
 
-Every speaker gets a code-generated handle via `speakerNameField({role, speaker, wardName, material})` [@memorization-js]:
+Every speaker gets a code-generated handle via `speakerNameField({role, speaker, wardName, material})` [@name-field-js]:
 
 - **Villagers or strangers:** `slugifyLabel(name)` — the name slug-cased, guaranteed name-field-safe.
 - **The ward (a user turn with no speaker field):** `ward-<slug>` — the `ward-` prefix marks the bond and makes the ward a specific person, never flattened to a bare role. The slug preserves their name.
@@ -76,22 +81,24 @@ Every speaker gets a code-generated handle via `speakerNameField({role, speaker,
 
 ### Capability detection and learning
 
-Whether to use name fields is gated by `nameFieldEnabledFor(job, settings)` [@memorization-js], which follows a three-tier fallback:
+Whether to use name fields is gated by `nameFieldEnabledFor(job, settings)` [@name-field-js], which follows a three-tier fallback:
 
 1. **Explicit per-connection setting:** The ward can set `nameFieldCapable: 'yes'` or `'no'` on a connection. This wins.
-2. **Learned per-provider-model:** An in-process Map records what earlier calls taught: if a previous call succeeded with names, try names again; if a previous call got a 400-with-names that succeeded without names, skip names. Learned state is cheap and can re-learn after restart; no dotfile is needed.
+2. **Learned per-provider-model:** A cache keyed `` `${provider}:${model}` `` records what earlier calls taught: if a previous call succeeded with names, try names again; if a previous call got a 400-with-names that succeeded without names, skip names.
 3. **Optimistic:** If nothing is known, assume the provider supports names and attempt it. Learn from the outcome.
 
-### Graceful degradation: `extractWithNameFallback`
+The learned verdict now persists to disk, in a cap-cache file keyed `provider:model` (`tomes/.name-field-capability.json`) — the same shape as the vision capability cache described in [Vision capability defaults to BLIND; prove capability via allowlist](../decisions/vision-capability-defaults). Persistence gets the ward two things for free: the verdict survives a server restart (no re-learning every boot), and a model change is a new cache key, so the field is re-attempted on a model swap without a separate "model changed" check. Persistence is OFF until `hydrateNameFieldCache()` runs at server boot (called from `server.js`), which loads the file and turns on write-through; tests never call it, so `recordNameFieldResult` stays pure in-memory there and no stray cap file is written during a test run [@name-field-js].
 
-The function `extractWithNameFallback({withNames, buildMessages, callProviderFn, onLearn})` [@memorization-js] implements the retry strategy:
+### Graceful degradation: `withNameFieldFallback`
+
+The function `withNameFieldFallback({withNames, buildMessages, callProviderFn, onLearn})` [@name-field-js] implements the retry strategy (its canonical name; `memorization.js` re-exports it as `extractWithNameFallback` for back-compat [@memorization-js]):
 
 - Attempt extraction with names enabled (if `withNames` is true).
 - On success, record `'yes'` in the learned cache.
 - On a 400 error while names were on, retry ONCE without names. If that succeeds, record `'no'` in the cache — the provider does not support the field. If it also fails, propagate the second failure untouched (never mis-learn).
 - On non-400 errors, never retry — propagate immediately.
 
-This design mirrors the `visionCapable` learning pattern. The net result: names switch on for capable providers with zero configuration. A strict server costs one wasted attempt, then stays bare. Memorization never fails over the name field itself. [@memorization-js]
+This design mirrors the `visionCapable` learning pattern in [Vision capability defaults to BLIND; prove capability via allowlist](../decisions/vision-capability-defaults). The net result: names switch on for capable providers with zero configuration. A strict server costs one wasted attempt, then stays bare. Memorization never fails over the name field itself. If a third capability cache appears elsewhere, that is the signal to extract one shared cap-cache helper — two small parallel copies (vision, name-field) don't yet earn the abstraction [@name-field-js].
 
 ### Why not split roles differently
 
@@ -107,3 +114,4 @@ The message `speaker` field already carries the same information that the inline
 - [Session lifecycle](session-lifecycle) — when sessions begin and when memorization is triggered.
 - [Attribution confidence: degrade the attribution, not the fact](../decisions/attribution-confidence-degrades-not-drops) — the follow-on decision for a referent the three-layer fix above still can't resolve: mark it unresolved rather than guess or drop it, and let [Phylactery](phylactery) recall and [Noticing](noticing) carry the correction.
 - [Deliberations delivered as system messages](../decisions/deliberations-as-system-messages) — the role-faithful transcript assembly on this page is the reference implementation of that decision's "Familiar spoken output rides as `assistant`" axis.
+- [Vision capability defaults to BLIND; prove capability via allowlist](../decisions/vision-capability-defaults) — the earlier capability-cache decision that the name-field persistence design above mirrors.
