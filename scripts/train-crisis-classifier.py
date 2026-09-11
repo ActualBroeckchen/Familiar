@@ -174,6 +174,57 @@ def evaluate(head, texts, labels, name):
             "recall": round(recall, 4), "precision": round(precision, 4)}
 
 
+# ── Hard-negative augmentation: teach the CHAT register (v2) ────────────────
+# The Reddit corpus has a ~50% distress base rate and never contains someone
+# raging at a compiler, so the raw model runs hot on mundane frustration (gate-2
+# finding: "i can't do this, nothing works" scored 0.90). We fold a templated
+# frustration/tech-helpless set + the CSSR-S severity-0 rows (REAL "distressed
+# but NOT suicidal") into the TRAINING negatives so the model learns the
+# register — the distinctive tokens (bug/deploy/compiler/…) get pulled negative.
+# Test/eval sets are untouched, so held-out numbers stay honest.
+_FRUST_FRAMES = [
+    "i can't do this {x}", "i can't figure out {x}", "i can't deal with {x} right now",
+    "{x} is killing me", "{x} is driving me crazy", "i'm so done with {x}",
+    "this {x} is hopeless", "i give up on {x}", "{x} won't work no matter what i try",
+    "i'm exhausted from {x}", "i hate {x} so much", "ugh {x} again", "nothing works on {x}",
+    "i can't stand {x} anymore", "{x} is impossible", "i'm stuck on {x} and nothing helps",
+]
+_FRUST_NOUNS = [
+    "this bug", "the deploy", "this code", "the build", "this spreadsheet", "my inbox",
+    "this puzzle", "the printer", "this homework", "the wifi", "this recipe", "traffic",
+    "this meeting", "my taxes", "this level", "the update", "this form", "the assignment",
+    "this software problem", "the compiler", "my essay", "this game", "the exam", "this config",
+]
+def mundane_negatives():
+    out = set(MUNDANE_NEG)
+    for f in _FRUST_FRAMES:
+        for n in _FRUST_NOUNS:
+            out.add(f.format(x=n))
+    return sorted(out)
+
+def load_cssrs(field="all"):
+    """CSSR-S rows as (content, severity). Real Columbia-graded SuicideWatch posts."""
+    try:
+        from datasets import load_dataset
+        ds = load_dataset("av9ash/CSSR-S_labelled_suicidewatch_posts_reddit", split="train")
+        return [(r["content"], int(r["severity"])) for r in ds
+                if r.get("content") and r.get("severity") is not None]
+    except Exception as e:
+        print(f"[train] CSSR-S unavailable ({e})", file=sys.stderr)
+        return []
+
+def calibrate_threshold(head, cssrs):
+    """Suggest a decision threshold + mean p per Columbia severity band."""
+    bands = {}
+    for content, sev in cssrs:
+        bands.setdefault(sev, []).append(score_head(head, content))
+    by_band = {str(s): round(sum(v) / len(v), 3) for s, v in sorted(bands.items()) if v}
+    low = bands.get(0, [])
+    hi = [p for s, ps in bands.items() if s >= 2 for p in ps]
+    thr = round(((sum(low) / len(low)) + (sum(hi) / len(hi))) / 2, 3) if low and hi else 0.5
+    return thr, by_band
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", choices=["hf", "local"], default="hf")
@@ -182,6 +233,7 @@ def main():
     ap.add_argument("--no-normalization", action="store_true",
                     help="skip the pro-suicide-register head even if its data is present")
     args = ap.parse_args()
+    cssrs = []   # (content, severity) rows for calibration; filled on the hf path
 
     if args.source == "local":
         import csv
@@ -199,6 +251,14 @@ def main():
         distress_rows = [(t, y) for t, y in distress_rows if t and y is not None]
         distress_test = [(t, to_binary_label(y)) for t, y in test]
         distress_test = [(t, y) for t, y in distress_test if t and y is not None]
+        # v2: fold chat-register hard-negatives into TRAINING only (not test).
+        # Templated frustration ×3 (weight without swamping) + real CSSR-S sev-0.
+        cssrs = load_cssrs()
+        aug = [(t, 0) for t in mundane_negatives()] * 3 \
+            + [(c, 0) for c, s in cssrs if s == 0]
+        distress_rows = distress_rows + aug
+        print(f"[train] + {len(aug)} chat-register hard-negatives folded in "
+              f"({len(mundane_negatives())} templated ×3 + {sum(1 for _, s in cssrs if s == 0)} CSSR-S sev-0)", file=sys.stderr)
 
     texts = [t for t, _ in distress_rows]
     labels = [y for _, y in distress_rows]
@@ -208,9 +268,16 @@ def main():
 
     report = {"distress_heldout": evaluate(distress, [t for t, _ in distress_test],
                                            [y for _, y in distress_test], "distress/heldout")}
-    # Precision guard: the mundane-frustration set must mostly read as NOT distress.
+    # Precision guard: the mundane-frustration set at the default 0.5 line.
     mundane_fp = sum(1 for t in MUNDANE_NEG if score_head(distress, t) >= 0.5)
     report["mundane_false_positives"] = f"{mundane_fp}/{len(MUNDANE_NEG)}"
+    # Threshold calibration on the Columbia severity bands (when CSSR-S is present).
+    thr, by_band = calibrate_threshold(distress, cssrs) if cssrs else (0.5, {})
+    distress["threshold"] = thr
+    report["suggested_threshold"] = thr
+    report["severity_mean_p"] = by_band
+    report["mundane_fp_at_threshold"] = \
+        f"{sum(1 for t in MUNDANE_NEG if score_head(distress, t) >= thr)}/{len(MUNDANE_NEG)}"
 
     artifact = {
         "version": 1,
@@ -221,7 +288,7 @@ def main():
         "distress": distress,
         "normalization": None,   # filled below iff the gated set is present
         "meta": {
-            "trainedAt": datetime.datetime.utcnow().isoformat() + "Z",
+            "trainedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "rows": len(texts),
             "metrics": report,
             "distress_top_tokens": head_top_tokens(distress),
