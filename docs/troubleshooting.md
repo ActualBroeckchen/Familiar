@@ -517,6 +517,8 @@ is not an off-switch.
 | `PROTO_FAMILIAR_PROACTIVE_SESSION_DISABLED` | recording proactive messages (reminders, event alerts, "a thought from me", triage check-ins) into your shared session so the Familiar knows it sent them and your reply has context (esp. Discord DMs). Delivery is unaffected either way |
 | `PROTO_FAMILIAR_VISION_DISABLED` | seeing images |
 | `PROTO_FAMILIAR_VISION_THREAT_DISABLED` | an image raising your Familiar's concern |
+| `PROTO_FAMILIAR_CRISIS_CLASSIFIER_DISABLED` | the ML distress classifier (the raise-only second opinion alongside the phrase detector) — off falls back to the phrase detector alone |
+| `PROTO_FAMILIAR_CRISIS_NORMALIZATION_DISABLED` | just the pro-suicide-attitude warning signal, leaving the rest of the classifier on |
 | `PROTO_FAMILIAR_ZAI_VISION_DISABLED` | the z.ai Coding-Plan vision route |
 | `PROTO_FAMILIAR_GIF_AS_VIDEO_DISABLED` | sending an animated GIF to a video-capable model as video (so it sees the motion) — with it off, a gif is always a still image |
 

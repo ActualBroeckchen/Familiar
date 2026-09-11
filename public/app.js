@@ -470,6 +470,12 @@ const state = {
   // ride live per request (older ones degrade to text stand-ins server-side).
   visionEnabled: true,
   visionMaxLiveImages: 4,
+  // Crisis ML classifier (docs/crisis-classifier-build-spec.md) — a raise-only
+  // second opinion on distress + a pro-suicide-register warning. Default ON, but
+  // INERT until a trained model artifact exists and the seam is wired (gated on
+  // ward sign-off). Kept here so the off-switches are declared with the feature.
+  crisisClassifierEnabled: true,
+  crisisNormalizationEnabled: true,
   // An animated GIF rides as VIDEO to a video-capable model (so I see the
   // motion), and as a still frame to an image-only one. Off → a gif is always a
   // plain image. Also gated server-side by PROTO_FAMILIAR_GIF_AS_VIDEO_DISABLED.
@@ -588,6 +594,7 @@ const SERVER_SYNCED_KEYS = [
   'villageAutoRegisterLocations',
   'featureConnections',
   'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring', 'gifAsVideoEnabled',
+  'crisisClassifierEnabled', 'crisisNormalizationEnabled',
   'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode', 'voiceCallOfflineTranscribe', 'voiceCallSettleMs',
   'mediaRetentionEnabled', 'voiceNoteRetentionDays', 'voiceEscalationFactor',
   'voiceGuestPolicy', 'voiceGuestThreshold', 'voiceGuestEnterSegments', 'voiceGuestExitSegments', 'voiceGuestExitQuietSec',

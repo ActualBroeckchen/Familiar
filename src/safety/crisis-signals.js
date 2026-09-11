@@ -117,7 +117,17 @@ export const SIGNALS = Object.freeze([
 
   { id: 'cant_continue', tier: 'high', weight: 4,
     patterns: [
-      /\bcan'?t (take|do|go on|keep going|handle) (this|it)( anymore| any longer)?\b/i,
+      // "can't go on" / "can't keep going" are inherently the can't-continue
+      // sense — fire on the bare form (this ADDS coverage; the old grammar
+      // wrongly required a "this/it" object and missed bare "I can't go on").
+      /\bcan'?t (go on|keep going)\b/i,
+      // "can't take/do/handle (this|it)" REQUIRES the despair qualifier now.
+      // Bare "I can't do this" / "I can't take it" is overwhelmingly benign
+      // task-frustration ("I can't do this, nothing works" while debugging) and
+      // fired HIGH (weight 4) — the ward's reported over-fire. Same discipline
+      // as the giving-up / what's-the-point / done-with tightenings: the
+      // genuine forms keep the "anymore"/"any longer" marker.
+      /\bcan'?t (take|do|handle) (this|it)( anymore| any longer)\b/i,
       /\bcan'?t (keep|go on) (doing this|like this|living like this)\b/i,
       // "I'm done" alone fires on "I'm done with dinner" / "done with this
       // meeting" — the old negative-lookahead missed those benign objects.

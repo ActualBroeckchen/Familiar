@@ -410,6 +410,21 @@ test('tightening: cant_continue keeps "done with everything"/"done trying", drop
   }
 });
 
+test('tightening: cant_continue keeps genuine "can\'t go on"/"anymore" forms, drops bare task-frustration', () => {
+  // Genuine can't-continue still fires HIGH (recall protected):
+  for (const msg of ["I can't go on.", "I can't keep going.", "I can't do this anymore.",
+                     "I can't take it anymore.", "I can't handle this any longer."]) {
+    assertScored(msg, { tier: 'high', idIncludes: 'cant_continue' });
+  }
+  // Bare task-frustration must NOT fire (the ward's reported over-fire):
+  for (const msg of ["ugh I can't do this, nothing I try works", "I can't take it, this heat is unreal",
+                     "I can't do this puzzle", "I can't handle it, this bug is impossible"]) {
+    const r = scoreMessage(msg);
+    assert.ok(!r.signals.some(s => s.id === 'cant_continue'),
+      `"${msg}" must not fire cant_continue: ${JSON.stringify(r.signals)}`);
+  }
+});
+
 test('tightening: severe_distress keeps "I\'m falling apart"/"I\'m breaking down", drops the car/data', () => {
   for (const msg of ["I'm falling apart.", "Everything is falling apart.", "I'm breaking down."]) {
     assertScored(msg, { tier: 'moderate', idIncludes: 'severe_distress' });
