@@ -83,6 +83,21 @@ sources:
   - id: media-retention-loop
     type: file
     path: src/vision/media-retention-loop.js
+  - id: offline-asr-models
+    type: file
+    path: src/voice/offline-asr-models.js
+  - id: voice-transcribe
+    type: file
+    path: src/voice/voice-transcribe.js
+  - id: voice-model-pins
+    type: file
+    path: voice-model-pins.json
+  - id: pin-audio-models-script
+    type: file
+    path: scripts/pin-audio-models.mjs
+  - id: offline-asr-resolve-test
+    type: file
+    path: tests/offline-asr-resolve.test.mjs
 ---
 
 # Voice
@@ -106,9 +121,11 @@ room sounds for care detection, and what a future ward-signed spec would need to
 one Familiar whenever a second one joined the same Discord call, fixed in 0.11.10-alpha
 [@voice-discord-adapter-js]; media retention (Pass 4 §9), the default-on background worker
 that curates aged voice-clip sounds without ever touching their transcripts
-[@media-retention-loop]; and text-in-voice interleave (0.11.85-alpha), which lets a message typed
+[@media-retention-loop]; text-in-voice interleave (0.11.85-alpha), which lets a message typed
 into a live Discord call's attached text chat become a spoken turn in that same call
-[@call-engine-js]. See [Vision and media](vision-and-media) for the sibling
+[@call-engine-js]; and making the Whisper/Parakeet offline-ASR upgrades actually installable
+in-app (0.11.117-alpha), after the opt-in download path had shipped scaffolded but unfinished
+[@offline-asr-models]. See [Vision and media](vision-and-media) for the sibling
 multimodal-input milestone that voice's media storage reuses.
 
 ## The footprint budget: disk as an accessibility constraint
@@ -598,6 +615,91 @@ in the same spirit: an LLM error or an unparseable response keeps *everything* t
 `parseKeepRefs` returns `null` on no-JSON, a state the loop deliberately treats as distinct from
 a valid "keep none" [@media-retention-loop]. Like the noticing loop, it stands down during a live
 call and at moderate-or-higher threat — curation can always wait for a calmer tick.
+
+## Offline ASR upgrades: scaffolded to actually installable (0.11.117)
+
+`offline-asr-models.js` lets a ward choose which model does the FINAL,
+no-one-waiting transcription pass for a voice note or a call: SenseVoice
+(multilingual, the bundled default), Whisper (multilingual, markedly better
+English, heavier), or NeMo Parakeet (English-only transducer, accurate, and
+the only one of the three that supports hotword biasing) [@offline-asr-models].
+The picker shipped in 0.11.84-alpha, but switching to Whisper or Parakeet
+neither downloaded nor activated the model — the opt-in path had the UI
+choice, the catalogue entries, and the worker config scaffolded, but three
+separate gaps kept it from ever completing end to end [@offline-asr-models].
+
+**Gap 1 — the models were never pinned, and the scaffolded Whisper URL was a
+404.** `voice-model-pins.json` had no entry for either upgrade, and `fetchPlan`
+fails closed on an unpinned model: `isPinned()` requires every file to carry
+a URL and a 64-hex sha256 [@voice-model-pins]. The originally-scaffolded
+Whisper asset, `sherpa-onnx-whisper-medium.int8.tar.bz2`, does not exist
+upstream — there is no `medium.int8` archive at all. Both models are now
+pinned: Parakeet to `sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2`, and
+Whisper to `sherpa-onnx-whisper-small.tar.bz2` rather than `medium`
+[@voice-model-pins]. The choice of `small` over `medium` is deliberate:
+medium's archive is 1.9 GB (roughly 3 GB unpacked), too heavy for the small,
+often nearly-full machines the footprint budget described above exists to
+protect, where `small` (610 MB) is the accuracy/footprint sweet spot
+and keeps every language `small` supports [@offline-asr-models]. Pins are
+machine-written by `scripts/pin-audio-models.mjs <id> --upstream`, which
+downloads the candidate, hashes it in flight, and — for archives — unpacks it
+to measure the real disk size, the same machine-written-never-typed discipline
+the rest of the voice supply chain follows (see [exact values are code's
+job](../decisions/exact-values-in-code)) [@pin-audio-models-script].
+
+**Gap 2 — the install plan ignored the ward's choice.** `voicePlanFor('listen')`
+hard-codes `extras: ['asr-offline']` (SenseVoice), so even a correctly-pinned
+upgrade was never targeted by an install [@server]. Two new endpoints close
+this: `POST /api/voice/asr-model/install {key}` builds a one-model plan
+(`{voice: null, capability: [], extras: [model], all: [model]}`) and fetches
+it through a new shared `fetchVoicePlanWithProgress(plan, label)`, extracted
+from the general install-models handler so the progress and failure-detail
+logging lives in one place rather than being duplicated per install path
+[@server]. It unpacks into `models/audio/<catalogueId>/`, the same directory
+the worker reads by `dir` [@server]. `POST /api/voice/asr-model/remove {key}`
+deletes an installed upgrade's directory to reclaim disk, but refuses to
+remove the SenseVoice default — it is the always-there fallback, so voice
+notes keep working even for a ward who switched away from an upgrade
+[@server]. `GET /api/voice/asr-model` reports each option's `{installed,
+pinned, removable}` plus an `installed` map, driven by the new
+`offlineAsrInstallState()` in `voice-transcribe.js`, so the picker can mark
+what is actually on disk rather than what was merely selected
+[@voice-transcribe].
+
+**Gap 3 — no in-app install; the UI sent the ward to a terminal.** The old
+status text told the ward to pin and install from a checkout. The Settings
+picker (`public/app.js`) now downloads the chosen model on switch if it is
+not already present, via `ensureOfflineAsrDownloaded`, marks installed models
+with a checkmark, and offers a Remove button (`removeOfflineAsrModel`) that
+reclaims disk; a module-level `_asrInstalling` guard prevents a double fetch
+or a remove firing mid-download [@app-js].
+
+**The latent bug the never-run path was hiding.** `modelUnpacked()` in
+`voice-transcribe.js` and `offlineRecognizerConfig()` in
+`offline-asr-models.js` both hard-coded the filename `tokens.txt`. The real
+sherpa-onnx Whisper `small` archive — confirmed by actually downloading and
+extracting it, not recalled from memory — ships a *prefixed* `small-tokens.txt`,
+plus both fp32 and int8 encoder/decoder pairs; Parakeet ships a plain
+`tokens.txt` and int8-only transducer files [@offline-asr-models]
+[@voice-transcribe]. Hard-coding the plain name meant a freshly-downloaded
+Whisper would have read as "not installed", and if it had loaded anyway it
+would have picked the heavy fp32 weights over the int8 ones. Both call sites
+now discover the tokens file by shape (`/tokens\.txt$/i`) and prefer an int8
+build when both precisions exist (`findPart` tries `<part>...int8...onnx`
+before the fp32 fallback) — the same discover-by-shape discipline the
+encoder/decoder/joiner lookup already used, rather than assuming a filename
+[@offline-asr-models] [@voice-transcribe].
+
+This is a concrete recurrence of a lesson CLAUDE.md records from the voice
+Pass 1 verification post-mortem: "a test can assert a bug and defend it for
+weeks" [@claude-md]. `offline-asr-resolve.test.mjs` had planted a fake plain
+`tokens.txt` fixture for its Whisper case, so it passed against the broken
+detector; it now plants the real prefixed layout the upstream archive
+actually ships, and the suite would fail again if the hard-coded filename
+ever came back [@offline-asr-resolve-test]. The fix as a whole was verified
+the same way the bug was found — by downloading and extracting both real
+archives with the repo's own `extractArchive` and reading the result, rather
+than trusting the catalogue's assumed filenames.
 
 ## What Pass 0 flagged for later passes
 
