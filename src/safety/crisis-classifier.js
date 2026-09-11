@@ -3,10 +3,13 @@
  * the tier-asymmetric combination with the regex scorer (crisis-signals.js).
  * See docs/crisis-classifier-build-spec.md.
  *
- * ⚠️ SAFETY-CRITICAL and, right now, INERT. Nothing here is called from the live
- *    threat path yet — wiring happens only after a validated model + ward
- *    sign-off (gate 3). The module is built + tested standalone so the seam is
- *    reviewable in isolation.
+ * ⚠️ SAFETY-CRITICAL. `scoreThreatMessage` is the live seam: every place a
+ *    message's threat is scored (chat, Discord ward, both voice paths, the
+ *    diagnostics tracer) routes the regex floor + the ML read through here.
+ *    Validated model (recall .93 / precision .94, threshold 0.714) + ward
+ *    sign-off cleared gate 3. The combination is still reviewable in isolation
+ *    (combineThreat is pure), and the regex floor still fires on its own when
+ *    the artifact is absent.
  *
  * Runtime reads a JSON artifact (models/crisis-classifier.json, git-ignored,
  * produced offline by scripts/train-crisis-classifier.py). It NEVER trains and
@@ -23,6 +26,7 @@ import fs from 'fs';
 import path from 'path';
 import { REPO_ROOT } from '../../repo-root.js';
 import { THREAT_TIERS, tierForThreat } from './threat-tracker.js';
+import { scoreMessage } from './crisis-signals.js';
 
 const ARTIFACT_PATH = path.join(REPO_ROOT, 'models', 'crisis-classifier.json');
 const ARTIFACT_VERSION = 1;   // must match the trainer's `version`
@@ -115,7 +119,11 @@ export function normalizationDisabled(settings = {}) {
 export function scoreMessageMl(message, { settings = {}, artifact } = {}) {
   if (typeof message !== 'string' || !message) return null;
   if (classifierDisabled(settings)) return null;
-  const art = artifact ?? loadArtifact();
+  // An explicitly-passed `artifact` is authoritative — including `null`, which
+  // means "no model" (tests rely on this to force the absent path
+  // deterministically whether or not the git-ignored real model is on disk).
+  // Only load the default when the caller omitted the key entirely.
+  const art = artifact === undefined ? loadArtifact() : artifact;
   if (!art) return null;
   try {
     const out = { distress: scoreHead(art.distress, message) };
@@ -126,7 +134,7 @@ export function scoreMessageMl(message, { settings = {}, artifact } = {}) {
   } catch { return null; }
 }
 
-// ── The combination seam (tier-asymmetric; spec §5) — PURE, not yet wired ────
+// ── The combination seam (tier-asymmetric; spec §5) — PURE ───────────────────
 // Provisional thresholds: tuned on held-out data + ward-reviewed at gate 3.
 export const CLASSIFIER_TUNING = Object.freeze({
   RAISE_P: 0.60,        // distress p at/above which the classifier adds concern
@@ -184,4 +192,66 @@ export function combineThreat(regex, ml, { settings = {}, tuning = CLASSIFIER_TU
   }
 
   return { level, adjustments, posture };
+}
+
+// ── The live seam — the ONE place the threat path scores a message ───────────
+const round3 = x => (Number.isFinite(x) ? Math.round(x * 1000) / 1000 : x);
+
+/**
+ * Turn the combine `adjustments` into audit signals so the classifier's say is
+ * recorded in threat-history exactly like a regex trigger (spec §5). The raise
+ * lands as `ml_classifier`; softening and the normalization warning keep their
+ * own descriptive ids.
+ */
+function mlAuditSignals(adjustments = []) {
+  const out = [];
+  for (const a of adjustments) {
+    if (a.id === 'ml_distress_raise') {
+      out.push({ id: 'ml_classifier', tier: tierForThreat(a.delta), p: round3(a.p), contribution: round3(a.delta) });
+    } else if (a.id === 'ml_soften') {
+      out.push({ id: 'ml_soften', p: round3(a.p), from: round3(a.from), to: round3(a.to) });
+    } else if (a.id === 'ml_normalization_raise') {
+      out.push({ id: 'ml_normalization', p: round3(a.p), contribution: round3(a.delta) });
+    } else if (a.id === 'ml_severe_ceiling') {
+      out.push({ id: 'ml_severe_ceiling' });
+    }
+  }
+  return out;
+}
+
+/**
+ * Score one message for the live threat path: the regex floor (crisis-signals)
+ * combined with the ML read under the tier-asymmetric rules. A DROP-IN for
+ * `scoreMessage` — returns `{ level, signals }` — with the ML detail attached
+ * (`ml`, `posture`, `adjustments`) for callers that want it.
+ *
+ * Synchronous and NEVER throws: on a disabled/absent/failed classifier it
+ * returns the raw regex result, so "no classifier" degrades toward the current
+ * (more sensitive) behaviour, never a softer one. The RAISE threshold is read
+ * from the artifact's own calibrated `distress.threshold` (0.714 on the shipped
+ * model), not guessed — the exact-values rule (code repeats the number the
+ * trainer chose).
+ */
+export function scoreThreatMessage(message, { settings = {}, artifact } = {}) {
+  const regex = scoreMessage(message);   // { level, signals } — the floor
+  try {
+    if (!classifierDisabled(settings)) {
+      const art = artifact === undefined ? loadArtifact() : artifact;
+      const ml = scoreMessageMl(message, { settings, artifact: art });
+      if (ml) {
+        const threshold = Number.isFinite(art?.distress?.threshold)
+          ? art.distress.threshold : CLASSIFIER_TUNING.RAISE_P;
+        const tuning = { ...CLASSIFIER_TUNING, RAISE_P: threshold };
+        const c = combineThreat(regex, ml, { settings, tuning });
+        return {
+          level:       c.level,
+          signals:     [...regex.signals, ...mlAuditSignals(c.adjustments)],
+          ml,
+          posture:     c.posture,
+          adjustments: c.adjustments,
+        };
+      }
+    }
+  } catch { /* fall through to the regex floor */ }
+  return { level: regex.level, signals: regex.signals, ml: null, posture: {}, adjustments: [] };
 }

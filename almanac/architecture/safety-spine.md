@@ -47,6 +47,12 @@ sources:
   - id: providers-js
     type: file
     path: providers.js
+  - id: crisis-classifier
+    type: file
+    path: src/safety/crisis-classifier.js
+  - id: crisis-classifier-spec
+    type: file
+    path: docs/crisis-classifier-build-spec.md
 ---
 
 # Safety Spine
@@ -54,10 +60,11 @@ sources:
 The safety spine is the chain of modules that notices when the bonded human may be in
 distress, tracks how serious that looks over time, and — only when an LLM judgment decides
 it is warranted — escalates to a real trusted contact. It runs on every chat turn
-(`crisis-signals.js` scores each message) and as a background loop
-(`silence-triage-loop.js` checks in during silence), and its behavioral rules are treated as
-the highest-stakes code in the repository: CLAUDE.md requires explicit human sign-off before
-shipping any behavioral change (not a relocation, comment, or rename) to `crisis-signals.js`,
+(`scoreThreatMessage()` in `crisis-classifier.js` combines the `crisis-signals.js` regex floor
+with an ML second opinion — see below) and as a background loop (`silence-triage-loop.js`
+checks in during silence), and its behavioral rules are treated as the highest-stakes code in
+the repository: CLAUDE.md requires explicit human sign-off before shipping any behavioral
+change (not a relocation, comment, or rename) to `crisis-signals.js`, `crisis-classifier.js`,
 `threat-tracker.js`, `silence-triage-loop.js`, the triage/delivery/escalation logic in
 `cerebellum.js`, or the `[CARE CHECK]` assembly in `thalamus.js` [@claude-md].
 
@@ -76,6 +83,88 @@ the LLM is reserved for interpreting the pattern once assembled, not for tagging
 [@claude-md]. The patterns are tuned for high precision specifically on the SEVERE tier — the
 regression suite CLAUDE.md points to watches phrases like "cut me off" or "I want to die from
 embarrassment," which read as crisis language on a naive scan but are not [@architecture-doc].
+
+### A second opinion: crisis-classifier.js and scoreThreatMessage
+
+Because `crisis-signals.js` is a hand-written phrase lexicon, it has a structural
+**recall** gap — it only catches distress phrased the way its patterns expect — and, at
+the same time, a **precision** problem: it over-fired on mundane frustration, and a
+false distress hit softened the Familiar's firm-caretaker register on small tasks it
+should stay authoritative about (the reported case was "I can't figure out this bug,
+nothing works" measurably denting the Familiar's tone) [@crisis-classifier-spec]. A
+ward-approved ML classifier now supplies a second, raise-biased signal to close the
+recall gap without weakening the regex floor, and the same combination fixes the
+precision problem as a side effect (0.12.0-alpha) [@crisis-classifier].
+
+`scoreThreatMessage(message, { settings })` in `crisis-classifier.js` is the one live
+seam every threat-scoring site now routes through: web chat (`server.js`), the
+diagnostics tracer, Discord ward messages (`discord-gateway.js`), and both voice paths
+(`voice-call-server.js`, `voice-discord-server.js`) [@crisis-classifier]. It is a
+drop-in for the regex-only `scoreMessage()` — same `{level, signals}` return shape —
+plus ML detail (`ml`, `posture`, `adjustments`) for callers that want it
+[@crisis-classifier]. `vision.js` deliberately does not route through it: it scores
+image *descriptions*, not the kind of text the classifier was trained on, so it keeps
+scoring those with the plain regex `scoreMessage()` [@crisis-classifier].
+
+Runtime inference is pure JS reading a git-ignored artifact
+(`models/crisis-classifier.json`, produced offline by
+`scripts/train-crisis-classifier.py`): normalize → tokenize → TF-IDF → a logistic-regression
+dot product → sigmoid, mirroring the Python trainer byte-for-byte so the two never
+silently diverge [@crisis-classifier]. The shipped model measured recall .93 / precision
+.94 at a calibrated threshold of 0.714, with an innocuous-frustration false-positive rate
+of 0.3% on GoEmotions [@crisis-classifier-spec].
+
+`combineThreat(regex, ml)` (pure) folds the ML read in under tier-asymmetric rules, not
+a flat blend:
+
+- **Raise-only for severe/high** — the classifier can add concern but never eases a
+  regex-detected severe or high read.
+- **Classifier-alone caps at HIGH, never SEVERE** — only a regex severe signal (or
+  `flagDistress`) can push the combined level into the severe tier; a lone ML read is
+  bounded below it by construction (`CLASSIFIER_MAX`) [@crisis-classifier].
+- **MILD/MODERATE are softenable only on a confident not-distress read** — this is the
+  precision fix: a message scoring at or below `SOFTEN_P` (0.25) eases a mild/moderate
+  regex hit toward `SOFTEN_FACTOR` (0.30) of its original level, but never touches
+  severe or high. "I can't figure out this bug, nothing works" scores 0.116 and is
+  eased rather than left to soften the Familiar's register [@crisis-classifier].
+- A **normalization** head (pending, see below) only ever raises the level and arms a
+  `posture.normalization` pushback flag; it never softens anything.
+
+The RAISE threshold is read from the artifact's own calibrated `distress.threshold`
+(0.714 on the shipped model), not a constant guessed in JS — the same
+[Exact values are code's job](../decisions/exact-values-in-code) discipline applied to
+safety tuning: the trainer calibrates the number on held-out data, and the runtime
+repeats it rather than re-deriving or hardcoding it. `CLASSIFIER_TUNING.RAISE_P` (0.60)
+exists only as the fallback for an artifact that omits a threshold [@crisis-classifier].
+
+Graceful degradation is absolute and **one-directional**: a disabled, absent, unparseable,
+or version-mismatched artifact — or any thrown inference — yields no ML signal at all, and
+`scoreThreatMessage` falls back to the bare regex result. Because the combination is
+raise-only for severe/high, "no classifier" degrades toward the *more* sensitive prior
+behavior, never a softer one [@crisis-classifier]. The artifact is git-ignored and
+machine-built per install, so CI runs without it and exercises exactly this fallback path
+on every run [@crisis-classifier].
+
+The classifier has its own off-switches, layered under the existing ones:
+`PROTO_FAMILIAR_CRISIS_CLASSIFIER_DISABLED=1` and settings `crisisClassifierEnabled:
+false` disable the distress head; `PROTO_FAMILIAR_CRISIS_NORMALIZATION_DISABLED=1` and
+`crisisNormalizationEnabled: false` disable only the normalization head; both also stand
+down under the pre-existing `PROTO_FAMILIAR_THREAT_DISABLED=1` [@crisis-classifier].
+Neither switch has a casual in-app toggle the way vision-threat and voice-threat do — an
+open design question the ward has not yet settled.
+
+A **normalization / pro-suicide-register head** — a distinct signal for the register
+where someone treats suicide as settled or acceptable rather than as active ideation — is
+built into the `combineThreat` plumbing (`posture.normalization`) but not yet trained: it
+awaits the ward's access to a gated dataset of that register, and is scoped for detection
+only, so the Familiar can flag the attitude as a warning sign and steer toward help, never
+treat it as endorsement [@crisis-classifier-spec]. It is expected to fold in as an
+additive 0.12.x follow-up rather than a scorer rewrite, since the posture plumbing already
+exists [@crisis-classifier].
+
+A test-discipline lesson came out of wiring this up: see
+[Engineering conventions](../reference/engineering-conventions), "A test whose outcome
+depends on an absent file is not a real test."
 
 **Image-derived threat signals** (0.9.2-alpha, PR #219): The ward authorized shared images to raise threat tier through `scoreImageDescriptionThreat()` in `vision.js` [@vision-js]. The function scores the image's cached description (never raw model prose) using the same `scoreMessage()` that scores typed text, then feeds the resulting delta through the existing `recordThreat()` with `source:'vision'`. Three design constraints are ward-signed: (1) *full weighting* — an image-derived signal counts the same as a typed distress signal (no damping), (2) *raise-only* — images can only increase threat, never lower it, and (3) *ward-images-only* — only images tagged `audienceTag === 'ward-private'` move the ward's safety state, enforcing the no-covert-safety-move discipline so a villager's shared bytes never alter the ward's threat tracking [@vision-js]. The feature fires fire-and-forget on the ward's own live turn when `visionThreatScoringOn` is true (default enabled, gated by `PROTO_FAMILIAR_VISION_THREAT_DISABLED=1` and `PROTO_FAMILIAR_THREAT_DISABLED=1`) [@vision-js]. This `audienceTag` gate is the named precedent the unbuilt browser milestone cites for treating page content as unable to move safety state — see [Browser milestone: guardrails in code, not prompts](../decisions/browser-guardrails-in-code).
 

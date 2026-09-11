@@ -29,7 +29,7 @@ import { createWebCallAdapter } from './voice-web-adapter.js';
 import { createVoiceTurnRunner } from './voice-call-turn.js';
 import { speakableText, isLikelyNoiseTranscript } from './voice-speech.js';
 import { createSynthesizer } from './voice-synthesize.js';
-import { scoreMessage } from '../safety/crisis-signals.js';
+import { scoreThreatMessage } from '../safety/crisis-classifier.js';
 import { recordThreat } from '../safety/threat-tracker.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
 import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs, resolveOfflineAsr } from './voice-transcribe.js';
@@ -327,7 +327,7 @@ export function attachVoiceCall(deps) {
 
   // ── onTurn dep: D2 — the ward's spoken words can raise the threat tier ───
   async function scoreThreat(transcript) {
-    const { level, signals } = scoreMessage(transcript);
+    const { level, signals } = scoreThreatMessage(transcript, { settings: readSettings() || {} });
     if (level > 0) await recordThreat({ delta: level, source: 'voice', signals });
   }
 

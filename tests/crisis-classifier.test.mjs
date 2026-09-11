@@ -10,8 +10,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   normalizeForMl, tokenizeMl, scoreHead, loadArtifact, scoreMessageMl,
-  combineThreat, CLASSIFIER_TUNING, _resetArtifactCache,
+  combineThreat, CLASSIFIER_TUNING, scoreThreatMessage, _resetArtifactCache,
 } from '../src/safety/crisis-classifier.js';
+import { scoreMessage } from '../src/safety/crisis-signals.js';
 import { THREAT_TIERS, tierForThreat } from '../src/safety/threat-tracker.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -117,4 +118,57 @@ test('combine: normalization raises + arms the pushback posture, still capped be
 test('combine: a low normalization score does nothing (fiction/philosophy guard is upstream, but low p never arms)', () => {
   const r = combineThreat({ level: 0, signals: [] }, { distress: 0.1, normalization: 0.2 });
   assert.ok(!r.posture.normalization && r.level === 0);
+});
+
+// ── the live seam: scoreThreatMessage (regex floor + ML, the wired path) ─────
+// The 5 live sites (chat, Discord ward, both voice paths, the diagnostics
+// tracer) all route through this. Artifact is injected so the seam is
+// deterministic regardless of whether the git-ignored real model is present.
+
+test('scoreThreatMessage: drop-in shape — { level, signals } plus ml/posture/adjustments', () => {
+  const r = scoreThreatMessage('the weather is nice today', { artifact: art });
+  assert.equal(typeof r.level, 'number');
+  assert.ok(Array.isArray(r.signals));
+  assert.ok('ml' in r && 'posture' in r && 'adjustments' in r);
+});
+
+test('scoreThreatMessage: a lexicon-missed distress line is RAISED and audited as ml_classifier', () => {
+  const msg = 'want die want die';   // the fixture scores this ~0.978 distress
+  const floor = scoreMessage(msg);
+  const r = scoreThreatMessage(msg, { artifact: art });
+  assert.ok(r.level >= floor.level, 'never eases below the regex floor');
+  assert.ok(r.ml && r.ml.distress > CLASSIFIER_TUNING.RAISE_P, 'ML read attached');
+  assert.ok(r.signals.some(s => s.id === 'ml_classifier'), 'the raise rides the audit trail like a regex trigger');
+  assert.ok(r.level <= THREAT_TIERS.high + 1e-9, 'classifier-alone stays at or below HIGH, never severe');
+});
+
+test('scoreThreatMessage: a confident not-distress read never invents a signal', () => {
+  const r = scoreThreatMessage('i am so happy i love this', { artifact: art });   // fixture ~0.007
+  assert.ok(!r.signals.some(s => s.id === 'ml_classifier'), 'below the raise threshold → no raise');
+  assert.equal(tierForThreat(r.level), 'calm');
+});
+
+test('scoreThreatMessage: off via settings → EXACT regex floor, ml null', () => {
+  const msg = 'want die want die';
+  const off = scoreThreatMessage(msg, { artifact: art, settings: { crisisClassifierEnabled: false } });
+  assert.deepEqual({ level: off.level, signals: off.signals }, scoreMessage(msg), 'degrades to the pure regex result');
+  assert.equal(off.ml, null);
+});
+
+test('scoreThreatMessage: off via env THREAT_DISABLED → regex floor, ml null', () => {
+  process.env.PROTO_FAMILIAR_THREAT_DISABLED = '1';
+  try {
+    const off = scoreThreatMessage('want die want die', { artifact: art });
+    assert.equal(off.ml, null, 'classifier inert when the whole detector is disabled');
+  } finally { delete process.env.PROTO_FAMILIAR_THREAT_DISABLED; }
+});
+
+test('scoreThreatMessage: an unusable artifact degrades to the regex floor, never throws', () => {
+  const msg = 'want die want die';
+  // A structurally-broken artifact (no usable head) → scoreMessageMl returns
+  // null → the seam falls through to the pure regex result. This is the same
+  // branch a genuinely-absent model hits (loadArtifact → null in CI).
+  const r = scoreThreatMessage(msg, { artifact: { version: 1 } });
+  assert.equal(r.ml, null);
+  assert.deepEqual({ level: r.level, signals: r.signals }, scoreMessage(msg));
 });

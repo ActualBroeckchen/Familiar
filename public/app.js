@@ -4355,6 +4355,7 @@ function readSettingsFromUI() {
     if (was !== state.visionEnabled) window.dispatchEvent(new Event('vision-enabled-changed'));
   }
   if ($('vision-threat-toggle')) state.visionThreatScoring = $('vision-threat-toggle').checked;
+  if ($('crisis-classifier-toggle')) state.crisisClassifierEnabled = $('crisis-classifier-toggle').checked;
   if ($('voice-call-threat-toggle')) state.voiceThreatScoring = $('voice-call-threat-toggle').checked;
   if ($('voice-call-lang') && $('voice-call-lang').value) state.voiceAsrLanguage = $('voice-call-lang').value;
   if ($('voice-offline-asr-model')) {
@@ -4561,6 +4562,7 @@ function writeSettingsToUI() {
   if ($('vision-enabled-toggle')) setIfNotFocused($('vision-enabled-toggle'), 'checked', state.visionEnabled !== false);
   if ($('read-aloud-default-toggle')) setIfNotFocused($('read-aloud-default-toggle'), 'checked', state.readAloudByDefault === true);
   if ($('vision-threat-toggle')) setIfNotFocused($('vision-threat-toggle'), 'checked', state.visionThreatScoring !== false);
+  if ($('crisis-classifier-toggle')) setIfNotFocused($('crisis-classifier-toggle'), 'checked', state.crisisClassifierEnabled !== false);
   if ($('voice-call-threat-toggle')) setIfNotFocused($('voice-call-threat-toggle'), 'checked', state.voiceThreatScoring !== false);
   if ($('voice-call-lang')) setIfNotFocused($('voice-call-lang'), 'value', state.voiceAsrLanguage ?? 'en');
   if ($('voice-offline-asr-model')) setIfNotFocused($('voice-offline-asr-model'), 'value', state.voiceOfflineAsrModel ?? 'sensevoice');
@@ -6027,7 +6029,7 @@ function init() {
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
     'event-alerts-toggle', 'event-alerts-lead', 'elapsed-stamp-hours',
-    'weather-toggle', 'vision-enabled-toggle', 'vision-threat-toggle',
+    'weather-toggle', 'vision-enabled-toggle', 'vision-threat-toggle', 'crisis-classifier-toggle',
     'voice-call-threat-toggle', 'voice-call-lang', 'voice-call-mode', 'voice-offline-asr-model',
     'voice-call-offline-toggle', 'voice-call-settle', 'voice-proactive-join-toggle', 'voice-greetings-toggle', 'audio-tagging-toggle',
     'gcal-write-toggle', 'gcal-write-command',

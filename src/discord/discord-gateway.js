@@ -68,7 +68,7 @@ import {
   buildEffortsView, buildEffortView, isSettableEffort,
 } from '../ward/ward-connections.js';
 import { resolveProviderUrl, authHeader, connectionReady, resolveReasoningEffort } from '../../providers.js';
-import { scoreMessage } from '../safety/crisis-signals.js';
+import { scoreThreatMessage } from '../safety/crisis-classifier.js';
 import { recordThreat } from '../safety/threat-tracker.js';
 import { recordUserActivity } from '../sessions/last-activity.js';
 import { buildWaitStreakLine, recordWait, recordProactive } from '../safety/wait-streak.js';
@@ -2322,7 +2322,7 @@ async function handleTurn(gw, msg, decision) {
     recordUserActivity().catch(err =>
       console.error('[discord] recordUserActivity failed:', err?.message ?? err));
     try {
-      const { level, signals } = scoreMessage(content);
+      const { level, signals } = scoreThreatMessage(content, { settings: readSettingsSync() || {} });
       if (level !== 0) {
         console.log(`[discord] threat scored ${level >= 0 ? '+' : ''}${level} on ward message`);
         recordThreat({ delta: level, source: 'discord', signals })

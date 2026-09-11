@@ -49,7 +49,7 @@ import {
   memByTimerange, getRecentMemoryLines,
   setIntention, roundsForWard, listIntentions, getDueIntentions,
 } from './thalamus.js';
-import { scoreMessage } from './src/safety/crisis-signals.js';
+import { scoreThreatMessage } from './src/safety/crisis-classifier.js';
 import { foldReasoningIntoContent, callProviderChat, familiarDeliberationMessages } from './llm-call.js';
 import { hydrateNameFieldCache, nameFieldEnabledFor, recordNameFieldResult, stampNamesOnTurns } from './name-field.js';
 import { fetchReadable } from './src/search/websearch.js';
@@ -413,7 +413,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     recordUserActivity().catch(err =>
       console.error('[server] recordUserActivity failed:', err?.message ?? err),
     );
-    const { level, signals } = scoreMessage(userText);
+    const { level, signals } = scoreThreatMessage(userText, { settings: readSettingsSync() || {} });
     if (level !== 0) {
       // Loud, structured log so the silent-failure case ("the
       // detector quietly stopped firing") can be diagnosed from
@@ -1449,7 +1449,7 @@ app.post('/api/diagnostics/session-trace', async (req, res) => {
       entry.surfacing = explainSelection({ turnText, dynamicBlock: typeof t?.dynamicBlock === 'string' ? t.dynamicBlock : '', villagerNames });
     }
     if (want.has('threat')) {
-      entry.threat = scoreMessage(user);   // threat scores the user message only, as live
+      entry.threat = scoreThreatMessage(user, { settings: readSettingsSync() || {} });   // regex floor + ML, as live
     }
     return entry;
   });

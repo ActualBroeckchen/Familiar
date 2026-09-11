@@ -25,7 +25,7 @@ import { buildCareCheckBlock } from '../src/safety/care-check.js';
 import os   from 'os';
 import { mkdtempSync, rmSync } from 'fs';
 
-import { scoreMessage }            from '../src/safety/crisis-signals.js';
+import { scoreThreatMessage }      from '../src/safety/crisis-classifier.js';
 import { recordThreat, getThreat,
          resetThreat,
          getThreatHistory }        from '../src/safety/threat-tracker.js';
@@ -73,13 +73,23 @@ await resetThreat({ tomesDir: TOMES_DIR });
 
 bar('1. Scoring a sequence of messages');
 for (const { msg, expect } of SCRIPT) {
-  const { level, signals } = scoreMessage(msg);
+  const { level, signals, ml } = scoreThreatMessage(msg);
   console.log(`\n› user: "${msg}"`);
   console.log(`  expectation: ${expect}`);
-  console.log(`  detector:    level ${level >= 0 ? '+' : ''}${level.toFixed(2)}`);
+  console.log(`  detector:    level ${level >= 0 ? '+' : ''}${level.toFixed(2)}` +
+    (ml ? `   (ml distress p=${ml.distress.toFixed(3)})` : '   (ml: absent → regex floor)'));
   for (const s of signals) {
-    const damp = s.damped ? '  [damped]' : '';
-    console.log(`    • ${s.id.padEnd(20)} ${s.tier.padEnd(9)} weight ${s.weight.toFixed(2).padStart(5)}  match: "${s.match}"${damp}`);
+    // Regex signals carry weight/match/tier; the ML audit signals carry p/contribution.
+    if (s.id === 'ml_classifier' || s.id === 'ml_normalization') {
+      console.log(`    • ${s.id.padEnd(20)} ${(s.tier ?? '').padEnd(9)} p ${Number(s.p).toFixed(3)}  +${Number(s.contribution).toFixed(2)}`);
+    } else if (s.id === 'ml_soften') {
+      console.log(`    • ${s.id.padEnd(20)} ${''.padEnd(9)} p ${Number(s.p).toFixed(3)}  ${Number(s.from).toFixed(2)}→${Number(s.to).toFixed(2)}`);
+    } else if (s.id === 'ml_severe_ceiling') {
+      console.log(`    • ${s.id.padEnd(20)} (classifier held below severe)`);
+    } else {
+      const damp = s.damped ? '  [damped]' : '';
+      console.log(`    • ${s.id.padEnd(20)} ${s.tier.padEnd(9)} weight ${s.weight.toFixed(2).padStart(5)}  match: "${s.match}"${damp}`);
+    }
   }
   if (signals.length === 0) console.log('    (no signals)');
 

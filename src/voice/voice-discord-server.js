@@ -46,7 +46,7 @@ import { createVoiceChatTurn } from './voice-chat-turn.js';
 import { createVoiceTurnRunner } from './voice-call-turn.js';
 import { voiceThreatEnabled } from './voice-call-server.js';
 import { speakableText, isLikelyNoiseTranscript } from './voice-speech.js';
-import { scoreMessage } from '../safety/crisis-signals.js';
+import { scoreThreatMessage } from '../safety/crisis-classifier.js';
 import { recordThreat, getThreat, THREAT_TIERS } from '../safety/threat-tracker.js';
 import { enqueueSessionByDay } from '../memory/memorization.js';
 import { writeSessionLog, stampMessages, turnMessages } from '../sessions/session-log.js';
@@ -360,7 +360,7 @@ export function attachDiscordVoice(deps) {
   // runner below gates this to speakerRef === 'ward', so a villager's voice never
   // moves my human's tier (spec §5 — threat scoring stays ward-only).
   async function scoreThreat(transcript) {
-    const { level, signals } = scoreMessage(transcript);
+    const { level, signals } = scoreThreatMessage(transcript, { settings: readSettings() || {} });
     if (level > 0) await recordThreat({ delta: level, source: 'voice', signals });
   }
 

@@ -45,7 +45,8 @@ server.js  (Express, Node 22+, ESM)
     │                          for every MCP write — never its own connection)
     │
     │  ── caring spine (per-request + autonomous) ─────────────────
-    ├── crisis-signals.js   ── pattern detector run on each user msg
+    ├── crisis-signals.js   ── pattern detector (regex floor) run on each user msg
+    ├── crisis-classifier.js── ML distress classifier + tier-asymmetric combine (scoreThreatMessage)
     ├── threat-tracker.js   ── decaying scalar, persistent, audit history
     ├── recent-ponderings.js── read recent free-cycle thoughts into chat
     ├── pondering.js        ── one-shot ponder primitive (LLM call → tome entry)
@@ -115,7 +116,8 @@ ponderings injection, care-check framing) and as background loops
 ├── server.js                Express server — chat proxy, all HTTP endpoints, autonomous-loop boot
 ├── thalamus.js              MCP bridge — Phylactery + Unruh, plus all the helper wrappers. MUTATING wrappers read results honestly via `unruhResult` / `mcpToolError` (phylactery-result.js): the SDK's callTool does NOT throw when a tool raises (it resolves isError:true), so a wrapper that just returned `{ok:true}` reported success on failure — the silent-write class behind the identity_update_section bug. Reads deliberately still degrade to empty (absence renders as absence). `saveBookmark` is the M8 write side (→ interest_bookmark), feeding the resurfacing loop
 ├── cerebellum.js            Motor module — tool registry + executors + tool loop, triage deliberation, trusted-contact delivery, escalation deadlines
-├── crisis-signals.js        Pattern-based detector — 5 tiers, ~13 signal categories, damping
+├── crisis-signals.js        Pattern-based detector (the regex floor) — 5 tiers, ~13 signal categories, damping
+├── crisis-classifier.js     ML distress classifier (TF-IDF+logreg) + scoreThreatMessage — the one live threat-scoring seam
 ├── threat-tracker.js        Decaying scalar with audit history, off-switches, file persistence
 ├── spine-states.js          Temporal-bridges Pass A — the caring spine mints graph citizens. On a live ward turn `enrich()` fire-and-forgets `syncSpineState`: threat crossing into moderate+ mints a ward-private `state` node (`payload.spine`) for the hard stretch so it becomes relatable to schedule events (the missing causal middle); falling back below closes it at the code-derived decay-crossing instant (`decayCrossingMs`, same half-life as the tracker) and derives `co_occurs_with` edges to overlapping schedule items (arithmetic, capped/deduped, recurring anchors linked once). All machine values code-derived; never moves the tier / gates nothing / delays no triage. Villager privacy is structural + fail-closed: `isSensitiveNode` + `stripSensitiveScheduleNodes` (gated-turn context) + the `schedule_find` filter hide `spine`/`sensitive` nodes from every non-ward surface. Open-episode pointer in `tomes/.spine-episode.json`. Off: `spineStatesEnabled` (default ON) + `PROTO_FAMILIAR_SPINE_STATES_DISABLED=1`. Pure helpers unit-tested; MCP wrappers injected by the call site (no thalamus cycle)
 ├── pondering.js             Pure `ponderOnce()` primitive — LLM call + tome write
@@ -260,8 +262,9 @@ lifecycle of the autonomous loops:
 
 **Chat / enrichment:**
 - `POST /api/chat` — validates request, fires `recordUserActivity()`
-  (fire-and-forget timestamp) + `scoreMessage()` → `recordThreat()`
-  on the user text, then `thalamus.enrich()` to assemble static +
+  (fire-and-forget timestamp) + `scoreThreatMessage()` → `recordThreat()`
+  on the user text (the regex floor combined with the ML classifier — see
+  `crisis-classifier.js`), then `thalamus.enrich()` to assemble static +
   dynamic context. **After the context is assembled and before the
   provider fetch, `materializeAttachments` (vision.js) runs ONCE** on
   the full message array — a message carrying `attachments` gains live
@@ -624,6 +627,29 @@ mild / safety). Damping for negation / hypothetical / others-speech /
 hyperbolic context. The patterns are tuned for high precision on
 SEVERE (the "cut me off" / "I want to die from embarrassment" false
 positives are the regression cases the test suite watches).
+
+**`crisis-classifier.js`** — the ML distress classifier + the tier-asymmetric
+combination with the regex detector. Pure-JS inference (TF-IDF sublinear+l2 →
+logreg → sigmoid) over a git-ignored, machine-built artifact
+(`models/crisis-classifier.json`, produced offline by
+`scripts/train-crisis-classifier.py`; recall .93 / precision .94, calibrated
+threshold 0.714). `scoreThreatMessage(message, {settings})` is the **one live
+seam** every threat-scoring site now routes through (web chat, Discord ward,
+both voice paths, the diagnostics tracer) — a drop-in for `scoreMessage`
+returning `{level, signals}` plus the ML detail. `combineThreat` is pure and
+tier-asymmetric: the ML **raises** distress the lexicon missed (capped so the
+classifier ALONE tops out at HIGH, never SEVERE), **softens** only a
+MILD/MODERATE over-fire on a confident not-distress read (never severe/high),
+and the (future) normalization head raises + arms a pushback posture. The
+classifier's say rides the audit trail as an `ml_classifier` signal. Graceful
+degradation is absolute and one-directional: a disabled/absent/unparseable
+artifact yields NO ML signal, so "no classifier" falls back to the regex floor
+— toward the *more* sensitive behaviour, never a softer one. Off-switches:
+`PROTO_FAMILIAR_CRISIS_CLASSIFIER_DISABLED=1` / `crisisClassifierEnabled`
+(synced), plus `PROTO_FAMILIAR_CRISIS_NORMALIZATION_DISABLED=1` /
+`crisisNormalizationEnabled` for the normalization head; also inert under
+`PROTO_FAMILIAR_THREAT_DISABLED=1`. The normalizer (`letters-v1`) and tokenizer
+are mirrored byte-for-byte against the Python trainer, pinned by a parity test.
 
 **`threat-tracker.js`** — persistent decaying scalar at
 `tomes/.threat-state.json` with 3-day half-life. Cap MAX=10, floor 0,
@@ -1948,7 +1974,9 @@ POST /api/chat  { messages, userMessage: userInput, … }
        │                                    detection + RAG query, not "last role:'user'"
        ▼  server.js
 recordUserActivity()                     (fire-and-forget)
-scoreMessage(userMessage)                ← crisis-signals.js
+scoreThreatMessage(userMessage)          ← crisis-classifier.js (regex floor + ML)
+   │  regex level (crisis-signals.js)  combined with  ML distress p (models/crisis-classifier.json)
+   │  tier-asymmetric: raise-only for severe/high, classifier-alone capped ≤ HIGH, mild/moderate softenable
    if level ≠ 0 → recordThreat(level, signals)   ← threat-tracker.js (logged: "[threat] scored ±N")
        │
        ▼

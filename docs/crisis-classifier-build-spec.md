@@ -1,10 +1,16 @@
 # Crisis classifier — build spec (a raise-only second opinion on distress)
 
-> **Status: DESIGN — awaiting ward review + a validated model. Nothing here is
-> wired into the live threat path yet.** This is safety-critical code
-> (`crisis-signals.js` / `threat-tracker.js` class): every behavioural change
-> needs the ward's sign-off, and this whole pass does too. It is NOT covered by
-> any "keep working / auto-merge" grant.
+> **Status: LIVE (distress head), 0.12.0-alpha.** The validated model (recall
+> .93 / precision .94, calibrated threshold 0.714, innocuous-frustration FP 0.3%)
+> is wired into the live threat path: every threat-scoring site (web chat, Discord
+> ward, both voice paths, the diagnostics tracer) routes through
+> `scoreThreatMessage` (regex floor + ML, tier-asymmetric combine). Ward-approved
+> all three gates (§8). **Still pending:** the normalization / pro-suicide-register
+> head (§5.5) — awaits the ward's gated-dataset access; it folds in additively as a
+> 0.12.x follow-up (arms the pushback posture; the plumbing already returns
+> `posture`). This is safety-critical code (`crisis-signals.js` /
+> `threat-tracker.js` class): every behavioural change still needs the ward's
+> sign-off. It is NOT covered by any "keep working / auto-merge" grant.
 
 ## 0. Why
 
@@ -278,11 +284,14 @@ Attribution kept in the trainer header + here.
 
 ## 8. Ward sign-off gates (all three required before it is live)
 
-1. **Design** — approve this spec.
+1. **Design** — approve this spec. ✅ (ward-approved)
 2. **Model** — review the trained artifact's metrics + top tokens; confirm recall
-   is up and nothing absurd is weighted high.
+   is up and nothing absurd is weighted high. ✅ (ward reviewed v3: recall .9289 /
+   precision .9434, top tokens sane, mundane 0/8 at threshold, frustration FP 0.3%)
 3. **Wiring** — approve the live combination + the chosen `threshold`/`cap`. Only
-   then does the seam in §5 get wired and the off-switch ship with it.
+   then does the seam in §5 get wired and the off-switch ship with it. ✅ (ward:
+   "Let's wire this classifier in" — regex as floor, triage LLM as the default
+   driver, threshold 0.714 raise-only, mild/moderate softenable. 0.12.0-alpha.)
 
 Not auto-merged at any stage.
 

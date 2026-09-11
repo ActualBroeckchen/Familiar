@@ -41,6 +41,12 @@ sources:
   - id: prompt-catalog-test
     type: file
     path: tests/prompt-catalog.test.mjs
+  - id: crisis-classifier
+    type: file
+    path: src/safety/crisis-classifier.js
+  - id: crisis-classifier-test
+    type: file
+    path: tests/crisis-classifier.test.mjs
 ---
 
 # Engineering Conventions
@@ -334,6 +340,25 @@ covering test was an AI debugging monologue asserting nothing—just describing 
 happen instead of verifying what *does*. Test the actual wire shape, not a convenient
 stand-in: if the code must handle bare date strings like `2026-07-06`, the test must exercise
 exactly that shape, not a convenience substitute.
+
+## A test whose outcome depends on an absent file is not a real test
+
+A pre-existing test for `scoreMessageMl(message, { artifact: null })` asserted the result
+was `null`, and it only passed because CI has no local copy of the git-ignored
+`models/crisis-classifier.json` artifact — the implementation used `artifact ?? loadArtifact()`,
+so an explicitly-passed `null` was treated as "unspecified" and fell through to loading the
+real model whenever one happened to be present on disk [@crisis-classifier-test]. The bug
+surfaced only once a real model was trained and placed locally for the 0.12.0-alpha work on
+[the crisis classifier](../architecture/safety-spine); the same test, run in an environment
+where the artifact existed, returned the model's real score instead of `null`
+[@crisis-classifier]. The fix: `crisis-classifier.js`'s `scoreMessageMl` and
+`scoreThreatMessage` now check `artifact === undefined` rather than using `??`, so an
+explicitly-passed artifact — including `null`, meaning "no model" — is always authoritative,
+and the default is loaded only when the caller omits the key entirely [@crisis-classifier].
+The general lesson: if a test's outcome can flip depending on whether an unrelated file
+happens to exist on the machine running it, it is not exercising the code path it claims to —
+make the behavior deterministic in both conditions, and actually run the test both ways
+before trusting it.
 
 ## Guards on shared primitives demand full-suite audit
 
