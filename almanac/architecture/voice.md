@@ -92,12 +92,18 @@ sources:
   - id: voice-model-pins
     type: file
     path: voice-model-pins.json
+  - id: voice-pin
+    type: file
+    path: src/voice/voice-pin.js
   - id: pin-audio-models-script
     type: file
     path: scripts/pin-audio-models.mjs
   - id: offline-asr-resolve-test
     type: file
     path: tests/offline-asr-resolve.test.mjs
+  - id: voice-pin-overlay-test
+    type: file
+    path: tests/voice-pin-overlay.test.mjs
 ---
 
 # Voice
@@ -232,6 +238,38 @@ Voice ships through three different mechanisms depending on what the artifact is
 Upstream ships every model as `.tar.bz2`; two small pure-JS dependencies, `tar` and
 `unbzip2-stream`, were added because Node has no built-in bzip2 support
 [@pr-voice-pass-0].
+
+### Shipped pins vs runtime pins: the overlay pattern
+
+Pins serve two separate purposes, and they flow through two separate files. **Shipped pins**
+(`voice-model-pins.json`) are git-tracked: maintainer-committed URLs and hashes for the models
+the Familiar ships with and offers by default. **Runtime pins** are models the ward chooses to
+install at runtime — optional speaker models like CAM++ or TitaNet, fetched on first in-UI
+install — and they are written to a git-ignored overlay, `voice-model-pins.local.json`
+[@voice-pin]. This split exists because of an incident: before the split, `voice-pin.js`'s
+`pinAndInstallModel` function recorded its trust-on-first-install pin by writing into the
+git-tracked `voice-model-pins.json`. That silently dirtied the working copy of every machine
+that installed a speaker model in-UI. The next `git pull` that touched the pins file would abort
+with "Your local changes to voice-model-pins.json would be overwritten by merge" — a file the
+ward never knowingly edited. It was latent for any user who did an in-UI speaker install.
+
+`voice-models.js`'s `loadPins()` function now merges the two tables with `mergePinTables()`
+— shipped pins first, runtime pins second, so a runtime pin overrides a shipped one of the same
+id if both exist [@voice-models]. Both files are optional; their absence is normal, not an error.
+`voice-pin.js` writes ONLY to the overlay file and never touches the tracked file at runtime
+[@voice-pin]. The overlay is git-ignored (`.gitignore` covers both `voice-model-pins.local.json`
+and its `.tmp` rename target), so a ward's in-UI installs never dirty the working copy
+[@voice-pin]. Tests assert this invariant and the merge behavior [@voice-pin-overlay-test]. Because pins only gate DOWNLOADING (sha-verify before bytes hit disk), never
+USING an already-installed model, losing a runtime pin record is harmless once the model is on
+disk — that is why the one-time recovery path (`git checkout -- voice-model-pins.json && git
+pull`) is safe [@voice-pin].
+
+This is an instance of a broader principle: an application must NEVER write a git-tracked file
+at runtime. State the app discovers or the user generates belongs in a git-ignored location,
+not in a file the repo also ships and updates — otherwise the two collide at `git pull` and
+the user is blocked by "local changes" to something they never touched. See
+[Runtime state must not write git-tracked files](../decisions/runtime-state-not-git-tracked)
+for the decision that constrains this area.
 
 ## Licensing and ward-supplied clips
 
