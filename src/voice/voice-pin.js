@@ -25,15 +25,27 @@ import { fetchPlan, MODELS_SUBDIR } from './voice-fetch.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// The SHIPPED pins are git-tracked; runtime pins go in a git-IGNORED overlay so
+// installing a model in-UI never modifies a tracked file (which would make the
+// ward's next `git pull` abort on "local changes" to a file they never touched).
 const PINS_FILE = path.join(REPO_ROOT, 'voice-model-pins.json');
+const LOCAL_PINS_FILE = path.join(REPO_ROOT, 'voice-model-pins.local.json');
 
-async function readPins() {
-  try { return JSON.parse(await fsp.readFile(PINS_FILE, 'utf8')); } catch { return {}; }
+async function readJsonObj(file) {
+  try {
+    const parsed = JSON.parse(await fsp.readFile(file, 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch { return {}; }
 }
-async function writePins(pins) {
-  const tmp = `${PINS_FILE}.tmp`;
+/** Shipped + local overlay, local winning — matches voice-models.js loadPins(). */
+async function readMergedPins() {
+  return { ...await readJsonObj(PINS_FILE), ...await readJsonObj(LOCAL_PINS_FILE) };
+}
+/** Runtime pins are written ONLY to the git-ignored overlay, never the tracked file. */
+async function writeLocalPins(pins) {
+  const tmp = `${LOCAL_PINS_FILE}.tmp`;
   await fsp.writeFile(tmp, JSON.stringify(pins, null, 2), 'utf8');
-  await fsp.rename(tmp, PINS_FILE);
+  await fsp.rename(tmp, LOCAL_PINS_FILE);
 }
 
 /** Stream a URL, returning its sha256 + byte count without keeping the body. */
@@ -71,14 +83,15 @@ export async function pinAndInstallModel(modelId, { rootDir = REPO_ROOT, onProgr
     let measured;
     try { measured = await measure(url, onProgress); }
     catch (err) { return { ok: false, reason: 'download-failed', detail: String(err?.message ?? err) }; }
-    const pins = await readPins();
-    pins[modelId] = { files: [{ name, url, sha256: measured.sha256, bytes: measured.bytes, diskBytes: measured.bytes }] };
-    await writePins(pins);
+    const local = await readJsonObj(LOCAL_PINS_FILE);
+    local[modelId] = { files: [{ name, url, sha256: measured.sha256, bytes: measured.bytes, diskBytes: measured.bytes }] };
+    await writeLocalPins(local);
 
     // 2) Install via the proven, verified fetch path (re-download + sha check +
     //    place). A second download of a one-time opt-in model is an acceptable
     //    cost for reusing tested install code instead of re-implementing it.
-    const model = applyPins(BASE_MODELS, pins).find((m) => m.id === modelId);
+    //    applyPins sees the shipped pins merged with this new local one.
+    const model = applyPins(BASE_MODELS, await readMergedPins()).find((m) => m.id === modelId);
     const plan = { all: [model], voice: null, capability: [], extras: [] };
     const result = await fetchPlan({ plan, modelsDir: path.join(rootDir, MODELS_SUBDIR), onProgress });
     if (result?.ok === false) {

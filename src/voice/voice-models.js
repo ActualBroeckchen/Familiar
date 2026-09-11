@@ -401,14 +401,42 @@ export function applyPins(baseModels, pins) {
   }));
 }
 
-/** Read the generated pins file, if one exists. Absence is normal, not an error. */
-function loadPins() {
+function readPinFile(relativeUrl) {
   try {
-    const url = new URL('../../voice-model-pins.json', import.meta.url);
-    return JSON.parse(readFileSync(url, 'utf8'));
+    const parsed = JSON.parse(readFileSync(new URL(relativeUrl, import.meta.url), 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
   }
+}
+
+/**
+ * The pins the rest of the app sees: the SHIPPED, git-tracked
+ * `voice-model-pins.json` (the maintainer-committed download sources), with a
+ * LOCAL, git-ignored `voice-model-pins.local.json` overlaid on top (per-id).
+ *
+ * The split exists because the app pins some models AT RUNTIME — a ward
+ * installing an optional speaker model is a trust-on-first-install pin
+ * (voice-pin.js). Writing those into the tracked file made every such machine's
+ * working copy diverge from HEAD, so the next `git pull` that touched the file
+ * aborted with "local changes would be overwritten" — a file the ward never
+ * knowingly edited. Runtime pins now land in the local overlay, which is
+ * git-ignored, so the tracked file only ever changes through a deliberate
+ * commit. Absence of either is normal, not an error.
+ */
+/** Merge pin tables, later tables winning per model id. Pure — the overlay is
+ *  applied on top of the shipped pins so a runtime pin overrides a shipped one
+ *  of the same id, and both are visible. */
+export function mergePinTables(...tables) {
+  const out = {};
+  for (const t of tables) {
+    if (t && typeof t === 'object' && !Array.isArray(t)) Object.assign(out, t);
+  }
+  return out;
+}
+
+function loadPins() {
+  return mergePinTables(readPinFile('../../voice-model-pins.json'), readPinFile('../../voice-model-pins.local.json'));
 }
 
 /** The manifest as the rest of the app sees it: base entries plus whatever has been pinned. */

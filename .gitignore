@@ -9,6 +9,12 @@ media/
 # Browser (browser build spec §2) — the Familiar's own profile (cookies/logins)
 # and any auto-fetched Chromium binary. Local per machine, never committed.
 browser/
+# Runtime voice-model pins (voice-pin.js) — a ward installing an optional model
+# in-UI records its trust-on-first-install pin here, NOT in the git-tracked
+# voice-model-pins.json. Keeping it out of the tree means an in-UI install never
+# makes `git pull` abort on "local changes" to a file the ward never edited.
+voice-model-pins.local.json
+voice-model-pins.local.json.tmp
 # Vision capability cache (provider:model → yes/no) — advisory, rebuildable.
 tomes/.vision-capability.json
 tomes/.vision-capability.json.tmp
