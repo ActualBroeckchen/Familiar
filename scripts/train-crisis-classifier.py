@@ -26,7 +26,7 @@ Offline smoke test (no HuggingFace needed):
     python3 scripts/train-crisis-classifier.py --source local \
         --distress-csv tests/fixtures/crisis_smoke.csv --out /tmp/art.json
 """
-import argparse, json, math, re, sys, datetime
+import argparse, json, math, random, re, sys, datetime
 from pathlib import Path
 
 # ── The shared normalization (THE exact-values seam) ────────────────────────
@@ -213,6 +213,29 @@ def load_cssrs(field="all"):
         print(f"[train] CSSR-S unavailable ({e})", file=sys.stderr)
         return []
 
+# Real innocuous frustration/venting from GoEmotions (58K Reddit comments,
+# Apache-2.0) — the register we must NOT read as distress. We take the
+# irritation emotions and EXCLUDE sadness/grief, so we never teach the model that
+# despair is "fine" (a safety-relevant emotion selection, not a casual one).
+_FRUST_EMOTIONS = ("anger", "annoyance", "disappointment", "disapproval", "disgust")
+_DESPAIR_EMOTIONS = ("sadness", "grief")
+def load_goemotions_frustration(limit=6500):
+    try:
+        from datasets import load_dataset
+        ds = load_dataset("google-research-datasets/go_emotions", "raw", split="train")
+        out = []
+        for r in ds:
+            if any(r.get(e) for e in _DESPAIR_EMOTIONS):      # skip despair overlap
+                continue
+            if r.get("text") and any(r.get(e) for e in _FRUST_EMOTIONS):
+                out.append(r["text"])
+                if len(out) >= limit:
+                    break
+        return out
+    except Exception as e:
+        print(f"[train] GoEmotions unavailable ({e})", file=sys.stderr)
+        return []
+
 def calibrate_threshold(head, cssrs):
     """Suggest a decision threshold + mean p per Columbia severity band."""
     bands = {}
@@ -233,7 +256,8 @@ def main():
     ap.add_argument("--no-normalization", action="store_true",
                     help="skip the pro-suicide-register head even if its data is present")
     args = ap.parse_args()
-    cssrs = []   # (content, severity) rows for calibration; filled on the hf path
+    cssrs = []       # (content, severity) rows for calibration; filled on the hf path
+    goemo_eval = []  # held-out real innocuous-frustration texts for the FP-rate eval
 
     if args.source == "local":
         import csv
@@ -251,14 +275,21 @@ def main():
         distress_rows = [(t, y) for t, y in distress_rows if t and y is not None]
         distress_test = [(t, to_binary_label(y)) for t, y in test]
         distress_test = [(t, y) for t, y in distress_test if t and y is not None]
-        # v2: fold chat-register hard-negatives into TRAINING only (not test).
-        # Templated frustration ×3 (weight without swamping) + real CSSR-S sev-0.
+        # v3: fold chat-register hard-negatives into TRAINING only (not test):
+        # templated frustration + real CSSR-S sev-0 + REAL GoEmotions frustration
+        # (anger/annoyance/…, sadness/grief excluded). A slice of GoEmotions is
+        # held out (goemo_eval) for an honest innocuous-frustration FP rate.
         cssrs = load_cssrs()
-        aug = [(t, 0) for t in mundane_negatives()] * 3 \
-            + [(c, 0) for c, s in cssrs if s == 0]
+        goemo = load_goemotions_frustration(6500)
+        random.Random(42).shuffle(goemo)
+        goemo_eval, goemo_train = goemo[:1500], goemo[1500:]
+        aug = [(t, 0) for t in mundane_negatives()] \
+            + [(c, 0) for c, s in cssrs if s == 0] \
+            + [(t, 0) for t in goemo_train]
         distress_rows = distress_rows + aug
-        print(f"[train] + {len(aug)} chat-register hard-negatives folded in "
-              f"({len(mundane_negatives())} templated ×3 + {sum(1 for _, s in cssrs if s == 0)} CSSR-S sev-0)", file=sys.stderr)
+        print(f"[train] + {len(aug)} hard-negatives ({len(mundane_negatives())} templated "
+              f"+ {sum(1 for _, s in cssrs if s == 0)} CSSR-S sev-0 "
+              f"+ {len(goemo_train)} GoEmotions frustration)", file=sys.stderr)
 
     texts = [t for t, _ in distress_rows]
     labels = [y for _, y in distress_rows]
@@ -278,6 +309,11 @@ def main():
     report["severity_mean_p"] = by_band
     report["mundane_fp_at_threshold"] = \
         f"{sum(1 for t in MUNDANE_NEG if score_head(distress, t) >= thr)}/{len(MUNDANE_NEG)}"
+    # The real number the ward wished for: innocuous-frustration false positives
+    # on a HELD-OUT GoEmotions slice (never seen in training), at the threshold.
+    if goemo_eval:
+        ffp = sum(1 for t in goemo_eval if score_head(distress, t) >= thr)
+        report["frustration_fp_rate"] = f"{ffp}/{len(goemo_eval)} ({round(100 * ffp / len(goemo_eval), 1)}%)"
 
     artifact = {
         "version": 1,
