@@ -311,10 +311,11 @@
           </label>
 
           <h4 class="section-label" style="margin-top:16px; font-size:0.9em; opacity:0.85">Voice transcription model</h4>
-          <p class="field-hint">Whisper and NeMo Parakeet are more accurate than the default, SenseVoice, but they aren't bundled — picking one here doesn't download anything on its own. Getting one running is a one-time, deliberate step from a checkout (pin + install the model, the same way the listening model itself is set up — see docs/troubleshooting.md), so calls and voice notes keep using SenseVoice until it's actually in place.</p>
+          <p class="field-hint">Whisper and NeMo Parakeet are more accurate than the default, SenseVoice. Pick one and it downloads and switches over on its own (a few hundred MB, one time); until it's ready, calls and voice notes keep using SenseVoice. You can remove an upgrade any time to free the space.</p>
           <div class="action-row" style="margin-top:8px; align-items:center; gap:8px; flex-wrap:wrap">
             <label for="voice-offline-asr-model" style="font-size:0.85em">Voice transcription model</label>
             <select id="voice-offline-asr-model" aria-label="Voice transcription model"></select>
+            <button type="button" id="voice-offline-asr-remove" class="btn-secondary" style="font-size:0.8em" hidden>Remove download</button>
           </div>
           <p class="field-hint" id="voice-offline-asr-model-state" style="margin-top:6px" aria-live="polite"></p>
 

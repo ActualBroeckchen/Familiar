@@ -58,5 +58,29 @@
       }
     ],
     "pinnedAt": "2026-07-29"
+  },
+  "asr-offline-parakeet": {
+    "files": [
+      {
+        "name": "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2",
+        "sha256": "157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad",
+        "bytes": 482468385,
+        "diskBytes": 661428477
+      }
+    ],
+    "pinnedAt": "2026-09-10"
+  },
+  "asr-offline-whisper": {
+    "files": [
+      {
+        "name": "sherpa-onnx-whisper-small.tar.bz2",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-small.tar.bz2",
+        "sha256": "486a46afbb7ba798507190ffe02fea2dd726049af212e774537efac6afb210a6",
+        "bytes": 639387718,
+        "diskBytes": 1344966809
+      }
+    ],
+    "pinnedAt": "2026-09-10"
   }
 }

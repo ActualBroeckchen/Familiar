@@ -3163,8 +3163,13 @@ recogniser config.
   none (the streaming text carries the final). Both voice servers pass it to the engine as
   `offlineModelDir`/`offlineModelKind` resolvers (evaluated at call start), so choosing an
   upgrade that isn't fetched yet never breaks a call.
-- **Download is opt-in.** Whisper/Parakeet are in the catalogue but UNPINNED, so the fetch
-  machinery refuses to download them until the ward pins them: `npm run pin:whisper` /
-  `npm run pin:parakeet` (then install). `GET /api/voice/asr-model` reports
-  `{options, selected, using, present, fellBack}` for the Settings picker. Setting:
-  `voiceOfflineAsrModel` (synced, default `sensevoice`).
+- **Download is opt-in and now in-app (0.11.117).** Whisper/Parakeet are pinned
+  (`voice-model-pins.json`: `asr-offline-whisper` = sherpa-onnx-whisper-small, `asr-offline-parakeet`),
+  so the fetch machinery will download them. The ward never needs a terminal: picking one in
+  Settings fetches it **on switch** if it isn't on disk, and a **Remove** button deletes it to
+  reclaim disk. Endpoints: `POST /api/voice/asr-model/install {key}` (a one-model plan through the
+  shared `fetchVoicePlanWithProgress` → `models/audio/<catalogueId>/`), `POST /api/voice/asr-model/remove {key}`
+  (rm the model dir; the SenseVoice default is refused — it's the fallback). `GET /api/voice/asr-model`
+  reports `{options:[{key,label,installed,pinned,removable}], selected, using, present, fellBack, installed}`
+  for the picker (the ✓/remove/status). Setting: `voiceOfflineAsrModel` (synced, default `sensevoice`).
+  (`npm run pin:whisper` / `pin:parakeet` remain the maintainer re-pin path.)

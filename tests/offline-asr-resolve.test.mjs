@@ -28,14 +28,27 @@ test('resolveOfflineAsr: selected whisper present → uses whisper; absent → f
     assert.equal(r.selectedKey, 'whisper');
     assert.equal(r.fellBack, true);
     assert.equal(r.kind, 'sensevoice');
-    // now download whisper → it wins
-    await place('asr-offline-whisper', ['tiny-encoder.onnx', 'tiny-decoder.onnx', 'tokens.txt']);
+    // now download whisper → it wins. The REAL sherpa-onnx layout: files are
+    // prefixed and tokens is `small-tokens.txt`, not `tokens.txt` — the detector
+    // must match that or a downloaded whisper reads as absent (the bug this fixes).
+    await place('asr-offline-whisper', ['small-encoder.int8.onnx', 'small-decoder.int8.onnx', 'small-tokens.txt']);
     r = resolveOfflineAsr({ voiceOfflineAsrModel: 'whisper' });
     assert.equal(r.usingKey, 'whisper');
     assert.equal(r.kind, 'whisper');
     assert.equal(r.fellBack, false);
     assert.ok(offlineAsrModelPresent({ voiceOfflineAsrModel: 'whisper' }));
   } finally { await clear('asr-offline-whisper'); await clear('asr-offline'); }
+});
+
+test('resolveOfflineAsr: a downloaded parakeet (plain tokens.txt, int8 transducer files) is detected', async () => {
+  await clear('asr-offline-parakeet'); await clear('asr-offline');
+  try {
+    await place('asr-offline-parakeet', ['encoder.int8.onnx', 'decoder.int8.onnx', 'joiner.int8.onnx', 'tokens.txt']);
+    const r = resolveOfflineAsr({ voiceOfflineAsrModel: 'parakeet' });
+    assert.equal(r.usingKey, 'parakeet');
+    assert.equal(r.kind, 'parakeet');
+    assert.equal(r.present, true);
+  } finally { await clear('asr-offline-parakeet'); await clear('asr-offline'); }
 });
 
 test('resolveOfflineAsr: nothing downloaded → present:false (call uses streaming text)', async () => {

@@ -48,20 +48,31 @@ export function offlineAsrChoice(settings) {
  */
 export function offlineRecognizerConfig({ kind = 'sensevoice', files = [], at, numThreads = 1 }) {
   const find = (re) => files.find((f) => re.test(f)) ?? null;
-  const common = { tokens: at('tokens.txt'), numThreads, provider: 'cpu', debug: false };
+  // Prefer an int8 build when the archive ships both precisions (whisper does:
+  // small-encoder.onnx AND small-encoder.int8.onnx) — int8 is smaller + faster,
+  // the point of the offline pass. Fall back to the fp32 file when there's no int8.
+  const findPart = (part) =>
+    find(new RegExp(`${part}[^/]*int8[^/]*\\.onnx$`, 'i')) ?? find(new RegExp(`${part}[^/]*\\.onnx$`, 'i'));
+  // tokens.txt is named plainly (SenseVoice, Parakeet) OR prefixed (whisper:
+  // `small-tokens.txt`), so discover it by shape rather than assuming the exact
+  // name — the same "discover, don't assume the filename" discipline as the
+  // encoder/decoder lookup. Hard-coding `tokens.txt` made a downloaded whisper
+  // read as absent and, if loaded, point tokens at a file that isn't there.
+  const tokens = find(/tokens\.txt$/i) ?? 'tokens.txt';
+  const common = { tokens: at(tokens), numThreads, provider: 'cpu', debug: false };
   const featConfig = { sampleRate: 16000, featureDim: 80 };
 
   if (kind === 'whisper') {
-    const encoder = find(/encoder.*\.onnx$/i), decoder = find(/decoder.*\.onnx$/i);
+    const encoder = findPart('encoder'), decoder = findPart('decoder');
     if (!encoder || !decoder) throw new Error('whisper: encoder/decoder .onnx not found');
     // language:'' → detect per clip (keeps both languages); transcribe, never translate.
     return { featConfig, modelConfig: { whisper: { encoder: at(encoder), decoder: at(decoder), language: '', task: 'transcribe' }, ...common } };
   }
   if (kind === 'parakeet') {
-    const encoder = find(/encoder.*\.onnx$/i), decoder = find(/decoder.*\.onnx$/i), joiner = find(/joiner.*\.onnx$/i);
+    const encoder = findPart('encoder'), decoder = findPart('decoder'), joiner = findPart('joiner');
     if (!encoder || !decoder || !joiner) throw new Error('parakeet: transducer encoder/decoder/joiner .onnx not found');
     return { featConfig, modelConfig: { transducer: { encoder: at(encoder), decoder: at(decoder), joiner: at(joiner) }, ...common } };
   }
-  const model = find(/^model.*\.onnx$/i) ?? 'model.int8.onnx';
+  const model = findPart('model') ?? 'model.int8.onnx';
   return { featConfig, modelConfig: { senseVoice: { model: at(model), language: '', useInverseTextNormalization: 1 }, ...common } };
 }

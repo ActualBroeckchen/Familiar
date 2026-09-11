@@ -273,13 +273,13 @@ import { PROVIDER_URLS, resolveProviderUrl, providerRequiresKey, authHeader, con
 import { ensureManualTome } from './src/tomes/manual-tome.js';
 import { listProviderModels } from './provider-models.js';
 import { startBenchmark, statusOf, cancelBenchmark, resetBenchmark, reportPathsRelative } from './src/voice/voice-bench-run.js';
-import { composePlan, evaluatePlan, availableAsrLangs, CAPABILITY_TIERS, VOICE_ENGINES, formatBytes } from './src/voice/voice-models.js';
+import { composePlan, evaluatePlan, availableAsrLangs, CAPABILITY_TIERS, VOICE_ENGINES, formatBytes, modelById, isPinned } from './src/voice/voice-models.js';
 import { consentSummary, inspectInstalled, fetchPlan, MODELS_SUBDIR } from './src/voice/voice-fetch.js';
 import { measureFootprint } from './src/voice/voice-footprint.js';
 import { listClips, measureClip, cachedFeatures, catalogueSummary } from './src/voice/voice-clips.js';
 import { currentAudioWorker as currentAudioWorkerShared, listeningWorker, stopAudioWorker, VOICE_HARD_DISABLED } from './src/voice/audio-worker-current.js';
-import { hearVoiceNotes, transcribeAsset, transcriptionAllowed, correctTranscript, resolveOfflineAsr } from './src/voice/voice-transcribe.js';
-import { OFFLINE_ASR_MODELS } from './src/voice/offline-asr-models.js';
+import { hearVoiceNotes, transcribeAsset, transcriptionAllowed, correctTranscript, resolveOfflineAsr, offlineAsrInstallState } from './src/voice/voice-transcribe.js';
+import { OFFLINE_ASR_MODELS, DEFAULT_OFFLINE_ASR } from './src/voice/offline-asr-models.js';
 import { enrollWard, enrollVillager, speakerModelPresent, speakerModelDir } from './src/voice/voice-enroll.js';
 import { pinAndInstallModel } from './src/voice/voice-pin.js';
 import { readVoiceprints, listVillagerPrints, deleteWardPrint, deleteVillagerPrint } from './src/voice/voiceprints.js';
@@ -1716,47 +1716,102 @@ function voicePlanFor(what) {
   return { ...listen, voice: null, capability: [], all: listen.extras };
 }
 
+/**
+ * Fetch a voice-model plan with preflight + terminal progress, returning the
+ * fetchPlan result. Shared by the general installer and the per-model offline-
+ * ASR installer so the progress + failure-detail handling lives in one place.
+ *
+ * `label` is only for the log lines. Progress reaches the terminal: a 158 MB
+ * download that prints nothing for two minutes is indistinguishable from one
+ * doing nothing, which is exactly how it looked to my human. The event field is
+ * `phase` — checked against voice-fetch.js, not assumed (written as `stage`
+ * first, it would have printed nothing and left this looking fixed).
+ */
+async function fetchVoicePlanWithProgress(plan, label) {
+  const modelsDir = path.join(__dirname, MODELS_SUBDIR);
+  const summary = await consentSummary({ plan, modelsDir });
+  if (summary?.preflight && summary.preflight.ok === false) {
+    return { ok: false, reason: summary.preflight.reason, needed: summary.outstandingBytes, message: summary.preflight.message };
+  }
+  console.log(`[voice] fetching the ${label} model(s)…`);
+  let lastPct = -1;
+  const result = await fetchPlan({
+    plan, modelsDir,
+    onProgress: (e) => {
+      if (e?.phase === 'download' && Number.isFinite(e.receivedBytes) && Number.isFinite(e.totalBytes) && e.totalBytes > 0) {
+        const pct = Math.floor((e.receivedBytes / e.totalBytes) * 10) * 10;
+        if (pct > lastPct) { lastPct = pct; console.log(`[voice]   ${label} model ${pct}%`); }
+      } else if (e?.phase && e.phase !== 'download') {
+        console.log(`[voice]   ${e.phase}${e.file ? ` ${e.file}` : ''}`);
+      }
+    },
+  });
+  if (result?.ok === false) {
+    // Surface the underlying cause, not just the friendly message. The one line
+    // that says WHY an unpack failed (a decode error, a missing codec, a locked
+    // file) lives in `result.failed[].detail`; dropping it made this class of
+    // failure undiagnosable from the terminal.
+    const cause = Array.isArray(result.failed) ? result.failed.map((f) => f?.detail).filter(Boolean).join('; ') : '';
+    console.log(`[voice] ${label} model download failed: ${result.message ?? result.reason}${cause ? ` — ${cause}` : ''}`);
+  } else {
+    console.log(`[voice] ${label} model(s) ready`);
+  }
+  return result;
+}
+
 app.post('/api/voice/install-models', async (req, res) => {
   try {
     const plan = voicePlanFor(req.body?.what);
-    const modelsDir = path.join(__dirname, MODELS_SUBDIR);
-    const summary = await consentSummary({ plan, modelsDir });
-    if (summary?.preflight && summary.preflight.ok === false) {
-      return res.json({ ok: false, reason: summary.preflight.reason, needed: summary.outstandingBytes });
-    }
-    // Progress reaches the terminal. A 158 MB download that prints nothing for
-    // two minutes is indistinguishable from one that is doing nothing, which
-    // is exactly how it looked to my human.
     const what = req.body?.what === 'listen' ? 'listening' : 'speaking';
-    console.log(`[voice] fetching the ${what} model(s)…`);
-    let lastPct = -1;
-    const result = await fetchPlan({
-      plan, modelsDir,
-      // The field is `phase` — checked against voice-fetch.js rather than
-      // assumed. Written as `stage` first, which would have printed nothing at
-      // all and left this looking fixed.
-      onProgress: (e) => {
-        if (e?.phase === 'download' && Number.isFinite(e.receivedBytes) && Number.isFinite(e.totalBytes) && e.totalBytes > 0) {
-          const pct = Math.floor((e.receivedBytes / e.totalBytes) * 10) * 10;
-          if (pct > lastPct) { lastPct = pct; console.log(`[voice]   ${what} model ${pct}%`); }
-        } else if (e?.phase && e.phase !== 'download') {
-          console.log(`[voice]   ${e.phase}${e.file ? ` ${e.file}` : ''}`);
-        }
-      },
-    });
-    if (result?.ok === false) {
-      // Surface the underlying cause, not just the friendly message. The one
-      // line that says WHY an unpack failed (a decode error, a missing codec,
-      // a locked file) lives in `result.failed[].detail`; dropping it here is
-      // what made this class of failure undiagnosable from the terminal.
-      const cause = Array.isArray(result.failed)
-        ? result.failed.map((f) => f?.detail).filter(Boolean).join('; ')
-        : '';
-      console.log(`[voice] ${what} model download failed: ${result.message ?? result.reason}${cause ? ` — ${cause}` : ''}`);
-    } else {
-      console.log(`[voice] ${what} model(s) ready`);
-    }
+    const result = await fetchVoicePlanWithProgress(plan, what);
     res.json({ ok: Boolean(result?.ok ?? true), ...result });
+  } catch (err) {
+    res.json({ ok: false, error: String(err?.message ?? err) });
+  }
+});
+
+/**
+ * Install ONE offline-ASR upgrade (Whisper / NeMo Parakeet) on demand — the
+ * "download it when I switch to it" path. SenseVoice is the bundled default and
+ * comes through the listening plan; the upgrades are opt-in and fetched here,
+ * per model, into models/audio/<catalogueId>/ (which the worker reads by that
+ * same dir). The choice is the OFFLINE_ASR_MODELS key ('whisper'/'parakeet').
+ */
+app.post('/api/voice/asr-model/install', async (req, res) => {
+  try {
+    const key = String(req.body?.key ?? '').trim().toLowerCase();
+    const choice = OFFLINE_ASR_MODELS[key];
+    if (!choice) return res.json({ ok: false, reason: 'unknown-model', message: `I don't know an offline transcription model called "${key}".` });
+    const model = modelById(choice.catalogueId);
+    if (!model) return res.json({ ok: false, reason: 'unknown-model', message: `${key} has no catalogue entry.` });
+    if (!isPinned(model)) return res.json({ ok: false, reason: 'unpinned', message: `${choice.label} doesn't have a verified download source yet.` });
+    // A one-model plan: no voice, no capability tier — just this offline model.
+    const plan = { voice: null, capability: [], extras: [model], all: [model] };
+    const result = await fetchVoicePlanWithProgress(plan, choice.key);
+    res.json({ ok: Boolean(result?.ok ?? true), ...result });
+  } catch (err) {
+    res.json({ ok: false, error: String(err?.message ?? err) });
+  }
+});
+
+/**
+ * Remove an installed offline-ASR upgrade to reclaim the disk — the counterpart
+ * to switching one on. Only the opt-in upgrades can be removed; the SenseVoice
+ * default is the always-there fallback, so refusing to delete it keeps voice
+ * notes working (and a ward who switched away from an upgrade still transcribes).
+ */
+app.post('/api/voice/asr-model/remove', async (req, res) => {
+  try {
+    const key = String(req.body?.key ?? '').trim().toLowerCase();
+    const choice = OFFLINE_ASR_MODELS[key];
+    if (!choice) return res.json({ ok: false, reason: 'unknown-model' });
+    if (choice.key === DEFAULT_OFFLINE_ASR) {
+      return res.json({ ok: false, reason: 'default-model', message: 'SenseVoice is the built-in fallback and stays installed.' });
+    }
+    const dir = path.join(__dirname, MODELS_SUBDIR, choice.dir);
+    await fsp.rm(dir, { recursive: true, force: true });
+    console.log(`[voice] removed offline ASR model ${choice.key} (${choice.dir})`);
+    res.json({ ok: true, removed: choice.key });
   } catch (err) {
     res.json({ ok: false, error: String(err?.message ?? err) });
   }
@@ -2285,8 +2340,19 @@ app.get('/api/voice/asr-model', (_req, res) => {
   try {
     const s = readSettingsSync() || {};
     const r = resolveOfflineAsr(s);
-    const options = Object.values(OFFLINE_ASR_MODELS).map((m) => ({ key: m.key, label: m.label }));
-    res.json({ ok: true, options, selected: r.selectedKey, using: r.usingKey, present: r.present, fellBack: r.fellBack });
+    const installed = offlineAsrInstallState();
+    // Each option carries whether it's on disk, whether a verified download
+    // source exists (pinned), and whether it can be removed (every upgrade can;
+    // the SenseVoice default stays as the fallback) — the UI needs all three to
+    // show "downloaded", offer install-on-switch, and a remove button.
+    const options = Object.values(OFFLINE_ASR_MODELS).map((m) => ({
+      key: m.key,
+      label: m.label,
+      installed: installed[m.key] === true,
+      pinned: isPinned(modelById(m.catalogueId)),
+      removable: m.key !== DEFAULT_OFFLINE_ASR,
+    }));
+    res.json({ ok: true, options, selected: r.selectedKey, using: r.usingKey, present: r.present, fellBack: r.fellBack, installed });
   } catch (err) { res.json({ ok: false, error: String(err?.message ?? err) }); }
 });
 

@@ -36,6 +36,18 @@ test('offlineRecognizerConfig: Whisper discovers encoder/decoder, detects langua
   assert.ok(!cfg.modelConfig.senseVoice && !cfg.modelConfig.transducer);
 });
 
+test('offlineRecognizerConfig: real whisper layout — prefixed tokens + both precisions → int8 preferred', () => {
+  // The actual sherpa-onnx-whisper-small archive (strip=1): fp32 AND int8 side by
+  // side, and tokens is `small-tokens.txt`, not `tokens.txt`. Verified against the
+  // downloaded archive; the old code hard-coded `tokens.txt` and took whichever
+  // encoder readdir returned first (often the heavy fp32).
+  const files = ['small-encoder.onnx', 'small-encoder.int8.onnx', 'small-decoder.onnx', 'small-decoder.int8.onnx', 'small-tokens.txt', 'test_wavs'];
+  const cfg = offlineRecognizerConfig({ kind: 'whisper', files, at });
+  assert.equal(cfg.modelConfig.tokens, '/m/small-tokens.txt', 'discovers the prefixed tokens file');
+  assert.equal(cfg.modelConfig.whisper.encoder, '/m/small-encoder.int8.onnx', 'prefers the int8 encoder over fp32');
+  assert.equal(cfg.modelConfig.whisper.decoder, '/m/small-decoder.int8.onnx', 'prefers the int8 decoder over fp32');
+});
+
 test('offlineRecognizerConfig: Parakeet builds a transducer from encoder/decoder/joiner', () => {
   const files = ['encoder.int8.onnx', 'decoder.int8.onnx', 'joiner.int8.onnx', 'tokens.txt'];
   const cfg = offlineRecognizerConfig({ kind: 'parakeet', files, at });

@@ -6444,7 +6444,14 @@ function init() {
   initVoiceprints();
   refreshVoiceBackendPane();
   refreshOfflineAsrModelUi();
-  $('voice-offline-asr-model')?.addEventListener('change', () => { refreshOfflineAsrModelUi(); });
+  $('voice-offline-asr-model')?.addEventListener('change', (e) => {
+    const key = ['sensevoice', 'whisper', 'parakeet'].includes(e.target.value) ? e.target.value : 'sensevoice';
+    state.voiceOfflineAsrModel = key;
+    saveSettings();                       // the choice syncs immediately (free + instant)
+    ensureOfflineAsrDownloaded(key);      // …then fetch it if it isn't on disk yet
+    refreshOfflineAsrModelUi();
+  });
+  $('voice-offline-asr-remove')?.addEventListener('click', (e) => { removeOfflineAsrModel(e.currentTarget?.dataset?.key); });
   $('voice-picker-close')?.addEventListener('click', closeVoicePicker);
   $('voice-picker-done')?.addEventListener('click', closeVoicePicker);
   $('voice-picker-more')?.addEventListener('click', () => loadVoicePage(false));
@@ -8868,35 +8875,101 @@ const OFFLINE_ASR_SHORT_NAME = { sensevoice: 'SenseVoice', whisper: 'Whisper', p
 
 /**
  * Fill the offline-ASR-model picker and its status line from
- * GET /api/voice/asr-model. Whisper/Parakeet are opt-in upgrades this UI
- * never downloads on its own (see docs/troubleshooting.md) — this only
- * reports what's actually installed and in use, and re-fetches itself
- * after the select changes so picking a not-yet-downloaded model shows
- * that immediately.
+ * GET /api/voice/asr-model. Reports what's installed, selected, and in use, and
+ * re-fetches after the select changes. Whisper/Parakeet are opt-in upgrades that
+ * now download in-app on switch (ensureOfflineAsrDownloaded) and can be removed
+ * to reclaim disk (removeOfflineAsrModel); this reflects that state (the ✓
+ * marker, the Remove button, the status line).
  */
+// The offline-ASR model currently downloading (key), or null — so the UI can
+// show progress and suppress a second fetch or a remove mid-download.
+let _asrInstalling = null;
+
 async function refreshOfflineAsrModelUi() {
-  const sel = $('voice-offline-asr-model'), st = $('voice-offline-asr-model-state');
+  const sel = $('voice-offline-asr-model'), st = $('voice-offline-asr-model-state'), rm = $('voice-offline-asr-remove');
   if (!sel) return;
   try {
     const r = await (await fetch('/api/voice/asr-model')).json();
     if (!r?.ok) return;
     if (Array.isArray(r.options) && r.options.length) {
-      sel.innerHTML = r.options.map(o => `<option value="${o.key}">${o.label}</option>`).join('');
+      // A ✓ marks what's actually downloaded, so the picker shows disk state.
+      sel.innerHTML = r.options.map(o => `<option value="${o.key}">${o.installed ? '✓ ' : ''}${o.label}</option>`).join('');
     }
     const want = state.voiceOfflineAsrModel ?? 'sensevoice';
     sel.value = r.options?.some(o => o.key === want) ? want : (r.selected || 'sensevoice');
+    const opt = (r.options || []).find(o => o.key === sel.value);
+    const usingName = OFFLINE_ASR_SHORT_NAME[r.using] || r.using;
+    const selectedName = OFFLINE_ASR_SHORT_NAME[r.selected] || r.selected;
+    // Remove button: only for an installed, removable upgrade that's the pick,
+    // and never mid-download.
+    if (rm) {
+      const showRemove = !!opt && opt.installed && opt.removable && !_asrInstalling;
+      rm.hidden = !showRemove;
+      if (opt) rm.dataset.key = opt.key;
+    }
     if (st) {
-      const usingName = OFFLINE_ASR_SHORT_NAME[r.using] || r.using;
-      const selectedName = OFFLINE_ASR_SHORT_NAME[r.selected] || r.selected;
-      if (r.present && !r.fellBack) {
-        st.textContent = `Using ${usingName}.`;
+      if (_asrInstalling) {
+        st.textContent = `Downloading ${OFFLINE_ASR_SHORT_NAME[_asrInstalling] || _asrInstalling}… this runs once and can take a minute or two. It switches over automatically when it's ready.`;
+      } else if (r.present && !r.fellBack) {
+        st.textContent = r.selected === 'sensevoice' ? `Using ${usingName}.` : `Using ${usingName} — downloaded and active.`;
+      } else if (opt && !opt.pinned) {
+        st.textContent = `${selectedName} isn't available to download in this build yet, so calls and voice notes use SenseVoice.`;
       } else if (r.selected && r.selected !== 'sensevoice' && (!r.present || r.fellBack)) {
-        st.textContent = `${selectedName} isn't downloaded yet, so calls and voice notes use SenseVoice for now. It's an opt-in upgrade — pin and install it from a checkout (see docs/troubleshooting.md), the same one-time step as the listening model.`;
+        st.textContent = `${selectedName} isn't downloaded — using SenseVoice for now. Pick it again to download it.`;
       } else {
-        st.textContent = `${selectedName} isn't installed yet.`;
+        st.textContent = `Using ${usingName}.`;
       }
     }
   } catch { /* leave the static hint in place */ }
+}
+
+/**
+ * Download the chosen offline-ASR upgrade if it isn't on disk yet — the
+ * "download when I switch to it" behaviour. SenseVoice is bundled; an unpinned
+ * or already-installed model is a no-op. One at a time (the flag). Errors land
+ * in the status line, never a thrown turn.
+ */
+async function ensureOfflineAsrDownloaded(key) {
+  if (!key || key === 'sensevoice' || _asrInstalling) return;
+  let info;
+  try { info = await (await fetch('/api/voice/asr-model')).json(); } catch { return; }
+  const opt = (info?.options || []).find(o => o.key === key);
+  if (!opt || opt.installed || !opt.pinned) return;   // nothing to fetch (or no source)
+  _asrInstalling = key;
+  refreshOfflineAsrModelUi();
+  try {
+    const res = await (await fetch('/api/voice/asr-model/install', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }),
+    })).json();
+    _asrInstalling = null;
+    if (!res?.ok) {
+      const st = $('voice-offline-asr-model-state');
+      if (st) st.textContent = `Couldn't download ${OFFLINE_ASR_SHORT_NAME[key] || key}: ${res?.message || res?.reason || 'unknown error'}. Still using SenseVoice.`;
+    }
+  } catch (e) {
+    _asrInstalling = null;
+    const st = $('voice-offline-asr-model-state');
+    if (st) st.textContent = `Download failed: ${String(e?.message ?? e)}. Still using SenseVoice.`;
+  } finally {
+    _asrInstalling = null;
+    refreshOfflineAsrModelUi();
+  }
+}
+
+/** Remove an installed offline-ASR upgrade to reclaim disk, then refresh. */
+async function removeOfflineAsrModel(key) {
+  if (!key || key === 'sensevoice' || _asrInstalling) return;
+  const st = $('voice-offline-asr-model-state');
+  try {
+    const res = await (await fetch('/api/voice/asr-model/remove', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }),
+    })).json();
+    if (!res?.ok && st) st.textContent = `Couldn't remove it: ${res?.message || res?.reason || 'unknown error'}.`;
+  } catch (e) {
+    if (st) st.textContent = `Remove failed: ${String(e?.message ?? e)}.`;
+  } finally {
+    refreshOfflineAsrModelUi();
+  }
 }
 
 /**

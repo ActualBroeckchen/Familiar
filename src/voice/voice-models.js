@@ -284,23 +284,27 @@ const BASE_MODELS = Object.freeze([
     files: [],
   },
   {
-    // OPT-IN offline-ASR upgrade #1 — Whisper. NOT in any tier/extras by default
-    // and deliberately UNPINNED, so it is never fetched on its own: choosing it
-    // in Settings costs nothing until the ward pins + installs it (the repo
-    // refuses to download an unpinned model). Multilingual, markedly better
-    // English than SenseVoice, heavier + slower, 30 s input window. Unpacks to
-    // models/audio/asr-offline-whisper/ (offline-asr-models.js `dir`). The
-    // upstream asset below is the INTENDED sherpa-onnx release; the exact name
-    // must be confirmed + pinned (scripts/pin-audio-models.mjs) before a fetch
-    // will run — that confirmation IS the opt-in.
+    // OPT-IN offline-ASR upgrade #1 — Whisper. NOT in any tier/extras by default:
+    // choosing it in Settings costs nothing, and it is fetched only when the ward
+    // switches to it (the app downloads it then, or on demand from the install
+    // button). Multilingual, markedly better English than SenseVoice, heavier +
+    // slower, 30 s input window. Unpacks to models/audio/asr-offline-whisper/
+    // (offline-asr-models.js `dir`). The archive carries BOTH fp32 and int8 onnx;
+    // offlineRecognizerConfig prefers the int8 encoder/decoder.
+    //
+    // Build = `small` (multilingual), NOT `medium`: medium's archive is 1.9 GB
+    // (≈3 GB unpacked), too heavy for the small machines this targets. `small`
+    // (≈610 MB) is the accuracy-vs-footprint sweet spot and still keeps every
+    // language. sherpa-onnx has no `medium.int8` archive (the name this once
+    // guessed was a 404); `small` is a real, verified release asset.
     id: 'asr-offline-whisper',
     role: 'asr-offline-whisper',
     engine: null,
     lang: 'multi',
     label: 'Offline ASR upgrade — Whisper (multilingual, more accurate)',
     why: 'Optional voice-note/call accuracy upgrade that keeps both languages.',
-    estBytes: 800 * MB,
-    upstream: { tag: 'asr-models', asset: 'sherpa-onnx-whisper-medium.int8.tar.bz2' },
+    estBytes: 640 * MB,
+    upstream: { tag: 'asr-models', asset: 'sherpa-onnx-whisper-small.tar.bz2' },
     files: [],
   },
   {

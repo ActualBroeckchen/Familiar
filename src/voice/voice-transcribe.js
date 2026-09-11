@@ -88,7 +88,10 @@ function dirForChoice(choice) { return path.join(AUDIO_MODELS_DIR, choice.dir); 
 function modelUnpacked(dir, kind) {
   try {
     const files = readdirSync(dir);
-    if (!files.includes('tokens.txt')) return false;
+    // tokens.txt is plain (SenseVoice/Parakeet) or prefixed (whisper's
+    // `small-tokens.txt`) — match by shape, not the exact name, or a real
+    // downloaded whisper reads as "not installed".
+    if (!files.some((f) => /tokens\.txt$/i.test(f))) return false;
     if (kind === 'whisper' || kind === 'parakeet') return files.some((f) => /encoder.*\.onnx$/i.test(f));
     return files.some((f) => /^model.*\.onnx$/i.test(f));
   } catch { return false; }
@@ -98,6 +101,17 @@ function modelUnpacked(dir, kind) {
 export function offlineAsrModelPresent(settings) {
   const c = offlineAsrChoice(settings);
   return modelUnpacked(dirForChoice(c), c.kind);
+}
+
+/** Which offline ASR options are actually unpacked on disk — keyed by model
+ *  key ({sensevoice:bool, whisper:bool, parakeet:bool}). Lets the settings UI
+ *  show what's downloaded and offer to remove it. Pure over the filesystem. */
+export function offlineAsrInstallState() {
+  const out = {};
+  for (const c of Object.values(OFFLINE_ASR_MODELS)) {
+    out[c.key] = modelUnpacked(dirForChoice(c), c.kind);
+  }
+  return out;
 }
 
 /**
