@@ -21,7 +21,7 @@ import {
   shouldReflectNow,
   markReflected,
   OUTCOMES,
-} from '../surface-events.js';
+} from '../src/pondering/surface-events.js';
 
 // Per-test isolated dir. Set in beforeEach, cleaned in afterEach.
 let DIR;

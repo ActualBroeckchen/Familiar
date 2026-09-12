@@ -4,15 +4,16 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-import { EMBED_COLOR, btn, row, expiredView } from '../discord-menu-kit.js';
+import { EMBED_COLOR, btn, row, expiredView } from '../src/discord/discord-menu-kit.js';
 import {
   isQueueCommand, QUEUE_CID,
   buildQueueHomeView, buildQueueItemView, buildQueueDoneView, buildQueueText,
-} from '../ward-consent-queue.js';
+} from '../src/ward/ward-consent-queue.js';
 import {
   isConnectionCommand, CONN_CID, DEFAULT_VALUE, FEATURE_CONNECTIONS,
   buildConnHomeView, buildFeaturesView, buildFeatureView, buildConnDoneView, buildConnText,
-} from '../ward-connections.js';
+  buildEffortsView, buildEffortView, effortLabelOf, isSettableEffort,
+} from '../src/ward/ward-connections.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -183,6 +184,43 @@ describe('buildFeaturesView / buildFeatureView', () => {
   it('feature view with no override marks Primary(default) as the pick', () => {
     const sel = selectOf(buildFeatureView({ feature: 'pondering', featureConnections: {}, connections: conns }));
     assert.equal(sel.options.find(o => o.value === DEFAULT_VALUE).default, true);
+  });
+});
+
+describe('reasoning-effort menu (!connection → Reasoning effort)', () => {
+  it('home offers a Reasoning effort button, disabled with no connections', () => {
+    const withConns = buildConnHomeView({ connections: conns, primaryId: 'glm-x1' });
+    assert.ok(cidsOf(withConns).includes(`${CONN_CID}:efforts`));
+    const empty = buildConnHomeView({ connections: [], primaryId: null });
+    const eff = empty.components.at(-1).components.find(b => b.custom_id === `${CONN_CID}:efforts`);
+    assert.equal(eff.disabled, true);
+  });
+  it('efforts view lists connections with their current effort in the picker', () => {
+    const withEffort = conns.map(c => c.id === 'glm-x1' ? { ...c, reasoningEffort: 'low' } : c);
+    const sel = selectOf(buildEffortsView({ connections: withEffort }));
+    assert.equal(sel.custom_id, `${CONN_CID}:effpick`);
+    assert.deepEqual(sel.options.map(o => o.value), ['glm-x1', 'gpt-y2', 'dead-z3']);
+    assert.match(sel.options.find(o => o.value === 'glm-x1').description, /low/);
+  });
+  it('effort view: Default/Low/High/Max/Off, current marked default', () => {
+    const withEffort = [{ ...conns[0], reasoningEffort: 'high' }];
+    const sel = selectOf(buildEffortView({ connId: 'glm-x1', connections: withEffort }));
+    assert.equal(sel.custom_id, `${CONN_CID}:effset:glm-x1`);
+    assert.deepEqual(sel.options.map(o => o.value), [DEFAULT_VALUE, 'low', 'high', 'max', 'off']);
+    assert.equal(sel.options.find(o => o.value === 'high').default, true);
+    assert.equal(sel.options.find(o => o.value === DEFAULT_VALUE).default, false);
+  });
+  it('effort view with no override marks Default as the pick', () => {
+    const sel = selectOf(buildEffortView({ connId: 'glm-x1', connections: conns }));
+    assert.equal(sel.options.find(o => o.value === DEFAULT_VALUE).default, true);
+  });
+  it('effortLabelOf + isSettableEffort behave', () => {
+    assert.equal(effortLabelOf({ reasoningEffort: 'MAX' }), 'max');
+    assert.equal(effortLabelOf({}), 'default');
+    assert.equal(effortLabelOf({ reasoningEffort: 'nonsense' }), 'default');
+    assert.equal(isSettableEffort(DEFAULT_VALUE), true);
+    assert.equal(isSettableEffort('low'), true);
+    assert.equal(isSettableEffort('banana'), false);
   });
 });
 

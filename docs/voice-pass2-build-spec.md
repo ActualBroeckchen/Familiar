@@ -1,6 +1,6 @@
 # Voice Pass 2 — first live conversation (build spec, architecture-reconciled)
 
-**Status: PLAN, not yet built. Ward review pending — the §"Open ward
+**Status: shipped (see `src/voice/`). Historical note — the §"Open ward
 decisions" list gates the safety-adjacent pieces.**
 
 This is the detailed build plan for **Pass 2** of the voice milestone, as

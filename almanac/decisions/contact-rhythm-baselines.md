@@ -4,13 +4,13 @@ topics: [decisions, autonomous-loops, armature]
 sources:
   - id: contact-baselines
     type: file
-    path: contact-baselines.js
+    path: src/safety/contact-baselines.js
   - id: contact-baselines-test
     type: file
     path: tests/contact-baselines.test.mjs
   - id: reachout
     type: file
-    path: reachout.js
+    path: src/warmth/reachout.js
   - id: reachout-test
     type: file
     path: tests/reachout.test.mjs
@@ -118,10 +118,11 @@ are the ward's own — any future audience-tagging change to web or Discord sess
 drift [@contact-baselines].
 
 The remaining Initiative build spec passes at the time of this writing — Session C (an
-Unruh-backed intention store and Familiar-controlled rounds view, 0.8.65-alpha), Session D (the
-noticing tick, on by default with no stand-down at threat, 0.8.66-alpha), and Session E (adaptive
-per-event lead times, 0.8.67-alpha) — have since all shipped, gated behind the resolved §10 ward
-decisions the spec records [@initiative-spec].
+Unruh-backed intention store and Familiar-controlled rounds view, 0.8.65-alpha; see
+[Unruh](../architecture/unruh) for the intention/round data model and the phase-matching bug it
+later needed fixed), Session D (the noticing tick, on by default with no stand-down at threat,
+0.8.66-alpha), and Session E (adaptive per-event lead times, 0.8.67-alpha) — have since all
+shipped, gated behind the resolved §10 ward decisions the spec records [@initiative-spec].
 
 See [Wait-streak experiment](wait-streak-experiment) for Pass 0 and Pass 1, the prompt-fix and
 counter this baseline rides below, and [Autonomous loops](../architecture/autonomous-loops) for

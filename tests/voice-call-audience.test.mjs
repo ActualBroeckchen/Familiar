@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolveCallAudience, wardVoiceState } from '../voice-call-audience.js';
+import { resolveCallAudience, wardVoiceState } from '../src/voice/voice-call-audience.js';
 
 // Fakes: a villager registry by uid, and a tag resolver that models the real
 // audience gate — a stranger present tightens to 'strangers', otherwise the

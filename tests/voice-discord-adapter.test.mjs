@@ -10,7 +10,8 @@ import {
   createDiscordCallAdapter,
   resampleMono, downmixStereoToMono, monoToStereo,
   stereo48ToMono16, monoToStereo48,
-} from '../voice-discord-adapter.js';
+  floatStereoToS16LE, isolatedDecoderFrom,
+} from '../src/voice/voice-discord-adapter.js';
 
 // ── Pure helpers ────────────────────────────────────────────────────────────
 
@@ -287,6 +288,36 @@ test('an oversized packet is skipped before it can overflow the decoder input bu
   assert.equal(decoded, 1);
 });
 
+test('a post-decode error never escapes the data handler (non-fatal join)', async () => {
+  // The reported "crash when someone new joins": a second speaker's decoder grows
+  // the shared WASM heap and detaches an existing decoder's buffer, so the RESAMPLE
+  // after a (retried) decode throws inside the stream 'data' handler. decodeOpus'
+  // own retry only guards the decode() call; here decode "succeeds" but returns a
+  // buffer the resample chokes on — modelling the detached-buffer throw downstream.
+  // Pre-fix that threw straight out of the EventEmitter and took the voice stack
+  // down; the whole handler is now wrapped, so the bad frame is skipped and logged.
+  const deps = makeFakeDeps();
+  const logs = [];
+  // decode returns a "buffer" whose backing ArrayBuffer is too small for its
+  // claimed length — so asInt16()'s `new Int16Array(buffer, offset, len)` throws a
+  // RangeError, exactly as a detached/moved heap buffer would downstream of decode.
+  deps.makeOpusDecoder = () => ({ decode: () => ({ length: 3840, buffer: new ArrayBuffer(2), byteOffset: 0 }), delete() {} });
+  const { hooks, calls } = makeHooks();
+  const { adapter } = createDiscordCallAdapter({ hooks, joinSpec: joinSpec(), deps, log: (m) => logs.push(m) });
+  await adapter.joinCall();
+
+  deps._receiver.speaking.emit('start', 'wardU');
+  const { stream } = deps._receiver.subscribed[0];
+  assert.doesNotThrow(
+    () => { for (let i = 0; i < 10; i++) stream.emit('data', Buffer.from([i])); },
+    'a post-decode throw must not escape the stream data handler',
+  );
+  assert.equal(calls.pushAudio.length, 0, 'the bad frames are skipped, not pushed');
+  assert.equal(stream.destroyed, undefined, 'the call stays live — the speaker is not torn down');
+  const warn = logs.filter((m) => /inbound frame dropped/.test(m));
+  assert.equal(warn.length, 1, 'the drop is logged once (rate-limited), not once per packet');
+});
+
 test('leaveCall destroys the connection and clears open speakers', async () => {
   const deps = makeFakeDeps();
   const { hooks } = makeHooks();
@@ -298,4 +329,104 @@ test('leaveCall destroys the connection and clears open speakers', async () => {
   await adapter.leaveCall();
   assert.equal(deps._connection.destroyed, true);
   assert.equal(stream.destroyed, true);
+});
+
+// ── Receive observability (0.11.79) ─────────────────────────────────────────
+// The reported "released after 0 audio frames" is silent about WHY: no audio
+// delivered, or delivered-but-undecodable. These signals disambiguate it so a
+// live 0-frame case points at the receive/DAVE path vs the adapter.
+
+test('a delivered packet logs "receive is live" once; a 0-packet utterance flags the upstream cause', async () => {
+  const logs = [];
+  const deps = makeFakeDeps();
+  const { hooks } = makeHooks();
+  const { adapter } = createDiscordCallAdapter({ hooks, joinSpec: joinSpec(), deps, log: (m) => logs.push(m) });
+  await adapter.joinCall();
+
+  // Speaker A delivers a packet → "receive is live" fires exactly once.
+  deps._receiver.speaking.emit('start', 'uA');
+  const a = deps._receiver.subscribed[0].stream;
+  a.emit('data', Buffer.from([42]));
+  a.emit('data', Buffer.from([42]));
+  const live = logs.filter((m) => /receive is live/.test(m));
+  assert.equal(live.length, 1, 'first-packet log is one-time');
+
+  // Speaker B opens a subscription but Discord delivers nothing → the upstream hint.
+  deps._receiver.speaking.emit('start', 'uB');
+  deps._receiver.speaking.emit('end', 'uB');
+  assert.ok(
+    logs.some((m) => /0 inbound audio packets delivered/.test(m) && /DAVE|upstream/.test(m)),
+    'a 0-packet speaker names the receive/DAVE path, not the adapter',
+  );
+});
+
+// ── Isolated inbound decode (0.11.80) ───────────────────────────────────────
+// opusscript keeps ONE shared WASM heap for every decoder, so 3+ concurrent
+// speakers corrupt each other and a bad packet fatally aborts decode for ALL of
+// them. opus-decoder gives each speaker its own WASM instance. These pin the
+// seam that lets it be a drop-in for the s16le-stereo pipeline.
+
+test('floatStereoToS16LE: planar float channels → interleaved s16le stereo, clamped', () => {
+  const L = Float32Array.from([0, 1, -1, 0.5]);
+  const R = Float32Array.from([0, -1, 1, -0.5]);
+  const buf = floatStereoToS16LE([L, R], 4);
+  assert.equal(buf.length, 4 * 4);                 // 4 samples × stereo × 2 bytes
+  assert.equal(buf.readInt16LE(0), 0);             // L[0]
+  assert.equal(buf.readInt16LE(2), 0);             // R[0]
+  assert.equal(buf.readInt16LE(4), 32767);         // L[1]=+1 clamps to max
+  assert.equal(buf.readInt16LE(6), -32768);        // R[1]=-1 → min
+  assert.equal(buf.readInt16LE(8), -32768);        // L[2]=-1 → min
+  assert.equal(buf.readInt16LE(12), 16384);        // L[3]=0.5 → 0.5*32768 (sample 3 → byte 12)
+  assert.equal(floatStereoToS16LE([], 0), null);
+});
+
+test('isolatedDecoderFrom: mono-only channelData still yields stereo (dupe), and is a { decode, delete }', async () => {
+  let freed = false;
+  const FakeCtor = class {
+    constructor(opts) { this.opts = opts; this.ready = Promise.resolve(); }
+    decodeFrame() { return { channelData: [Float32Array.from([0.25, -0.25])], samplesDecoded: 2 }; }
+    free() { freed = true; }
+  };
+  const dec = isolatedDecoderFrom(FakeCtor, {});
+  assert.equal(dec.decode(new Uint8Array([1])), null, 'drops until ready (async warmup)');
+  await Promise.resolve(); await Promise.resolve();       // let ready resolve
+  const out = dec.decode(new Uint8Array([1]));
+  assert.equal(out.length, 2 * 4);
+  assert.equal(out.readInt16LE(0), out.readInt16LE(2), 'L duped into R when mono');
+  dec.delete();
+  assert.equal(freed, true);
+});
+
+// ── Anti-aliased downsampling (0.11.83) ─────────────────────────────────────
+// 48k→16k was an exact 3:1 ratio, so the old linear interp reduced to naive
+// decimation (pick every 3rd sample) with no low-pass — aliasing everything
+// above 8 kHz into the speech band. These prove the low-pass now suppresses a
+// >Nyquist tone while passing a low one, and that lengths/passthrough hold.
+const rms = (a) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * a[i]; return Math.sqrt(s / (a.length || 1)); };
+function tone(freq, rate, secs, amp = 10000) {
+  const n = Math.floor(rate * secs);
+  const out = new Int16Array(n);
+  for (let i = 0; i < n; i++) out[i] = Math.round(amp * Math.sin(2 * Math.PI * freq * i / rate));
+  return out;
+}
+
+test('resampleMono: a 12 kHz tone (above the 8 kHz output Nyquist) is strongly attenuated, not aliased down', () => {
+  const out = resampleMono(tone(12000, 48000, 0.2), 48000, 16000);
+  // Naive decimation would alias 12 kHz → 4 kHz at nearly full amplitude (~7000 RMS).
+  // The low-pass must knock it well down.
+  assert.ok(rms(out) < 1500, `aliased tone not suppressed: rms=${rms(out).toFixed(0)}`);
+});
+
+test('resampleMono: a 500 Hz tone survives the downsample largely intact', () => {
+  const inTone = tone(500, 48000, 0.2);
+  const out = resampleMono(inTone, 48000, 16000);
+  // Passband: most of the energy is kept (allow for filter/quantisation loss).
+  assert.ok(rms(out) > 0.8 * rms(inTone), `passband tone lost too much: in=${rms(inTone).toFixed(0)} out=${rms(out).toFixed(0)}`);
+});
+
+test('resampleMono: length still scales by ratio, equal rates still passthrough', () => {
+  const a = Int16Array.from([1, 2, 3]);
+  assert.equal(resampleMono(a, 16000, 16000), a);                 // same ref
+  assert.equal(resampleMono(tone(300, 48000, 0.1), 48000, 16000).length, Math.floor(4800 / 3));
+  assert.equal(resampleMono(Int16Array.from([1,2,3,4]), 24000, 48000).length, 8);   // upsample unaffected
 });

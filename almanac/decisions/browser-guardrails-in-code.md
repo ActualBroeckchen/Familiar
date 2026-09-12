@@ -7,31 +7,31 @@ sources:
     path: docs/browser-build-spec.md
   - id: websearch-js
     type: file
-    path: websearch.js
+    path: src/search/websearch.js
   - id: village-js
     type: file
-    path: village.js
+    path: src/village/village.js
   - id: browser-grants-js
     type: file
-    path: browser-grants.js
+    path: src/browser/browser-grants.js
   - id: browser-lens-js
     type: file
-    path: browser-lens.js
+    path: src/browser/browser-lens.js
   - id: browser-driver-js
     type: file
-    path: browser-driver.js
+    path: src/browser/browser-driver.js
   - id: browser-js
     type: file
-    path: browser.js
+    path: src/browser/browser.js
   - id: ponder-research-js
     type: file
-    path: ponder-research.js
+    path: src/pondering/ponder-research.js
 ---
 
 # Browser Milestone: Guardrails in Code, Not Prompts
 
-**Status: Pass 1 through Pass 4 decided and shipped (0.11.0 / 0.11.1 / 0.11.3 / 0.11.4 / 0.11.5 /
-0.11.6 / 0.11.7).** `docs/browser-build-spec.md` specs a MINOR milestone — the
+**Status: Pass 1 through Pass 4 decided and shipped (0.11.0 / 0.11.1 / 0.11.2 / 0.11.3 / 0.11.4 /
+0.11.5 / 0.11.6 / 0.11.7).** `docs/browser-build-spec.md` specs a MINOR milestone — the
 Familiar using the web (click, fill, scroll, multi-step flows) instead of only reading it
 through `read_webpage` [@browser-build-spec]. It is a cognition layer over `playwright-core`,
 built on the existing web-search stack (`websearch.js`'s `look_up` / `web_search` /
@@ -39,7 +39,8 @@ built on the existing web-search stack (`websearch.js`'s `look_up` / `web_search
 and Sigil's doctrine of deterministic, code-level guardrails instead of prompted ones
 [@browser-build-spec]. Pass 1 (the driver, the lens, the guarded proxy,
 `browse_open`/`see`/`act`/`close`, the audit log), Pass 2 (screenshots, tabs, downloads,
-history), Pass 3a (site modes and credential/payment fill hardening, 0.11.3), and Pass 3b (the
+history, and closing with `read_webpage`'s re-backing onto the live DOM at 0.11.2), Pass 3a
+(site modes and credential/payment fill hardening, 0.11.3), and Pass 3b (the
 consent ceremony, credentials vault, fill-source gate, confirm-domain refusal, and
 `browse_handoff`, 0.11.4) are all built and described on
 [Browser: click-and-fill web access](../architecture/browser); this page records the design
@@ -201,7 +202,7 @@ is a structured error, never a coin-flip on the first match [@browser-build-spec
 mode this buys is always "re-observe, then retry," never "clicked something the model never
 named."
 
-## Build order defers `read_webpage`'s re-backing past both shipped passes
+## Build order held `read_webpage`'s re-backing to the end of Pass 2
 
 Pass 1 shipped the driver, the lens, `browse_open/see/act/close`, the SSRF proxy, and the audit
 log, but deliberately left `read_webpage` on its existing static extractor rather than routing it
@@ -210,16 +211,16 @@ through the new browser driver immediately [@browser-build-spec]. The reasoning:
 an always-on, widely-used tool — routing it through a brand-new subsystem in the same pass that
 subsystem first ships would put unproven code straight into the hot path of existing behavior.
 `browse_*` proved the driver first; the spec placed `read_webpage`'s replacement (the static
-extractor retained as the degradation floor, selectable via `webReadBackend:'static'`) in Pass 2
-[@browser-build-spec], but as shipped through 0.11.7, that re-backing is still deferred — see
-[Browser: click-and-fill web access](../architecture/browser) for the current state of the tool
-surface. Pass 3 added the sovereignty surfaces (site modes, the consent ceremony, the
-credentials vault, the fill-source gate, the confirm-domain refusal, and `browse_handoff`) across
-0.11.3 and 0.11.4, and its two named refinements (`browseConfirmMode: 'ask'` approve-resume and
-headed handoff hand-back-and-resume) shipped in 0.11.5 and 0.11.6, so Pass 3 is now fully
-shipped. Pass 4 (0.11.7) shipped read-only unattended research on pondering ticks — the one
-deliberate exception to the project's usual "ride existing requests, never poll" rule for
-background work — described in the section below.
+extractor retained as the degradation floor, selectable via `webReadBackend:'static'`) as Pass
+2's closing item, and it shipped there, at 0.11.2 — see [Browser: click-and-fill web
+access](../architecture/browser) for the mechanics of `browseRead`/`shouldBrowserRead` and the
+shared `extractReadable` pipeline. Pass 3 added the sovereignty surfaces (site modes, the consent
+ceremony, the credentials vault, the fill-source gate, the confirm-domain refusal, and
+`browse_handoff`) across 0.11.3 and 0.11.4, and its two named refinements (`browseConfirmMode:
+'ask'` approve-resume and headed handoff hand-back-and-resume) shipped in 0.11.5 and 0.11.6, so
+Pass 3 is now fully shipped. Pass 4 (0.11.7) shipped read-only unattended research on pondering
+ticks — the one deliberate exception to the project's usual "ride existing requests, never poll"
+rule for background work — described in the section below.
 
 ## Pass 4 (0.11.7) inverts agency instead of adding a tool loop
 
@@ -259,12 +260,13 @@ page — matching the "gate in code" doctrine already established for [Injection
 and [Content-based memory gating](../architecture/content-gating). A future implementer must not
 loosen the Stranger default, the credential-refusal boundary, or the handoff headless fallback as
 local conveniences; each one is a ward-signed floor, and the spec names loosening any of them as
-its own decision to reopen, not a bug to quietly fix. The build-order deferral means
-`read_webpage` keeps its static-extractor behavior even after Pass 1 through Pass 4 shipped in
-0.11.0/0.11.1/0.11.3/0.11.4/0.11.5/0.11.6/0.11.7 — a reader should not expect the browser-backed
-reading path until a future pass flips it over. `browse_handoff`, the autonomy grants, vault-fill
-credentials, `browseConfirmMode: 'ask'` approve-resume, the headed handoff hand-back-and-resume,
-and Pass 4's plan-and-read pondering research are all now shipped and can be relied on. Because
+its own decision to reopen, not a bug to quietly fix. The build-order sequencing means
+`read_webpage` kept its static-only behavior only through the rest of Pass 1 — its re-backing
+onto the live DOM was Pass 2's own closing item (0.11.2), so a reader should expect the
+browser-backed reading path (with the static extractor as its degradation floor) from Pass 2
+onward, not a future pass. `browse_handoff`, the autonomy grants, vault-fill credentials,
+`browseConfirmMode: 'ask'` approve-resume, the headed handoff hand-back-and-resume, and Pass 4's
+plan-and-read pondering research are all now shipped and can be relied on. Because
 Pass 4's design diverged from the spec's read-only tool-loop description, a future implementer
 should not "fix" `ponder-research.js` back toward a tool-calling shape without re-reading the
 agency-inversion reasoning above — the divergence is the safer design, not an unfinished one.

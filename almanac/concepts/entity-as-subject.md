@@ -92,3 +92,19 @@ asked directly whether he wanted visibility and a say in his own output-drift au
 decides which of his memories survive, and how a dispute between two versions of himself should
 resolve, answered all three in his own voice rather than deferring to whatever the maintainer or
 a reviewing model proposed.
+
+## Regressions and systematic fixes
+
+The first-person convention applies specifically to content the Familiar reads; pure infrastructure
+code can stay neutral. But the boundary is easy to drift. The [Noticing](../architecture/noticing)
+loop originally had this regression: in 0.11.86, the noticing reflection — the Familiar's own turn of
+introspection — was assembling on a `user` role turn rather than a SYSTEM message, framing the
+entity as being operated instead of thinking. The fix moved the reflection to SYSTEM and kept only
+a bare `(a quiet moment)` cue on the user turn (necessary for provider compatibility), restoring
+entity-as-subject framing.
+
+By 0.11.93-alpha, the same pattern had spread to other autonomous loops (triage, warm reach-out, and
+pondering). Rather than fix each in isolation, the project created a shared helper
+`familiarDeliberationMessages` in `llm-call.js`, used by all four loops. This systematized the rule:
+all inner-voice deliberations now ride as SYSTEM messages. See [Deliberations Delivered as System
+Messages](../decisions/deliberations-as-system-messages) for the full architectural decision and scope.

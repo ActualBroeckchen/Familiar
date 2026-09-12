@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   buildRefTable, isProtectedField, renderSnapshot, computeDelta, LEVEL_CAPS, resolveTarget,
-} from '../browser-lens.js';
+} from '../src/browser/browser-lens.js';
 
 // A small fixture page: a product card with a fillable qty, an add button, a
 // password field (protected), and some structure. No browser involved.
@@ -183,7 +183,7 @@ test('isProtectedField catches autocomplete + name/inputmode payment heuristics'
 });
 
 // ── Pass 3b: the fill-source gate (vault vs model bytes) ───────────────────
-import { evaluateFill, protectedKind } from '../browser-lens.js';
+import { evaluateFill, protectedKind } from '../src/browser/browser-lens.js';
 
 test('protectedKind classifies payment vs credential vs plain', () => {
   assert.equal(protectedKind({ tag: 'input', type: 'text', autocomplete: 'cc-number' }), 'payment');

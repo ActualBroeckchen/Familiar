@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { floatToPcm16, pcm16ToFloat, parseWav } from '../voice-audio-features.js';
+import { floatToPcm16, pcm16ToFloat, parseWav } from '../src/voice/voice-audio-features.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, '..');
@@ -63,7 +63,7 @@ const canRun = MODEL_DIR && existsSync(MODEL_DIR) && engineResolvable
   && existsSync(path.join(MODEL_DIR, 'test_wavs', '0.wav'));
 
 test('a wav streamed as PCM through the real worker yields partials and a final transcript', { skip: canRun ? false : 'set PF_ASR_STREAMING_MODEL_DIR to an extracted streaming-ASR model dir (and install sherpa-onnx-node) to run' }, async () => {
-  const { createAudioWorker } = await import('../audio-worker-host.js');
+  const { createAudioWorker } = await import('../src/voice/audio-worker-host.js');
   const partials = [];
   const finals = [];
   const worker = createAudioWorker({ idleMs: 0 });

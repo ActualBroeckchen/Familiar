@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import {
   fetchPlan, inspectInstalled, outstandingBytes, sweepTemp,
   reclaimModels, consentSummary, blobPath, installedPath, hashFile,
-} from '../voice-fetch.js';
+} from '../src/voice/voice-fetch.js';
 
 const MB = 1024 * 1024;
 const sha = (buf) => createHash('sha256').update(buf).digest('hex');

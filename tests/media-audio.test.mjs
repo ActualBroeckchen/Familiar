@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  IMAGE_MIME_EXT, AUDIO_MIME_EXT, MEDIA_KINDS, mediaKindFor, readImageSize,
-} from '../media.js';
+  IMAGE_MIME_EXT, AUDIO_MIME_EXT, VIDEO_MIME_EXT, MEDIA_KINDS, mediaKindFor, readImageSize,
+} from '../src/vision/media.js';
 
 /**
  * The store was written for images and hard-coded `kind: 'image'` while looking
@@ -16,8 +16,9 @@ test('kind and extension come from the same lookup, so they cannot disagree', ()
   for (const [mime, { kind, ext }] of Object.entries(MEDIA_KINDS)) {
     const fromImages = IMAGE_MIME_EXT[mime];
     const fromAudio = AUDIO_MIME_EXT[mime];
-    assert.equal(ext, fromImages ?? fromAudio, `${mime} extension disagrees`);
-    assert.equal(kind, fromImages ? 'image' : 'audio', `${mime} kind disagrees`);
+    const fromVideo = VIDEO_MIME_EXT[mime];
+    assert.equal(ext, fromImages ?? fromAudio ?? fromVideo, `${mime} extension disagrees`);
+    assert.equal(kind, fromImages ? 'image' : fromAudio ? 'audio' : 'video', `${mime} kind disagrees`);
   }
 });
 
@@ -42,7 +43,8 @@ test('the wav aliases all land on the same extension', () => {
 });
 
 test('anything not on the list is refused rather than guessed at', () => {
-  for (const mime of ['application/pdf', 'text/plain', 'video/mp4', '', null, undefined, 'image/svg+xml']) {
+  // video/mp4 is now an accepted kind (the video patch); it's no longer here.
+  for (const mime of ['application/pdf', 'text/plain', 'video/x-flv', '', null, undefined, 'image/svg+xml']) {
     assert.equal(mediaKindFor(mime), null, String(mime));
   }
 });

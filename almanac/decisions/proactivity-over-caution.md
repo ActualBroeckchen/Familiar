@@ -110,3 +110,4 @@ consequence.
 - [Armature](../concepts/armature) — the base model's compliance pull, of which this decision is the safety-critical instance.
 - [Structural authorization](../concepts/structural-authorization) — a more general design concept for closing off the same compliance pull for pre-authorized overrides.
 - [Wait-streak experiment](wait-streak-experiment) — a related instance of the same "do not pre-resolve the question for the model" discipline applied to non-crisis warmth.
+- [Plugin surface safety wall](plugin-surface-safety-wall) — this decision's rule applied in advance to a not-yet-built extension surface: plugin context is excluded from crisis and threat scoring by construction.

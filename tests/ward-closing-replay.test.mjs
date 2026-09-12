@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { wardClosingReplayMessages } from '../discord-gateway.js';
+import { wardClosingReplayMessages } from '../src/discord/discord-gateway.js';
 
 // The ward dead-air guard (audit Task 4): when my human's own tool turn ends
 // with no closing text, handleTurn replays the tool rounds + a nudge and makes

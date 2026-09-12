@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { segmentByDay, localDateOf, isReadableMessage, dayDelta } from '../day-segments.js';
+import { segmentByDay, localDateOf, isReadableMessage, dayDelta } from '../src/schedule/day-segments.js';
 
 // Build a timestamp at a given LOCAL wall-clock time so the test is tz-safe:
 // localDateOf reads it back in the same local zone it was constructed in.

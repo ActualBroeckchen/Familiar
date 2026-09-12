@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runOneTriageTick, TRIAGE_SILENCE_THRESHOLD_MS, resetTriageCooldown } from '../silence-triage-loop.js';
+import { runOneTriageTick, TRIAGE_SILENCE_THRESHOLD_MS, resetTriageCooldown } from '../src/safety/silence-triage-loop.js';
 
 // These tests inject fake deciders but not the wait-streak recorders —
 // hard-disable the feature so a test run can never mutate the real

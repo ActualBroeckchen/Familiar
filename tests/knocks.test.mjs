@@ -6,7 +6,7 @@ import { promises as fsp } from 'fs';
 
 import { recordKnock, listKnocks, dismissKnock, KNOCKS_CAP,
          recordLocationKnock, listLocationKnocks, dismissLocationKnock, LOCATION_KNOCKS_CAP,
-         recordServer, listServers, dismissServer } from '../knocks.js';
+         recordServer, listServers, dismissServer } from '../src/village/knocks.js';
 
 let dir;
 let file;

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   humanCount, isGroupCall, attributeSpeaker, prefixTurn, joinNames,
   diffRoster, formatPresenceNote, buildGreetingPrompt, parseGreeting,
-} from '../voice-presence.js';
+} from '../src/voice/voice-presence.js';
 
 const roster = (...names) => names.map((name, i) => ({ id: `u${i}`, name, isWard: name === 'my human' }));
 

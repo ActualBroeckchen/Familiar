@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pickInterest } from '../interest-picker.js';
+import { pickInterest } from '../src/pondering/interest-picker.js';
 
 // Tiny linear-congruential rng so the weighted-distribution tests are
 // deterministic. Not for production use; only here so the sampling

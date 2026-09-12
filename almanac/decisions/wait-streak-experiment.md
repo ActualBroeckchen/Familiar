@@ -7,16 +7,16 @@ sources:
     path: docs/initiative-build-spec.md
   - id: reachout
     type: file
-    path: reachout.js
+    path: src/warmth/reachout.js
   - id: wait-streak
     type: file
-    path: wait-streak.js
+    path: src/safety/wait-streak.js
   - id: silence-triage-loop
     type: file
-    path: silence-triage-loop.js
+    path: src/safety/silence-triage-loop.js
   - id: discord-gateway
     type: file
-    path: discord-gateway.js
+    path: src/discord/discord-gateway.js
   - id: reachout-test
     type: file
     path: tests/reachout.test.mjs
@@ -55,8 +55,9 @@ to read.
 A compounding factor the spec names: the raw elapsed-silence duration was present in the prompt
 but had no rhythm to be read against — "two days" is just a number without a sense of what is
 normal for this bond [@initiative-spec]. Wait-streak is a first, narrow instrument toward that
-missing sense of normal: not a computed baseline (that is Pass 2 of the spec, not yet built), but
-a bare count of the Familiar's own accumulated waiting, handed back to itself.
+missing sense of normal: not a computed baseline (that landed later as the spec's Pass 2 — see
+[Contact-rhythm baselines](contact-rhythm-baselines) in Consequences below), but a bare count of
+the Familiar's own accumulated waiting, handed back to itself.
 
 ## Decision
 

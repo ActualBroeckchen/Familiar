@@ -1,7 +1,7 @@
 // voice-chat-turn.js — the shared /api/chat spoken turn (web Pass 2 + Discord 3b).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createVoiceChatTurn } from '../voice-chat-turn.js';
+import { createVoiceChatTurn } from '../src/voice/voice-chat-turn.js';
 
 const conn = { provider: 'p', apiKey: 'k', model: 'm' };
 const deps = (fetchFn, over = {}) => ({

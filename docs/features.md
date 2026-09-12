@@ -111,6 +111,21 @@ When enabled (Settings → Tools → **Web search & read**), the Familiar gains 
 
 ---
 
+## Seeing & watching — images and video
+
+The Familiar can actually **see images** you share and, on a capable model, **watch video clips** — not a caption of them, the thing itself. Attach with the paperclip, paste, or drag-and-drop into the web composer; on Discord, just attach to the message. Images are downscaled client-side; short video rides raw.
+
+**Which models can see / watch.** Sight and video are separate capabilities, set per connection in the **Connections** modal:
+
+- **Can see images?** — most modern multimodal models (GPT-4o/5, Claude 3+, Gemini, Qwen-VL, GLM-V, …). On **Auto** the app recognises the known vision families and, for anything else, describes the image with a capable connection and reads that description instead of guessing.
+- **Can watch video?** — a narrower set: **Google Gemini**, **Zhipu GLM 5.3 Flash** (including on the **z.ai Coding Plan**), Qwen-VL, and explicit video models. Set it to **Yes** for a connection you've confirmed. Short clips (≤ ~20 MB) ride inline; for a longer clip on a Gemini connection, a **🎬 Watch full clip** button uploads it and the Familiar answers about the whole thing.
+
+Both are honest by design: on a model that can't see an image it's described first (never hallucinated), and on a model that can't watch a clip the video **stands in as text and the Familiar says plainly it hasn't watched it** — it never pretends. An image the Familiar's human shares can also gently raise its concern if what it sees warrants it (ward-only, raise-only). Ask the Familiar "can you watch this?" and it answers from what's actually switched on right now (its manual carries a live `{{videoActive}}` note). Hard-disable seeing with `PROTO_FAMILIAR_VISION_DISABLED=1` and video with `PROTO_FAMILIAR_VIDEO_DISABLED=1`.
+
+See [`vision-build-spec.md`](vision-build-spec.md) and [`video-build-spec.md`](video-build-spec.md) for the full reference.
+
+---
+
 ## Discord presence
 
 The Familiar can join Discord as a bot — answering your DMs with full context, registered Villagers' DMs with only what their category grants, and server channels when @-mentioned. Configure it in Settings → **Discord presence**: paste the **Bot token** (Developer Portal → your app → Bot, with the *Message Content* intent enabled), tick **Enable Discord presence**, and press **⟳ Apply & connect** — it connects immediately, no page reload.
@@ -139,6 +154,7 @@ See [Sessions & Memorization](sessions.md) for the full reference.
 | Memorize now | **Chat sidebar** button that enqueues memorization of the current session on demand without ending it |
 | Session browser | **☰ → Logs** — view, load, or delete any past session |
 | Per-session Memorize | Each row in the Logs modal has a **Memorize** button offering **Auto-summarize** (run the worker over the session and save to **Session Memories**) or **Manual topics** (open the session read-only, mark topic ranges by hand, review each entry) |
+| Familiar session search | In a private moment with you, the Familiar can glance back through past sessions itself (`search_sessions`) to find where something was said — across web and Discord, DMs and group rooms — so "let me have a look… ah, that's where you mentioned it" works even when it wasn't in the current chat. Ward-private only. |
 
 ---
 

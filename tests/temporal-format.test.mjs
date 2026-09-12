@@ -11,7 +11,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatTemporalContext } from '../temporal-format.js';
+import { formatTemporalContext } from '../src/schedule/temporal-format.js';
 
 test('returns empty string for null payload', () => {
   assert.equal(formatTemporalContext(null), '');
@@ -117,7 +117,7 @@ test('renders live interests as plain labels (no numeric weight), heaviest first
       ],
     },
   });
-  assert.match(out, /Lately I keep being drawn to think about:/);
+  assert.match(out, /What I'm interested in right now:/);
   // Labels present, weights gone.
   assert.match(out, /owl feather aerodynamics/);
   assert.match(out, /biomimetic engineering/);

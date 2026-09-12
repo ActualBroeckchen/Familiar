@@ -14,10 +14,10 @@ import {
   buildWaitStreakLine,
   isWaitStreakEnabled,
   PROACTIVE_KIND_PHRASES,
-} from '../wait-streak.js';
-import { runOneTriageTick, resetTriageCooldown } from '../silence-triage-loop.js';
-import { runOneReachoutTick, resetReachoutCooldown } from '../reachout-loop.js';
-import { buildReachoutPrompt } from '../reachout.js';
+} from '../src/safety/wait-streak.js';
+import { runOneTriageTick, resetTriageCooldown } from '../src/safety/silence-triage-loop.js';
+import { runOneReachoutTick, resetReachoutCooldown } from '../src/warmth/reachout-loop.js';
+import { buildReachoutPrompt } from '../src/warmth/reachout.js';
 
 let dir;
 beforeEach(() => {

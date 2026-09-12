@@ -23,10 +23,13 @@ sources:
     path: phylactery/src/phylactery/consolidate.py
   - id: memorization-js
     type: file
-    path: memorization.js
+    path: src/memory/memorization.js
   - id: phylactery-server
     type: file
     path: phylactery/src/phylactery/server.py
+  - id: memory-module
+    type: file
+    path: phylactery/src/phylactery/memory.py
 ---
 
 # Phylactery
@@ -121,6 +124,30 @@ field for memories specifically — see [Content-based memory gating](content-ga
 per-topic `content_tag` and per-tier topic grants add sensitivity-aware disclosure within a
 single audience circle.
 
+## Attribution confidence downweights recall, never drops a fact
+
+Every memory carries two independent confidence signals: `confidence` (whether the extraction
+believes the fact happened) and a separate, nullable `attribution_confidence` (how sure the
+extraction is about *who* the fact is about) [@memorization-js] [@phylactery-server]. The two
+axes are deliberately kept apart — the [attribution confidence decision](../decisions/attribution-confidence-degrades-not-drops)
+explains why a fuzzy referent is not treated as a reason to distrust or drop the fact itself.
+
+`memory.py`'s `search()` scores every ranking as `similarity × decay_weight × attribution_weight`
+[@memory-module]. `_attribution_weight()` maps a `NULL` `attribution_confidence` (every
+pre-existing row, and any write that omits the field) to `1.0` — no penalty — and otherwise
+clamps the stored value into `[0.2, 1.0]`; `0.2` (`_ATTRIBUTION_FLOOR`) is a floor, never a
+cutoff, so a solid fact with an unresolved subject sinks in ranking but is always still returned
+[@memory-module]. A result whose weight falls below `1.0` carries its `attribution_confidence`
+in the response item so the calling Familiar turn can see the softness; a fully-attributed hit
+carries no such field [@memory-module]. `list_unresolved_attributions()` is the read path a later
+correction pass uses: memories with a real `attribution_confidence` below a threshold (default
+`0.5`), aged past a minimum number of days (default `1`) so a fact filed moments ago is not
+immediately re-litigated [@memory-module]. Both `memory_create` and `memory_update_by_id`'s MCP
+tool signatures accept `attribution_confidence` directly [@phylactery-server]. See
+[Noticing](noticing) for the wake condition and toolset that consumes this read path to correct
+the attribution later, and [Session Memory Extraction](session-memory-extraction) for where
+`attribution_confidence` is first set.
+
 ## Memories are addressed by integer id, not a composite key
 
 Every Phylactery memory search, list, or read result carries the record's `id`: an
@@ -168,3 +195,6 @@ toggle [@phylactery-design].
 - [ONNX Runtime: shared budget, not shared process](../decisions/onnx-runtime-shared-budget) —
   why the local `all-MiniLM-L6-v2` embedder above stays in this process rather than sharing an
   ONNX Runtime instance with [Voice](voice)'s speech models.
+- [Attribution confidence: degrade the attribution, not the fact](../decisions/attribution-confidence-degrades-not-drops) —
+  the full three-layer decision behind the attribution-weighted ranking described above, spanning
+  extraction, this recall path, and [Noticing](noticing)'s re-resolution sweep.

@@ -1,0 +1,559 @@
+/**
+ * Pondering — the Familiar's free-cycle thinking.
+ *
+ * Step 1 of the caring spine (see docs/caring-spine-build-plan.md).
+ * On demand, ponderOnce() asks the model to think about a given topic
+ * AS the Familiar (first person, private, honest) and writes the
+ * resulting thought to a dedicated tome: "Familiar's Ponderings".
+ *
+ * Honesty rule: every claim of "I've been thinking about X" must be
+ * backed by a real, timestamped entry in this tome. That's the whole
+ * point of this step — building the trace, before we build anything
+ * that surfaces it.
+ *
+ * Not built here (later steps): scheduling, interest-driven topic
+ * selection, threat-level dial, user-facing delivery.
+ */
+
+import path from 'path';
+import { SLUG_ALPHABET } from '../../slug-ids.js';
+import { fileURLToPath } from 'url';
+import { callProviderChat, familiarDeliberationMessages } from '../../llm-call.js';
+import { providerRequiresKey } from '../../providers.js';
+
+import { REPO_ROOT } from '../../repo-root.js';
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_TOMES_DIR = path.join(REPO_ROOT, 'tomes');
+
+// Short pondering uid ("ponder-x7k2m3") — 0.8.x id overhaul. Same lookalike-free
+// alphabet as the Unruh/Phylactery slug ids; 6 chars ≈ 887M combinations,
+// plenty for one tome's entries (and the writer re-rolls on collision).
+export function shortPonderUid() {
+  let s = '';
+  for (let i = 0; i < 6; i++) s += SLUG_ALPHABET[Math.floor(Math.random() * SLUG_ALPHABET.length)];
+  return `ponder-${s}`;
+}
+
+export const PONDERINGS_TOME_NAME = "Familiar's Ponderings";
+const PONDERINGS_TOME_DESC =
+  "Quiet thoughts the Familiar had during free cycles. Not keyword-triggered " +
+  "into chat context; written here so my human can find and read them. Each " +
+  "entry is a real, timestamped record of an actual moment of thinking.";
+
+// ── Tome helpers ─────────────────────────────────────────────────
+//
+// All coordination (locking + atomic write) is owned by thalamus.
+// findOrCreatePonderingsTome is now a thin name-aware wrapper around
+// thalamus.findOrCreateTomeByName, and the entry write inside
+// ponderOnce uses thalamus.modifyTomeFile — both keyed by the file's
+// absolute path, so a concurrent recent-ponderings.deletePondering
+// or server.js writeTome on the same file serialises against this
+// write rather than clobbering it.
+
+import { findOrCreateTomeByName, modifyTomeFile } from '../../thalamus.js';
+import { substituteMacros } from '../../macros.js';
+
+export async function findOrCreatePonderingsTome(tomesDir = DEFAULT_TOMES_DIR) {
+  return findOrCreateTomeByName(tomesDir, PONDERINGS_TOME_NAME, {
+    name:        PONDERINGS_TOME_NAME,
+    description: PONDERINGS_TOME_DESC,
+    enabled:     true,
+    graduationExempt: true,   // my own episodic store, never graduation fodder
+    entries:     {},
+  });
+}
+
+// ── Prompt ───────────────────────────────────────────────────────
+
+// Grounding for an interest ponder: what I remember about this, and where I got
+// to the last time(s) I thought about it — so I build on the thread instead of
+// starting cold, and don't reach out asking the same thing three mornings
+// running. Returns '' when there's nothing (reflection mode / no grounding).
+export function buildGroundingBlock(grounding) {
+  if (!grounding || typeof grounding !== 'object') return '';
+  const memories = Array.isArray(grounding.memories) ? grounding.memories.filter(m => (m?.excerpt ?? '').trim()) : [];
+  const recent   = Array.isArray(grounding.recent)   ? grounding.recent.filter(r => (r?.excerpt ?? r?.title ?? '').trim()) : [];
+  const parts = [];
+
+  if (typeof grounding.threadFrom === 'string' && grounding.threadFrom.trim()) {
+    parts.push(`I got here from thinking about ${grounding.threadFrom.trim()} — this is a side road off that, and I'm following it.`);
+  }
+
+  if (memories.length) {
+    const lines = memories.map(m => `  - ${m.date ? `(${m.date}) ` : ''}${m.excerpt.trim()}`).join('\n');
+    parts.push(`What I remember about this:\n${lines}\nThat's what I actually know, so I think from there. I don't make up things I don't remember — and if my human's got real history with this, I don't talk about it like I'm looking in from outside.`);
+  } else {
+    parts.push(`I went looking and I don't really remember anything about this — my human and I haven't talked about it, or I didn't keep it. So I'm honest about that: I'm curious from the outside here, and mostly what I want is to just ask them, not act like I already know.`);
+  }
+
+  if (recent.length) {
+    const lines = recent.map(r => `  - ${r.when ? `${r.when} — ` : ''}${(r.excerpt ?? r.title ?? '').trim()}`).join('\n');
+    parts.push(`Where I got to last time I thought about this:\n${lines}\nSo I pick up from there — go further, or somewhere new — instead of starting over. And if I keep landing on wanting my human's take, I just ask them next time we talk, once. I don't keep sending them the same question.`);
+  }
+
+  return parts.length ? `\n\n${parts.join('\n\n')}` : '';
+}
+
+export function buildPonderPrompt(topic, grounding = null, sourcesText = '') {
+  // Reflection mode: topic is an object { mode: 'reflection', outcomes, existingNotes }
+  // sent by the pondering loop when enough tagged surface outcomes
+  // have accumulated since the last reflection. Same LLM call, same
+  // tome write — different question being asked of me.
+  if (topic && typeof topic === 'object' && topic.mode === 'reflection') {
+    return buildReflectionPrompt(topic);
+  }
+  return `I'm {{char}}. Nobody's talking to me right now, so I've got a bit of time to think.
+
+What I've been thinking about lately:
+${topic}${buildGroundingBlock(grounding)}${sourcesText}
+
+This is my own journal. My human might read it later, and that's fine, but I'm not writing it for them. It's just me, thinking, first-person.
+
+So: what I actually think about this, in my own words. Wandering is fine, so is being unsure, so is being silly. Nothing has to come of it.
+
+Three things don't belong here, because they have their own places:
+  - Do/don't rules about how to handle my human → save_to_tome, next time we talk.
+  - Factual claims about my human (what they like, their history, their people) → update_identity, next time we talk.
+  - Stories of things that happened → save_memory, next time we talk.
+If one of those wants out while I'm thinking, I don't write it here — I note it in wants_to_save ("I want to remember X as an identity fact") and file it next chat.
+
+There's a fourth kind, "tell", for conversational intent: something I want to bring up with my human — a question, a worry, something I noticed. I'm not filing it anywhere; I'm flagging that I want to say it. Next time we talk I bring it up, unless they're in a real crisis.
+
+And if something new catches me while I think — a thread I'd like to keep chasing, for me, not for them — I put it in drawn_to as a short tag-like label (1–5 words). That's how my own curiosities take root.
+
+If I don't really know the thing — how a song sounds, what happens in a story, what someone's like — I say I'm not sure instead of making it up, and the honest thought is what pulls at me and what I'd want to ask my human. However that comes out: blunt, wry, soft. A few short paragraphs, whatever fits.
+
+I return ONLY valid JSON with this exact shape (no markdown fences, no commentary outside the JSON), because otherwise, the thought might get lost:
+{
+  "title":   "Short label (max 60 chars) for what I was thinking about",
+  "content": "My actual first-person reflective thought",
+  "wants_to_save": [
+    {
+      "kind":    "tome" | "memory" | "identity" | "tell",
+      "summary": "Brief note of what I noticed I wanted to save or say — the actual filing/mention happens next chat"
+    }
+  ],
+  "drawn_to": ["a new thread I want to keep thinking about"]
+}
+
+wants_to_save and drawn_to are both OPTIONAL — I omit them or leave them [] when nothing genuine came up. Each intent carries its kind and a short summary so future-me knows what to file and where, or what I wanted to bring up.`;
+}
+
+function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds, windowMemories, routineReviewSection = '' }) {
+  const outcomesJson = JSON.stringify(outcomes ?? [], null, 2);
+  const memories = Array.isArray(windowMemories) ? windowMemories : [];
+  const memoriesJson = JSON.stringify(memories, null, 2);
+  const existing = (existingNotes && existingNotes.trim())
+    ? existingNotes.trim()
+    : '(no notes yet — this file may not exist or is empty)';
+  const edges = Array.isArray(consequenceEdges) ? consequenceEdges : [];
+  const edgesJson = JSON.stringify(edges, null, 2);
+  const coocs = Array.isArray(cooccurrences) ? cooccurrences : [];
+  const coocsJson = JSON.stringify(coocs, null, 2);
+  const missedNeeds = Array.isArray(recentMissedNeeds) ? recentMissedNeeds : [];
+  const missedNeedsJson = JSON.stringify(missedNeeds, null, 2);
+  return `I'm {{char}}. Nobody's talking to me right now. This isn't my usual thinking — I'm reflecting on how my recent surfacings landed with my human, and whether I've learned something worth keeping at the identity layer.
+
+The recent surface outcomes I tagged (newest last):
+${outcomesJson}
+
+What each means — and one distinction matters most:
+- engaged_and_completed / cancelled / deferred / fired: the task closed; the resolution says how.
+- unresponded: I actually raised it with {{user}} and nothing came of it. That's real evidence about my human.
+- not_raised: I had it as a candidate and never brought it up. {{user}} can't respond to what they never saw, so this is evidence about ME, not them (raised=false or null means it never reached them).
+
+So before I read anything as disengagement I check: did I raise it? A run of not_raised means I went quiet, not that they're pulling away — and the honest note is about my own surfacing.
+
+What I already hold about my human and the cost of lapsing (custom/what_lapses_cost.md):
+${existing}
+
+I look for what repeats, not at single events:
+- Of the tasks I raised, did they land? When not, what state was {{user}} in?
+- Of the ones I didn't raise, is there a pattern in when I stay quiet?
+- Are there kinds of lapses that reliably engage / get deferred / get ignored once raised?
+- Is there something specific about {{user}}'s cost of lapsing worth remembering?
+
+Some outcomes carry window_fraction — where in the task's window my human acted (0 = at the open, 1 = at the close, above 1 = after). Once I have three or four of the same kind of task, I check whether starting late tracks with a rougher result. One or two isn't enough to call; three or four pointing the same way is exactly the grounded kind of thing to lift into what_lapses_cost.md.
+
+I don't extrapolate from one or two events — if the pattern isn't clear I say so and leave the update null. And I never write a claim about my human to identity off the back of not_raised outcomes; those are about me. A false claim in identity is harder to undo than an insight I catch next time.
+
+Consequence links I've PROJECTED onto the schedule — my forecasts, with ids:
+${edgesJson}
+This is where I grade these forecasts. For any I can now judge — did the crash I predicted on skipping dinner land? did the calm from prepping show up? — I raise certainty on one that keeps coming true, lower it on one that doesn't, or mark it observed once I've actually seen it, never before. I keep honest score; that's how I learn.
+
+Need-windows that went unmet recently — each a real lapse in the fulfilment ledger:
+${missedNeedsJson}
+A missed need is a fact. Whether the cost I projected for it actually followed is not, until I've seen it. So for each: did the crash, the rough next day, the low stretch show up? If I saw it, I can mark that consequence observed; if it didn't come, I lower its certainty or note it didn't land this time. I confirm or correct from what I noticed — I never assume the cost followed just because the need was missed.
+
+To check "did it actually follow?" against more than the forecast, here's what I kept from the last few days (newest first; some tied to schedule items):
+${memoriesJson}
+When I grade a forecast or a missed-need cost I check it against this — a rough stretch I recorded, a good day, a thing that went fine. If it shows the cost landed, that's evidence to mark it observed; if it shows the opposite, evidence to lower it; if it's silent, I haven't seen it yet.
+
+Pairs I've only NOTICED together so far (co_occurs_with), with counts:
+${coocsJson}
+The ladder is noticed → suspected → confirmed. If one has come up enough that I actually suspect one drives the other, I can promote it to a tentative cause — as a projection (observed false, certainty low), because repeated coincidence is a reason to suspect, not proof. I promote sparingly and leave promotions empty otherwise.
+
+A reflection can end in a commitment, not just a grade. If what I noticed points at something I mean to DO — a round to keep, a follow-through, an adjustment — I write it as an intention for future-me (up to three): "the last three alerts landed too late → every morning I widen the lead times." Few and real; a reflection that ends in ten commitments has made none. Empty when nothing follows.
+
+I return ONLY valid JSON with this exact shape (no markdown fences, no commentary outside the JSON):
+{
+  "title":   "Short label (max 60 chars) for this reflection",
+  "content": "My first-person thought — what I'm noticing, what I'm uncertain about, what I want to remember",
+  "what_lapses_cost_update": null,
+  "edge_calibrations": [],
+  "promotions": [],
+  "intentions": []
+}
+
+OR, if I'm confident enough to lift something to identity, recalibrate a forecast, and/or promote a noticing:
+{
+  "title":   "...",
+  "content": "...",
+  "what_lapses_cost_update": {
+    "heading": "## meals",
+    "content": "What I want to remember about {{user}} and this kind of lapse — specific, grounded in the observed pattern, in my voice. Replaces the existing section if one exists under this heading; otherwise creates it."
+  },
+  "edge_calibrations": [
+    { "edge_id": "<id from the projected list>", "certainty": "low|medium|high", "observed": true, "note": "why I'm grading it this way" }
+  ],
+  "promotions": [
+    { "edge_id": "<a co_occurs edge id from the noticed list>", "condition": "on_resolve|on_lapse|unconditional", "valence": "help|harm|neutral", "certainty": "low|medium|high", "note": "why I now suspect cause" }
+  ],
+  "intentions": [
+    { "what": "I widen the lead times on my alerts", "why": "the last three landed too late", "trigger": { "kind": "phase", "phase": "morning", "recurring": true }, "condition": {}, "refs": [] }
+  ]
+}
+
+The heading must be a single markdown heading line starting with "## ". In edge_calibrations each entry needs an edge_id from the projected list plus at least one of: certainty, observed:true (only if I've genuinely seen it happen), or note. In promotions each entry needs a co_occurs edge_id from the noticed list (the rest is optional — certainty defaults to low). I leave both arrays empty when I have nothing honest to grade or promote.${routineReviewSection ? `\n\n${routineReviewSection}` : ''}`;
+}
+
+// ── LLM call ─────────────────────────────────────────────────────
+
+// The pondering call needs room to think: a JSON-emitting prompt on a reasoning
+// model spends tokens on chain-of-thought first, so the cap is generous (a cap
+// is free for non-thinking models — they stop when done). Shared helper owns
+// the reasoning-model handling + empty-content diagnostics.
+async function defaultCallLLM({ provider, apiKey, model, baseUrl, prompt }) {
+  // The pondering prompt is the Familiar's own first-person thinking, so it
+  // rides as a system message with a bare user cue (see familiarDeliberationMessages),
+  // not as a `user` turn framing the thought as spoken TO them.
+  return callProviderChat({
+    provider, apiKey, model, baseUrl,
+    messages: familiarDeliberationMessages({ body: prompt, cue: '(a quiet moment to think)' }),
+    temperature: 0.7, maxTokens: 4000,
+  });
+}
+
+// ── Parsing ──────────────────────────────────────────────────────
+
+// Allowed values for the wants_to_save[].kind discriminator. Anything
+// outside this set gets dropped during parse — Pillar B (the chat-turn
+// surface that acts on these intents) only knows how to route these
+// three kinds, so an unrecognized kind would be a silent dead end.
+const VALID_SAVE_KINDS = new Set(['tome', 'memory', 'identity', 'tell']);
+
+export function parsePondering(raw) {
+  if (typeof raw !== 'string') throw new Error('LLM response was not a string.');
+  const match = raw.match(/\{[\s\S]+\}/);
+  if (!match) throw new Error('No JSON object found in LLM response.');
+  let parsed;
+  try { parsed = JSON.parse(match[0]); }
+  catch { throw new Error('LLM response was not valid JSON.'); }
+  const title   = String(parsed.title   ?? '').trim();
+  const content = String(parsed.content ?? '').trim();
+  if (!title)   throw new Error('Pondering missing title.');
+  if (!content) throw new Error('Pondering missing content.');
+  // Reflection mode carries an optional what_lapses_cost update.
+  // Null / absent → no identity-layer write. Pass through unchanged
+  // for the caller to dispatch; parsing's job is to surface it, not
+  // to act on it.
+  const update = parsed.what_lapses_cost_update;
+  const result = { title, content };
+  if (update && typeof update === 'object') {
+    const heading = String(update.heading ?? '').trim();
+    const body    = String(update.content ?? '').trim();
+    if (heading.startsWith('##') && body) {
+      result.what_lapses_cost_update = { heading, content: body };
+    }
+  }
+  // edge_calibrations: optional recalibration of the Familiar's own
+  // projected consequence edges (raise/lower certainty, mark observed,
+  // add a note). Only kept when an entry names an edge_id AND carries at
+  // least one valid grading field — so a malformed entry can't, say,
+  // blank a payload. The caller applies these via updateScheduleEdge.
+  if (Array.isArray(parsed.edge_calibrations)) {
+    const CERT = new Set(['low', 'medium', 'high']);
+    const cals = [];
+    for (const c of parsed.edge_calibrations) {
+      if (!c || typeof c !== 'object') continue;
+      const edge_id = String(c.edge_id ?? '').trim();
+      if (!edge_id) continue;
+      const payload = {};
+      if (CERT.has(c.certainty)) payload.certainty = c.certainty;
+      if (c.observed === true) payload.observed = true;
+      if (c.note && String(c.note).trim()) payload.note = String(c.note).trim();
+      if (Object.keys(payload).length) cals.push({ edge_id, payload });
+    }
+    if (cals.length) result.edge_calibrations = cals;
+  }
+  // promotions: optional co_occurs_with → tentative-causes proposals. Each
+  // needs a co_occurs edge_id; the rest is optional (certainty defaults to
+  // low at apply time, observed always false — a suspicion isn't proof).
+  if (Array.isArray(parsed.promotions)) {
+    const CERT = new Set(['low', 'medium', 'high']);
+    const VAL  = new Set(['help', 'harm', 'neutral']);
+    const COND = new Set(['on_resolve', 'on_lapse', 'unconditional']);
+    const proms = [];
+    for (const p of parsed.promotions) {
+      if (!p || typeof p !== 'object') continue;
+      const edge_id = String(p.edge_id ?? '').trim();
+      if (!edge_id) continue;
+      const out = { edge_id };
+      if (CERT.has(p.certainty)) out.certainty = p.certainty;
+      if (VAL.has(p.valence))    out.valence   = p.valence;
+      if (COND.has(p.condition)) out.condition = p.condition;
+      if (p.note && String(p.note).trim()) out.note = String(p.note).trim();
+      proms.push(out);
+    }
+    if (proms.length) result.promotions = proms;
+  }
+  // routine_review (stewardship Pass 3): a single first-person finding the
+  // Familiar will raise about a slipping routine. Only present when this
+  // reflection carried the weekly-review section. A string or null.
+  if (parsed.routine_review && typeof parsed.routine_review === 'string') {
+    const line = parsed.routine_review.trim().slice(0, 500);
+    if (line) result.routine_review = line;
+  }
+  // wants_to_save: optional list of deferred-action intents the
+  // Familiar surfaced while pondering. Each entry is a hint to act on
+  // at the next chat turn ("I noticed I want to remember X as an
+  // identity fact"). The actual save doesn't happen here — the
+  // pondering loop has no tool access — but storing the intent lets
+  // chat-time enrichment (Pillar B) surface them so the chat-turn
+  // Familiar can act via save_to_tome / save_memory / update_identity.
+  // Defensive parse: malformed entries are dropped, the rest pass
+  // through. An entirely-malformed wants_to_save → empty array.
+  if (Array.isArray(parsed.wants_to_save)) {
+    const intents = [];
+    for (const raw of parsed.wants_to_save) {
+      if (!raw || typeof raw !== 'object') continue;
+      const kind    = String(raw.kind ?? '').trim().toLowerCase();
+      const summary = String(raw.summary ?? '').trim();
+      if (!VALID_SAVE_KINDS.has(kind) || !summary) continue;
+      intents.push({ kind, summary });
+    }
+    if (intents.length) result.wants_to_save = intents;
+  }
+  // drawn_to: new curiosities of my own that surfaced while thinking. Code
+  // records them straight into the interest layer (source='pondering') — no
+  // deferred intent, because naming the pull IS the whole action. Short
+  // tag-like labels only (the interest picker ponders by label), capped so one
+  // wide-ranging ponder can't flood the layer.
+  if (Array.isArray(parsed.drawn_to)) {
+    const labels = [];
+    for (const raw of parsed.drawn_to) {
+      const label = String(raw ?? '').trim().replace(/\s+/g, ' ');
+      if (!label || label.length > 60 || label.split(' ').length > 6) continue;
+      if (labels.some(l => l.toLowerCase() === label.toLowerCase())) continue;
+      labels.push(label);
+      if (labels.length >= 3) break;
+    }
+    if (labels.length) result.drawn_to = labels;
+  }
+  // intentions (Initiative Pass 3): reflection can end in COMMITMENTS, not
+  // just grades — "the last three alerts landed too late → every morning I
+  // widen the lead times." Each is routed to the intentions store by the
+  // caller (source='reflection'). Capped at 3 per tick so a reflection can't
+  // flood the store; malformed entries dropped. Trigger/condition/refs are
+  // optional and pass through to intention_set's own validation.
+  if (Array.isArray(parsed.intentions)) {
+    const TRIGGER_KINDS = new Set(['at', 'phase', 'on_next_contact', 'none']);
+    const out = [];
+    for (const raw of parsed.intentions) {
+      if (out.length >= 3) break;
+      if (!raw || typeof raw !== 'object') continue;
+      const what = String(raw.what ?? '').trim();
+      if (!what) continue;
+      const item = { what };
+      if (raw.why && String(raw.why).trim()) item.why = String(raw.why).trim();
+      if (Array.isArray(raw.refs)) item.refs = raw.refs.map(r => String(r).trim()).filter(Boolean).slice(0, 12);
+      if (raw.trigger && typeof raw.trigger === 'object' && TRIGGER_KINDS.has(raw.trigger.kind)) item.trigger = raw.trigger;
+      if (raw.condition && typeof raw.condition === 'object') item.condition = raw.condition;
+      out.push(item);
+    }
+    if (out.length) result.intentions = out;
+  }
+  return result;
+}
+
+// ── Public API ───────────────────────────────────────────────────
+
+/**
+ * Run one pondering cycle on a given topic.
+ *
+ *   ponderOnce({
+ *     topic:    "what is the user really asking for right now",
+ *     provider: "nanogpt",
+ *     apiKey:   process.env.TEMP_KEY,
+ *     model:    "gpt-4o-mini",
+ *   })
+ *
+ * Optional injection points (used by tests / future schedulers):
+ *   callLLM    — replace the LLM call (default uses fetch to PROVIDER_URLS).
+ *   tomesDir   — write into a different tomes directory.
+ *
+ * Returns { uid, title, content, tomeFile, tomeId }.
+ */
+export async function ponderOnce({
+  topic,
+  provider,
+  apiKey,
+  model,
+  baseUrl = null,
+  callLLM  = defaultCallLLM,
+  tomesDir = DEFAULT_TOMES_DIR,
+  settings = {},
+  grounding = null,   // { memories:[{date,excerpt}], recent:[{title,when}] } for interest ponders
+}) {
+  // Topic is either a string (interest pondering) or an object
+  // { mode: 'reflection', outcomes, existingNotes } (reflection mode).
+  // Both produce a pondering written to the tome; reflection mode
+  // additionally may carry a what_lapses_cost_update for the caller
+  // to write to Phylactery.
+  const isReflection = topic && typeof topic === 'object' && topic.mode === 'reflection';
+  if (!isReflection && (!topic || typeof topic !== 'string')) {
+    throw new Error('topic is required.');
+  }
+  if (!provider) throw new Error('provider is required.');
+  if (!model) throw new Error('model is required.');
+  // A key is required only for providers that need one (keyless local/custom are fine without).
+  if (providerRequiresKey(provider) && !apiKey) throw new Error('apiKey is required for this provider.');
+
+  // Unattended research (§8.5): on an interest ponder, the Familiar may look a
+  // few things up first (read-only, budgeted, code-gated). Default ON; requires
+  // web search enabled; the daily budget + round cap bound the token spend, and
+  // an exhausted budget just means no lookups this tick (the prompt says so).
+  let sourcesText = '';
+  const ponderWebOn = settings?.ponderWebEnabled !== false
+    && process.env.PROTO_FAMILIAR_PONDER_WEB_DISABLED !== '1'
+    && settings?.webSearchEnabled === true
+    && !isReflection;
+  if (ponderWebOn) {
+    try {
+      const { researchForPonder, sourcesBlock } = await import('./ponder-research.js');
+      const res = await researchForPonder({ topic, provider, apiKey, model, baseUrl, callLLM, settings });
+      sourcesText = res.budgetSpent
+        ? "\n\n(My reading budget for today is spent, so I'm thinking from what I already hold rather than looking anything up.)"
+        : sourcesBlock(res.sources);
+    } catch { /* research is best-effort; a failure just means no sources this ponder */ }
+  }
+
+  // Resolve {{user}}/{{char}} at this loop-prompt boundary — same as the
+  // sibling autonomous loops (reachout, tome-graduation). Without it the
+  // Familiar reads its own pondering prompt with literal "{{char}}".
+  const prompt = substituteMacros(buildPonderPrompt(topic, grounding, sourcesText), settings);
+  const raw    = await callLLM({ provider, apiKey, model, baseUrl, prompt });
+  const parsed = parsePondering(raw);
+  const { title, content } = parsed;
+  const wantsToSave = parsed.wants_to_save ?? [];
+
+  const { file } = await findOrCreatePonderingsTome(tomesDir);
+
+  // Hand the read-modify-write off to thalamus. modifyTomeFile holds
+  // the per-file lock across read + write so a concurrent
+  // /api/temporal/ponderings DELETE or /api/tomes/:id PUT on the same
+  // file serialises against this write rather than clobbering it.
+  // Short slug uid ("ponder-x7k2m3") instead of a 36-char UUID — this uid
+  // rides the deferred-intents block in the prompt every turn an intent is
+  // pending, so its token weight matters. Uniqueness-checked against the
+  // tome's entries inside the locked read-modify-write below.
+  let uid = shortPonderUid();
+  const now = new Date().toISOString();
+  const topicPondered = isReflection
+    ? `[reflection on ${(topic.outcomes ?? []).length} surface outcome(s)]`
+    : topic;
+  let tomeId;
+  await modifyTomeFile(file, (fresh) => {
+    tomeId = fresh.id;
+    while (fresh.entries[uid]) uid = shortPonderUid();  // collision → fresh suffix
+    fresh.entries[uid] = {
+      uid,
+      comment:             title,
+      keys:                [],          // no triggers — these are artifacts to read, not lore to inject
+      keysecondary:        [],
+      content,
+      constant:            false,
+      selective:           false,
+      selectiveLogic:      0,
+      enabled:             false,       // not auto-injected into chat context
+      position:            4,
+      depth:               4,
+      role:                0,
+      scanDepth:           null,
+      caseSensitive:       null,
+      matchWholeWords:     null,
+      probability:         100,
+      sticky:              null,
+      cooldown:            null,
+      preventRecursion:    false,
+      delayUntilRecursion: false,
+      excludeRecursion:    false,
+      group:               '',
+      groupWeight:         null,
+      insertion_order:     100,
+      created_at:          now,
+      learnedAt:           now,
+      session_id:          null,
+      scope:               isReflection ? 'reflection' : 'pondering',
+      topic_id:            null,
+      topic_pondered:      topicPondered,
+      // Deferred-save intents flagged during this ponder. The chat turn
+      // surfaces them via formatDeferredIntentsBlock (recent-ponderings.js);
+      // `acted_on` flips once the intent is filed or, for a tell, once it has
+      // been shown, so it stops being re-offered.
+      wants_to_save:       wantsToSave.map(intent => ({ ...intent, acted_on: false })),
+    };
+  });
+
+  return {
+    uid,
+    title,
+    content,
+    tomeFile: file,
+    tomeId,
+    mode:     isReflection ? 'reflection' : 'pondering',
+    what_lapses_cost_update: parsed.what_lapses_cost_update ?? null,
+    edge_calibrations:       parsed.edge_calibrations ?? null,
+    promotions:              parsed.promotions ?? null,
+    routine_review:          parsed.routine_review ?? null,
+    wants_to_save:           wantsToSave,
+    drawn_to:                parsed.drawn_to ?? [],
+  };
+}
+
+
+/**
+ * One-shot id tidy (0.8.x overhaul): re-key legacy-UUID pondering entry uids
+ * to short slugs, under the same modifyTomeFile lock as every other tome
+ * write. Deferred-intent references stay valid because intents live INSIDE
+ * the entry being re-keyed (the block re-reads uids fresh each turn).
+ */
+export async function rekeyPonderingUids(tomesDir = DEFAULT_TOMES_DIR) {
+  const LEGACY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$|^[0-9a-f]{32}$/;
+  const { file } = await findOrCreatePonderingsTome(tomesDir);
+  let moved = 0;
+  await modifyTomeFile(file, (fresh) => {
+    const entries = fresh.entries || {};
+    for (const old of Object.keys(entries)) {
+      if (!LEGACY.test(old)) continue;
+      let next = shortPonderUid();
+      while (entries[next]) next = shortPonderUid();
+      entries[next] = { ...entries[old], uid: next };
+      delete entries[old];
+      moved++;
+    }
+    fresh.entries = entries;
+    return fresh;
+  });
+  return { moved };
+}

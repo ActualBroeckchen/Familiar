@@ -21,6 +21,7 @@ import {
   enrich, createMemory, appendIdentity, updateIdentitySection,
   // Reads for the Knowledge editor UI
   listMemories, readMemory, readMemoryById, getIdentityAll, listGraphNodes, searchGraphNodes, getGraphSubgraph, getFullGraph,
+  listUnresolvedAttributions,
   listSnapshots,
   // Writes (each auto-snapshots before the destructive op)
   updateMemory, deleteMemory, updateMemoryById, deleteMemoryById, moveMemoryDate, rewriteIdentitySection,
@@ -34,7 +35,7 @@ import {
   remapCategoryAudiences, backfillContentTags,
   searchMemory,
   reconnectPhylactery,
-  recordInterest, recordHandoff, listLiveInterests, listInterests,
+  recordInterest, relatedInterests, recordHandoff, listLiveInterests, listInterests,
   bumpInterest, demoteStanding, setStandingInterest,
   getScheduleWindow, addScheduleNode, updateScheduleNode,
   resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
@@ -48,42 +49,44 @@ import {
   memByTimerange, getRecentMemoryLines,
   setIntention, roundsForWard, listIntentions, getDueIntentions,
 } from './thalamus.js';
-import { scoreMessage } from './crisis-signals.js';
-import { foldReasoningIntoContent, callProviderChat } from './llm-call.js';
-import { fetchReadable } from './websearch.js';
-import { startPageWatchLoop, stopPageWatchLoop } from './page-watch-loop.js';
-import { buildPageWatchPrompt, parsePageWatchDecision } from './page-watch.js';
-import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
-import { ponderOnce } from './pondering.js';
-import { startPonderingLoop, stopPonderingLoop } from './pondering-loop.js';
-import { startNoticingLoop, stopNoticingLoop, resetNoticingCooldown } from './noticing-loop.js';
-import { buildNoticingPrompt, AGING_INTENT_MS, AGING_TASK_MS, OVERDUE_EVENT_GRACE_MS } from './noticing.js';
-import { getContactBaseline, weekdayClass } from './contact-baselines.js';
-import { getWaitStreak, recordWait, recordProactive } from './wait-streak.js';
+import { scoreThreatMessage } from './src/safety/crisis-classifier.js';
+import { foldReasoningIntoContent, callProviderChat, familiarDeliberationMessages } from './llm-call.js';
+import { hydrateNameFieldCache, nameFieldEnabledFor, recordNameFieldResult, stampNamesOnTurns } from './name-field.js';
+import { fetchReadable } from './src/search/websearch.js';
+import { startPageWatchLoop, stopPageWatchLoop, isRunning as pageWatchRunning } from './src/browser/page-watch-loop.js';
+import { buildPageWatchPrompt, parsePageWatchDecision } from './src/browser/page-watch.js';
+import { recordThreat, resetThreat, getThreat, getThreatHistory } from './src/safety/threat-tracker.js';
+import { ponderOnce } from './src/pondering/pondering.js';
+import { startPonderingLoop, stopPonderingLoop, isRunning as ponderingRunning, clampChance } from './src/pondering/pondering-loop.js';
+import { startNoticingLoop, stopNoticingLoop, resetNoticingCooldown, isRunning as noticingRunning } from './src/safety/noticing-loop.js';
+import { buildNoticingPrompt, noticingMessages, AGING_INTENT_MS, AGING_TASK_MS, OVERDUE_EVENT_GRACE_MS } from './src/safety/noticing.js';
+import { readAskedMap, writeAskedMap, filterRecentlyAsked, stampAsked, pruneAsked } from './src/safety/noticing-outcomes.js';
+import { getContactBaseline, weekdayClass } from './src/safety/contact-baselines.js';
+import { getWaitStreak, recordWait, recordProactive } from './src/safety/wait-streak.js';
 import {
   addLocation, listLocations, getCurrentLocation, setCurrentLocation, deleteLocation,
   weatherLocationsPrivate, ingestWeather, readWeather,
 } from './thalamus.js';
-import { geocode, fetchForecast } from './weather-source.js';
-import { readWeatherNowLine, readWeatherVagueLine, readWeatherMirrorSync, writeWeatherMirror, clearWeatherMirror } from './weather-mirror.js';
-import { WEATHER_STALE_MS } from './weather-format.js';
-import { selectReadiness } from './stewardship.js';
+import { geocode, fetchForecast } from './src/weather/weather-source.js';
+import { readWeatherNowLine, readWeatherVagueLine, readWeatherMirrorSync, writeWeatherMirror, clearWeatherMirror } from './src/weather/weather-mirror.js';
+import { WEATHER_STALE_MS } from './src/weather/weather-format.js';
+import { selectReadiness } from './src/schedule/stewardship.js';
 import {
   shouldReflectNow,
   getNewOutcomesSinceLastReflection,
   markReflected,
   tagRaisedOutcomes,
-} from './surface-events.js';
-import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedIntents } from './recent-ponderings.js';
-import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
+} from './src/pondering/surface-events.js';
+import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedIntents } from './src/memory/recent-ponderings.js';
+import { startRemindersLoop, stopRemindersLoop } from './src/schedule/reminders-loop.js';
 import {
   selectDueEventAlerts, formatEventAlert, alertWindowBounds,
   selectDueWeatherAlerts, formatWeatherAlert,
   clampLeadMinutes, clampElapsedStampHours, ALERT_GRACE_MS, MAX_LEAD_MS,
-} from './event-alerts.js';
-import { startGcalSyncLoop, stopGcalSyncLoop, resetGcalSyncCadence } from './gcal-sync-loop.js';
-import { recordSyncOutcome, readSyncStatus } from './gcal-sync-status.js';
-import { fetchIcal, fetchViaCli, cliPresetHint } from './gcal-source.js';
+} from './src/schedule/event-alerts.js';
+import { startGcalSyncLoop, stopGcalSyncLoop, resetGcalSyncCadence, isRunning as gcalSyncRunning } from './src/gcal/gcal-sync-loop.js';
+import { recordSyncOutcome, readSyncStatus } from './src/gcal/gcal-sync-status.js';
+import { fetchIcal, fetchViaCli, cliPresetHint } from './src/gcal/gcal-source.js';
 import {
   parseCredentials, buildAuthUrl, exchangeCode,
   readToken as readGoogleToken, writeToken as writeGoogleToken,
@@ -91,24 +94,24 @@ import {
   getFreshAccessToken, listEvents as listGoogleEvents,
   listCalendars as listGoogleCalendars, hasCalendarListScope,
   normalizeGoogleEvents, isConnected as googleConnected,
-} from './gcal-google.js';
+} from './src/gcal/gcal-google.js';
 import {
   resolveAttribution, isIgnored, wardCalendarId,
   writeCalendarCache, readCalendarCache, normalizeAttributionEntry,
-} from './gcal-attribution.js';
-import { listOutbox, acknowledgeOutbox, clearAcknowledged, acknowledgePendingByKind } from './outbox.js';
-import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
-import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';
-import { startMemorySweepLoop, stopMemorySweepLoop } from './memory-sweep-loop.js';
-import { startTomeGraduationLoop, stopTomeGraduationLoop } from './tome-graduation-loop.js';
-import { startContentRegateLoop, stopContentRegateLoop } from './content-regate-loop.js';
-import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './needs-tracking-loop.js';
-import { startMediaRetentionLoop, stopMediaRetentionLoop } from './media-retention-loop.js';
-import { isNeedWindow } from './needs-tracking.js';
-import { decideReachoutViaLLM, getWarmVillagers } from './reachout.js';
-import { recordReachOut } from './reach-out-log.js';
-import { appendReflectionEvent, readReflectionEvents } from './reflection-events.js';
-import { recordUserActivity, getLastUserActivity } from './last-activity.js';
+} from './src/gcal/gcal-attribution.js';
+import { listOutbox, acknowledgeOutbox, clearAcknowledged, acknowledgePendingByKind } from './src/safety/outbox.js';
+import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './src/safety/silence-triage-loop.js';
+import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId, isRunning as reachoutRunning } from './src/warmth/reachout-loop.js';
+import { startMemorySweepLoop, stopMemorySweepLoop, isRunning as memorySweepRunning } from './src/memory/memory-sweep-loop.js';
+import { startTomeGraduationLoop, stopTomeGraduationLoop } from './src/tomes/tome-graduation-loop.js';
+import { startContentRegateLoop, stopContentRegateLoop } from './src/memory/content-regate-loop.js';
+import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './src/schedule/needs-tracking-loop.js';
+import { startMediaRetentionLoop, stopMediaRetentionLoop } from './src/vision/media-retention-loop.js';
+import { isNeedWindow } from './src/schedule/needs-tracking.js';
+import { decideReachoutViaLLM, getWarmVillagers } from './src/warmth/reachout.js';
+import { recordReachOut } from './src/warmth/reach-out-log.js';
+import { appendReflectionEvent, readReflectionEvents } from './src/pondering/reflection-events.js';
+import { recordUserActivity, getLastUserActivity } from './src/sessions/last-activity.js';
 import { buildTimeAnchorBlock, wardLocalNowISO, plainInterval } from './relative-time.js';
 // Cerebellum is the motor module — the outbound counterpart to thalamus.
 // Triage deliberation, trusted-contact delivery, and escalation deadlines
@@ -133,10 +136,10 @@ import {
   // Discord webhook) and records per-channel delivery state.
   enqueueAndDispatch, formatDeliveryNote, activePushAdapters,
 } from './cerebellum.js';
-import { expandWindow } from './recurrence.js';
+import { expandWindow } from './src/schedule/recurrence.js';
 import { selectModules, explainSelection, stickyModulesFor, tickSticky, TOOL_MODULES } from './tool-surfacing.js';
-import { readStewardshipState, recordRoutineReview } from './stewardship.js';
-import { buildNeedsLedger, isRoutineReviewDue, buildRoutineReviewSection, routineReviewHardDisabled } from './routine-review.js';
+import { readStewardshipState, recordRoutineReview } from './src/schedule/stewardship.js';
+import { buildNeedsLedger, isRoutineReviewDue, buildRoutineReviewSection, routineReviewHardDisabled } from './src/schedule/routine-review.js';
 import {
   enqueueMemorization,
   enqueueSessionByDay,
@@ -145,10 +148,12 @@ import {
   cancelJob as cancelMemorizationJob,
   startMemorizationWorker, stopMemorizationWorker,
   findOrCreateSessionMemoriesTome,
-} from './memorization.js';
-import { computeCoverage, collectDateSlices } from './memory-coverage.js';
-import { parseImport, dateFromFilename, applyFallbackDate } from './log-import.js';
-import { segmentByDay } from './day-segments.js';
+} from './src/memory/memorization.js';
+import { computeCoverage, collectDateSlices } from './src/memory/memory-coverage.js';
+import { writeSessionLog as persistSessionLog, sessionLocationLabel } from './src/sessions/session-log.js';
+import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY } from './src/sessions/session-bindings.js';
+import { parseImport, dateFromFilename, applyFallbackDate } from './src/sessions/log-import.js';
+import { segmentByDay } from './src/schedule/day-segments.js';
 import {
   getRegistry as getVillageRegistry,
   upsertCategory as upsertVillageCategory, deleteCategory as deleteVillageCategory,
@@ -157,19 +162,20 @@ import {
   migrateTrustedContacts, seedDefaultCategories,
   initVillageSync, bootSync as villageBootSync,
   pendingCategoryAudienceRemap,
-} from './village.js';
-import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, WARD_PRIVATE } from './audience.js';
-import { normalizeTag } from './content-tags.js';
-import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, AUDIO_MAX_BYTES, IMAGE_MIME_EXT, MEDIA_KINDS, mediaKindFor, MAX_IMAGES_PER_MESSAGE } from './media.js';
-import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './vision.js';
-import { filterOutgoingReply } from './outgoing-filter.js';
-import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw } from './discord-gateway.js';
+} from './src/village/village.js';
+import { parseRegistryJson } from './src/village/village-registry-json.js';
+import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, WARD_PRIVATE } from './src/village/audience.js';
+import { normalizeTag } from './src/memory/content-tags.js';
+import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, AUDIO_MAX_BYTES, IMAGE_MIME_EXT, MEDIA_KINDS, mediaKindFor, MAX_IMAGES_PER_MESSAGE } from './src/vision/media.js';
+import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './src/vision/vision.js';
+import { filterOutgoingReply } from './src/safety/outgoing-filter.js';
+import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw } from './src/discord/discord-gateway.js';
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
 import { substituteMacros } from './macros.js';
 import { withCorePrompts } from './core-prompts.js';
-import { recordOutgoingPrompt, lastOutgoingPrompts } from './prompt-capture.js';
+import { recordOutgoingPrompt, lastOutgoingPrompts } from './src/sessions/prompt-capture.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
-import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock, listServers, dismissServer } from './knocks.js';
+import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock, listServers, dismissServer } from './src/village/knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -263,27 +269,29 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Provider chat-completions URLs live in providers.js so thalamus.js can
 // share them when it builds the env block for Phylactery. See that file
 // for the rationale and how to add a new provider.
-import { PROVIDER_URLS } from './providers.js';
+import { PROVIDER_URLS, resolveProviderUrl, providerRequiresKey, authHeader, connectionReady, resolveReasoningEffort } from './providers.js';
+import { ensureManualTome } from './src/tomes/manual-tome.js';
 import { listProviderModels } from './provider-models.js';
-import { startBenchmark, statusOf, cancelBenchmark, resetBenchmark, reportPathsRelative } from './voice-bench-run.js';
-import { composePlan, evaluatePlan, availableAsrLangs, CAPABILITY_TIERS, VOICE_ENGINES, formatBytes } from './voice-models.js';
-import { consentSummary, inspectInstalled, fetchPlan, MODELS_SUBDIR } from './voice-fetch.js';
-import { measureFootprint } from './voice-footprint.js';
-import { listClips, measureClip, cachedFeatures, catalogueSummary } from './voice-clips.js';
-import { currentAudioWorker as currentAudioWorkerShared, listeningWorker, stopAudioWorker, VOICE_HARD_DISABLED } from './audio-worker-current.js';
-import { hearVoiceNotes, transcribeAsset, transcriptionAllowed, correctTranscript } from './voice-transcribe.js';
-import { enrollWard, enrollVillager, speakerModelPresent, speakerModelDir } from './voice-enroll.js';
-import { pinAndInstallModel } from './voice-pin.js';
-import { readVoiceprints, listVillagerPrints, deleteWardPrint, deleteVillagerPrint } from './voiceprints.js';
-import { assetBytesPath } from './media.js';
-import { DEFAULT_VOICE } from './voice-catalogue.js';
-import { resolveVoice, installVoice, saveWardVoice, listLocalVoices } from './voices.js';
+import { startBenchmark, statusOf, cancelBenchmark, resetBenchmark, reportPathsRelative } from './src/voice/voice-bench-run.js';
+import { composePlan, evaluatePlan, availableAsrLangs, CAPABILITY_TIERS, VOICE_ENGINES, formatBytes, modelById, isPinned } from './src/voice/voice-models.js';
+import { consentSummary, inspectInstalled, fetchPlan, MODELS_SUBDIR } from './src/voice/voice-fetch.js';
+import { measureFootprint } from './src/voice/voice-footprint.js';
+import { listClips, measureClip, cachedFeatures, catalogueSummary } from './src/voice/voice-clips.js';
+import { currentAudioWorker as currentAudioWorkerShared, listeningWorker, stopAudioWorker, VOICE_HARD_DISABLED } from './src/voice/audio-worker-current.js';
+import { hearVoiceNotes, transcribeAsset, transcriptionAllowed, correctTranscript, resolveOfflineAsr, offlineAsrInstallState } from './src/voice/voice-transcribe.js';
+import { OFFLINE_ASR_MODELS, DEFAULT_OFFLINE_ASR } from './src/voice/offline-asr-models.js';
+import { enrollWard, enrollVillager, speakerModelPresent, speakerModelDir } from './src/voice/voice-enroll.js';
+import { pinAndInstallModel } from './src/voice/voice-pin.js';
+import { readVoiceprints, listVillagerPrints, deleteWardPrint, deleteVillagerPrint } from './src/voice/voiceprints.js';
+import { assetBytesPath } from './src/vision/media.js';
+import { DEFAULT_VOICE } from './src/voice/voice-catalogue.js';
+import { resolveVoice, installVoice, saveWardVoice, listLocalVoices } from './src/voice/voices.js';
 import { mergeSettings } from './settings-merge.js';
-import { prepareForSpeech, splitForUtterances, splitForSpeech } from './voice-speech.js';
+import { prepareForSpeech, splitForUtterances, splitForSpeech } from './src/voice/voice-speech.js';
 import {
   speakUnitsSelfHealing,
   SMALL_UTTERANCE_CHARS, DEFAULT_TTS_SEED, MAX_CHAR_IN_SENTENCE,
-} from './voice-generation.js';
+} from './src/voice/voice-generation.js';
 
 /**
  * Failures where nothing further can be spoken, so the read-aloud loop stops
@@ -291,9 +299,9 @@ import {
  * else is a per-part problem and must NOT silence the parts that still work.
  */
 const FATAL_TTS_REASONS = new Set(['no-worker', 'no-engine', 'not-loaded', 'stopped', 'worker-died', 'worker-stopped', 'parked', 'spawn-failed']);
-import { resolveBackend, inspectBackends, BACKENDS, rebuildVoicebox } from './voice-backend.js';
-import { wavHeader, WAV_STREAMING_LENGTH, measureVoiceClip, floatToPcm16 } from './voice-audio-features.js';
-import { KIND_PCM } from './audio-frame.js';
+import { resolveBackend, inspectBackends, BACKENDS, rebuildVoicebox } from './src/voice/voice-backend.js';
+import { wavHeader, WAV_STREAMING_LENGTH, measureVoiceClip, floatToPcm16 } from './src/voice/voice-audio-features.js';
+import { KIND_PCM } from './src/voice/audio-frame.js';
 import { shortSlug } from './slug-ids.js';
 // Tome / state-file coordination is owned by thalamus — every writer
 // of a shared file goes through these helpers so cross-loop races
@@ -333,7 +341,7 @@ function chatRateLimit(req, res, next) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode, injectCorePrompts } = req.body;
+  const { provider, apiKey, baseUrl, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode, injectCorePrompts, reasoningEffort } = req.body;
   // runToolLoop: the app sends true when the user has tools enabled.
   // The server then composes the tool list (built-ins + custom) and runs
   // the multi-round tool-call loop HERE — executing via cerebellum —
@@ -351,12 +359,15 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   //   false            → none.
   const enrichMode = enrichFlag === false ? 'none' : enrichFlag === 'static' ? 'static' : 'full';
 
-  const url = PROVIDER_URLS[provider];
+  const url = resolveProviderUrl({ provider, baseUrl });
   if (!url) {
-    return res.status(400).json({ error: `Unknown provider: "${provider}". Expected one of: ${Object.keys(PROVIDER_URLS).join(', ')}.` });
+    const known = Object.keys(PROVIDER_URLS).join(', ');
+    return res.status(400).json({ error: `Unknown provider "${provider}" (or a custom provider with no base URL). Expected one of: ${known}, custom.` });
   }
-  if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
-    return res.status(400).json({ error: 'API key is required.' });
+  // A key is required only for providers that need one — local/custom endpoints
+  // (Ollama, LM Studio, a self-hosted URL) run keyless.
+  if (providerRequiresKey(provider) && (!apiKey || typeof apiKey !== 'string' || !apiKey.trim())) {
+    return res.status(400).json({ error: 'API key is required for this provider.' });
   }
   if (!model || typeof model !== 'string' || !model.trim()) {
     return res.status(400).json({ error: 'Model name is required.' });
@@ -402,7 +413,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     recordUserActivity().catch(err =>
       console.error('[server] recordUserActivity failed:', err?.message ?? err),
     );
-    const { level, signals } = scoreMessage(userText);
+    const { level, signals } = scoreThreatMessage(userText, { settings: readSettingsSync() || {} });
     if (level !== 0) {
       // Loud, structured log so the silent-failure case ("the
       // detector quietly stopped firing") can be diagnosed from
@@ -589,6 +600,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   const preVisionMessages = enrichedMessages;   // kept for the mid-turn stand-in retry
   const visionGate = audienceTag && audienceTag !== 'ward-private' ? audienceVisible : null;
   let imagesLiveThisTurn = 0;
+  let gifsAsVideoThisTurn = 0;   // animated gifs sent as video_url parts this turn
   let visionFellBack = false;
   let visionCapableTurn = false;   // does THIS turn's connection see? (gates view_image)
   // Re-materialize forcing stand-ins — the mid-turn hard fallback when a
@@ -597,8 +609,11 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     try {
       const s = readSettingsSync() || {};
       const conn = findConnection(s, { provider, model }) || { provider, model };
+      // Force BOTH modalities off: whatever the provider just rejected (a live
+      // image, or an animated-gif-as-video part) must NOT be re-emitted on the
+      // retry, or we'd hit the same reject. Everything stands in as text.
       const mat = await materializeAttachments(preVisionMessages, {
-        connection: { ...conn, visionCapable: 'no' }, settings: s, visibleAudiences: visionGate,
+        connection: { ...conn, visionCapable: 'no', videoCapable: 'no' }, settings: s, visibleAudiences: visionGate,
       });
       return mat.messages;
     } catch { return preVisionMessages; }
@@ -653,9 +668,11 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       });
       enrichedMessages = mat.messages;
       imagesLiveThisTurn = mat.imagesLive;
+      gifsAsVideoThisTurn = mat.gifsAsVideo || 0;
       if (mat.imagesLive || mat.imagesStoodIn) {
         console.log(`[vision] materialized ${mat.imagesLive} live + ${mat.imagesStoodIn} stand-in image(s)`);
       }
+      if (gifsAsVideoThisTurn) console.log(`[vision] ${gifsAsVideoThisTurn} animated gif(s) sent as video`);
       // Anything still undescribed (over the sync cap, or a live-connection's
       // over-budget older image) gets a background look so NEXT time it carries
       // real words. Never blocks this turn.
@@ -684,8 +701,29 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   }
 
   const payload = { model: model.trim(), messages: enrichedMessages, stream: !!stream };
+  // Name the human on their own turns (entity-as-subject "name the human" rule,
+  // now applied on this surface too). /api/chat turns are the ward's — villagers
+  // arrive via Discord, never here — so these resolve to `ward-<slug>`. Optimistic:
+  // stamp unless the off-switch is set or this provider:model has learned a 400 on
+  // the field. Both send points below retry bare + learn on a name-field 400.
+  // (This path can't use withNameFieldFallback: it must pass a genuine 400 through
+  // to the client and must not disturb streaming — so the retry is inline, reusing
+  // the shared stampNamesOnTurns + recordNameFieldResult primitives.)
+  const nameJob = { provider, model, baseUrl: baseUrl ?? null };
+  const nameWard = (readSettingsSync()?.userName || '').trim() || 'my human';
+  const nameFieldsOn = process.env.PROTO_FAMILIAR_NAME_FIELDS_DISABLED !== '1'
+    && nameFieldEnabledFor(nameJob, readSettingsSync());
+  if (nameFieldsOn) payload.messages = stampNamesOnTurns(enrichedMessages, { wardName: nameWard });
   if (typeof temperature === 'number') payload.temperature = temperature;
   if (typeof max_tokens === 'number' && max_tokens > 0) payload.max_tokens = max_tokens;
+  // Reasoning effort for always-on-thinking models (GLM-5.3+): resolved from the
+  // active connection's setting + provider (default low for the z.ai family, off
+  // elsewhere unless set). Keeps chat answer-first instead of spending the whole
+  // budget reasoning. Same helper the Discord path uses.
+  {
+    const effort = resolveReasoningEffort({ provider, reasoningEffort });
+    if (effort) payload.reasoning_effort = effort;
+  }
   // Context-sensitive tool surfacing (tool-surfacing-build-spec): when the
   // ward has it on, only core + triggered modules are advertised; everything
   // stays reachable via request_tools (same-turn recovery). Default OFF.
@@ -739,6 +777,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       // Familiar can commit this conversation through the real pipeline.
       audienceTag,
       apiKey,
+      baseUrl,   // custom/local endpoint the turn is running on (memorize_now reuses it)
     };
     if (surfacing) toolCtx._requestedModules = new Set();
     // request_tools grew the set → the next round advertises the union.
@@ -764,7 +803,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     const upstreamUrl = url;
     const authHeaders = {
       'Content-Type':  'application/json',
-      'Authorization': `Bearer ${apiKey.trim()}`,
+      // Keyless local/custom endpoints send no Authorization (and `apiKey` may be
+      // absent for them — never .trim() it unguarded).
+      ...authHeader(apiKey),
     };
 
     // Abort the loop when the browser tab closes or the client disconnects.
@@ -812,17 +853,25 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
             // model must answer in text — a silent tool-hungry turn is worse
             // than a bounded answer.
             const { tools: _pt, tool_choice: _ptc, ...basePayload } = payload;
-            const body = opts?.forceText
-              ? { ...basePayload, messages: msgs, stream: false }
-              : { ...payload, messages: msgs, ...(roundTools ? { tools: roundTools } : {}), stream: false };
+            const mkBody = (m) => opts?.forceText
+              ? { ...basePayload, messages: m, stream: false }
+              : { ...payload, messages: m, ...(roundTools ? { tools: roundTools } : {}), stream: false };
+            // Loop mode passes its own evolving `msgs`, so the payload-level name
+            // stamping doesn't reach here — stamp the ward's turns per round, and
+            // retry bare on a name-field 400 (learn 'no' only if bare succeeds).
+            const fetchOnce = (m) => fetch(upstreamUrl, {
+              method: 'POST', headers: authHeaders, body: JSON.stringify(mkBody(m)), signal: ac.signal,
+            });
             let r;
             try {
-              r = await fetch(upstreamUrl, {
-                method:  'POST',
-                headers: authHeaders,
-                body:    JSON.stringify(body),
-                signal:  ac.signal,
-              });
+              r = await fetchOnce(nameFieldsOn ? stampNamesOnTurns(msgs, { wardName: nameWard }) : msgs);
+              if (r.status === 400 && nameFieldsOn) {
+                const bare = await fetchOnce(stampNamesOnTurns(msgs, { stamp: false }));
+                if (bare.ok) recordNameFieldResult(nameJob, 'no');
+                r = bare;
+              } else if (r.ok && nameFieldsOn) {
+                recordNameFieldResult(nameJob, 'yes');
+              }
             } catch (err) {
               if (err.name === 'AbortError') {
                 const e = new Error('client disconnected');
@@ -858,10 +907,17 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         try {
           loopOutcome = await runLoop(enrichedMessages);
         } catch (err) {
-          if (!visionFellBack && imagesLiveThisTurn > 0 && isModalityError(err.status, err.body)) {
+          if (!visionFellBack && (imagesLiveThisTurn > 0 || gifsAsVideoThisTurn > 0) && isModalityError(err.status, err.body)) {
             visionFellBack = true;
-            await cacheVisionCapability(provider, model, 'no');
-            console.warn(`[vision] ${provider}:${model} rejected image modality — retried with stand-ins; capability cached 'no'`);
+            // Only a rejected live IMAGE means the connection can't see — cache
+            // that. A rejected gif-as-video means only that it won't take a gif
+            // through video_url; it must NOT blind the connection to images.
+            if (imagesLiveThisTurn > 0) {
+              await cacheVisionCapability(provider, model, 'no');
+              console.warn(`[vision] ${provider}:${model} rejected image modality — retried with stand-ins; capability cached 'no'`);
+            } else {
+              console.warn(`[vision] ${provider}:${model} rejected an animated-gif-as-video part — retried with the gif stood in (vision capability left untouched)`);
+            }
             loopOutcome = await runLoop(await fallbackToStandins());
           } else { throw err; }
         }
@@ -973,10 +1029,16 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         // has streamed — rebuild this round's messages as stand-ins, flip the
         // capability cache, and retry the same round with degraded sight
         // instead of erroring my human's turn.
-        if (!headersSent && !visionFellBack && imagesLiveThisTurn > 0 && isModalityError(upstream.status, text)) {
+        if (!headersSent && !visionFellBack && (imagesLiveThisTurn > 0 || gifsAsVideoThisTurn > 0) && isModalityError(upstream.status, text)) {
           visionFellBack = true;
-          await cacheVisionCapability(provider, model, 'no');
-          console.warn(`[vision] ${provider}:${model} rejected image modality — retrying stream with stand-ins; capability cached 'no'`);
+          // Only a rejected live IMAGE caches 'no' (the connection can't see); a
+          // rejected gif-as-video part leaves vision capability untouched.
+          if (imagesLiveThisTurn > 0) {
+            await cacheVisionCapability(provider, model, 'no');
+            console.warn(`[vision] ${provider}:${model} rejected image modality — retrying stream with stand-ins; capability cached 'no'`);
+          } else {
+            console.warn(`[vision] ${provider}:${model} rejected an animated-gif-as-video part — retrying stream with the gif stood in (vision capability left untouched)`);
+          }
           currentMsgs = await fallbackToStandins();
           round--;   // re-run this round with the stand-in messages
           continue;
@@ -1116,15 +1178,26 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   }
 
   let upstream;
+  const sendUpstream = (msgs) => fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader(apiKey) },
+    body: JSON.stringify(msgs ? { ...payload, messages: msgs } : payload),
+  });
   try {
-    upstream = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey.trim()}`,
-      },
-      body: JSON.stringify(payload),
-    });
+    upstream = await sendUpstream();
+    // Name-field 400 handling: a provider that rejects the `name` field 400s the
+    // whole request. Retry ONCE bare; learn 'no' only if the bare retry actually
+    // succeeds (so an unrelated 400 never permanently disables names). A bare
+    // retry that still fails surfaces its real error, exactly as before.
+    if (upstream.status === 400 && nameFieldsOn) {
+      const bare = await sendUpstream(stampNamesOnTurns(enrichedMessages, { stamp: false })).catch(() => null);
+      if (bare) {
+        if (bare.ok) recordNameFieldResult(nameJob, 'no');
+        upstream = bare;
+      }
+    } else if (upstream.ok && nameFieldsOn) {
+      recordNameFieldResult(nameJob, 'yes');
+    }
   } catch (err) {
     return res.status(502).json({ error: `Network error reaching ${provider}: ${err.message}` });
   }
@@ -1376,7 +1449,7 @@ app.post('/api/diagnostics/session-trace', async (req, res) => {
       entry.surfacing = explainSelection({ turnText, dynamicBlock: typeof t?.dynamicBlock === 'string' ? t.dynamicBlock : '', villagerNames });
     }
     if (want.has('threat')) {
-      entry.threat = scoreMessage(user);   // threat scores the user message only, as live
+      entry.threat = scoreThreatMessage(user, { settings: readSettingsSync() || {} });   // regex floor + ML, as live
     }
     return entry;
   });
@@ -1643,47 +1716,102 @@ function voicePlanFor(what) {
   return { ...listen, voice: null, capability: [], all: listen.extras };
 }
 
+/**
+ * Fetch a voice-model plan with preflight + terminal progress, returning the
+ * fetchPlan result. Shared by the general installer and the per-model offline-
+ * ASR installer so the progress + failure-detail handling lives in one place.
+ *
+ * `label` is only for the log lines. Progress reaches the terminal: a 158 MB
+ * download that prints nothing for two minutes is indistinguishable from one
+ * doing nothing, which is exactly how it looked to my human. The event field is
+ * `phase` — checked against voice-fetch.js, not assumed (written as `stage`
+ * first, it would have printed nothing and left this looking fixed).
+ */
+async function fetchVoicePlanWithProgress(plan, label) {
+  const modelsDir = path.join(__dirname, MODELS_SUBDIR);
+  const summary = await consentSummary({ plan, modelsDir });
+  if (summary?.preflight && summary.preflight.ok === false) {
+    return { ok: false, reason: summary.preflight.reason, needed: summary.outstandingBytes, message: summary.preflight.message };
+  }
+  console.log(`[voice] fetching the ${label} model(s)…`);
+  let lastPct = -1;
+  const result = await fetchPlan({
+    plan, modelsDir,
+    onProgress: (e) => {
+      if (e?.phase === 'download' && Number.isFinite(e.receivedBytes) && Number.isFinite(e.totalBytes) && e.totalBytes > 0) {
+        const pct = Math.floor((e.receivedBytes / e.totalBytes) * 10) * 10;
+        if (pct > lastPct) { lastPct = pct; console.log(`[voice]   ${label} model ${pct}%`); }
+      } else if (e?.phase && e.phase !== 'download') {
+        console.log(`[voice]   ${e.phase}${e.file ? ` ${e.file}` : ''}`);
+      }
+    },
+  });
+  if (result?.ok === false) {
+    // Surface the underlying cause, not just the friendly message. The one line
+    // that says WHY an unpack failed (a decode error, a missing codec, a locked
+    // file) lives in `result.failed[].detail`; dropping it made this class of
+    // failure undiagnosable from the terminal.
+    const cause = Array.isArray(result.failed) ? result.failed.map((f) => f?.detail).filter(Boolean).join('; ') : '';
+    console.log(`[voice] ${label} model download failed: ${result.message ?? result.reason}${cause ? ` — ${cause}` : ''}`);
+  } else {
+    console.log(`[voice] ${label} model(s) ready`);
+  }
+  return result;
+}
+
 app.post('/api/voice/install-models', async (req, res) => {
   try {
     const plan = voicePlanFor(req.body?.what);
-    const modelsDir = path.join(__dirname, MODELS_SUBDIR);
-    const summary = await consentSummary({ plan, modelsDir });
-    if (summary?.preflight && summary.preflight.ok === false) {
-      return res.json({ ok: false, reason: summary.preflight.reason, needed: summary.outstandingBytes });
-    }
-    // Progress reaches the terminal. A 158 MB download that prints nothing for
-    // two minutes is indistinguishable from one that is doing nothing, which
-    // is exactly how it looked to my human.
     const what = req.body?.what === 'listen' ? 'listening' : 'speaking';
-    console.log(`[voice] fetching the ${what} model(s)…`);
-    let lastPct = -1;
-    const result = await fetchPlan({
-      plan, modelsDir,
-      // The field is `phase` — checked against voice-fetch.js rather than
-      // assumed. Written as `stage` first, which would have printed nothing at
-      // all and left this looking fixed.
-      onProgress: (e) => {
-        if (e?.phase === 'download' && Number.isFinite(e.receivedBytes) && Number.isFinite(e.totalBytes) && e.totalBytes > 0) {
-          const pct = Math.floor((e.receivedBytes / e.totalBytes) * 10) * 10;
-          if (pct > lastPct) { lastPct = pct; console.log(`[voice]   ${what} model ${pct}%`); }
-        } else if (e?.phase && e.phase !== 'download') {
-          console.log(`[voice]   ${e.phase}${e.file ? ` ${e.file}` : ''}`);
-        }
-      },
-    });
-    if (result?.ok === false) {
-      // Surface the underlying cause, not just the friendly message. The one
-      // line that says WHY an unpack failed (a decode error, a missing codec,
-      // a locked file) lives in `result.failed[].detail`; dropping it here is
-      // what made this class of failure undiagnosable from the terminal.
-      const cause = Array.isArray(result.failed)
-        ? result.failed.map((f) => f?.detail).filter(Boolean).join('; ')
-        : '';
-      console.log(`[voice] ${what} model download failed: ${result.message ?? result.reason}${cause ? ` — ${cause}` : ''}`);
-    } else {
-      console.log(`[voice] ${what} model(s) ready`);
-    }
+    const result = await fetchVoicePlanWithProgress(plan, what);
     res.json({ ok: Boolean(result?.ok ?? true), ...result });
+  } catch (err) {
+    res.json({ ok: false, error: String(err?.message ?? err) });
+  }
+});
+
+/**
+ * Install ONE offline-ASR upgrade (Whisper / NeMo Parakeet) on demand — the
+ * "download it when I switch to it" path. SenseVoice is the bundled default and
+ * comes through the listening plan; the upgrades are opt-in and fetched here,
+ * per model, into models/audio/<catalogueId>/ (which the worker reads by that
+ * same dir). The choice is the OFFLINE_ASR_MODELS key ('whisper'/'parakeet').
+ */
+app.post('/api/voice/asr-model/install', async (req, res) => {
+  try {
+    const key = String(req.body?.key ?? '').trim().toLowerCase();
+    const choice = OFFLINE_ASR_MODELS[key];
+    if (!choice) return res.json({ ok: false, reason: 'unknown-model', message: `I don't know an offline transcription model called "${key}".` });
+    const model = modelById(choice.catalogueId);
+    if (!model) return res.json({ ok: false, reason: 'unknown-model', message: `${key} has no catalogue entry.` });
+    if (!isPinned(model)) return res.json({ ok: false, reason: 'unpinned', message: `${choice.label} doesn't have a verified download source yet.` });
+    // A one-model plan: no voice, no capability tier — just this offline model.
+    const plan = { voice: null, capability: [], extras: [model], all: [model] };
+    const result = await fetchVoicePlanWithProgress(plan, choice.key);
+    res.json({ ok: Boolean(result?.ok ?? true), ...result });
+  } catch (err) {
+    res.json({ ok: false, error: String(err?.message ?? err) });
+  }
+});
+
+/**
+ * Remove an installed offline-ASR upgrade to reclaim the disk — the counterpart
+ * to switching one on. Only the opt-in upgrades can be removed; the SenseVoice
+ * default is the always-there fallback, so refusing to delete it keeps voice
+ * notes working (and a ward who switched away from an upgrade still transcribes).
+ */
+app.post('/api/voice/asr-model/remove', async (req, res) => {
+  try {
+    const key = String(req.body?.key ?? '').trim().toLowerCase();
+    const choice = OFFLINE_ASR_MODELS[key];
+    if (!choice) return res.json({ ok: false, reason: 'unknown-model' });
+    if (choice.key === DEFAULT_OFFLINE_ASR) {
+      return res.json({ ok: false, reason: 'default-model', message: 'SenseVoice is the built-in fallback and stays installed.' });
+    }
+    const dir = path.join(__dirname, MODELS_SUBDIR, choice.dir);
+    await fsp.rm(dir, { recursive: true, force: true });
+    console.log(`[voice] removed offline ASR model ${choice.key} (${choice.dir})`);
+    res.json({ ok: true, removed: choice.key });
   } catch (err) {
     res.json({ ok: false, error: String(err?.message ?? err) });
   }
@@ -2205,6 +2333,29 @@ app.get('/api/voice/local', async (_req, res) => {
   catch (err) { res.json({ ok: false, error: String(err?.message ?? err) }); }
 });
 
+// GET the offline-ASR model choice + live state, so Settings can show which
+// model calls/voice-notes actually use, whether the selected one is downloaded,
+// and whether it fell back to SenseVoice. The `options` list drives the picker.
+app.get('/api/voice/asr-model', (_req, res) => {
+  try {
+    const s = readSettingsSync() || {};
+    const r = resolveOfflineAsr(s);
+    const installed = offlineAsrInstallState();
+    // Each option carries whether it's on disk, whether a verified download
+    // source exists (pinned), and whether it can be removed (every upgrade can;
+    // the SenseVoice default stays as the fallback) — the UI needs all three to
+    // show "downloaded", offer install-on-switch, and a remove button.
+    const options = Object.values(OFFLINE_ASR_MODELS).map((m) => ({
+      key: m.key,
+      label: m.label,
+      installed: installed[m.key] === true,
+      pinned: isPinned(modelById(m.catalogueId)),
+      removable: m.key !== DEFAULT_OFFLINE_ASR,
+    }));
+    res.json({ ok: true, options, selected: r.selectedKey, using: r.usingKey, present: r.present, fellBack: r.fellBack, installed });
+  } catch (err) { res.json({ ok: false, error: String(err?.message ?? err) }); }
+});
+
 // ── Voiceprint enrolment (voice Pass 4, §8) ────────────────────────────────
 // Biometric data — the store is local-only, never synced (voiceprints.js). The
 // client records clips, uploads each via POST /api/media (kind audio,
@@ -2364,47 +2515,24 @@ app.post('/api/log', async (req, res) => {
   if (!Array.isArray(messages))
     return res.status(400).json({ error: 'messages must be an array.' });
 
-  const logPath = path.join(LOGS_DIR, `${sessionId}.json`);
-
-  // Merge: keep any server-side messages the client doesn't have.
-  // Uses the `id` field when present; falls back to last-writer-wins
-  // for legacy messages without ids (they form a shared prefix).
-  let finalMessages = messages;
-  try {
-    const existing = JSON.parse(await fsp.readFile(logPath, 'utf8'));
-    if (Array.isArray(existing.messages) && existing.messages.length > 0) {
-      const clientIdSet = new Set(messages.filter(m => m.id).map(m => m.id));
-      const serverOnly  = existing.messages.filter(m => m.id && !clientIdSet.has(m.id));
-      if (serverOnly.length > 0) {
-        // Interleave server-only messages in timestamp order.
-        const merged = [...messages];
-        for (const msg of serverOnly) {
-          const msgTs = msg.timestamp ? new Date(msg.timestamp).getTime() : Infinity;
-          let insertAt = merged.length;
-          for (let i = merged.length - 1; i >= 0; i--) {
-            const mTs = merged[i].timestamp ? new Date(merged[i].timestamp).getTime() : Infinity;
-            if (mTs <= msgTs) break;
-            insertAt = i;
-          }
-          merged.splice(insertAt, 0, msg);
-        }
-        finalMessages = merged;
-      }
-    }
-  } catch { /* no existing file or corrupt — use client's messages as-is */ }
-
-  const data = {
+  // The shared writer serializes per-session and unions by id under a lock, so a
+  // web POST that raced a Discord append to the same (unified) session can't drop
+  // the other surface's turn — and it preserves any fields another writer set
+  // (location, participants, audienceTag). A web POST with no prior location IS
+  // the web chat surface.
+  const r = await persistSessionLog({
     sessionId, startedAt, endedAt: endedAt || null, provider, model,
-    messages: finalMessages,
+    messages,
+    location: { platform: 'web', label: 'Web chat' },
     updatedAt: new Date().toISOString(),
-  };
-  try {
-    await fsp.writeFile(logPath, JSON.stringify(data, null, 2), 'utf8');
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to write log.' });
-  }
+  }, { logsDir: LOGS_DIR, merge: true });
+  if (r.ok) res.json({ ok: true });
+  else res.status(500).json({ error: 'Failed to write log.' });
 });
+
+// A short, human "where did this session happen" label from a log's `location`
+// (web chat, a Discord DM / channel, a voice call) — the label helper now lives in
+// session-log.js (sessionLocationLabel), shared with the Familiar's session search.
 
 // GET /api/logs — list all sessions (metadata only)
 app.get('/api/logs', async (_req, res) => {
@@ -2415,8 +2543,15 @@ app.get('/api/logs', async (_req, res) => {
       if (!f.endsWith('.json')) continue;
       try {
         const raw = await fsp.readFile(path.join(LOGS_DIR, f), 'utf8');
-        const { sessionId, startedAt, endedAt, updatedAt, provider, model, messages } = JSON.parse(raw);
+        const { sessionId, startedAt, endedAt, updatedAt, provider, model, messages, location, origin, audienceTag } = JSON.parse(raw);
         sessions.push({ sessionId, startedAt, endedAt, updatedAt, provider, model,
+          location: location ?? null,
+          locationLabel: sessionLocationLabel(location, origin),
+          platform: location?.platform ?? (typeof origin === 'string' && origin.startsWith('voice-call') ? 'voice' : 'web'),
+          // Whether this is the ward's own private conversation — gates the
+          // "Continue on Discord" handoff so a villager's session is never bound
+          // as the ward-private pointer. Web sessions have no tag (ward-private).
+          wardPrivate: !audienceTag || audienceTag === 'ward-private',
           messageCount: Array.isArray(messages) ? messages.length : 0 });
       } catch { /* skip corrupt files */ }
     }
@@ -2434,11 +2569,50 @@ app.get('/api/logs/:id', async (req, res) => {
     return res.status(400).json({ error: 'Invalid session ID.' });
   try {
     const raw = await fsp.readFile(path.join(LOGS_DIR, `${id}.json`), 'utf8');
+    // Delta mode (?afterCount=N): return only turns after index N plus the new
+    // total. This is what the web poller uses to pick up the OTHER surface's new
+    // turns cheaply — it never refetches a long log every few seconds.
+    const afterCount = Number.parseInt(req.query.afterCount, 10);
+    if (Number.isInteger(afterCount) && afterCount >= 0) {
+      const log = JSON.parse(raw);
+      const all = Array.isArray(log.messages) ? log.messages : [];
+      res.json({ sessionId: id, total: all.length, newMessages: all.slice(afterCount) });
+      return;
+    }
     res.setHeader('Content-Type', 'application/json');
     res.send(raw);
   } catch {
     res.status(404).json({ error: 'Session not found.' });
   }
+});
+
+// GET /api/session/active — the ward's CURRENT private conversation (the pointer
+// the web chat and the Discord DM share). Scoped to ward-private, so a villager
+// DM or a guild room never surfaces here. Returns the bound session's metadata
+// (or null). This is what the web adopts on open so a Discord DM shows up.
+app.get('/api/session/active', async (_req, res) => {
+  try {
+    const b = await getSessionBinding(WARD_PRIVATE_KEY);
+    if (!b?.sessionId) return res.json(null);
+    let messageCount = 0, updatedAt = null, startedAt = null;
+    try {
+      const log = JSON.parse(await fsp.readFile(path.join(LOGS_DIR, `${b.sessionId}.json`), 'utf8'));
+      messageCount = Array.isArray(log.messages) ? log.messages.length : 0;
+      updatedAt = log.updatedAt ?? null; startedAt = log.startedAt ?? null;
+    } catch { /* bound session has no log yet */ }
+    res.json({ sessionId: b.sessionId, lastTurnAt: b.lastTurnAt, messageCount, updatedAt, startedAt });
+  } catch { res.json(null); }
+});
+
+// POST /api/session/active {sessionId} — the web claims a session as the ward's
+// current private conversation, so the ward's next Discord DM continues THIS one.
+// Called on send / new-chat / a "continue elsewhere" handoff.
+app.post('/api/session/active', async (req, res) => {
+  const { sessionId } = req.body ?? {};
+  if (!isValidSessionId(sessionId)) return res.status(400).json({ error: 'Invalid session ID.' });
+  const r = await setSessionBinding(WARD_PRIVATE_KEY, sessionId);
+  if (r.ok) res.json({ ok: true, sessionId });
+  else res.status(500).json({ error: 'Failed to set active session.' });
 });
 
 // DELETE /api/logs/:id — remove a session log
@@ -2452,6 +2626,30 @@ app.delete('/api/logs/:id', async (req, res) => {
   } catch {
     res.status(404).json({ error: 'Session not found.' });
   }
+});
+
+// POST /api/logs/:id/close — manually mark a session ended. For sessions that
+// never got finalized (a tab closed, or one that never idle-rolled) and so still
+// read as "open". Stamps endedAt at the LAST message's real time (when the
+// conversation actually stopped), not "now" — falling back to updatedAt/now. A
+// session already ended is a no-op. Written through the merge writer so a
+// concurrent turn can't be dropped.
+app.post('/api/logs/:id/close', async (req, res) => {
+  const { id } = req.params;
+  if (!isValidSessionId(id)) return res.status(400).json({ error: 'Invalid session ID.' });
+  let log;
+  try {
+    log = JSON.parse(await fsp.readFile(path.join(LOGS_DIR, `${id}.json`), 'utf8'));
+  } catch {
+    return res.status(404).json({ error: 'Session not found.' });
+  }
+  if (log.endedAt) return res.json({ ok: true, endedAt: log.endedAt, alreadyEnded: true });
+  const msgs = Array.isArray(log.messages) ? log.messages : [];
+  const lastTs = msgs.length ? msgs[msgs.length - 1]?.timestamp : null;
+  const endedAt = lastTs || log.updatedAt || new Date().toISOString();
+  const r = await persistSessionLog({ ...log, endedAt }, { logsDir: LOGS_DIR, merge: true });
+  if (r.ok) res.json({ ok: true, endedAt });
+  else res.status(500).json({ error: 'Failed to close session.' });
 });
 
 // GET /api/active-session — most recently updated session (metadata only).
@@ -2599,7 +2797,7 @@ app.get('/api/reflection-events', async (req, res) => {
 // villager-driven write is auditable, not silent.
 app.get('/api/discord-writes', async (_req, res) => {
   try {
-    const { readDiscordWrites } = await import('./discord-write-log.js');
+    const { readDiscordWrites } = await import('./src/discord/discord-write-log.js');
     res.json(await readDiscordWrites({ limit: 200 }));
   } catch {
     res.json([]);
@@ -2612,16 +2810,29 @@ app.get('/api/browser/status', async (_req, res) => {
     return res.json({ running: false, disabled: true, reason: 'PROTO_FAMILIAR_BROWSE_DISABLED=1' });
   }
   try {
-    const { browserStatus } = await import('./browser.js');
+    const { browserStatus } = await import('./src/browser/browser.js');
     res.json(browserStatus());
   } catch (err) {
     res.json({ running: false, error: err?.message ?? String(err) });
   }
 });
 
+app.get('/api/reader-doctor', async (_req, res) => {
+  // Ward-facing diagnostic: which gated sites are reachable and what unlocks the
+  // rest. The endpoint is the ward's own surface, so the browser-session backend
+  // is allowed (wardTurn:true).
+  try {
+    const { runReaderDoctor } = await import('./src/browser/reader-doctor.js');
+    const report = await runReaderDoctor({ settings: readSettingsSync(), wardTurn: true });
+    res.json(report);
+  } catch (err) {
+    res.status(500).json({ error: err?.message ?? String(err) });
+  }
+});
+
 app.get('/api/browser-actions', async (_req, res) => {
   try {
-    const { readBrowserActions } = await import('./browser-audit.js');
+    const { readBrowserActions } = await import('./src/browser/browser-audit.js');
     res.json(await readBrowserActions({ limit: 200 }));
   } catch {
     res.json([]);
@@ -2635,8 +2846,55 @@ app.post('/api/browser/confirm', async (req, res) => {
   if (process.env.PROTO_FAMILIAR_BROWSE_DISABLED === '1') return res.status(403).json({ ok: false, error: 'browsing disabled' });
   try {
     const { id, approve } = req.body || {};
-    const { resolveConfirm } = await import('./browser.js');
+    const { resolveConfirm } = await import('./src/browser/browser.js');
     res.json(await resolveConfirm(id, approve === true));
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message ?? String(err) });
+  }
+});
+
+// CDP mode arm/disarm (docs/browser-cdp-mode-build-spec.md §3). The ward arms a
+// scoped, time-boxed grant to let the Familiar drive their OWN logged-in Chrome.
+// This is a WARD action by construction — the model has no tool to arm; arming
+// only through this endpoint is the second of the two human gates.
+app.post('/api/browser/cdp-arm', async (req, res) => {
+  if (process.env.PROTO_FAMILIAR_BROWSER_CDP_DISABLED === '1') return res.status(403).json({ ok: false, error: 'CDP mode is turned off by env.' });
+  const s = (() => { try { return readSettingsSync(); } catch { return {}; } })();
+  if (s?.cdpModeEnabled !== true) return res.status(403).json({ ok: false, error: 'Turn on “Drive my own Chrome (CDP)” in Settings first.' });
+  try {
+    const { armCdp } = await import('./src/browser/browser-cdp-arm.js');
+    const r = armCdp({ domain: req.body?.domain, minutes: req.body?.minutes });
+    res.status(r.ok ? 200 : 400).json(r);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message ?? String(err) });
+  }
+});
+app.post('/api/browser/cdp-disarm', async (_req, res) => {
+  try {
+    const { disarmCdp } = await import('./src/browser/browser-cdp-arm.js');
+    res.json(disarmCdp('ward'));
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message ?? String(err) });
+  }
+});
+
+// One-click "Set up my Chrome": drop a double-clickable launcher on the Desktop
+// that opens a Chrome the Familiar can drive (debug port + a DEDICATED profile,
+// so the ward's everyday browser is never exposed). The app writes a shortcut;
+// it never launches Chrome itself — the ward still chooses to run it (§3 gate 1).
+app.post('/api/browser/cdp-setup', async (_req, res) => {
+  if (process.env.PROTO_FAMILIAR_BROWSER_CDP_DISABLED === '1') return res.status(403).json({ ok: false, error: 'CDP mode is turned off by env.' });
+  try {
+    const { launcherPlan, launcherInstructions, findWardChrome, cdpChromeProfileDir, desktopDir } = await import('./src/browser/cdp-launcher.js');
+    const chromePath = findWardChrome();
+    if (!chromePath) return res.json({ ok: false, error: "I couldn't find Chrome (or Edge/Chromium) on this computer. Install Google Chrome, then try this again." });
+    const profileDir = cdpChromeProfileDir();
+    mkdirSync(profileDir, { recursive: true });
+    const plan = launcherPlan({ platform: process.platform, chromePath, profileDir });
+    const outPath = path.join(desktopDir(), plan.filename);
+    await fsp.writeFile(outPath, plan.content);
+    try { await fsp.chmod(outPath, plan.mode); } catch { /* Windows / restricted fs — mode is best-effort */ }
+    res.json({ ok: true, path: outPath, filename: plan.filename, instructions: launcherInstructions(process.platform) });
   } catch (err) {
     res.status(500).json({ ok: false, error: err?.message ?? String(err) });
   }
@@ -2647,7 +2905,7 @@ app.post('/api/browser/confirm', async (req, res) => {
 app.post('/api/browser/handback', async (_req, res) => {
   if (process.env.PROTO_FAMILIAR_BROWSE_DISABLED === '1') return res.status(403).json({ ok: false, error: 'browsing disabled' });
   try {
-    const { browseHandback } = await import('./browser.js');
+    const { browseHandback } = await import('./src/browser/browser.js');
     const s = (() => { try { return readSettingsSync(); } catch { return {}; } })();
     res.json(await browseHandback({ settings: s }));
   } catch (err) {
@@ -2680,10 +2938,10 @@ function visionThreatScoringOn() {
 // store: same content-addressing, same audience tag, same slug ids. What
 // differs is which consent governs them — seeing vs hearing — so the gate is
 // picked from the kind rather than assumed.
-app.post('/api/media', express.raw({ type: ['image/*', 'audio/*'], limit: '30mb' }), async (req, res) => {
+app.post('/api/media', express.raw({ type: ['image/*', 'audio/*', 'video/*'], limit: '30mb' }), async (req, res) => {
   const buffer = req.body;
   if (!Buffer.isBuffer(buffer) || !buffer.length) {
-    return res.status(400).json({ error: 'No bytes received (send a raw image/* or audio/* body).' });
+    return res.status(400).json({ error: 'No bytes received (send a raw image/*, audio/*, or video/* body).' });
   }
   const mime = String(req.headers['content-type'] || '').split(';')[0].trim();
   const kind = mediaKindFor(mime);
@@ -2710,6 +2968,38 @@ app.post('/api/media', express.raw({ type: ['image/*', 'audio/*'], limit: '30mb'
 
 // Stream bytes for a UI thumbnail (accepts slug or sha). Behind the same
 // loopback/Tailscale gate as every endpoint.
+// Long-video understanding via the Gemini File API (docs/video-build-spec.md §4).
+// ISOLATED from /api/chat: a single native generateContent call over an uploaded
+// clip, default-OFF, ward-only (web). Any failure → {ok:false} and the ward is
+// told; it never falls into the chat path.
+app.post('/api/video-understand', express.json({ limit: '256kb' }), async (req, res) => {
+  if (process.env.PROTO_FAMILIAR_VIDEO_DISABLED === '1') return res.status(403).json({ ok: false, error: 'Video is turned off.' });
+  const s = (() => { try { return readSettingsSync() || {}; } catch { return {}; } })();
+  if (s.videoFileApiEnabled !== true) {
+    return res.status(403).json({ ok: false, error: 'Long clips are off — turn on “Send longer clips to Gemini (File API)” in Settings first.' });
+  }
+  const { assetId, prompt, provider, model, apiKey } = req.body || {};
+  try {
+    const gm = await import('./src/vision/gemini-file-api.js');
+    if (!gm.isGeminiVideoProvider(provider, model)) {
+      return res.status(400).json({ ok: false, error: 'Longer clips go through Gemini — pick a Google Gemini connection for this.' });
+    }
+    if (!apiKey) return res.status(400).json({ ok: false, error: 'That connection has no API key.' });
+    let asset = null;
+    try { asset = await getAsset(assetId); } catch { asset = null; }
+    if (!asset?.buffer || asset?.meta?.kind !== 'video') return res.status(404).json({ ok: false, error: 'I don\'t have that video.' });
+    const r = await gm.answerAboutVideo({
+      buffer: asset.buffer, mime: asset.meta.mime, displayName: asset.meta.slugs?.[0] || 'clip',
+      model, apiKey,
+      prompt: (typeof prompt === 'string' && prompt.trim()) ? prompt : 'Please watch this video and tell me what happens in it.',
+    });
+    if (r.ok) return res.json({ ok: true, text: r.text });
+    return res.json({ ok: false, error: `I couldn't watch that clip: ${r.error}` });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err?.message ?? String(err) });
+  }
+});
+
 app.get('/api/media/:id', async (req, res) => {
   const got = await getAsset(req.params.id);
   if (got?.ok === false) return res.status(404).json({ error: 'Not found.' });
@@ -2765,7 +3055,12 @@ app.post('/api/media/:id/transcript', async (req, res) => {
 });
 
 // Health check
-app.get('/api/health',  (_req, res) => res.json({ ok: true, version: PKG_VERSION }));
+// `loops` names which self-pacing background workers are actually up — a
+// dead loop reads as `false` here instead of as calm silence.
+app.get('/api/health',  (_req, res) => res.json({ ok: true, version: PKG_VERSION, loops: {
+  pondering: ponderingRunning(), noticing: noticingRunning(), reachout: reachoutRunning(),
+  memorySweep: memorySweepRunning(), gcalSync: gcalSyncRunning(), pageWatch: pageWatchRunning(),
+} }));
 app.get('/api/version', (_req, res) => res.json({ version: PKG_VERSION }));
 
 // ── Self-update (updater.js) ────────────────────────────────────────
@@ -3371,7 +3666,7 @@ initCerebellumTools({
 // at the right tier, consent-gated and dedup'd. Function declaration so it can be
 // referenced in the initCerebellumTools call above (hoisted). Degrades to a
 // structured result; never throws into the tool loop.
-async function memorizeSessionNow({ sessionId, provider, apiKey, model, audienceTag }) {
+async function memorizeSessionNow({ sessionId, provider, apiKey, baseUrl, model, audienceTag }) {
   if (!isValidSessionId(sessionId)) return { ok: false, error: 'no-session' };
   let log;
   try {
@@ -3388,7 +3683,7 @@ async function memorizeSessionNow({ sessionId, provider, apiKey, model, audience
     // slices (skips dates already memorized per the coverage ledger).
     const { enqueued, skipped } = await enqueueSessionByDay({
       sessionId, messages,
-      provider: provider ?? log.provider, apiKey, model: model ?? log.model,
+      provider: provider ?? log.provider, apiKey, baseUrl: baseUrl ?? log.baseUrl, model: model ?? log.model,
       audienceTag: audienceTag ?? 'ward-private',
     });
     return { ok: true, enqueued, skipped, messageCount: readable.length };
@@ -3411,20 +3706,20 @@ app.post('/api/memorize', express.text({ type: ['text/plain', 'application/json'
   if (!body || typeof body !== 'object') {
     return res.status(400).json({ error: 'Request body required.' });
   }
-  const { sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model, audienceTag } = body;
+  const { sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, baseUrl, model, audienceTag } = body;
   if (!isValidSessionId(sessionId))
     return res.status(400).json({ error: 'Invalid session ID.' });
   try {
     if (scope === 'topic') {
       // Topic-scoped memorization stays whole-range (one summary of a slice).
       const { jobId, deduped } = await enqueueMemorization({
-        sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model, audienceTag,
+        sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, baseUrl, model, audienceTag,
       });
       res.status(202).json({ jobId, deduped });
     } else {
       // Session scope is day-anchored: one job per calendar date the session
       // touched, skipping date-slices already memorized (the coverage ledger).
-      const r = await enqueueSessionByDay({ sessionId, messages, provider, apiKey, model, audienceTag });
+      const r = await enqueueSessionByDay({ sessionId, messages, provider, apiKey, baseUrl, model, audienceTag });
       res.status(202).json(r);
     }
   } catch (err) {
@@ -3477,9 +3772,9 @@ app.post('/api/memory-backfill', async (_req, res) => {
 // Skips slices already memorized unless `force`. Client supplies the creds, same
 // as POST /api/memorize.
 app.post('/api/memorize-day', async (req, res) => {
-  const { date, force, provider, apiKey, model } = req.body ?? {};
+  const { date, force, provider, apiKey, baseUrl, model } = req.body ?? {};
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date ?? '')) return res.status(400).json({ error: 'Invalid date (YYYY-MM-DD).' });
-  if (!provider || !apiKey || !model) return res.status(400).json({ error: 'provider, apiKey, and model are required.' });
+  if (!provider || !model || (providerRequiresKey(provider) && !apiKey)) return res.status(400).json({ error: 'provider and model are required (and an API key for this provider).' });
   try {
     const slices = await collectDateSlices(date, { force: force === true });
     let enqueued = 0, deduped = 0;
@@ -3488,7 +3783,7 @@ app.post('/api/memorize-day', async (req, res) => {
         const r = await enqueueMemorization({
           sessionId, scope: 'day', topicId: date,
           messageRange: { start: seg.startIdx, end: seg.endIdx },
-          messages: seg.messages, provider, apiKey, model, audienceTag,
+          messages: seg.messages, provider, apiKey, baseUrl, model, audienceTag,
           // A forced re-memorize deliberately re-reads the whole day; otherwise
           // ingest only the un-memorized tail (the default delta behaviour).
           fullSegment: force === true,
@@ -3525,7 +3820,7 @@ function resolveImportSegs({ content, filename, fallbackDate, names }) {
 
 // Write each date-slice as an imported session log + enqueue it for ingestion.
 // Shared commit half. Returns { created, enqueued }.
-async function commitImportSegs(segs, { source, provider, apiKey, model }) {
+async function commitImportSegs(segs, { source, provider, apiKey, baseUrl, model }) {
   let created = 0, enqueued = 0;
   const tag = (typeof source === 'string' && source.trim()) ? source.trim().slice(0, 40) : 'import';
   for (const seg of segs) {
@@ -3546,7 +3841,7 @@ async function commitImportSegs(segs, { source, provider, apiKey, model }) {
       const r = await enqueueMemorization({
         sessionId, scope: 'day', topicId: seg.date,
         messageRange: { start: seg.startIdx, end: seg.endIdx },
-        messages: seg.messages, provider, apiKey, model, audienceTag: 'ward-private',
+        messages: seg.messages, provider, apiKey, baseUrl, model, audienceTag: 'ward-private',
       });
       if (!r.deduped) enqueued++;
     } catch (err) { console.warn('[import] enqueue failed:', err?.message ?? err); }
@@ -3559,7 +3854,7 @@ async function commitImportSegs(segs, { source, provider, apiKey, model }) {
 // can show the scale before spending; with `commit` it places the logs by date
 // (one imported session per date) and enqueues them for immediate ingestion.
 app.post('/api/import-logs', express.json({ limit: '32mb' }), async (req, res) => {
-  const { content, selfNames, source, commit, provider, apiKey, model, fallbackDate, filename } = req.body ?? {};
+  const { content, selfNames, source, commit, provider, apiKey, baseUrl, model, fallbackDate, filename } = req.body ?? {};
   const names = Array.isArray(selfNames) ? selfNames
     : (typeof selfNames === 'string' ? selfNames.split(',').map(s => s.trim()).filter(Boolean) : []);
 
@@ -3573,10 +3868,10 @@ app.post('/api/import-logs', express.json({ limit: '32mb' }), async (req, res) =
   if (!commit) {
     return res.json({ ok: true, preview: true, format: r.format, dates: r.dates, days: r.segs.length, messages: r.messageCount });
   }
-  if (!provider || !apiKey || !model) {
-    return res.status(400).json({ error: 'provider, apiKey, and model are required to ingest.' });
+  if (!provider || !model || (providerRequiresKey(provider) && !apiKey)) {
+    return res.status(400).json({ error: 'provider and model are required to ingest (and an API key for this provider).' });
   }
-  const { created, enqueued } = await commitImportSegs(r.segs, { source, provider, apiKey, model });
+  const { created, enqueued } = await commitImportSegs(r.segs, { source, provider, apiKey, baseUrl, model });
   res.status(202).json({ ok: true, committed: true, format: r.format, days: created, enqueued, dates: r.dates });
 });
 
@@ -3586,7 +3881,7 @@ app.post('/api/import-logs', express.json({ limit: '32mb' }), async (req, res) =
 // per-file breakdown; commit ingests every file that resolved, skipping (never
 // failing the whole batch on) any that need a date or didn't parse.
 app.post('/api/import-logs-batch', express.json({ limit: '64mb' }), async (req, res) => {
-  const { files, selfNames, source, commit, provider, apiKey, model } = req.body ?? {};
+  const { files, selfNames, source, commit, provider, apiKey, baseUrl, model } = req.body ?? {};
   if (!Array.isArray(files) || files.length === 0) return res.status(400).json({ error: 'No files provided.' });
   if (files.length > 100) return res.status(400).json({ error: 'Too many files in one batch (max 100).' });
   const names = Array.isArray(selfNames) ? selfNames
@@ -3607,8 +3902,8 @@ app.post('/api/import-logs-batch', express.json({ limit: '64mb' }), async (req, 
       })),
     });
   }
-  if (!provider || !apiKey || !model) {
-    return res.status(400).json({ error: 'provider, apiKey, and model are required to ingest.' });
+  if (!provider || !model || (providerRequiresKey(provider) && !apiKey)) {
+    return res.status(400).json({ error: 'provider and model are required to ingest (and an API key for this provider).' });
   }
 
   let totalDays = 0, totalEnqueued = 0;
@@ -3618,7 +3913,7 @@ app.post('/api/import-logs-batch', express.json({ limit: '64mb' }), async (req, 
       per.push({ filename: r.filename, skipped: true, reason: r.needsDate ? 'needs a date' : (r.error ?? 'could not parse') });
       continue;
     }
-    const { created, enqueued } = await commitImportSegs(r.segs, { source, provider, apiKey, model });
+    const { created, enqueued } = await commitImportSegs(r.segs, { source, provider, apiKey, baseUrl, model });
     totalDays += created; totalEnqueued += enqueued;
     per.push({ filename: r.filename, days: created, enqueued, dates: r.dates });
   }
@@ -4829,10 +5124,10 @@ app.post('/api/discord/apply', (_req, res) => {
 // works as a picker if this fails.
 app.post('/api/guide-chat', async (req, res) => {
   if (guideChatDisabled()) return res.status(403).json({ error: 'The in-modal guide is turned off.' });
-  const { provider, apiKey, model, messages } = req.body || {};
-  const url = PROVIDER_URLS[provider];
+  const { provider, apiKey, baseUrl, model, messages } = req.body || {};
+  const url = resolveProviderUrl({ provider, baseUrl });
   if (!url) return res.status(400).json({ error: `Unknown provider: "${provider}".` });
-  if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) return res.status(400).json({ error: 'API key is required.' });
+  if (providerRequiresKey(provider) && (!apiKey || typeof apiKey !== 'string' || !apiKey.trim())) return res.status(400).json({ error: 'API key is required for this provider.' });
   if (!model || typeof model !== 'string' || !model.trim()) return res.status(400).json({ error: 'Model name is required.' });
   if (!Array.isArray(messages) || messages.length === 0) return res.status(400).json({ error: 'Messages array is required.' });
 
@@ -4858,7 +5153,7 @@ app.post('/api/guide-chat', async (req, res) => {
   try {
     const r = await fetch(url, {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey.trim()}` },
+      headers: { 'Content-Type': 'application/json', ...authHeader(apiKey) },
       body:    JSON.stringify({ model: model.trim(), messages: finalMessages, stream: false }),
     });
     if (!r.ok) {
@@ -5055,7 +5350,12 @@ async function startVillageSync() {
         pullReached = true;
         const file = (id?.custom ?? []).find(f => f.filename === 'village-registry.md');
         const m = file?.content?.match(/```json\s*\n([\s\S]*?)\n```/);
-        return m ? JSON.parse(m[1]) : null;
+        if (!m) return null;
+        const { value, repaired } = parseRegistryJson(m[1]);
+        if (repaired) {
+          console.warn('[village] canonical registry carried stray control characters — repaired on read; it will be rewritten cleanly on the next registry change');
+        }
+        return value;
       } catch (err) {
         pullReached = false;
         console.warn('[village] canonical pull failed:', err?.message ?? err);
@@ -5198,6 +5498,20 @@ const httpServer = app.listen(PORT, HOST, async () => {
   } else {
     console.log('[threat] crisis-signal detection ACTIVE in chat path. Each fire is logged as "[threat] scored ±N on chat msg [signal,...]". Hard-disable with PROTO_FAMILIAR_THREAT_DISABLED=1.');
   }
+  // Seed the self-documenting manual tome, and auto-refresh it when its version
+  // bumps — flag-tracked inside, so a ward who deletes or edits it isn't
+  // overridden (only an untouched manual is refreshed). Best-effort.
+  ensureManualTome(TOMES_DIR)
+    .then(r => {
+      if (r.seeded) console.log('[manual] seeded the "Familiar Manual" tome (enabled, protected)');
+      else if (r.refreshed) console.log('[manual] refreshed the "Familiar Manual" tome to the current version (was unedited)');
+      else if (r.reason === 'ward-edited') console.log('[manual] a newer manual shipped, but yours is edited — leaving it as-is');
+    })
+    .catch(err => console.error('[manual] seed failed (skipping):', err?.message ?? err));
+  // Load the learned `name`-field capability cache (provider:model → yes/no) and
+  // enable write-through, so a provider that 400'd on the field stays bare across
+  // restarts until its model changes. Optimistic until something is learned.
+  hydrateNameFieldCache();
   startMemorizationWorker();
   startAutonomousPondering();
   startRemindersScheduler();
@@ -5214,7 +5528,7 @@ const httpServer = app.listen(PORT, HOST, async () => {
   // server down — chat, read-aloud, and voice notes keep working regardless
   // (the no-module-may-break-the-chat-path rule).
   try {
-    const { attachVoiceCall } = await import('./voice-call-server.js');
+    const { attachVoiceCall } = await import('./src/voice/voice-call-server.js');
     const sharedVoiceWorkers = {
       getListeningWorker: async () => (await listeningWorker({ rootDir: __dirname })).worker,
       getTtsWorker: async () => (await currentAudioWorker()).worker,
@@ -5230,8 +5544,8 @@ const httpServer = app.listen(PORT, HOST, async () => {
     // Discord voice (Pass 3) shares the SAME ASR/TTS workers — one call at a
     // time across both transports. Failure here never blocks web calls or chat.
     try {
-      const { attachDiscordVoice } = await import('./voice-discord-server.js');
-      const { setDiscordVoiceController } = await import('./discord-gateway.js');
+      const { attachDiscordVoice } = await import('./src/voice/voice-discord-server.js');
+      const { setDiscordVoiceController } = await import('./src/discord/discord-gateway.js');
       const discordVoice = attachDiscordVoice({
         rootDir: __dirname, port: PORT,
         readSettings: readSettingsSync,
@@ -5361,7 +5675,7 @@ function startAutonomousPondering() {
       const s = readSettingsSync();
       if (s.ponderingEnabled === false) return false;
       const conn = connectionForFeature(s, 'pondering');
-      return !!(conn?.apiKey && conn?.provider && conn?.model);
+      return connectionReady(conn);
     },
     getIntervalScale: async () => {
       const s = readSettingsSync();
@@ -5508,7 +5822,11 @@ function startAutonomousPondering() {
         windowMemories, routineReviewSection, isRoutineReview: !!review,
       };
     },
-    runPonder: async (topic /* string OR { mode:'reflection', ... } */) => {
+    // Threads: one hop along a related_to edge, so a ponder can wander from
+    // the topic it was drawn from instead of always sampling by weight.
+    getRelated: (id) => relatedInterests(id),
+    threadChance: () => clampChance(readSettingsSync().ponderThreadChance),   // Settings → "Wander chance"
+    runPonder: async (topic /* string OR { mode:'reflection', ... } */, _picked = null, opts = {}) => {
       const s    = readSettingsSync();
       const conn = connectionForFeature(s, 'pondering');
       if (!conn?.apiKey) throw new Error('no connection configured for pondering');
@@ -5545,7 +5863,7 @@ function startAutonomousPondering() {
                 excerpt: String(p.content ?? p.title ?? '').trim().slice(0, 280),
               }))
           : [];
-        grounding = { memories, recent };
+        grounding = { memories, recent, threadFrom: opts?.threadFrom ?? null };
       }
 
       const result = await ponderOnce({
@@ -5553,9 +5871,21 @@ function startAutonomousPondering() {
         provider: conn.provider,
         apiKey:   conn.apiKey,
         model:    conn.model,
+        baseUrl:  conn.baseUrl,
         settings: s,
         grounding,
       });
+      // A curiosity of my own that surfaced while pondering takes root in the
+      // interest layer right here, in code — the only self-originated route
+      // into a layer that otherwise mirrors what my human talks about. Small
+      // delta: a passing pull decays away unless later ponders keep landing on it.
+      if (result?.mode === 'pondering') {
+        for (const label of (result.drawn_to ?? [])) {
+          recordInterest({ topic: label, delta: 1.0, source: 'pondering', relatedTo: typeof topic === 'string' ? topic : null })
+            .then(ok => console.log(`[pondering] drawn to "${label}" → ${ok ? 'recorded' : 'not recorded'}`))
+            .catch(err => console.error('[pondering] drawn_to record failed:', err?.message ?? err));
+        }
+      }
       // Reflection follow-through: if the LLM proposed an
       // identity-layer update, write it. Mark the reflection so
       // future shouldReflectNow() calls measure freshness from
@@ -6085,9 +6415,17 @@ function startPageWatches() {
     decideChange: async ({ url, label, note, oldSnapshot, newText }) => {
       const s = readSettingsSync();
       const conn = connectionForFeature(s, 'chat') || connectionForFeature(s, 'pondering');
-      if (!(conn?.apiKey && conn?.provider && conn?.model)) return { surface: true, summary: '' };   // no model → surface plainly rather than swallow the change
+      if (!connectionReady(conn)) return { surface: true, summary: '' };   // no model → surface plainly rather than swallow the change
       const prompt = substituteMacros(buildPageWatchPrompt({ url, label, note, oldSnapshot, newText }), s);
-      const raw = await callProviderChat({ provider: conn.provider, apiKey: conn.apiKey, model: conn.model, prompt, temperature: 0.4, maxTokens: 2000 });
+      // The is-this-worth-a-nudge judgment is my own thinking about a page I
+      // watch, so it rides as a system message with a bare user cue
+      // (familiarDeliberationMessages), never as a `user` turn framing it as
+      // handed TO me.
+      const raw = await callProviderChat({
+        provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
+        messages: familiarDeliberationMessages({ body: prompt, cue: '(a quiet moment checking a page I watch)' }),
+        temperature: 0.4, maxTokens: 2000,
+      });
       return parsePageWatchDecision(raw);
     },
     // Surface as a gentle banner AND push to the ward's channels (same path the
@@ -6213,7 +6551,7 @@ function startReachout() {
       const s = readSettingsSync();
       if (s.warmthEnabled === false) return false;          // default-ON (undefined = on)
       const conn = connectionForFeature(s, 'reachout');
-      return !!(conn?.apiKey && conn?.provider && conn?.model);
+      return connectionReady(conn);
     },
     getThreat,
     getLastActivity: getLastUserActivity,
@@ -6380,13 +6718,37 @@ async function gatherNoticingWakeInputs() {
   // therapy 2 weeks ago) ride in `linked`. Scoping to what's reachable naturally
   // limits this to events that MATTER (carry consequences), not every past speck.
   const seenOverdue = new Set();
-  const overdueEvents = [...nodes, ...linked].filter(n => {
+  const allOverdue = [...nodes, ...linked].filter(n => {
     if (n?.type !== 'event' || n.resolution || !n.id || seenOverdue.has(n.id)) return false;
     const t = Date.parse(n.end || n.when || '');
     if (!Number.isFinite(t) || t >= nowMs - OVERDUE_EVENT_GRACE_MS) return false;
     seenOverdue.add(n.id);
     return true;
-  }).slice(0, 3);
+  }).map(n => ({
+    id: n.id, label: n.label ?? n.id, when: n.when, end: n.end,
+    atMs: Date.parse(n.end || n.when || ''),
+  }));
+
+  // Dedup (ward-signed): an event I already ASKED about is suppressed until the
+  // cooldown passes, so I don't nag — it re-surfaces after, still unresolved, and
+  // I close it then (the look-back window still holds my human's answer). Prune
+  // the ledger against what's still live so it can't grow without bound.
+  const askedMap = await readAskedMap(TOMES_DIR);
+  const prunedAsked = pruneAsked(askedMap, allOverdue.map(e => e.id), { now: nowMs });
+  if (JSON.stringify(prunedAsked) !== JSON.stringify(askedMap)) writeAskedMap(TOMES_DIR, prunedAsked).catch(() => {});
+  const overdueEvents = filterRecentlyAsked(allOverdue, prunedAsked, { now: nowMs }).slice(0, 3);
+
+  // Fuzzy-attribution re-sweep: memories saved unsure who did what (a real
+  // attribution_confidence below threshold), aged a day so the moment has
+  // settled — surfaced to be re-resolved. Gated (default-ON): toggle
+  // noticingAttributionResweepEnabled or PROTO_FAMILIAR_ATTRIBUTION_RESWEEP_DISABLED=1.
+  // Best-effort → [] on failure or when off, so it just doesn't wake the turn.
+  const attributionResweepOn =
+    s?.noticingAttributionResweepEnabled !== false &&
+    process.env.PROTO_FAMILIAR_ATTRIBUTION_RESWEEP_DISABLED !== '1';
+  const unresolvedAttributions = attributionResweepOn
+    ? (await listUnresolvedAttributions({ threshold: 0.5, minAgeDays: 1, limit: 3 }).catch(() => ({ items: [] })))?.items ?? []
+    : [];
 
   return {
     dueIntentions: Array.isArray(dueRes?.due) ? dueRes.due : [],
@@ -6400,6 +6762,7 @@ async function gatherNoticingWakeInputs() {
     agingIntents,
     agingTasks,
     overdueEvents,
+    unresolvedAttributions,
     weekdayClass: weekdayClass(nowMs, tz),
   };
 }
@@ -6407,44 +6770,69 @@ async function gatherNoticingWakeInputs() {
 // The bounded, tool-using deliberation. Composes the noticing toolset, runs
 // the tool-call loop, and reports which tools were EFFECTIVELY called (a
 // reach-out refused during quiet hours is not counted as acting).
-async function noticingDeliberate({ situationReport, threatTier, quietHours }) {
+async function noticingDeliberate({ situationReport, threatTier, quietHours, conditions = [] }) {
   const s = readSettingsSync();
   const conn = connectionForFeature(s, 'noticing');
-  if (!conn?.apiKey || !conn?.model) return { toolNamesCalled: [] };
+  if (!connectionReady(conn)) return { toolNamesCalled: [] };
 
   const nowMs = Date.now();
-  const [{ static: identity }, lastAct, recentMessages, recentMemories] = await Promise.all([
+
+  // The overdue events this turn surfaces (already dedup-filtered upstream). Each
+  // carries its id (so I can actually close it) and age. The oldest one sets how
+  // far back I read the conversation — the whole point, so a day of unrelated
+  // chatter can't bury the exchange where my human said how something went.
+  const openEvents = (Array.isArray(conditions) ? conditions : [])
+    .filter(c => c.kind === 'overdue_event' && c.event?.id && Number.isFinite(c.event?.atMs))
+    .map(c => ({ id: c.event.id, label: c.event.label, atMs: c.event.atMs, agoText: plainInterval(c.event.atMs, nowMs), snippet: null }));
+  const oldestAtMs = openEvents.length ? Math.min(...openEvents.map(e => e.atMs)) : null;
+  const spanText = oldestAtMs != null ? plainInterval(oldestAtMs, nowMs) : '';
+
+  const [{ static: identity }, lastAct, recentMemories] = await Promise.all([
     enrich('', { staticOnly: true }).catch(() => ({ static: '' })),
     getLastUserActivity().catch(() => null),
-    // Same recent context a live chat turn / warm reach-out gets, so noticing
-    // isn't deciding blind to what was just said or what I hold from the last
-    // day or two. Information only — no suppression, no stand-down (ward
-    // decision); the no-look-away-at-threat posture is unchanged.
-    getRecentSessionMessages({ limit: 6 }).catch(() => []),
     getRecentMemoryLines({ days: 2, limit: 8, now: nowMs }).catch(() => ''),
   ]);
+  // Recent conversation: when there's an open outcome, read back to the OLDEST
+  // open event (capped) rather than a fixed 6-turn tail — so my human's answer,
+  // even said hours ago and buried under later chatter, is actually in front of
+  // me to close on. Information only; never a stand-down cue.
+  const recentMessages = await getRecentSessionMessages(
+    oldestAtMs != null ? { since: oldestAtMs, max: 60 } : { limit: 6 },
+  ).catch(() => []);
+
   const nowBlock = buildTimeAnchorBlock({
     now: nowMs, lastUserMessageAt: lastAct?.ts ?? null, timeZone: s?.wardTimeZone || null,
     // Noticing is a ward-private deliberation → full weather line, in the
     // ward's chosen unit.
     weatherLine: readWeatherNowLine({ unit: s?.weatherUnit }),
   });
-  const prompt = substituteMacros(buildNoticingPrompt({
+  const noticingBody = substituteMacros(buildNoticingPrompt({
     // flag_distress is in the noticing toolset now, so the prompt's
     // hand-to-triage clause names a lever the Familiar can actually pull.
-    nowBlock, situationReport, threatTier, hasFlagDistress: true,
+    nowBlock, openEvents, otherItems: situationReport, spanText, threatTier, hasFlagDistress: true,
     recentConversation: formatRecentMessagesForContext(recentMessages, nowMs),
     recentMemories,
   }), s);
-  const messages = [
-    ...(identity ? [{ role: 'system', content: identity }] : []),
-    { role: 'user', content: prompt },
-  ];
+  // Role (ward decision): the Familiar's own reflection rides as SYSTEM, next to
+  // identity — never a `user` turn, which framed it as being operated. A bare,
+  // non-speaking cue fills the `user` slot only because several providers refuse
+  // a completion with no user turn at all. (Assembly is a pure helper so the role
+  // decision is pinned by a test.)
+  const messages = noticingMessages({ identity, body: noticingBody });
   const tools = composeNoticingTools(s);
 
   let nextCheckInMs = null;
   const effectiveNames = [];
+  // Which surfaced events the turn actually CLOSED (a real schedule_resolve on
+  // the event id) — the enforcement signal: a close is a written resolution, not
+  // the model's say-so. Drives both "acted" and the no-nag ledger below.
+  const resolvedEventIds = new Set();
+  const openEventIds = new Set(openEvents.map(e => e.id));
   const executeTool = async (name, argsJson, ctx) => {
+    if (name === 'schedule_resolve') {
+      try { const a = argsJson ? JSON.parse(argsJson) : {}; if (a?.id && openEventIds.has(a.id)) resolvedEventIds.add(a.id); }
+      catch { /* a malformed id just doesn't count as a close */ }
+    }
     if (name === 'set_next_check') {
       let a = {}; try { a = argsJson ? JSON.parse(argsJson) : {}; } catch { /* ignore */ }
       const min = Number(a.minutes);
@@ -6491,6 +6879,26 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours }) {
     // A whole-loop failure surfaces as deliberation_failed upstream.
     throw err;
   }
+
+  // Enforcement + the no-nag ledger. An event the turn RESOLVED is closed (it
+  // drops out of "overdue" on its own next tick — a written resolution, never
+  // the model's word). An open event the turn ASKED about (a reach-out actually
+  // went out, and it wasn't resolved) is stamped so it isn't re-asked until the
+  // cooldown. Anything else is left to surface again. Logged per event so a loop
+  // that never closes is visible, not silent.
+  if (openEvents.length) {
+    const reachedOut = effectiveNames.includes('reach_out_to_ward');
+    const askedIds = reachedOut ? openEvents.map(e => e.id).filter(id => !resolvedEventIds.has(id)) : [];
+    for (const e of openEvents) {
+      const outcome = resolvedEventIds.has(e.id) ? 'closed' : (askedIds.includes(e.id) ? 'asked' : 'left');
+      console.log(`[noticing] overdue event ${e.id} (${e.label}): ${outcome}`);
+    }
+    if (askedIds.length) {
+      const cur = await readAskedMap(TOMES_DIR);
+      await writeAskedMap(TOMES_DIR, stampAsked(cur, askedIds, nowMs));
+    }
+  }
+
   return { toolNamesCalled: effectiveNames, nextCheckInMs };
 }
 
@@ -6504,7 +6912,7 @@ function startNoticing() {
       const s = readSettingsSync();
       if (s.noticingEnabled === false) return false;         // default-ON (undefined = on)
       const conn = connectionForFeature(s, 'noticing');
-      return !!(conn?.apiKey && conn?.provider && conn?.model);
+      return connectionReady(conn);
     },
     getThreat,
     getWakeInputs: gatherNoticingWakeInputs,
@@ -6607,7 +7015,7 @@ async function handleSignal(signal) {
   try { stopDiscordGateway(); } catch { /* already stopped */ }
   try { shutdownPhylactery(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }
-  try { import('./zai-vision.js').then(m => m.shutdownZaiVision()).catch(() => {}); } catch { /* never spawned */ }
+  try { import('./src/vision/zai-vision.js').then(m => m.shutdownZaiVision()).catch(() => {}); } catch { /* never spawned */ }
   // Give the close handshakes a tiny window, then exit.
   setTimeout(() => process.exit(0), 250).unref();
 }

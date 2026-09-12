@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'path';
 import os from 'os';
 import { mkdtempSync, rmSync } from 'fs';
-import { recordUserActivity, getLastUserActivity } from '../last-activity.js';
+import { recordUserActivity, getLastUserActivity } from '../src/sessions/last-activity.js';
 
 function tempDir() {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'last-activity-test-'));

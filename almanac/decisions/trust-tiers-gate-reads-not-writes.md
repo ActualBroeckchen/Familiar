@@ -8,10 +8,10 @@ sources:
     note: "Short founding-adjacent conversation right after Unruh's prototype milestone, in which the maintainer's want for Discord access forced the first design pass on cross-session trust."
   - id: village-js
     type: file
-    path: village.js
+    path: src/village/village.js
   - id: audience-js
     type: file
-    path: audience.js
+    path: src/village/audience.js
   - id: injection-guard
     type: file
     path: injection-guard.js

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { readsRemaining, recordReads, PONDER_READS_PER_DAY_DEFAULT } from '../ponder-web-budget.js';
+import { readsRemaining, recordReads, PONDER_READS_PER_DAY_DEFAULT } from '../src/pondering/ponder-web-budget.js';
 
 // The budget lives at a fixed file under tomes/ (git-ignored). Back it up around
 // each test so a developer's real budget count is never clobbered.

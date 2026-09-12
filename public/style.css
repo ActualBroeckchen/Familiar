@@ -372,6 +372,30 @@ textarea:focus-visible {
 .status-badge.busy { color: var(--warn-color); }
 .status-badge.err  { color: var(--error-color); }
 
+/* "Is my Familiar alive?" loop-status readout — one dot + name per
+   background loop. Color is never the only carrier (WCAG 1.4.1): each
+   dot's aria-label/title names the state, and the row also prints the
+   word "up"/"down" so it reads fine with color off. */
+.loops-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  padding: 8px 0;
+}
+.loops-status-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--text);
+}
+.loops-dot { font-size: 0.9rem; line-height: 1; cursor: default; }
+.loops-dot.ok  { color: var(--success-color); }
+.loops-dot.err { color: var(--error-color); }
+.loops-status-word { color: var(--text-dim); font-size: 0.76rem; }
+
+.loops-log-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+
 /* Active-connection chip — always-visible, atop the chat; opens Connections. */
 .conn-chip {
   display: inline-flex;
@@ -1909,6 +1933,35 @@ button { cursor: pointer; font-family: var(--font); }
   font-size: 0.7rem;
   color: var(--accent);
   font-weight: 600;
+}
+
+/* Where a session happened — a small calm chip in the sessions list. */
+.log-loc {
+  display: inline-block;
+  font-size: 0.66rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  margin-right: 6px;
+  border-radius: 10px;
+  background: var(--surface-2, var(--surface));
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  vertical-align: middle;
+}
+.log-loc-discord { color: #8ea1f0; border-color: #3a4470; }
+.log-loc-voice   { color: #7ad0c0; border-color: #2f5c54; }
+
+.logs-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+.logs-sort-label {
+  font-size: 0.73rem;
+  color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .log-actions {
@@ -3846,6 +3899,35 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
 .vl-knocks.hidden { display: none; }
 .vl-servers.hidden { display: none; }
 .vl-knocks-head { font-size: 0.82rem; font-weight: 600; }
+/* The server list header doubles as a collapse toggle. */
+.vl-servers-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.vl-servers-toggle .hint-chev {
+  font-size: 0.6rem;
+  transition: transform 0.15s;
+  transform: rotate(0deg);
+  color: var(--text-dim);
+}
+.vl-servers-toggle[aria-expanded="true"] .hint-chev { transform: rotate(90deg); }
+.vl-servers-toggle:hover .hint-chev { color: var(--accent); }
+.vl-servers-count { font-weight: 400; color: var(--text-dim); }
+.vl-servers-body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.vl-servers-body.hidden { display: none; }
 /* Server-name subheader that groups a run of channel knocks. */
 .vl-knock-group + .vl-knock-group { margin-top: 8px; }
 .vl-knock-group-head {

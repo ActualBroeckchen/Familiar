@@ -24,7 +24,7 @@ def _conn():
             id TEXT PRIMARY KEY, kind TEXT, register TEXT, granularity TEXT,
             date_key TEXT, slug TEXT, content TEXT, audience TEXT,
             subjects_json TEXT, care_weight TEXT, category TEXT, content_tag TEXT,
-            consent_pending INTEGER DEFAULT 0, confidence REAL DEFAULT 1.0,
+            consent_pending INTEGER DEFAULT 0, confidence REAL DEFAULT 1.0, attribution_confidence REAL,
             source_json TEXT, created_at TEXT, updated_at TEXT
         )
     """)
@@ -99,3 +99,8 @@ def test_update_by_id_sets_and_clears_content_tag():
     memory.update_memory_by_id("m1", content_tag="medical:open", conn=c)
     memory.update_memory_by_id("m1", new_content="y", conn=c)
     assert _tag_of(c, "m1") == "medical:open"
+
+
+def test_category_to_tag_views_mirrors_node():
+    """`views` (an opinion or a taste) → general:open, same as content-tags.js."""
+    assert memory.category_to_tag("views") == "general:open"

@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import {
   recordReachOut, recentReachOuts, formatReachOutBlock, WINDOW_HOURS, MAX_SHOWN,
-} from '../reach-out-log.js';
+} from '../src/warmth/reach-out-log.js';
 
 const tmp = () => fs.mkdtemp(path.join(os.tmpdir(), 'rol-'));
 const HOUR = 3_600_000;

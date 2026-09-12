@@ -1,6 +1,6 @@
 {
   "name": "proto-familiar",
-  "version": "0.11.19-alpha",
+  "version": "0.12.0-alpha",
   "description": "Lightweight LLM frontend for z.ai, NanoGPT, and Google AI Studio",
   "license": "GPL-3.0-or-later",
   "type": "module",
@@ -19,8 +19,11 @@
     "import-entity": "node scripts/import-entity.js",
     "import-tome": "node scripts/import-tome.js",
     "pin:listening": "node scripts/pin-audio-models.mjs asr-offline --upstream",
+    "pin:whisper": "node scripts/pin-audio-models.mjs asr-offline-whisper --upstream",
+    "pin:parakeet": "node scripts/pin-audio-models.mjs asr-offline-parakeet --upstream",
     "audit:wiring": "node scripts/audit-wiring.mjs",
-    "audit:mcp": "node scripts/audit-mcp-contracts.mjs"
+    "audit:mcp": "node scripts/audit-mcp-contracts.mjs",
+    "prompts:catalog": "node scripts/build-prompt-catalog.mjs"
   },
   "dependencies": {
     "@discordjs/voice": "^0.19.2",
@@ -30,6 +33,7 @@
     "express": "^4.18.2",
     "libsodium-wrappers": "^0.7.16",
     "linkedom": "^0.18.12",
+    "opus-decoder": "^0.7.12",
     "opusscript": "^0.1.1",
     "tar": "^7.5.22",
     "turndown": "^7.2.4",

@@ -30,7 +30,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { shippableSources, sourceByKey } from '../voice-catalogue.js';
+import { shippableSources, sourceByKey } from '../src/voice/voice-catalogue.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = path.join(ROOT, 'voice-clips.json');

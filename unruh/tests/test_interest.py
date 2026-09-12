@@ -509,3 +509,31 @@ class TestDueBookmarks:
             self._bm(conn, topic=f"Topic{i}")
         due = interests.due_bookmarks(conn, now="2026-08-16T10:00:00", limit=2)
         assert len(due) == 2
+
+
+# ── threads: related_to edges and one-hop neighbours ─────────────────
+
+def test_record_related_to_links_once_and_related_interests_walks_it(conn):
+    tea = interests.record(conn, topic="tea", delta=5.0)
+    kettles = interests.record(conn, topic="Georgian kettles", delta=1.0, related_to="tea")
+    assert kettles["related_to_id"] == tea["id"]
+    # Recording again with the same relation does not add a second edge.
+    interests.record(conn, topic="Georgian kettles", delta=1.0, related_to="tea")
+    n = conn.execute("SELECT COUNT(*) FROM edges WHERE kind='related_to'").fetchone()[0]
+    assert n == 1
+    # Either direction walks.
+    assert [r["label"] for r in interests.related_interests(conn, id=tea["id"])] == ["Georgian kettles"]
+    assert [r["label"] for r in interests.related_interests(conn, id=kettles["id"])] == ["tea"]
+
+
+def test_record_related_to_unknown_label_is_a_no_op(conn):
+    out = interests.record(conn, topic="moth wings", delta=1.0, related_to="nothing here")
+    assert "related_to_id" not in out
+    assert interests.related_interests(conn, id=out["id"]) == []
+
+
+def test_related_interests_skips_standing_values(conn):
+    tea = interests.record(conn, topic="tea", delta=2.0)
+    interests.set_standing(conn, topic="honesty first")
+    interests.record(conn, topic="honesty first", delta=0.5, related_to="tea")
+    assert interests.related_interests(conn, id=tea["id"]) == []

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { correctTranscript } from '../voice-transcribe.js';
+import { correctTranscript } from '../src/voice/voice-transcribe.js';
 
 /** A stubbed asset store: records what would be written, returns the merged meta. */
 function store(meta) {

@@ -22,10 +22,14 @@ topics:
   - slug: safety
     title: Safety
     description: Crisis detection, threat tracking, and escalation to a human
-    parents: [architecture]
+    parents: [architecture, decisions, concepts]
   - slug: installer
     title: Installer
     description: Cross-platform one-click install, update, and launch tooling
+    parents: [architecture]
+  - slug: sessions
+    title: Sessions
+    description: Session creation, lifecycle, unification, and memorization
     parents: [architecture]
   - slug: memorization
     title: Memorization
@@ -77,7 +81,7 @@ topics:
     parents: [architecture, autonomous-loops]
   - slug: vision
     title: Vision
-    description: Multimodal image input, media storage, and modality fallback
+    description: Multimodal image and video input, media storage, and modality fallback
     parents: [architecture]
   - slug: content-gating
     title: Content Gating
@@ -91,3 +95,23 @@ topics:
     title: Browser
     description: The opt-in, ward-only click-and-fill web milestone -- SSRF-guarding proxy, ref/generation model, and Stranger-tier page framing
     parents: [architecture]
+  - slug: tomes
+    title: Tomes
+    description: Keyword-triggered lorebook entries, the shared web/Discord activation engine, live tome macros, and the self-documenting Familiar Manual tome
+    parents: [architecture, memorization]
+  - slug: memory-and-knowledge
+    title: Memory and Knowledge
+    description: How the layered memory systems (Phylactery, Unruh, Tomes, Session Memorization, Content-Gating) fit together and where each kind of knowledge lives
+    parents: [architecture, phylactery, memorization]
+  - slug: plugins
+    title: Plugins
+    description: "The \"Grimoire\" plugin surface: Psycheros-compatible extension points, the tiered Node/Deno loader, and the safety-path exclusion wall (designed, not yet built)"
+    parents: [architecture, decisions]
+  - slug: session-search
+    title: Session Search
+    description: "Raw transcript search and distilled memory recall — two distinct tools for finding what was said versus what was learned"
+    parents: [architecture, memory-and-knowledge]
+  - slug: connections
+    title: Connections
+    description: Saved LLM provider connections -- URL resolution, keyless local/custom readiness, per-feature routing, and reasoning-effort control
+    parents: [architecture, decisions]

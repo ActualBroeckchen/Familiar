@@ -11,6 +11,9 @@ sources:
   - id: slug-ids
     type: file
     path: slug-ids.js
+  - id: providers-js
+    type: file
+    path: providers.js
 ---
 
 # Exact Values Are Code's Job
@@ -106,3 +109,11 @@ The unbuilt browser milestone specs a further application to secrets: the model 
 credentials-vault entry, but only code reads and types the value, so a password never enters a
 prompt, tool result, session log, or audit trail — see
 [Browser milestone: guardrails in code, not prompts](browser-guardrails-in-code).
+
+`providers.js`'s `normalizeBaseUrl` (0.11.91-alpha) is a narrower, non-model-facing application
+of the same rule to a value the *ward* types by hand rather than the model: a connection's
+base URL (a bare host, a versioned base, or a full endpoint) is canonicalised into a full
+`chat/completions` URL by code once, so every LLM call site fetches the same well-formed
+endpoint regardless of which of the three shapes the ward pasted in [@providers-js]. See
+[Providers and connection readiness](../architecture/providers) for the rest of what that module
+does with a connection.

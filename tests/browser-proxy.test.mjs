@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 
-import { createGuardedProxy } from '../browser-proxy.js';
+import { createGuardedProxy } from '../src/browser/browser-proxy.js';
 
 // Issue a raw CONNECT through the proxy and return the first status line.
 function connectVia(port, target) {

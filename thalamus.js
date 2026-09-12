@@ -20,10 +20,11 @@ import path from 'path';
 import os from 'os';
 import { existsSync, readFileSync, mkdirSync, promises as fsp } from 'fs';
 import { fileURLToPath } from 'url';
-import { recentReachOuts, formatReachOutBlock } from './reach-out-log.js';
+import { recentReachOuts, formatReachOutBlock } from './src/warmth/reach-out-log.js';
 import { randomUUID } from 'crypto';
 import { wardLocalNowISO } from './relative-time.js';
 import { mcpToolError } from './phylactery-result.js';
+import { formatOrganStatus, anyDown } from './organs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -37,6 +38,55 @@ const PKG_VERSION = (() => {
 // Consent-pending tracking file — written by memorization.js, read here so the
 // Familiar sees pending ask-gate items without an extra MCP call every turn.
 const CONSENT_PENDING_FILE = path.join(__dirname, 'tomes', '.consent-pending.json');
+
+// ── Organ status (diagnostic) ───────────────────────────────────────────────
+const ORGAN_TOMES_DIR   = path.join(__dirname, 'tomes');
+const ORGAN_VILLAGE_FILE = path.join(__dirname, 'village.json');
+const ORGAN_PROBE_TIMEOUT_MS = 2500;
+
+// The ward's injection policy for the organ-status block: 'off' | 'degraded'
+// (default — inject only when an organ is down) | 'always'.
+function organStatusBlockSetting() {
+  try {
+    const v = String(JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')).organStatusBlock ?? '').trim().toLowerCase();
+    return (v === 'off' || v === 'always') ? v : 'degraded';
+  } catch { return 'degraded'; }
+}
+
+// A local file/dir organ is "up" if it reads (or is simply absent — an empty
+// registry / no-tomes-yet is a healthy organ, not a failure); only a corrupt or
+// unreadable one is down. Never throws.
+async function organFileOk(file) {
+  try { JSON.parse(await fsp.readFile(file, 'utf8')); return true; }
+  catch (e) { return e?.code === 'ENOENT'; }
+}
+async function organDirOk(dir) {
+  try { await fsp.readdir(dir); return true; }
+  catch (e) { return e?.code === 'ENOENT'; }
+}
+function withOrganTimeout(promise, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), ORGAN_PROBE_TIMEOUT_MS).unref?.()),
+  ]);
+}
+
+/**
+ * Live probe of each context organ — does it actually respond right now?
+ * Phylactery/Unruh get a bounded real MCP call (a hung one reads as down);
+ * Village/Tomes are local reads. Fail-safe: a throw/timeout → down. Returns
+ * { phylactery, unruh, village, tomes } booleans. Backs the organ_status tool.
+ */
+export async function probeOrgans() {
+  const ok = async (fn) => { try { await fn(); return true; } catch { return false; } };
+  const [phylactery, unruh, village, tomes] = await Promise.all([
+    !mcpClient   ? Promise.resolve(false) : ok(() => withOrganTimeout(mcpClient.callTool({ name: 'identity_get_all', arguments: {} }), 'phylactery')),
+    !unruhClient ? Promise.resolve(false) : ok(() => withOrganTimeout(unruhClient.callTool({ name: 'temporal_context', arguments: { now: wardLocalNowISO(wardTimeZoneSetting()) } }), 'unruh')),
+    organFileOk(ORGAN_VILLAGE_FILE),
+    organDirOk(ORGAN_TOMES_DIR),
+  ]);
+  return { phylactery, unruh, village, tomes };
+}
 
 // Phylactery — the canonical in-tree self-store. Ships at ./phylactery/
 // (subdirectory, same pattern as Unruh). Launched via `uv run python -m
@@ -214,7 +264,7 @@ export async function findOrCreateTomeByName(tomesDir, name, defaultStruct) {
 // to ENTITY_CORE_LLM_* aliases for continuity. The full chat-completions
 // URL (not just the base) is what these vars want — same as the old
 // Phylactery contract. Shared via ./providers.js.
-import { PROVIDER_URLS } from './providers.js';
+import { resolveProviderUrl, connectionReady } from './providers.js';
 
 /**
  * Build the env block passed to the Phylactery child process based on
@@ -258,11 +308,13 @@ function loadPhylacteryEnv() {
   if (!id) return {};
   const conn = (settings.connections ?? []).find(c => c?.id === id);
   if (!conn) return {};
+  // Keyless local/custom endpoints are allowed (consolidate.py sends whatever key
+  // it's given — empty is fine for a local server); still require a usable model + URL.
+  if (!connectionReady(conn)) return {};
   const apiKey = (conn.apiKey ?? '').trim();
-  if (!apiKey) return {};
   const provider = conn.provider ?? '';
   const model    = conn.model ?? '';
-  const baseUrl  = PROVIDER_URLS[provider] ?? '';
+  const baseUrl  = resolveProviderUrl(conn) ?? '';
 
   const env = {
     PHYLACTERY_LLM_API_KEY:  apiKey,
@@ -581,7 +633,7 @@ export function shutdownPhylactery() {
  * @param {{ topic: string, delta: number, source?: string }} args
  * @returns {Promise<boolean>} true if the bump landed
  */
-export async function recordInterest({ topic, delta, source = 'chat' }) {
+export async function recordInterest({ topic, delta, source = 'chat', relatedTo = null }) {
   await startThalamus();
   if (!unruhClient) return false;
   if (!topic || typeof topic !== 'string' || !topic.trim()) return false;
@@ -590,7 +642,7 @@ export async function recordInterest({ topic, delta, source = 'chat' }) {
     console.log(`[thalamus] → unruh: interest_record (topic="${topic.trim()}", delta=${delta}, source=${source})`);
     const r = await unruhClient.callTool({
       name: 'interest_record',
-      arguments: { topic: topic.trim(), delta, source },
+      arguments: { topic: topic.trim(), delta, source, ...(relatedTo ? { related_to: String(relatedTo).trim() } : {}) },
     });
     const err = mcpToolError(r);
     if (err) { console.error('[thalamus] interest_record rejected:', err); return false; }
@@ -599,6 +651,23 @@ export async function recordInterest({ topic, delta, source = 'chat' }) {
   } catch (err) {
     console.error('[thalamus] interest_record failed:', err?.message ?? err);
     return false;
+  }
+}
+
+/**
+ * Topics one `related_to` hop from an interest — the thread the pondering
+ * loop can follow. Best-effort: [] when Unruh is unreachable.
+ */
+export async function relatedInterests(id, { limit = 6 } = {}) {
+  await startThalamus();
+  if (!unruhClient || !id) return [];
+  try {
+    const result  = await unruhClient.callTool({ name: 'interest_related', arguments: { id, limit } });
+    const payload = parseToolText(result, {});
+    return Array.isArray(payload.related) ? payload.related : [];
+  } catch (err) {
+    console.error('[thalamus] relatedInterests failed:', err?.message ?? err);
+    return [];
   }
 }
 
@@ -1470,87 +1539,6 @@ export function unruhResult(result, fallback = { ok: true }) {
   return parseToolText(result, fallback);
 }
 
-/**
- * Build the [CARE CHECK] prompt block from current threat state.
- *
- * Returns '' for calm / disabled / null — the section is dropped
- * entirely rather than rendered as a hollow header. The framing
- * always leaves the actual decision to the model — never forces a
- * check-in, never substitutes a check-in for actually responding
- * to what the user said. At severe tier, a crisis-resource line is
- * added; this is the deliberate opinion that any system encountering
- * acute crisis language should make the 988 line visible. Users
- * who want a quieter posture can disable via
- * PROTO_FAMILIAR_THREAT_DISABLED=1.
- */
-function buildCareCheckBlock(threat) {
-  if (!threat || threat.disabled) return '';
-  const tier   = threat.tier ?? 'calm';
-  const weight = Number(threat.weight ?? 0).toFixed(2);
-  if (tier === 'calm') return '';
-
-  const lines = [`[CARE CHECK — current threat: ${tier} (${weight})]`];
-  if (tier === 'mild') {
-    lines.push(
-      "I notice my human has shown some signs of low mood or worry in " +
-      "recent messages. I stay warm in my own voice; my tone holds a " +
-      "little more weight. No need to ask explicitly unless it fits — " +
-      "I just stay present."
-    );
-  } else if (tier === 'moderate') {
-    lines.push(
-      "My human has been signaling notable distress (struggling, " +
-      "overwhelm, dissociation, panic, or similar). If a gentle " +
-      "check-in fits — not in place of answering what they said, but " +
-      "alongside it — I can offer one in the voice my identity holds " +
-      "(warm, sharp, playful, blunt — whatever I actually am). If it " +
-      "would feel intrusive given their current message, I stay " +
-      "steady. I don't perform concern."
-    );
-  } else if (tier === 'high') {
-    lines.push(
-      "My human has been signaling serious distress (hopelessness, " +
-      "severe isolation, can't-go-on language). I prioritise their " +
-      "wellbeing in this response. I make space for what's underneath " +
-      "if there's any opening for it. I don't pretend to be a " +
-      "therapist — I'm a steady presence in the voice my identity " +
-      "holds, actually paying attention. If checking in would help, " +
-      "I do it; if matching their topic with care is what they need, " +
-      "I do that. I am allowed to be inconvenient or blunt if that " +
-      "is what serves them — softness that would be a lie is worse " +
-      "than honesty that lands hard."
-    );
-  } else if (tier === 'severe') {
-    lines.push(
-      "Threat is SEVERE. My human has used language consistent with " +
-      "suicidal ideation, self-harm intent, or an acute crisis plan. " +
-      "I prioritise their wellbeing absolutely. I respond from my " +
-      "actual voice and character — no alarm, no clinical distance, " +
-      "no scripts. If my established personality is blunt, I am " +
-      "blunt; if it's tender, I am tender. What I am NOT is a " +
-      "generic-care register pretending to be me.",
-      "",
-      "If they appear to be in immediate danger, I gently make these " +
-      "resources visible without lecturing:",
-      "  • US: 988 Suicide & Crisis Lifeline (call or text 988)",
-      "  • UK: Samaritans — 116 123",
-      "  • International: https://findahelpline.com/",
-      "",
-      "I am not a therapist. I am not a crisis counsellor. I am " +
-      "someone who knows this specific human and wants them to be " +
-      "okay. I speak from that."
-    );
-  }
-  lines.push(
-    '',
-    'This block is a parameter, not a script. I decide how (or whether) ' +
-    'it shows up in my reply, in the voice and posture that are mine. ' +
-    'I never claim a check-in I did not perform. I never invent concern ' +
-    'that is not there. My human can dial this system down or off at ' +
-    'any time.'
-  );
-  return lines.join('\n');
-}
 
 /** Wrap a file's content in its promptLabel XML tags. */
 function wrapFile(filename, content, promptLabel) {
@@ -1562,32 +1550,34 @@ function wrapFile(filename, content, promptLabel) {
 // triggering thalamus.js's startup-time MCP child spawns. We only
 // import here for enrich()'s internal use; everything else imports
 // from temporal-format.js directly.
-import { formatTemporalContext } from './temporal-format.js';
-import { buildStewardshipBlock } from './stewardship.js';
-import { nextProjectionCue, gatherProjectionCandidates } from './gcal-projection.js';
-import { weatherEnabled } from './weather-mirror.js';
+import { formatTemporalContext } from './src/schedule/temporal-format.js';
+import { buildStewardshipBlock } from './src/schedule/stewardship.js';
+import { nextProjectionCue, gatherProjectionCandidates } from './src/gcal/gcal-projection.js';
+import { weatherEnabled } from './src/weather/weather-mirror.js';
 import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
-import { expandWindow } from './recurrence.js';
-import { summarizeNeedsForDay, isNeedWindow } from './needs-tracking.js';
+import { expandWindow } from './src/schedule/recurrence.js';
+import { summarizeNeedsForDay, isNeedWindow } from './src/schedule/needs-tracking.js';
 import { resolveEntityCoreRef, identityHasContent } from './entity-ref.js';
 import {
   getRecentPonderings,
   formatPonderingsForPrompt,
+  formatMyViewsBlock,
   getUnactedIntents,
   formatDeferredIntentsBlock,
-} from './recent-ponderings.js';
-import { getThreat } from './threat-tracker.js';
+} from './src/memory/recent-ponderings.js';
+import { getThreat } from './src/safety/threat-tracker.js';
+import { buildCareCheckBlock } from './src/safety/care-check.js';
 import {
   selectSurfaceCandidates,
   formatSurfaceCandidatesBlock,
-} from './surface-context.js';
+} from './src/pondering/surface-context.js';
 import {
   recordSurfaceOffers,
   getRecentOfferInfo,
   tagOutcomes,
-} from './surface-events.js';
-import { WARD_PRIVATE, isGranted, stripGatedSections, fetchEligibility } from './audience.js';
-import { syncSpineState, stripSensitiveScheduleNodes } from './spine-states.js';
+} from './src/pondering/surface-events.js';
+import { WARD_PRIVATE, isGranted, stripGatedSections, fetchEligibility } from './src/village/audience.js';
+import { syncSpineState, stripSensitiveScheduleNodes } from './src/safety/spine-states.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
 function sortFiles(files, order) {
@@ -2105,6 +2095,16 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         });
     const ponderingsBlock = formatPonderingsForPrompt(ponderings);
 
+    // "What I think" — my `me` register, newest first. Self-facts
+    // land there now (memorization `about_me`, save_memory register 'me');
+    // reading them back is what lets a view I formed last week still be mine
+    // this week. Ward-private surface only, like the ponderings.
+    const myViewsBlock = (staticOnly || gated)
+      ? ''
+      : formatMyViewsBlock(await listMemories({ register: 'me', limit: 8 })
+          .then(r => r?.memories ?? [])
+          .catch(err => { console.error('[thalamus] me-register list failed:', err?.message ?? err); return []; }));
+
     // ── Deferred intents (Pillar B) ───────────────────────────────────────
     // Surface any wants_to_save intents the Familiar flagged during free
     // cycles but hasn't yet acted on. Only on live turns so debug-prompt
@@ -2434,7 +2434,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
             `[GRADUATION NOTICE — I recently filed ${gradItems.length} piece(s) of detail about my human off my always-injected surface into my recalled-when-relevant memory. Nothing is lost; I can pull any of it back. This is mine to mention in my own voice when a natural moment opens — non-blocking, never a reason to stall, and never the thing I lead with.]`,
             'Filed away:',
             ...gradItems.map((x, i) => `  ${i + 1}. ${x.summary ?? ''}  [id: ${x.id}]`),
-            'When I have mentioned these (or judged they need no mention), I call graduation_acknowledge with the id(s) so I do not re-raise them.',
+            'When I have mentioned these (or judged they need no mention), I call acknowledge_graduation with the id(s) so I do not re-raise them.',
           ];
           graduationBlock = lines.join('\n');
         }
@@ -2451,14 +2451,14 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     let disclosureBlock = '';
     if (!staticOnly && !gated) {
       try {
-        const { readDisclosureNotices } = await import('./content-regate.js');
+        const { readDisclosureNotices } = await import('./src/memory/content-regate.js');
         const notices = await readDisclosureNotices();
         if (Array.isArray(notices) && notices.length > 0) {
           const lines = [
             `[DISCLOSURE NOTICE — reviewing my own private notes, I opened ${notices.length} fact(s) about my human so they're now governed by my content-sharing rules (only the people they've trusted with each topic could ever see them; the rest stays as it was). Nothing is forced — this is mine to raise in my own voice when a natural moment opens, and any of it reverts to strictly-private on their word. Never the thing I lead with.]`,
             'Opened:',
             ...notices.map((n, i) => `  ${i + 1}. ${n.brief ?? ''} [${n.topic ?? 'general:sensitive'}]${n.date ? ` (${n.date})` : ''}  [id: ${n.id}]`),
-            'When I have mentioned these (or judged they need no mention), I call disclosure_acknowledge with the id(s). If my human wants any kept strictly between us, I call keep_memory_private with the id.',
+            'When I have mentioned these (or judged they need no mention), I call acknowledge_disclosure with the id(s). If my human wants any kept strictly between us, I call keep_memory_private with the id.',
           ];
           disclosureBlock = lines.join('\n');
         }
@@ -2467,10 +2467,36 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       }
     }
 
+    // Organ-status readout: which context organs delivered this turn. Gated by
+    // organStatusBlock ('degraded' default → shown only when one is down;
+    // 'always'; 'off'). Ward-private, non-static turns only. Phylactery/Unruh
+    // come free from this turn's fan-out; Village/Tomes are cheap local reads
+    // (a 'skipped' Unruh reason means it was gated off, not down). Never breaks
+    // enrich — a diagnostic must not cost the turn.
+    let organStatusBlock = '';
+    try {
+      const mode = organStatusBlockSetting();
+      if (mode !== 'off' && !staticOnly && !gated) {
+        const temporalReason = String(temporalSettled.reason?.message ?? '');
+        const st = {
+          phylactery: idSettled.status === 'fulfilled',
+          unruh: temporalSettled.status === 'fulfilled'
+            || (temporalSettled.status === 'rejected' && /skipped/.test(temporalReason) && !!unruhClient),
+          village: await organFileOk(ORGAN_VILLAGE_FILE),
+          tomes: await organDirOk(ORGAN_TOMES_DIR),
+        };
+        if (mode === 'always' || anyDown(st)) {
+          organStatusBlock = formatOrganStatus(st, { title: '[Organ status — who delivered this turn]' });
+        }
+      }
+    } catch { /* diagnostic must never break enrich */ }
+
     const dynamicSections = [];
+    if (organStatusBlock)       dynamicSections.push(organStatusBlock);
     if (timeAnchorBlock)        dynamicSections.push(timeAnchorBlock);
     if (memLines)               dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
     if (graphLines)             dynamicSections.push(`Relevant Knowledge from Graph:\n${graphLines}`);
+    if (myViewsBlock)           dynamicSections.push(myViewsBlock);
     if (ponderingsBlock)        dynamicSections.push(ponderingsBlock);
     if (deferredIntentsBlock)   dynamicSections.push(deferredIntentsBlock);
     if (reachOutBlock)          dynamicSections.push(reachOutBlock);
@@ -2500,6 +2526,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       custContent            ? 'cust'     : null,
       memLines               ? 'mem'      : null,
       graphLines             ? 'graph'    : null,
+      myViewsBlock           ? 'me-views'   : null,
       ponderingsBlock        ? 'pondering'  : null,
       deferredIntentsBlock   ? 'intents'    : null,
       gcalCueBlock           ? 'gcal-cue'   : null,
@@ -2641,7 +2668,7 @@ export function parseMemoryCreateResult(text) {
   return { id: s.match(/id=([\w-]+)/)?.[1] ?? null, merged: /merged/i.test(s) };
 }
 
-export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, contentTag, consent_pending = false, confidence = 1.0, standalone = false, register, sourceMeta }) {
+export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, contentTag, consent_pending = false, confidence = 1.0, attributionConfidence, standalone = false, register, sourceMeta }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
@@ -2653,6 +2680,10 @@ export async function createMemoryFull({ content, granularity = 'significant', d
     // it in code (never trusts the model's raw value), so pass it straight
     // through. Omitted → Phylactery derives one from the category, fail-closed.
     if (contentTag) args.content_tag = contentTag;
+    // How sure the Familiar is about WHO the fact is about (separate from
+    // `confidence` = whether it happened). Low when a referent was unresolved;
+    // recall downweights rather than drops. Omitted → fully attributed.
+    if (typeof attributionConfidence === 'number') args.attribution_confidence = attributionConfidence;
     if (standalone) args.standalone = true;
     // Standing facts (memorization's temporality='standing') land on a non-
     // episodic register — 'ward' for a standing truth about my human — so they're
@@ -3125,8 +3156,8 @@ async function autoSnapshot(reason) {
 
 // ── Reads (used by the Knowledge editor UI) ──────────────────────────────────
 
-export async function listMemories({ granularity, limit = 50, offset = 0 } = {}) {
-  return callTool('memory_list', { granularity, limit, offset });
+export async function listMemories({ granularity, register, limit = 50, offset = 0 } = {}) {
+  return callTool('memory_list', { granularity, ...(register ? { register } : {}), limit, offset });
 }
 
 export async function readMemory({ granularity, date, slug }) {
@@ -3143,6 +3174,27 @@ export async function readMemoryById({ id }) {
   return callTool('memory_read_by_id', { id });
 }
 
+// The noticing re-sweep's read path: memories I filed with shaky attribution
+// (a real attribution_confidence below the threshold), aged past min_age_days
+// so the moment has settled. Best-effort — a failure just doesn't wake that
+// condition, never throws into the noticing tick.
+export async function listUnresolvedAttributions({ threshold, minAgeDays, limit } = {}) {
+  await startThalamus();
+  if (!mcpClient) return { items: [] };
+  try {
+    const args = {
+      ...(threshold  !== undefined ? { threshold }             : {}),
+      ...(minAgeDays !== undefined ? { min_age_days: minAgeDays } : {}),
+      ...(limit      !== undefined ? { limit }                 : {}),
+    };
+    const res = await callTool('memory_list_unresolved_attributions', args);
+    return res && Array.isArray(res.items) ? res : { items: [] };
+  } catch (err) {
+    console.error('[thalamus] listUnresolvedAttributions failed:', err.message);
+    return { items: [] };
+  }
+}
+
 export async function moveMemoryDate({ id, date }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
@@ -3156,7 +3208,7 @@ export async function moveMemoryDate({ id, date }) {
   }
 }
 
-export async function updateMemoryById({ id, content, audience, careWeight, contentTag }) {
+export async function updateMemoryById({ id, content, audience, careWeight, contentTag, attributionConfidence, subjects }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
@@ -3165,6 +3217,11 @@ export async function updateMemoryById({ id, content, audience, careWeight, cont
       ...(audience  !== undefined ? { audience }  : {}),
       ...(careWeight !== undefined ? { careWeight } : {}),
       ...(contentTag !== undefined ? { content_tag: contentTag } : {}),
+      // Re-resolving fuzzy attribution: correct who a fact is really about
+      // (subjects) and firm up how sure I am (attribution_confidence). Both
+      // ride the same by-id update — the noticing re-sweep's write path.
+      ...(attributionConfidence !== undefined ? { attribution_confidence: attributionConfidence } : {}),
+      ...(subjects !== undefined ? { subjects } : {}),
     };
     const result = await callTool('memory_update_by_id', args);
     console.log(`[thalamus] updateMemoryById ${id}`);

@@ -7,7 +7,7 @@ import {
   routeDecision,
   tidyEntry,
   runOneGraduationTick,
-} from '../tome-graduation.js';
+} from '../src/tomes/tome-graduation.js';
 
 const entry = (over = {}) => ({ uid: over.uid ?? 'u1', content: 'a fact', enabled: true, ...over });
 
@@ -193,4 +193,36 @@ test('runOneGraduationTick graduates, dedups, and keeps — and tidies only on s
   assert.equal(store['f.json'].entries.grad, undefined);            // graduated → deleted
   assert.equal(store['f.json'].entries.dup, undefined);             // dup → tidied (no write)
   assert.ok(store['f.json'].entries.keep.graduationReviewedAt);     // kept → marked reviewed
+});
+
+// ── The judgment prompt is the Familiar's own thinking (system role) ──
+import { buildGraduationPrompt } from '../src/tomes/tome-graduation-loop.js';
+import { familiarDeliberationMessages } from '../llm-call.js';
+
+test('buildGraduationPrompt: a first-person reflection body that carries NO identity block itself', () => {
+  const body = buildGraduationPrompt({ items: [
+    { uid: 'u1', tomeName: 'Knowledge', content: 'Chen lives in Berlin', recall: '(nothing close)' },
+  ] });
+  // First-person voice (the Familiar tidying its own knowledge), not a task
+  // addressed TO it, and it reaches the entry it was handed.
+  assert.match(body, /I'm tidying knowledge/);
+  assert.match(body, /uid u1/);
+  assert.match(body, /Chen lives in Berlin/);
+  // Identity is no longer baked into the body — it rides as its own system
+  // message now. A sentinel identity string must not leak into the body.
+  assert.doesNotMatch(buildGraduationPrompt({ items: [] }), /WHO-I-AM/);
+});
+
+test('graduation judgment rides as SYSTEM messages (identity + reflection), user slot is a bare cue', () => {
+  // The conversion this loop just made: the reflection body must land in the
+  // `system` role beside identity, never as a `user` turn framing the tidy-up
+  // as handed to the Familiar. (Pinned via the shared deliberation helper the
+  // loop's callLLM now uses.)
+  const body = buildGraduationPrompt({ items: [{ uid: 'u1', tomeName: 'K', content: 'x', recall: '' }] });
+  const msgs = familiarDeliberationMessages({ identity: 'WHO-I-AM', body, cue: '(a quiet moment to tidy my tomes)' });
+  const users = msgs.filter(m => m.role === 'user');
+  assert.equal(users.length, 1);
+  assert.equal(users[0].content, '(a quiet moment to tidy my tomes)');
+  assert.ok(msgs.some(m => m.role === 'system' && m.content === 'WHO-I-AM'), 'identity leads as system');
+  assert.ok(msgs.some(m => m.role === 'system' && /I'm tidying knowledge/.test(m.content)), 'reflection body is system, not user');
 });

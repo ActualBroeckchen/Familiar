@@ -14,7 +14,7 @@ sources:
     path: docs/tomes.md
   - id: tome-graduation-loop
     type: file
-    path: tome-graduation-loop.js
+    path: src/tomes/tome-graduation-loop.js
 ---
 
 # Bucket-Purge Cycle
@@ -94,7 +94,7 @@ Two concrete, already-known gaps were named as sitting in the bucket:
   confirmed root cause.
 - **Tomes accumulate with no consolidation.** As of this conversation, Tomes have no
   entry-consolidation or dedup mechanism of their own; the only consolidation machinery in the
-  repo belongs to session memorization's daily-to-weekly rollups and to
+  repo belongs to [session memorization](../architecture/session-memorization)'s daily-to-weekly rollups and to
   `tome-graduation-loop.js`'s promotion of tome facts into Phylactery, both of which are separate
   systems from the tomes a Familiar writes to directly as a diary [@tome-graduation-loop]. The
   maintainer's own framing is that Tomes are used "less as knowledge storage and more as diaries,"

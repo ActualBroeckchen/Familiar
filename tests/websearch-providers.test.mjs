@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { braveSearch, tavilySearch, googleSearch, marginaliaSearch, API_PROVIDERS } from '../websearch-providers.js';
+import { braveSearch, tavilySearch, googleSearch, marginaliaSearch, API_PROVIDERS } from '../src/search/websearch-providers.js';
 
 // ── Brave ────────────────────────────────────────────────────────
 test('braveSearch needs a key', async () => {

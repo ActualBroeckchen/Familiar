@@ -8,7 +8,7 @@ import {
   pendingTailStart, expectedSpeechSeconds,
   renderDroppedWords, bestRender, SMALL_UTTERANCE_CHARS,
   speakUnitsSelfHealing,
-} from '../voice-generation.js';
+} from '../src/voice/voice-generation.js';
 
 const RATE = 18.6;   // chars/second the helpers assume; the fake engine matches it
 const sentencesOf = (t) => t.split(/(?<=[.!?])\s+/).filter(Boolean);

@@ -18,9 +18,9 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { inspectBackends, POCKET_FOOTPRINT, BACKENDS, VOICEBOX_SUBDIR, ensureWindowsMsvcRuntime } from '../voice-backend.js';
-import { formatBytes } from '../voice-models.js';
-import { preflight } from '../voice-footprint.js';
+import { inspectBackends, POCKET_FOOTPRINT, BACKENDS, VOICEBOX_SUBDIR, ensureWindowsMsvcRuntime } from '../src/voice/voice-backend.js';
+import { formatBytes } from '../src/voice/voice-models.js';
+import { preflight } from '../src/voice/voice-footprint.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const has = (flag) => process.argv.includes(flag);

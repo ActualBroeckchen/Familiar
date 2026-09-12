@@ -4,7 +4,7 @@ import {
   currentAudioWorker,
   stopAudioWorker,
   __setVoiceTestHooks,
-} from '../audio-worker-current.js';
+} from '../src/voice/audio-worker-current.js';
 
 /**
  * The bug this guards: a pocket (Kyutai) install whose FILES exist but whose

@@ -1,6 +1,6 @@
 ---
 title: Per-Feature Model Routing
-topics: [decisions, memorization, architecture]
+topics: [decisions, memorization, architecture, connections]
 sources:
   - id: app-js
     type: file
@@ -8,6 +8,12 @@ sources:
   - id: server-js
     type: file
     path: server.js
+  - id: ward-connections-js
+    type: file
+    path: src/ward/ward-connections.js
+  - id: providers-js
+    type: file
+    path: providers.js
   - id: founding-conversation
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/e6e73df7-Finding_a_better_mental_health_tool.txt
@@ -73,9 +79,25 @@ relationships, and more places where personal context leaves the ward's control 
 deliberate about which providers see which data before binding a job to a new one
 [@founding-conversation].
 
+The web Connections modal is no longer the only control surface for this mechanism. The
+[Ward Discord console](../architecture/ward-console)'s `!connection` command exposes the same
+`primaryConnectionId` and `FEATURE_CONNECTIONS` routing from the ward's own Discord DM, reading
+and writing the same settings the web app does through one locked, atomic write path — a
+Discord change and a web change cannot tear the settings file [@ward-connections-js]. Each saved
+connection also carries an optional `reasoningEffort` field (`low`/`high`/`max`/`off`), resolved
+per call by `resolveReasoningEffort(conn)`: an explicit value is honored for any provider, and an
+unset connection defaults to `low` only for the always-thinking z.ai GLM family, never for a
+provider that might reject an unrecognized parameter [@providers-js]. `reasoningEffort` is set
+from the Discord console only, not from the web UI.
+
 ## Related
 
 - [Autonomous loops](../architecture/autonomous-loops) — the background workers that
   `FEATURE_CONNECTIONS` covers.
 - [Session memorization](../architecture/session-memorization) — the memorization queue whose
   worker resolves its connection through this same mechanism.
+- [Ward Discord console](../architecture/ward-console) — the `!connection` command that exposes
+  active-connection selection, per-feature routing, and reasoning effort from Discord.
+- [Providers and connection readiness](../architecture/providers) — what a call site does with
+  the connection this routing mechanism resolves: URL resolution, the keyless-local readiness
+  gate, and the safety implication for silence-triage.

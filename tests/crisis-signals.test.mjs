@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { scoreMessage, SIGNALS, SCORE_CAPS } from '../crisis-signals.js';
+import { scoreMessage, SIGNALS, SCORE_CAPS } from '../src/safety/crisis-signals.js';
 
 // Helper: assert that scoring a message produces ≥ N signals firing,
 // at the expected tier, with the resulting level within [min,max].
@@ -404,6 +404,21 @@ test('tightening: cant_continue keeps "done with everything"/"done trying", drop
   }
   for (const msg of ["I'm done with dinner.", "I'm so done with this meeting.",
                      "I'm done for today, see you tomorrow.", "I'm done with the project."]) {
+    const r = scoreMessage(msg);
+    assert.ok(!r.signals.some(s => s.id === 'cant_continue'),
+      `"${msg}" must not fire cant_continue: ${JSON.stringify(r.signals)}`);
+  }
+});
+
+test('tightening: cant_continue keeps genuine "can\'t go on"/"anymore" forms, drops bare task-frustration', () => {
+  // Genuine can't-continue still fires HIGH (recall protected):
+  for (const msg of ["I can't go on.", "I can't keep going.", "I can't do this anymore.",
+                     "I can't take it anymore.", "I can't handle this any longer."]) {
+    assertScored(msg, { tier: 'high', idIncludes: 'cant_continue' });
+  }
+  // Bare task-frustration must NOT fire (the ward's reported over-fire):
+  for (const msg of ["ugh I can't do this, nothing I try works", "I can't take it, this heat is unreal",
+                     "I can't do this puzzle", "I can't handle it, this bug is impossible"]) {
     const r = scoreMessage(msg);
     assert.ok(!r.signals.some(s => s.id === 'cant_continue'),
       `"${msg}" must not fire cant_continue: ${JSON.stringify(r.signals)}`);

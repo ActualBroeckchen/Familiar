@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { isNeedWindow, selectMissedOccurrences, summarizeNeedsForDay } from '../needs-tracking.js';
-import { runNeedsTick } from '../needs-tracking-loop.js';
+import { isNeedWindow, selectMissedOccurrences, summarizeNeedsForDay } from '../src/schedule/needs-tracking.js';
+import { runNeedsTick } from '../src/schedule/needs-tracking-loop.js';
 
 const DAY = 24 * 3600 * 1000;
 const HOUR = 3600 * 1000;

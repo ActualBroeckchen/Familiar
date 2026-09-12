@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   selectCueItems, buildCueBlock, gatherProjectionCandidates,
   MAX_TURNS, MAX_PER_TURN, MAX_WINDOW_MS, MIN_LEAD_MS, LAST_CHANCE_MS,
-} from '../gcal-projection.js';
+} from '../src/gcal/gcal-projection.js';
 
 const cand = (id, label = id) => ({ id, label, when: new Date(Date.now() + 3 * 3600_000).toISOString() });
 

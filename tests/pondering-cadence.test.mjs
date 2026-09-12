@@ -6,7 +6,7 @@ import {
   PONDER_INTERVAL_MS,
   PONDER_TIER_LABEL,
   THREAT_CADENCE_MULTIPLIER,
-} from '../pondering-cadence.js';
+} from '../src/pondering/pondering-cadence.js';
 
 test('computeRequiredInterval: zero / negative / non-finite → Infinity (don\'t ponder)', () => {
   assert.equal(computeRequiredInterval(0),         Infinity);

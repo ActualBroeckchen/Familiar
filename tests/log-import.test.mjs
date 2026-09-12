@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseImport, parseTimestampedText, toIso, dateFromFilename, applyFallbackDate } from '../log-import.js';
+import { parseImport, parseTimestampedText, toIso, dateFromFilename, applyFallbackDate } from '../src/sessions/log-import.js';
 
 test('toIso handles epoch seconds, ms, and ISO; rejects junk', () => {
   assert.equal(toIso(1_750_000_000).slice(0, 4), '2025');       // seconds

@@ -10,10 +10,16 @@ sources:
     path: CLAUDE.md
   - id: knocks-js
     type: file
-    path: knocks.js
+    path: src/village/knocks.js
   - id: discord-gateway-js
     type: file
-    path: discord-gateway.js
+    path: src/discord/discord-gateway.js
+  - id: organs-js
+    type: file
+    path: organs.js
+  - id: thalamus-js
+    type: file
+    path: thalamus.js
 ---
 
 # Architecture
@@ -52,6 +58,27 @@ context; it never executes actions. Each peer is
 treated as a plural, independently-failing collaborator — a downed Phylactery does not take
 Unruh's temporal context out with it, and an empty sub-block simply renders as nothing in the
 prompt rather than as an error [@architecture-doc].
+
+`thalamus.js`, `cerebellum.js`, and `organs.js` are three of about 21 files that stay at the
+repository root by design, alongside `server.js` and other cross-cutting helpers, while the
+domain-specific modules referenced throughout this wiki (voice, browser, memory, and the rest)
+now live under `src/<domain>/` — see
+[Domain folder layout](../decisions/domain-folder-layout) for why the split landed where it did.
+
+That graceful degradation used to be silent: a missing organ just meant the Familiar reasoned
+with less context, with no signal to the ward or a debugging agent that anything had gone
+missing. `organs.js` (0.11.24) is a small pure module — `ORGAN_ORDER`, `formatOrganStatus()`,
+`anyDown()` — that turns Phylactery/Unruh/Village/Tomes availability into a 🟢/⚫ readout
+[@organs-js]. `enrich()` derives per-organ status for the current turn from the same settled
+fan-out the context sections are already built from (Phylactery and Unruh from
+`idSettled`/`temporalSettled`; Village and Tomes from cheap local file/dir reads) and, on a
+ward-private non-static turn, pushes an `[Organ status]` block per the ward's
+`organStatusBlock` setting: `'degraded'` (default — inject only when `anyDown()` is true),
+`'always'`, or `'off'` [@thalamus-js]. A separate `probeOrgans()` runs a bounded *live*
+reachability probe — a real MCP call to Phylactery/Unruh, not last turn's fan-out result — and
+backs the ward-facing `organ_status` tool, so the Familiar can check organ health on demand
+independent of the injected block [@thalamus-js]. Both paths are wrapped so a probe failure can
+never break `enrich()` itself; the diagnostic must not cost the turn it is reporting on.
 
 **`cerebellum.js`** is the motor module — the outbound counterpart to thalamus. It owns the
 tool registry (`BUILTIN_TOOLS` + `TOOL_EXECUTORS`), the tool-call loop, the silence-triage
@@ -126,6 +153,10 @@ unregistered guild channel's activity: off, it goes into the capped knock list f
 registration; on, `noteUnregisteredGuild` auto-creates a Location for it via `upsertLocation`,
 born at the Strangers floor so it grants nothing until the ward assigns it a circle — the same
 "a knock grants nothing" guarantee, just pre-listed instead of queued [@discord-gateway-js].
+Alongside the villager-facing `!consent` menu, `discord-gateway.js` intercepts two more
+component menus in the ward's own DM only: `!queue` and `!connection` — see
+[Ward Discord console](ward-console) for the pending memory-consent queue, connection routing,
+and reasoning-effort controls they expose.
 
 ## Storage shape
 
@@ -147,14 +178,23 @@ If you're asking yourself... go to:
 - **How does the Familiar notice someone is in crisis?** → [Safety spine](safety-spine)
 - **What does the schedule graph do?** → [Unruh](unruh) and [Temporal assurance](../concepts/temporal-assurance)
 - **How do sessions turn into lasting memories?** → [Session memorization](session-memorization)
+- **How does keyword-triggered lore work, and what is the Familiar Manual tome?** → [Tomes and keyword lore](tomes-and-lore)
 - **What's the thalamus/cerebellum split about?** → Back to the lead section above, then [Naming Cerebellum](../decisions/cerebellum-naming) for the reasoning
 - **How does image input work?** → [Vision and media](vision-and-media)
 - **How does the Familiar click and fill on the web?** → [Browser](browser)
+- **What happens when a site (Reddit today) blocks a plain fetch?** → [Reader router](reader-router)
 - **How does the Familiar speak, and what governs what voice models it fetches?** → [Voice](voice)
 - **How is the Familiar consistent across web, Discord, and voice?** → [Core prompts and multi-surface assembly](core-prompts)
+- **How does the ward control settings from Discord instead of the web app?** → [Ward Discord console](ward-console)
+- **How does a saved connection turn into an actual LLM request, and can a local model with no API key be used?** → [Providers and connection readiness](providers)
+- **When do sessions end, and how can the ward manually close an open session?** → [Session lifecycle](session-lifecycle)
+- **How does the ward's web chat and Discord DM stay one conversation?** → [Unified Ward Sessions](session-unification)
 
 ## Where to go next
 
+- [Memory and knowledge](memory-and-knowledge) — how the layered memory systems (Phylactery,
+  Unruh, Tomes, Session Memorization, Content-Gating) fit together and where each kind of
+  knowledge lives.
 - [Phylactery](phylactery) — the canonical self-store: identity, memory, and the knowledge
   graph.
 - [Content-based memory gating](content-gating) — the per-topic sensitivity axis layered on top
@@ -162,6 +202,12 @@ If you're asking yourself... go to:
   not others.
 - [Session memorization](session-memorization) — the durable job queue that turns a session or
   topic into Tome entries, and the dedicated Session Memories tome it writes to.
+- [Session lifecycle](session-lifecycle) — when sessions begin, how they normally end, and the
+  manual close-out mechanism for sessions that never received an `endedAt` timestamp.
+- [Data ingestion](data-ingestion) — importing conversation logs from other platforms and
+  formats (ChatGPT, SillyTavern, OpenClaw, timestamped text) into the memorization pipeline.
+- [Tomes and keyword lore](tomes-and-lore) — the keyword-activation engine shared by web and
+  Discord, the live tome-macro boundary, and the self-documenting Familiar Manual tome.
 - [Unruh](unruh) — the temporal-context specialist: the schedule graph, the interest weight
   system, and the local-naive time model.
 - [Weather](weather) — ward-local weather sensing, the provider chain, and the
@@ -169,8 +215,17 @@ If you're asking yourself... go to:
 - [Vision and media](vision-and-media) — multimodal image input, content-addressed storage,
   and modality fallback at the materialization seam.
 - [Browser](browser) — the opt-in, ward-only click-and-fill web subsystem: the SSRF-guarding
-  proxy, the ref/generation model, and the five shipped passes (through 0.11.16) plus the parked
-  CDP-mode alternate engine.
+  proxy, the ref/generation model, the five shipped build-spec passes plus the work that
+  continued past them through 0.11.30 (open shadow-DOM piercing, the `browse_open` Reddit
+  reader mirror, page watches, JS-render settling, and a Reddit JSON-API reader that routes
+  `read_webpage` around Reddit's anti-bot wall entirely), and the CDP-mode alternate engine
+  (0.11.31-alpha, pending a desktop shakeout) that attaches over the Chrome DevTools Protocol to
+  a Chrome the ward launches themselves — a dedicated, one-click-set-up profile by default,
+  or their own everyday logged-in Chrome if they set the debug flag by hand.
+- [Reader router](reader-router) — the 0.11.30 gated-site registry and reachability doctor
+  that generalizes the Reddit fix above: a `browser-driver.contextRequest` primitive fetches
+  through the ward's own authenticated browser session for any site a plain server-side
+  fetch cannot reach.
 - [Voice](voice) — the multi-pass voice milestone: the model supply chain, the disk-footprint
   budget, the ward-facing benchmark tool, and read-aloud text-to-speech.
 - [Core prompts and multi-surface assembly](core-prompts) — the ward's four core prompt fields
@@ -178,12 +233,25 @@ If you're asking yourself... go to:
   assembled server-side, and the lesson about cross-surface consistency.
 - [Autonomous loops](autonomous-loops) — the background workers, what each one does, and how
   to turn one off.
+- [Pondering](pondering) — the autonomous pondering loop, how the Familiar thinks aloud
+  at a cadence weighted by interest and threat level.
 - [Safety spine](safety-spine) — crisis detection, threat tracking, and how escalation to a
   human trusted contact works.
 - [Injection guard: wiring history](injection-guard-gap) — the pattern-scanner's
   wiring history and current boundaries, and the incident that produced it.
+- [Ward Discord console](ward-console) — the ward-only `!queue` and `!connection` Discord
+  menus: the pending memory-consent queue, active-connection and per-feature routing, and
+  per-connection reasoning-effort control.
+- [Providers and connection readiness](providers) — how `providers.js` turns a saved connection
+  into an actual request: URL resolution and canonicalisation, the single keyless-aware
+  readiness gate every LLM call site shares, and the safety implication for silence-triage.
+- [Unified Ward Sessions](session-unification) — the shared session-binding pointer that
+  makes the ward's web private chat and Discord DM one continuous conversation, the
+  multi-writer log merge that makes that safe, and the composer-safe live-sync poller.
 - [Installer and launcher](installer-and-launcher) — the per-platform one-click install,
   update, and launch tooling, and the invariants it must preserve.
+- [Update](update) — the self-update mechanism, detection, and the design choice to never
+  update automatically without the ward's consent.
 - [Entity-as-subject](../concepts/entity-as-subject) and
   [Multi-embodiment](../concepts/multi-embodiment) — the design stance this architecture
   exists to serve.
@@ -191,3 +259,5 @@ If you're asking yourself... go to:
   rules (versioning, degradation, id schemes) that apply across every component above.
 - [Prompt-cache-aware context ordering](../decisions/prompt-cache-aware-context-ordering) — why
   Thalamus's context is split into a static prefix and a depth-injected dynamic block.
+- [Domain folder layout](../decisions/domain-folder-layout) — why domain modules now live under
+  `src/<domain>/` while `server.js` and a handful of cross-cutting files stay at the root.

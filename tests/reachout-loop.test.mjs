@@ -2,7 +2,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { runOneReachoutTick, resetReachoutCooldown } from '../reachout-loop.js';
+import { runOneReachoutTick, resetReachoutCooldown } from '../src/warmth/reachout-loop.js';
 
 // Keep default-wired wait-streak recording away from the real state file
 // (wait-streak.test.mjs covers recording against a temp dir).

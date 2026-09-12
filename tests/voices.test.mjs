@@ -8,9 +8,9 @@ import { createHash } from 'node:crypto';
 import {
   voiceFileName, resolveVoice, installVoice, saveWardVoice, listLocalVoices,
   bundledVoicePath, installedVoicePath, BUNDLED_FILE, BUNDLED_SUBDIR, WARD_SUBDIR, INSTALLED_SUBDIR,
-} from '../voices.js';
-import { DEFAULT_VOICE, VOICE_PROVENANCE, attributionNotice, SHORTLIST, preferEnhanced } from '../voice-catalogue.js';
-import { loadCatalogue, clipKey } from '../voice-clips.js';
+} from '../src/voice/voices.js';
+import { DEFAULT_VOICE, VOICE_PROVENANCE, attributionNotice, SHORTLIST, preferEnhanced } from '../src/voice/voice-catalogue.js';
+import { loadCatalogue, clipKey } from '../src/voice/voice-clips.js';
 
 /**
  * `loadCatalogue` memoises on first call and ignores `rootDir` afterwards.

@@ -82,3 +82,10 @@ addressing — Phylactery memories are addressed
 by an autoincrement integer `id` returned on every search/list/read result, not by a
 composite key an embodiment would have to reconstruct, so any embodiment can act on a record
 using only what it was just handed back [@claude-md].
+
+The same one-continuous-thing stance shows up one level down from identity and memory, in the
+ward's live chat *session* itself: [Unified Ward Sessions](../architecture/session-unification)
+makes the ward's web private chat and their Discord DM resolve to one session id instead of
+two independent logs. That mechanism is a plain file-backed pointer inside Proto-Familiar's own
+process, not a Phylactery MCP write — it unifies conversation turn history, a narrower and
+differently-owned kind of state than the identity and memory this page is about.

@@ -13,7 +13,7 @@ import {
   initVillageSync, bootSync,
   migrateCategoryIds,
   CATEGORY_EMERGENCY, CATEGORY_STRANGERS,
-} from '../village.js';
+} from '../src/village/village.js';
 
 let dir;
 let filePath;
@@ -540,7 +540,7 @@ test('upsertCategory mints a readable slug id, not a UUID', async () => {
 });
 
 test('pendingCategoryAudienceRemap: always includes the fixed legacy-seed map', async () => {
-  const { pendingCategoryAudienceRemap } = await import('../village.js');
+  const { pendingCategoryAudienceRemap } = await import('../src/village/village.js');
   // No file at this path → seed map only (the three legacy seed UUIDs → slugs).
   const map = await pendingCategoryAudienceRemap({ filePath: path.join(dir, 'nonexistent.json') });
   assert.equal(map['00000000-0000-4000-8001-000000000001'], 'close-friends');
@@ -549,7 +549,7 @@ test('pendingCategoryAudienceRemap: always includes the fixed legacy-seed map', 
 });
 
 test('pendingCategoryAudienceRemap: unions ward-created UUID → name-slug from the raw file', async () => {
-  const { pendingCategoryAudienceRemap } = await import('../village.js');
+  const { pendingCategoryAudienceRemap } = await import('../src/village/village.js');
   const raw = { categories: [{ id: 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e', name: 'Book Club' }] };
   await fsp.writeFile(filePath, JSON.stringify(raw), 'utf8');
   const map = await pendingCategoryAudienceRemap({ filePath });

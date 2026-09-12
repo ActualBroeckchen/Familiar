@@ -4,7 +4,7 @@ topics: [decisions, vision]
 sources:
   - id: vision-js
     type: file
-    path: vision.js
+    path: src/vision/vision.js
 ---
 
 # Vision capability defaults to BLIND; prove capability via allowlist
@@ -57,6 +57,10 @@ Generalizable design principles for future capability detection work:
 2. **Make asymmetry explicit and correct**: When a heuristic can be wrong in both directions, make the asymmetry clear. The cheap-to-be-wrong direction (describe an unknown, graceful degradation) must be the default. The expensive-to-be-wrong direction (send something live to a blind consumer, trust-break) must require positive evidence: allowlist match, explicit user choice, or cached confirmation.
 
 3. **Add hard invariants where describe/stand-in can still fail**: Even when images degrade to descriptions, the model could still confabulate details it's not supposed to know. Add a prompt-level invariant in the shared seam that the model must never guess about unseen content — it must plainly say it can't see and ask. This protection rides every surface equally, not embedded per-UI-layer.
+
+## Extension to video
+
+The 0.11.33-alpha video milestone reuses this same asymmetry rather than inventing a new one, and tightens it further: `looksVideoCapable()`'s allowlist recognizes fewer families than its image counterpart, and the live-video budget is fixed at one clip per turn rather than four, because a wrong live attempt ships megabytes of base64 instead of a few kilobytes of text. See [Vision and media](../architecture/vision-and-media) for the video-specific allowlist and budget.
 
 ## Related
 

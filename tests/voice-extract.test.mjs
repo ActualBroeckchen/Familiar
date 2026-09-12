@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import {
   archiveKind, isArchive, entryIsSafe, extractArchive,
   writeMarker, readMarker, isExtractedFrom, MARKER,
-} from '../voice-extract.js';
+} from '../src/voice/voice-extract.js';
 
 const run = promisify(execFile);
 const tmp = () => fs.mkdtemp(path.join(os.tmpdir(), 'vx-'));

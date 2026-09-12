@@ -45,7 +45,8 @@ server.js  (Express, Node 22+, ESM)
     │                          for every MCP write — never its own connection)
     │
     │  ── caring spine (per-request + autonomous) ─────────────────
-    ├── crisis-signals.js   ── pattern detector run on each user msg
+    ├── crisis-signals.js   ── pattern detector (regex floor) run on each user msg
+    ├── crisis-classifier.js── ML distress classifier + tier-asymmetric combine (scoreThreatMessage)
     ├── threat-tracker.js   ── decaying scalar, persistent, audit history
     ├── recent-ponderings.js── read recent free-cycle thoughts into chat
     ├── pondering.js        ── one-shot ponder primitive (LLM call → tome entry)
@@ -70,7 +71,7 @@ server.js  (Express, Node 22+, ESM)
     ├── memorization.js     ── autonomous per-fact memorization queue + worker (Pillar C)
     ├── outgoing-filter.js  ── Pillar D: post-response semantic gate before delivery
     ├── temporal-format.js  ── pure renderer for Unruh's payload
-    ├── providers.js        ── shared chat-completions URL map
+    ├── providers.js        ── shared chat-completions URL map + connection readiness (resolveProviderUrl / connectionReady / providerRequiresKey / authHeader); local + custom OpenAI-compatible endpoints, key-optional
     │
     ├── logs/               session JSON files (git-ignored)
     └── tomes/              per-Tome JSON files + state caches
@@ -88,6 +89,20 @@ versa — and `enrich()` fans out across whichever peers are live
 via `Promise.allSettled`. Empty sub-blocks render as nothing in the
 prompt; the LLM only sees scaffolding when there's content.
 
+**Organ status (0.11.24, `organs.js`).** `enrich()` records which
+organs actually delivered this turn — Phylactery / Unruh / Village /
+Tomes — and can surface a small `[Organ status]` block (🟢 answered ·
+⚫ silent) so a degraded organ reads as an explicit absence rather than
+mystery-quiet context. Injection is ward-configurable via
+`organStatusBlock` (Settings → Diagnostics): `degraded` (default —
+show only when at least one organ is down), `always`, or `off`. The
+turn-status is read from the same settled results the sections are
+built from (identity/temporal settled state, plus a file/dir check for
+Village and Tomes). The Familiar can also run a live reachability probe
+on demand via the `organ_status` tool (`probeOrgans` — bounded MCP
+pings to Phylactery/Unruh, file checks for Village/Tomes), independent
+of the injected block.
+
 The **caring spine** modules are not MCP children — they are
 Node-side modules that read from / write to Unruh and the local
 state files. They run alongside the chat path (detection,
@@ -101,7 +116,8 @@ ponderings injection, care-check framing) and as background loops
 ├── server.js                Express server — chat proxy, all HTTP endpoints, autonomous-loop boot
 ├── thalamus.js              MCP bridge — Phylactery + Unruh, plus all the helper wrappers. MUTATING wrappers read results honestly via `unruhResult` / `mcpToolError` (phylactery-result.js): the SDK's callTool does NOT throw when a tool raises (it resolves isError:true), so a wrapper that just returned `{ok:true}` reported success on failure — the silent-write class behind the identity_update_section bug. Reads deliberately still degrade to empty (absence renders as absence). `saveBookmark` is the M8 write side (→ interest_bookmark), feeding the resurfacing loop
 ├── cerebellum.js            Motor module — tool registry + executors + tool loop, triage deliberation, trusted-contact delivery, escalation deadlines
-├── crisis-signals.js        Pattern-based detector — 5 tiers, ~13 signal categories, damping
+├── crisis-signals.js        Pattern-based detector (the regex floor) — 5 tiers, ~13 signal categories, damping
+├── crisis-classifier.js     ML distress classifier (TF-IDF+logreg) + scoreThreatMessage — the one live threat-scoring seam
 ├── threat-tracker.js        Decaying scalar with audit history, off-switches, file persistence
 ├── spine-states.js          Temporal-bridges Pass A — the caring spine mints graph citizens. On a live ward turn `enrich()` fire-and-forgets `syncSpineState`: threat crossing into moderate+ mints a ward-private `state` node (`payload.spine`) for the hard stretch so it becomes relatable to schedule events (the missing causal middle); falling back below closes it at the code-derived decay-crossing instant (`decayCrossingMs`, same half-life as the tracker) and derives `co_occurs_with` edges to overlapping schedule items (arithmetic, capped/deduped, recurring anchors linked once). All machine values code-derived; never moves the tier / gates nothing / delays no triage. Villager privacy is structural + fail-closed: `isSensitiveNode` + `stripSensitiveScheduleNodes` (gated-turn context) + the `schedule_find` filter hide `spine`/`sensitive` nodes from every non-ward surface. Open-episode pointer in `tomes/.spine-episode.json`. Off: `spineStatesEnabled` (default ON) + `PROTO_FAMILIAR_SPINE_STATES_DISABLED=1`. Pure helpers unit-tested; MCP wrappers injected by the call site (no thalamus cycle)
 ├── pondering.js             Pure `ponderOnce()` primitive — LLM call + tome write
@@ -111,7 +127,7 @@ ponderings injection, care-check framing) and as background loops
 ├── silence-triage-loop.js   Autonomous singleton loop; LLM-deliberated proactive check-ins
 ├── reachout-loop.js         Autonomous singleton loop; warm non-crisis outreach (companionship). Stands down at moderate+ threat (triage owns distress); quiet-hours + cooldown gated
 ├── tome-graduation-loop.js  Autonomous singleton loop (Phase 4, opt-in/default-OFF); drains durable facts stranded in tomes into Phylactery (identity + memory + graph; relational facts resolve-or-create nodes + dedup edges). Pure logic in tome-graduation.js. Code-gated candidates → one batched LLM judgment (Phase-3 rubric; leans toward graduating — consolidation back-end prunes over-gathering) → route via thalamus wrappers (ward memory consent-gated) → tidy only after confirmed route (delete/pointer). Off-switch PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1; distinct from Pillar H (identity→RAG); per-tome opt-out `graduationExempt` (0.8.106): ward-toggleable in the Tomes modal, stamped on runtime tomes at creation, exposed via GET/PATCH /api/tomes — the name-exclusion list stays as belt-and-suspenders
-├── content-regate-loop.js   Autonomous singleton loop (ward-disclosure Phase B, opt-in/default-OFF); the Familiar reviews EXISTING ward-private ward-self memories and, with a batched judgment, opens the ones that may be content-gated (`audience → ward-content-gated`, optionally correcting the coarse backfill `content_tag`) while keeping the rest private. Pure logic in content-regate.js. Conservative (parser fails closed to keep); code-selects candidates (memory_list_content_gate_candidates — ward-private + no third-party subject only, never touches a third-party fact); reviewed-tracker judges each once; every opening writes a `[DISCLOSURE NOTICE]` (enrich(), ward-visible) settled by `disclosure_acknowledge` / reverted by `keep_memory_private`. Off-switch PROTO_FAMILIAR_CONTENT_REGATE_DISABLED=1 + "Review my private notes for content-sharing" toggle
+├── content-regate-loop.js   Autonomous singleton loop (ward-disclosure Phase B, opt-in/default-OFF); the Familiar reviews EXISTING ward-private ward-self memories and, with a batched judgment, opens the ones that may be content-gated (`audience → ward-content-gated`, optionally correcting the coarse backfill `content_tag`) while keeping the rest private. Pure logic in content-regate.js. Conservative (parser fails closed to keep); code-selects candidates (memory_list_content_gate_candidates — ward-private + no third-party subject only, never touches a third-party fact); reviewed-tracker judges each once; every opening writes a `[DISCLOSURE NOTICE]` (enrich(), ward-visible) settled by `acknowledge_disclosure` / reverted by `keep_memory_private`. Off-switch PROTO_FAMILIAR_CONTENT_REGATE_DISABLED=1 + "Review my private notes for content-sharing" toggle
 ├── content-regate.js        Pure Phase-B logic: selectBatch / parseRetagDecision (fail-closed) / summarizeCircles / buildRetagPrompt + injectable runOneRetagTick; reviewed-tracker (tomes/.content-regate-reviewed.json) + disclosure notices (tomes/.disclosure-notices.json)
 ├── needs-tracking-loop.js   Autonomous singleton loop (Pass 2, opt-in/default-OFF); marks a recurring need-window's occurrence `missed` once its [when,end] elapses unresolved (builds the needs-fulfilment ledger). Pure selection in needs-tracking.js. Stands down at moderate+ threat (never competes with triage); only the LAPSE is made factual — projected consequence edges are untouched. Off-switch PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1
 ├── needs-tracking.js        Pure Pass-2 logic: isNeedWindow / selectMissedOccurrences / summarizeNeedsForDay (the live "Needs today" view)
@@ -139,16 +155,18 @@ ponderings injection, care-check framing) and as background loops
 ├── recurrence.js            Recurrence-rule expansion — turns one "weekly cleaning" anchor into occurrences within the temporal window
 ├── temporal-format.js       Pure renderer for the Unruh temporal_context payload
 ├── media.js                 Media store (vision build spec §2, Pass 1–2) — content-addressed image persistence in media/ (sha256 bytes + `.json` meta + `.slugs.json` index). saveAsset (dedup free — same bytes = one asset), getAsset/getAssetMeta, setAssetDescription (also upgrades a generic `img-xxxx` slug to a meaning-bearing alias once described), listAssets/deleteAsset, resolveAssetId (slug/sha → sha, index + meta-scan heal). **Pass 2 picture→node linking (§6.5):** addAssetLink/removeAssetLink (links[] on meta, deduped by nodeId — bytes stay local, the link is an embodiment-local annotation), assetsForNode ("show me what Milkyway looks like"), and buildStandin names linked nodes ("— of Milkyway —"). drainPendingImages (§10 — view_image's stash → a user image message for the next tool round; lives here so both tool loops call it without a cerebellum↔vision cycle). Caps at save (MEDIA_MAX_BYTES 6MB, image mime allow-list). Pure-code readImageSize (JPEG/PNG/GIF/WebP headers, no native lib). buildStandin + contentWithStandins (§6/§7). Never throws into a caller. Off via PROTO_FAMILIAR_VISION_DISABLED=1 — inert until an image arrives
-├── zai-vision.js            z.ai coding-plan vision (0.9.5) — on the GLM Coding Plan, vision is NOT on the chat endpoint; it's a separate "Vision Understanding" MCP server (@z_ai/mcp-server, GLM-4.6V) with its own quota pool. This module lazily spawns that server as a stdio MCP child (keyed by API key, env Z_AI_API_KEY + Z_AI_MODE=ZAI), discovers its analyze_image tool + schema (pickAnalyzeTool/buildAnalyzeArgs adapt to whatever it names its image param — path/url/base64 — writing a temp file only when a path is wanted), and describeViaZaiVision() returns the description text. describeAsset (vision.js) routes here when the resolved vision connection is provider 'zai-coding' — so a coding connection assigned to the vision feature spends the coding vision allotment (describe-only; the coding chat models can't take live image parts). Graceful: any spawn/call failure → {ok:false}, description stays null. Off: PROTO_FAMILIAR_ZAI_VISION_DISABLED=1
-├── vision.js                The provider boundary (vision build spec §3, Pass 1–2) — the ONE seam turning media references into provider content-parts. materializeAttachments(apiMessages,{connection,settings,visibleAudiences}) → live `image_url` data-URL parts (capable + within the live budget, newest-first) OR a text stand-in appended to the content STRING (otherwise); returns `stoodInUndescribed` ids so the chat path can background-describe them; a request with no attachments is returned identical, and the internal `attachments` field is stripped from every outgoing message. Audience gate first, fail-closed (a ward-private asset contributes nothing on a gated turn). Capability (§3.1): per-connection `visionCapable` tri-state ('yes'/'no' the ward's word; 'auto' → cache tomes/.vision-capability.json, then a TIGHT name allowlist `looksVisionCapable` — recognised vision families ride live and self-confirm, everything else defaults BLIND → described, never sent an image it may not see. This replaced a blanket "optimistic = capable" that let a text-only primary hallucinate a photo it never saw). isModalityError classifies a modality rejection for the mid-turn hard fallback. **Blind-image confabulation guard:** when any image stands in with NO description (a describe failed), the seam injects a hard system line — the Familiar never describes/guesses/names what's in an unseen image (`blindImageStandins`). **Pass 2:** describeAsset (look-once-keep-forever — resolveVisionConnection picks a capable connection via connectionForFeature('vision')→primary→first-capable; one callProviderChat with the image as a data-URL part; the result is injection-guarded THEN cached via setAssetDescription, never regenerated). **Image→threat scoring (0.9.2, ward-signed §15.1):** scoreImageDescriptionThreat scores the ward's OWN image's DESCRIPTION with the ward's scoreMessage and feeds recordThreat(source:'vision') — FULL weight, RAISE-ONLY, ward-private only; crisis-signals.js/threat-tracker.js unchanged. Fired fire-and-forget from the chat path on the ward's live turn (server.js visionThreatScoringOn gate); off-switch PROTO_FAMILIAR_VISION_THREAT_DISABLED=1
+├── zai-vision.js            z.ai coding-plan vision (0.9.5) — on the GLM Coding Plan, vision is NOT on the chat endpoint; it's a separate "Vision Understanding" MCP server (@z_ai/mcp-server, GLM-4.6V) with its own quota pool. This module lazily spawns that server as a stdio MCP child (keyed by API key, env Z_AI_API_KEY + Z_AI_MODE=ZAI), discovers its analyze_image tool + schema (pickAnalyzeTool/buildAnalyzeArgs adapt to whatever it names its image param — path/url/base64 — writing a temp file only when a path is wanted), and describeViaZaiVision() returns the description text. describeAsset (vision.js) routes here when the resolved vision connection is provider 'zai-coding' — so a coding connection assigned to the vision feature spends the coding vision allotment (image describe path; the older text/code coding models can't take live image parts). **Model-aware since 0.11.40:** a natively-multimodal coding model (GLM 5.3 Flash) DOES take live image AND video parts on the same coding chat endpoint (`/api/coding/paas/v4/chat/completions` is the same OpenAI-compat surface as standard z.ai), so it rides live and never reaches this MCP; only a blind coding model (GLM-4.6) describes here. Graceful: any spawn/call failure → {ok:false}, description stays null. Off: PROTO_FAMILIAR_ZAI_VISION_DISABLED=1
+├── vision.js                The provider boundary (vision build spec §3, Pass 1–2) — the ONE seam turning media references into provider content-parts. materializeAttachments(apiMessages,{connection,settings,visibleAudiences}) → live `image_url` data-URL parts (capable + within the live budget, newest-first) OR a text stand-in appended to the content STRING (otherwise); returns `stoodInUndescribed` ids so the chat path can background-describe them; a request with no attachments is returned identical, and the internal `attachments` field is stripped from every outgoing message. Audience gate first, fail-closed (a ward-private asset contributes nothing on a gated turn). Capability (§3.1): per-connection `visionCapable` tri-state ('yes'/'no' the ward's word; 'auto' → cache tomes/.vision-capability.json, then a TIGHT name allowlist `looksVisionCapable` — recognised vision families ride live and self-confirm, everything else defaults BLIND → described, never sent an image it may not see. This replaced a blanket "optimistic = capable" that let a text-only primary hallucinate a photo it never saw). isModalityError classifies a modality rejection for the mid-turn hard fallback. **Blind-image confabulation guard:** when any image stands in with NO description (a describe failed), the seam injects a hard system line — the Familiar never describes/guesses/names what's in an unseen image (`blindImageStandins`). **Pass 2:** describeAsset (look-once-keep-forever — resolveVisionConnection picks a capable connection via connectionForFeature('vision')→primary→first-capable; one callProviderChat with the image as a data-URL part; the result is injection-guarded THEN cached via setAssetDescription, never regenerated). **Image→threat scoring (0.9.2, ward-signed §15.1):** scoreImageDescriptionThreat scores the ward's OWN image's DESCRIPTION with the ward's scoreMessage and feeds recordThreat(source:'vision') — FULL weight, RAISE-ONLY, ward-private only; crisis-signals.js/threat-tracker.js unchanged. Fired fire-and-forget from the chat path on the ward's live turn (server.js visionThreatScoringOn gate); off-switch PROTO_FAMILIAR_VISION_THREAT_DISABLED=1. **Video patch (0.11.33, docs/video-build-spec.md):** a `video` media kind rides the same seam — `materializeAttachments` emits a `{type:'video_url', video_url:{data:…}}` part for a **video-capable** connection (`resolveVideoCapable` — a TIGHT heuristic `looksVideoCapable`: Gemini/Qwen-VL/**GLM 5.3 Flash**/explicit-`video`, plus the ward's `videoCapable` tri-state — the connection-editor "Can watch video?" control, 0.11.36; much narrower than vision since a wrong attempt ships megabytes) within a newest-first `DEFAULT_MAX_LIVE_VIDEOS`=1 budget, else a text stand-in with the same blind-confabulation guard + a video legibility line. **`zai-coding` is model-aware for both image and video (0.11.40), not blanket-blind** — GLM 5.3 Flash rides live on the coding chat endpoint. **Describe is image-only and guards at the door (0.11.39):** `describeAsset`/`ensureDescribed` refuse a non-image kind before touching a connection, so a shared video never reaches the image describer (the reported coding-plan `HTTP 400` image-parse error). Inline only (`VIDEO_MAX_BYTES`=20 MB); the modality-reject fallback means a provider that can't take `video_url` degrades to a stand-in, never a 500. `POST /api/media` accepts `video/*`; the web composer attaches short clips raw (no downscale) with a `<video>` thumbnail chip. Off-switch `PROTO_FAMILIAR_VIDEO_DISABLED=1`. **Discord ingest (0.11.34):** `ingestDiscordImages` → `ingestDiscordMedia` also fetches video attachments RAW (no resizer) at arrival, size-capped, under the same audience rule + caps as images (`isDiscordVideoAttachment`, octet-stream→ext fallback). **File-API path for longer clips (0.11.35, `gemini-file-api.js`):** a clip over the inline cap can't ride the OpenAI-compat endpoint, so a longer video goes through Google's native File API + `generateContent` — kept ENTIRELY isolated behind `POST /api/video-understand` (never the `/api/chat` handler), default-OFF (`videoFileApiEnabled`), ward-only, Gemini-only, every failure → `{ok:false}` fallback. Store split: `VIDEO_MAX_BYTES` (20 MB) = inline eligibility; `VIDEO_STORE_MAX_BYTES` (300 MB) = what the store holds; the materializer only inlines ≤ the inline cap, a bigger clip stands in and the endpoint uploads it. Web composer shows a 🎬 "watch full clip" action on a too-big pending video. Unit-tested against a stubbed Google; the live round-trip needs the ward's key (shakeout). Discord long-video + other providers are follow-ups; no video-describe yet
 ├── unruh/ templates.py      Requirement templates (stewardship Pass 2b, 0.8.20) — a `templates` table (migration 0004, keyed by obstacle tag UNIQUE, one bundle per barrier) + upsert/list/delete accessors, exposed as MCP tools template_upsert/list/delete. Storage ONLY — deliberately NOT schedule nodes, so templates never leak into the schedule window. APPLYING a template is JS orchestration in cerebellum's template_apply: reads an event's payload.obstacle_tags, matches templates, resolve-or-creates each prerequisite task (findScheduleNodes exact-label reuse of an open task, else addScheduleNode — never duplicates) and links a `requires` edge (addScheduleEdge) — SUGGESTED + prunable per instance. schedule_add_event hints (loud) when a tagged event has a matching template. Templates are the Familiar's own editable objects (no ward UI, per spec §3.2)
 ├── surface-context.js       Consumer pipeline — hard gates + candidate selection + block format. Consequence-aware scoring reads schedule edges (summarizeConsequences: requires/depends_on/blocks/causes → priority pressure + plain "why"). Stewardship Pass 2a (0.8.19) adds an obstacle-radar nudge: a task whose `payload.obstacle_tags` names a real barrier (e.g. "outside") gets +1 pressure and a "worth keeping on the radar" reason, so an outside-the-house errand doesn't slide under the easier tasks
 ├── surface-events.js        Event store (offers + outcomes) + pure-code tagger + reflection inputs
 ├── village.js               Village registry (V1) — categories/grant sets, villagers (name/pronouns/aliases/relation/stance/comm-style/notes/privateNotes/remember consent map/graphNodeId), locations; local mirror + Phylactery write-through sync (see docs/village-support-design.md). The Familiar reaches it via the village_lookup / village_upsert tools (privateNotes field-gated to ward-private turns)
-├── own-files.js             Sandboxed read-only access to the Familiar's own checkout — resolves repo-relative paths inside the root, denies secrets (settings.json, .env) + build noise (node_modules/.git/.venv), size-caps + text-only. Backs the list_files / read_file tools (ward-private only)
+├── own-files.js             Sandboxed read-only access to the Familiar's own checkout — resolves repo-relative paths inside the root, denies secrets (settings.json, .env) + build noise (node_modules/.git/.venv), size-caps + text-only. Backs the list_files / read_file tools AND `searchSessions` (content search across `logs/*.json`, recency-ranked snippets + the log path to read next; same denylist) behind the search_sessions tool — all ward-private only
 ├── websearch.js             Web access (opt-in, 0.7.0) — backs the look_up / web_search / read_webpage tools. look_up (0.7.19) answers definitions/facts/overviews from keyless official reference APIs (Wikipedia action API + DuckDuckGo Instant Answer API), no scraping/no setup. web_search finds pages; searchWeb resolves the human-chosen backend: webSearchBackend ∈ {basic → in-box keyless DuckDuckGo HTML scrape (no setup); api → a provider adapter (Marginalia/Tavily/Brave/Google) via webSearchApiProvider+key}. ANY backend failing falls through to the keyless floor — a wrong key / down provider never leaves the human without search. Each search logs which backend actually served (`[websearch] "q" — served via …` / `… failed […]; fell back to built-in keyless search`) so a silent fallback is visible (0.7.28). Owns the SSRF guard (scheme allow-list + resolved-IP block of loopback/private/link-local/metadata + redirect re-validation), the fetch timeout, and the linkedom→@mozilla/readability→turndown extraction with provenance stamping — the html→framed-markdown half is `extractReadable(html,{url,maxChars})`, SHARED with the browser read path (browser.js) so live-DOM and static reads produce byte-identical output. cerebellum registers the defs + delegates; gated by webSearchEnabled / PROTO_FAMILIAR_WEBSEARCH_DISABLED=1. (The managed local engines — SearXNG/4get/LibreY — were removed in 0.7.38; Marginalia + APIs + the floor cover the same ground without the install/spawn machinery.)
-├── browser.js               Internet navigation — Pass 1 spine + Pass 2 eyes/hands + Pass 3a safety gates (docs/browser-build-spec.md; 0.11.x, opt-in/default-OFF). Pass 3a (0.11.3): site modes (`siteModeAllows` — open/blocklist/allowlist, subdomain match, fail-closed; enforced at browse_open + browseRead AND on page-TRIGGERED top-level navs via a driver route interceptor that aborts a disallowed main-frame navigation), hardened credential/payment fill refusal (autocomplete cc-*/current-password + name/inputmode heuristics in browser-lens.isProtectedField, over autocomplete/inputmode now captured by the DOM walk), and a Settings "browser activity" viewer (GET /api/browser-actions + /api/browser/status). A site-blocked read returns a DISTINCT `blocked` signal so read_webpage honours the block instead of falling through to the static floor. Pass 2 (0.11.1) adds: browse_screenshot (saves a PNG media asset, returns an id the executor pushes to _pendingImages so it rides the SAME turn on a vision-capable connection — capable-turn-gated like view_image), browse_tabs (list/switch/close), browse_history (query the audit log), and downloads→media on an act (size-cap + mime allow-list, never an executable). **read_webpage re-backing (0.11.2):** browseRead reads the LIVE JS-rendered DOM (driver.readPage → an ephemeral, cap-exempt tab → page.content()) through websearch.js's SHARED extractReadable, so browser + static output can't drift; the read_webpage executor routes here when shouldBrowserRead (browseEnabled + a browser exists + webReadBackend != 'static') and falls back to the static floor on any failure. The executor-facing browse_open/see/act/close ops: tie the engine (browser-driver.js) to the pure lens (browser-lens.js), sanitise every string leaving the lens through injection-guard, FRAME page content as Stranger-tier external speech (read, never obeyed), audit-log every action, and degrade any engine failure to a calm first-person line (never a throw into the turn). browseEnabled gate + PROTO_FAMILIAR_BROWSE_DISABLED=1. cerebellum's browse_* executors dynamic-import this (heavy engine out of the static graph); WARD-ONLY (a gated villager turn is refused). read_webpage is NOT re-backed this pass (Pass 2, spec §11).
-├── browser-driver.js        The engine: lazy playwright-core (optionalDependency — server boots without it), Chromium channel-detect (findChromium: PROTO_FAMILIAR_CHROME/CHROME env → PLAYWRIGHT_BROWSERS_PATH cache → browser/pw-browsers → system installs) with a BACKGROUND auto-fetch when none is found (startChromiumFetch shells out to playwright-core's own install CLI into browser/pw-browsers — it owns the version pin + checksum; the first browse call kicks it off and returns "setting up", status() surfaces install state, a later call finds it ready — never blocks a turn), one persistent context (browser/profile, git-ignored) launched THROUGH the guarded proxy, tab registry + hard cap (browseMaxTabs), idle reaper (browseIdleMin), crash supervision, GET /api/browser/status. extractPageData runs ONE in-page DOM walk → the lens shape with a code-computed unique CSS path per node (the act-time resolver; no held ElementHandles — verified against playwright-core 1.62.1 where page.accessibility is gone). extractPageData also emits IMAGE nodes (0.11.15: img/[role=img]/named-svg/figure/canvas, named or ≥100×100, capped 40, each with a css) so the model can perceive pictures and scope a screenshot to one. act() enforces the §4.1 dialog policy (confirm defaults dismiss; on_dialog:'accept' only for a benign one) + protected-field refusal + act-time unique-match-or-error + a generation guard (a nav / DOM rebuild bumps the page generation via framenavigated; a ref from an older generation errors to a re-observe). **Page-level scroll (0.11.15):** `scroll` with NO ref moves the viewport (value up/down/top/bottom via window.scrollBy/To) to reveal below-the-fold / lazy-loaded / infinite-scroll content, then re-snapshots — distinct from `scroll` with a ref (scrollIntoViewIfNeeded). Pass 2 adds screenshot({scope}), tab ops (list/switch/close), and download capture (page 'download' → takeLastDownload).
+├── reddit-reader.js         Reddit via its JSON API (0.11.29). Reddit's anti-bot wall 403s automated BROWSER traffic before render (and the datacenter-IP `.json` too), so `read_webpage` routes any reddit URL here BEFORE the browser/static path. `redditApiPath` normalises a front-end URL to its `.json` endpoint (bounded `limit`, `raw_json=1`); `fetchRedditJson` fetches it through websearch.js's `guardedFetch` (SSRF guard reused; a `headers`/`method`/`body` override was added there for a descriptive UA + JSON Accept + the OAuth POST). Two tiers: **public `.json`** (default, zero setup — works from a residential IP where the browser fingerprint is blocked) and, when `redditCredentials` is complete, the **sanctioned OAuth API** (script-app password grant → bearer on `oauth.reddit.com`, token cached in-memory, never persisted) which never touches the anti-bot wall. `parseRedditReadable` renders a comments page (post + threaded top comments) or a listing (numbered posts) into clean text, then `readReddit` runs it through injection-guard (comment bodies are user-authored) and returns `{ok,text,hard}` — a definitive block/auth outcome (`hard`) is surfaced honestly instead of falling through to the also-walled browser. Credentials + UA come from env FIRST (`PROTO_FAMILIAR_REDDIT_CLIENT_ID` / `PROTO_FAMILIAR_REDDIT_CLIENT_SECRET` / `PROTO_FAMILIAR_REDDIT_USERNAME` / `PROTO_FAMILIAR_REDDIT_PASSWORD` / `PROTO_FAMILIAR_REDDIT_USER_AGENT`) then Settings (`reddit*` keys, synced); off-switch `redditReaderEnabled` (default ON) + `PROTO_FAMILIAR_REDDIT_DISABLED=1`. **Browser-session tier (0.11.30):** Reddit also blocks server-side `.json` at the network layer (not just by IP), so `fetchRedditJson` inserts an authenticated **`browser-session`** backend between OAuth and public — `deps.contextFetch` (→ `browser-driver.contextRequest`, the ward's real browser fingerprint + logged-in session) fetches the `.json`, trusted only if it returns real JSON; `read_webpage` wires `contextFetch` on the ward's own turn only (the session is theirs).
+├── reader-router.js / reader-doctor.js  Gated-site reading (0.11.30, docs/reader-router-build-spec.md). The durable answer to "AI can't read this site" is per-site "primary + fallback" backends off the ward's authenticated browser, plus a way to SEE what's open. `reader-router` is the site REGISTRY (`READER_SITES`: hosts + ordered backend chain + the one-line unlock; `readerSiteFor`, `runReaderChain`). `reader-doctor` runs bounded live probes and renders "🟢 reachable / ⚫ blocked (+ what unlocks it)" — the `reader_doctor` tool (first-person) + `GET /api/reader-doctor`. Reddit is the first wired site (oauth → browser-session → public-json); LinkedIn/Quora/Medium/Twitter are follow-up passes via `browser-session`/`browser-read` off the logged-in profile.
+├── browser.js               Internet navigation — Pass 1 spine + Pass 2 eyes/hands + Pass 3a safety gates (docs/browser-build-spec.md; 0.11.x, opt-in/default-OFF). Pass 3a (0.11.3): site modes (`siteModeAllows` — open/blocklist/allowlist, subdomain match, fail-closed; enforced at browse_open + browseRead AND on page-TRIGGERED top-level navs via a driver route interceptor that aborts a disallowed main-frame navigation), hardened credential/payment fill refusal (autocomplete cc-*/current-password + name/inputmode heuristics in browser-lens.isProtectedField, over autocomplete/inputmode now captured by the DOM walk), and a Settings "browser activity" viewer (GET /api/browser-actions + /api/browser/status). A site-blocked read returns a DISTINCT `blocked` signal so read_webpage honours the block instead of falling through to the static floor. Pass 2 (0.11.1) adds: browse_screenshot (saves a PNG media asset, returns an id the executor pushes to _pendingImages so it rides the SAME turn on a vision-capable connection — capable-turn-gated like view_image), browse_tabs (list/switch/close), browse_history (query the audit log), and downloads→media on an act (size-cap + mime allow-list, never an executable). **read_webpage re-backing (0.11.2):** browseRead reads the LIVE JS-rendered DOM (driver.readPage → an ephemeral, cap-exempt tab → page.content()) through websearch.js's SHARED extractReadable, so browser + static output can't drift; the read_webpage executor routes here when shouldBrowserRead (browseEnabled + a browser exists + webReadBackend != 'static') and falls back to the static floor on any failure. The executor-facing browse_open/see/act/close ops: tie the engine (browser-driver.js) to the pure lens (browser-lens.js), sanitise every string leaving the lens through injection-guard, FRAME page content as Stranger-tier external speech (read, never obeyed), audit-log every action, and degrade any engine failure to a calm first-person line (never a throw into the turn). browseEnabled gate + PROTO_FAMILIAR_BROWSE_DISABLED=1. cerebellum's browse_* executors dynamic-import this (heavy engine out of the static graph); WARD-ONLY (a gated villager turn is refused). read_webpage is NOT re-backed this pass (Pass 2, spec §11). **Reader mirror (0.11.28):** `browse_open` takes an optional `reader:true` — a per-browse opt-in that swaps a URL to a lighter, reader-friendly mirror when a well-known one exists (`readerMirrorUrl`: Reddit's www/new/np/amp/m front-ends → old.reddit.com, path/query/hash preserved), noted in the result and a safe no-op elsewhere (old.reddit/media/api hosts and non-reddit URLs return null). The Familiar chooses it per browse when an app-style page reads badly; nothing is auto-rewritten.
+├── browser-driver.js        The engine: lazy playwright-core (optionalDependency — server boots without it), Chromium channel-detect (findChromium: PROTO_FAMILIAR_CHROME/CHROME env → PLAYWRIGHT_BROWSERS_PATH cache → browser/pw-browsers → system installs) with a BACKGROUND auto-fetch when none is found (startChromiumFetch shells out to playwright-core's own install CLI into browser/pw-browsers — it owns the version pin + checksum; the first browse call kicks it off and returns "setting up", status() surfaces install state, a later call finds it ready — never blocks a turn), one persistent context (browser/profile, git-ignored) launched THROUGH the guarded proxy, tab registry + hard cap (browseMaxTabs), idle reaper (browseIdleMin), crash supervision, GET /api/browser/status. extractPageData runs ONE in-page DOM walk → the lens shape with a code-computed unique CSS path per node (the act-time resolver; no held ElementHandles — verified against playwright-core 1.62.1 where page.accessibility is gone). extractPageData also emits IMAGE nodes (0.11.15: img/[role=img]/named-svg/figure/canvas, named or ≥100×100, capped 40, each with a css) so the model can perceive pictures and scope a screenshot to one. act() enforces the §4.1 dialog policy (confirm defaults dismiss; on_dialog:'accept' only for a benign one) + protected-field refusal + act-time unique-match-or-error + a generation guard (a nav / DOM rebuild bumps the page generation via framenavigated; a ref from an older generation errors to a re-observe). **JS-render settle (0.11.23):** navigate/readPage/act go through `settlePage(pg)` after `domcontentloaded` — a bounded (best-effort, can't hang) wait for `load` → a short `networkidle` → a small floor, so an SPA / framework / Carrd-style page finishes loading + WIRING its interactivity before the first read or after an act. Without it the snapshot read a half-built page and a click landed on an un-wired element and appeared to do nothing (the reported "sees some links, nothing reacts" on a JS-driven site); the fixed 150ms post-act wait is now this settle, so a client-side route / hash-nav / section-swap lands before the re-snapshot (a URL/hash change is surfaced by `computeDelta`'s before/after url diff). **Open shadow-DOM piercing (0.11.28):** the in-page walk collects every OPEN shadow root (nested included) and queries nodes/images across all of them, and appends each shadow root's own `innerText` — because `document.querySelectorAll` AND `innerText` both skip shadow content, so a web-component site (Reddit's `shreddit-*`, many framework apps) used to read as empty chrome. A shadow-DOM node can't be addressed by a document-rooted CSS path, so such elements are stamped a unique `data-pfsx` marker and addressed by `[data-pfsx="…"]` (Playwright's locator pierces open shadow roots — verified live); light-DOM nodes keep their natural `uniqueCss` path unchanged (zero regression). **Page-level scroll (0.11.15):** `scroll` with NO ref moves the viewport (value up/down/top/bottom via window.scrollBy/To) to reveal below-the-fold / lazy-loaded / infinite-scroll content, then re-snapshots — distinct from `scroll` with a ref (scrollIntoViewIfNeeded). Pass 2 adds screenshot({scope}), tab ops (list/switch/close), and download capture (page 'download' → takeLastDownload). **`contextRequest(url,{headers})` (0.11.30):** an authenticated fetch THROUGH the persistent context (`context.request`) — the ward's real browser fingerprint + profile cookies + logged-in session, still tunnelling the guarded proxy — the door past network-layer blocks / login gates (Reddit's browser-session backend; the general primitive for the gated-site reader router). **CDP mode (0.11.31, `browser-cdp-arm.js`, docs/browser-cdp-mode-build-spec.md):** `ensureContext` branches to `connectOverCDP('http://127.0.0.1:9222')` (loopback ONLY) and drives a DEDICATED tab in the ward's OWN running Chrome when a per-task arm is live — the natural way past login walls / anti-bot on sites the ward is signed into. Inert by two independent human gates: the ward launched Chrome with `--remote-debugging-port=9222` themselves AND armed a scoped, time-boxed grant (`POST /api/browser/cdp-arm {domain,minutes}`, 15-min default / 60 ceiling; the model has NO tool to arm — it can only ask). Under CDP the SSRF launch-proxy floor is gone, so the network gate degrades to a per-tab URL allowlist == the armed domain (`armAllowsHost`, fail-closed, private/loopback literals refused). **Hard invariant:** teardown DISCONNECTS (closes only our tab, then the CDP connection) — NEVER the ward's context/browser. Arm expiry mid-task drops to the owned profile, audit-stamped (`mode:'cdp'→owned`) with a first-person note (RULE B). Every other §5 guardrail (injection/Stranger-tier, no-purchase/credential, ward-only, autonomy-grants) holds unchanged app-side. Settings `cdpModeEnabled` (default OFF, gates arming) + hard off-switch `PROTO_FAMILIAR_BROWSER_CDP_DISABLED=1`. **One-click setup (0.11.32, `cdp-launcher.js`):** `POST /api/browser/cdp-setup` writes a double-clickable launcher to the Desktop (`.cmd`/`.command`/`.desktop`, pure `launcherPlan` per OS) that opens Chrome with the debug port on a **DEDICATED profile** (`--user-data-dir`, not the ward's everyday Chrome) — so the setup step needs no command-line surgery AND the ward's real profile (bank/email) is never exposed to the port (a ward-approved safety improvement over the spec's "your everyday Chrome"). The app writes a shortcut; it still never launches Chrome itself (gate 1 intact — the ward chooses to run it).
 ├── browser-lens.js          The cognition layer (spec §3) — PURE, no playwright: PageData → leveled, ref'd, token-capped snapshots (outline/actions/text/full) + code-computed delta verdicts. **Refs are MEANING-BEARING slugs (0.11.14):** buildRefTable/mintRef assign each interactable a slug of its accessible name (role when unnamed), collision-suffixed (add-to-basket, quantity, button-2) via the shared slugifyLabel — the readable-slug-id law applied to page elements, so an LLM picks the right handle far more reliably than an opaque r14 (still code-minted, ephemeral, resolved by the code-held locator). **resolveTarget** powers select-by-text: browse_act may name a `target` (visible label, optional `role`) instead of a ref — exact-name→substring→slug match, unique→ref / several→candidate refs / none→re-observe; code owns disambiguation. **Images are perceivable (0.11.15):** the DOM walk emits image nodes (img/[role=img]/named-svg/figure/canvas, meaningful ones only), buildRefTable refs them, and renderSnapshot adds an `[images]` section — so the model KNOWS pictures are on the page and can `browse_screenshot scope=<image-ref>` to look at one (it reads text, not pixels, so without this it couldn't decide to screenshot). isProtectedField flags password/file/credential fields. Fixture-tested without a browser.
 ├── browser-proxy.js         The SSRF enforcement floor (spec §5.1) — a small in-process CONNECT proxy Chromium launches through: the SINGLE DNS-resolution point, runs websearch.js's isBlockedIp over the real connect target and pins the checked IP, so main-nav + subresources + DNS-rebinding are closed together (context.route can't see the resolved IP; a pre-goto check races a rebind).
 ├── browser-audit.js         Append-only audit of every browse action → logs/browser-actions.jsonl (GET /api/browser-actions). The mirror of discord-write-log.js; never throws.
@@ -161,10 +179,13 @@ ponderings injection, care-check framing) and as background loops
 ├── knocks.js                Village knock list (V4.x) — contact attempts from unregistered people, captured for one-click registration in the Village editor; tomes/.village-knocks.json, capped, metadata only
 ├── injection-guard.js       Prompt injection immunization — pattern scanner + sanitizer (span-surgical, conservative false-positive budget; escape-tolerant bracket markers). WIRED (0.8.57) at the two genuinely-external inbound boundaries: web text (websearch.js — search titles/snippets, look_up reference text, read_webpage extraction; URLs deliberately untouched) and Village communications (discord-gateway.js inboundContent() — villager/stranger text only). The ward's OWN words are never sanitized on any path (threat scoring must read them raw; a redacted distress line could read as a jailbreak to triage), and no OUTBOUND path (replies, relay_message, relay_to_ward, trusted-contact delivery) passes through it — the guard is inbound-third-party-only, which is what keeps relay and triage structurally unblockable by it. NOT applied to Phylactery/Unruh recall (first-party stores; villager-written memories carry provenance labels instead) or gcal event titles (the ward's own calendar)
 ├── memorization.js          Persistent per-session memorization queue + worker; V7: buildSharedRoomPrompt variant selected when audienceTag !== 'ward-private' — focuses on ward-only facts, skips unregistered-third-party detail. Source-aware consent (0.8.88): direct ward-self facts kept on implied consent, only third-party/group-room facts ask; extractor tags temporality (episodic→daily dated / standing→ward register). Deferred follow-ups: the ward-private `buildPrompt` also asks for `follow_ups` (things I said I'd do this session but never backed with a tool) on the SAME call — `parseFollowups` + `createSessionFollowup` (recent-ponderings.js) store each; gated by `followupsEnabled` (default ON) / `PROTO_FAMILIAR_FOLLOWUPS_DISABLED=1`
-├── session-log.js           Shared `writeSessionLog(data,{logsDir})` (atomic tmp+rename), `stampMessages` (id/timestamp safety net), and `turnMessages(user,assistant,{speaker})` (the one place a call's turn pair is built — id + real accumulation-time timestamp + a `speaker` on the user turn when known). The one place a conversation lands in `logs/` as a reviewable session. Used by the Discord gateway AND both voice-call servers: a voice call (web + Discord) lands as a reviewable session log the ward can open in the Sessions tab, not only as extracted facts — web at `ward-private`, each Discord segment stamped with ITS audience tag (a villager's segment never ward-private), written on hang-up before memorization, each half independent. GROUP calls: the room session attributes each turn to the villager who spoke (`speaker`, matching Discord text) so memorization and the reviewer both read who-said-what; `createMessageEl` renders the speaker's initial + name. Off-switch `PROTO_FAMILIAR_VOICE_SESSION_LOG_DISABLED=1`
+├── session-bindings.js      The shared "current conversation" pointer (`ward-private → {sessionId,lastTurnAt}`, `tomes/.session-bindings.json`, in-process locked). Auto-unify: the ward's web private chat and their Discord DM resolve THE SAME session through this — a DM appends to the web's current conversation and vice versa. Villager DMs + guild rooms are never unified (they keep per-location sessions in `.discord-map.json`). Off-switch `PROTO_FAMILIAR_SESSION_UNIFY_DISABLED=1` + the ward toggle `sessionUnifyEnabled`. The web claims it on send via `POST /api/session/active` and ADOPTS it on open via `GET /api/session/active` (scoped — never a villager DM); the gateway's ward-DM path resolves it in `sessionForLocation({bindKey})`. **Live sync:** the open web session polls `GET /api/logs/:id?afterCount=N` (~3s, tab-visible + not-mid-send) and APPENDS new turns from the other surface — a hard composer-safe invariant (`pollSessionDelta` in `public/app.js`): it never re-renders or touches `#user-input`, only appends bubbles to `#messages` (a rare tool-carrying turn re-renders the message list, still never the composer).
+├── proactive-session.js     Records the Familiar's OWN proactive messages (reminders, event/weather alerts, "a thought from me", triage check-ins — `WARD_CONVERSATIONAL_KINDS`) into the unified ward session as assistant turns, so it knows it sent them (no re-sending the same reminder) and a Discord DM reply isn't context-less. `appendWardProactiveTurn` lands the message in the currently-bound ward-private session (merge-by-id), minting + binding a fresh one when there's none or it's idled past `SESSION_IDLE_ROTATE_MS` (so the reply threads to THIS message). Wired at the one seam every proactive item passes — `cerebellum.enqueueAndDispatch` — gated by kind (relays/notices/page-watch excluded). Discord reads history from the log each turn so the DM reply continues a real thread. **Web reconciliation (0.11.90):** the browser already injects proactive items into the transcript (`injectOutboxAsChatMessage`), so the server append and that injection share ONE stable id — `proactiveMessageId(outboxId)` → `outbox:<id>`, hand-mirrored in `public/app.js` — so the log merges them to a single copy and the browser shows them once: `pollSessionDelta` skips `outbox:`-prefixed turns (the injection owns their display, with the ping + ack), and the injection no-ops when the id is already in `state.messages` (loaded from the log on open). Without the shared id the two paths double (log-level → Discord, and on web). Never throws — a failure never sinks delivery. Off-switch `PROTO_FAMILIAR_PROACTIVE_SESSION_DISABLED=1`
+├── session-search.js        Raw-transcript search — the companion to `recall` (which searches Phylactery's distilled memories): `searchSessionLogs({logsDir,query,sinceMs,days,limit})` reads the actual session logs so the Familiar can find what was literally SAID. Two ways in: a text query (words we'd have used) OR a time window (`sinceMs`) that returns everything since then keyword-free — the reliable "did my human already tell me how it went?" check for the noticing loop, since an answer ("wasn't as scary") often carries none of the event's keywords. Scope (`isWardReadableLog`): the ward's own chats (web + ward DM), private voice, AND the GROUP rooms they share are read — the tool only ever RUNS on a private ward turn (the executor fail-closes on a gated villager turn, `discordReadAudiences(ctx) !== undefined` → refuse), so results never reach a villager regardless. A villager's 1:1 DM is the one line held back (private to that villager) unless `includeVillagerDms` is set. Tool is `core` (ward chat + noticing toolset); never granted to villagers. Pure over the fs, never throws.
+├── session-log.js           Shared `writeSessionLog(data,{logsDir,merge})` — **per-session in-process lock + atomic tmp+rename**, and with `merge:true` reads the on-disk log first and **unions messages by id** (`mergeMessages`, timestamp-ordered, id-less legacy = earliest prefix) preserving set-once `location`/`startedAt`, so the ward's UNIFIED web+Discord session never loses a turn one surface appended while the other was writing. Plus `stampMessages` (id/timestamp safety net), and `turnMessages(user,assistant,{speaker})` (the one place a call's turn pair is built — id + real accumulation-time timestamp + a `speaker` on the user turn when known). The one place a conversation lands in `logs/` as a reviewable session. Used by the Discord gateway AND both voice-call servers: a voice call (web + Discord) lands as a reviewable session log the ward can open in the Sessions tab, not only as extracted facts — web at `ward-private`, each Discord segment stamped with ITS audience tag (a villager's segment never ward-private), written on hang-up before memorization, each half independent. Each voice log carries a real `location` (web: `{platform:'voice'}`; Discord: `{platform:'voice',kind:'discord',label:'Discord voice call'}`) so the Sessions tab labels + types it as a voice call rather than "Web chat" — and `sessionLocationLabel` re-labels legacy Discord voice logs (origin `voice-call-discord`, no location) too (0.11.82). GROUP calls: the room session attributes each turn to the villager who spoke (`speaker`, matching Discord text) so memorization and the reviewer both read who-said-what; `createMessageEl` renders the speaker's initial + name. Off-switch `PROTO_FAMILIAR_VOICE_SESSION_LOG_DISABLED=1`
 ├── outgoing-filter.js       Pillar D outgoing gate — semantic check before delivery; retries up to budget then safe-refusal
-├── providers.js             Shared chat-completions URL map (used by server.js + thalamus.js)
-├── llm-call.js              One chat-completion call for the autonomous background loops (pondering / reach-out / memorization / tome-graduation) — replaces four byte-identical `defaultCallLLM` copies. THINKING-MODEL handling lives here: a reasoning model bills its chain-of-thought against `max_tokens`, so a small cap returned an empty `message.content` (the "Provider returned empty content" the loops logged). `callProviderChat` uses a generous default cap (free for non-thinking models — they stop when done), falls back to `reasoning_content`/`reasoning` when `content` is empty (`extractContent`, shared with memorization which keeps its own finish_reason handling), and throws a diagnostic naming `finish_reason` (=length → raise the cap) instead of a bare mystery. The safety-critical triage call in `cerebellum.js` (silence-triage) now routes through this too (ward-signed, 0.8.82): its cap was 600 with no reasoning handling, and its empty-content path returns `action:'wait'` — so a thinking model there degraded to a SILENT no-op on a distressed ward (the 1.5-hour-silence class). The call now uses `callProviderChat` (cap 4000 + reasoning recovery); the decision logic is unchanged — a genuine transient failure still degrades to the safe `wait`, never a fabricated decision
+├── providers.js             Shared chat-completions URL map (used by server.js + thalamus.js) + `resolveReasoningEffort(conn)` (0.11.20): always-on-thinking models (GLM-5.3 made thinking mandatory, `reasoning_effort` defaulting to `max`) spend their whole token budget reasoning and return empty content — surfacing as a raw "thinking dump" and, on the empty/throw paths, dropping the user's own message. Per-connection `reasoningEffort` (`low`/`high`/`max`/`off`): explicit values sent for any provider; UNSET → auto-`low` ONLY for the z.ai family (zai/zai-coding), nothing elsewhere (so a Gemini or non-reasoning NanoGPT model can't get an unknown-param 400 from a default). Applied in the Discord turn (callChatRaw) + the web `/api/chat` payload; the client sends the active connection's `reasoningEffort` (rides the existing connections sync)
+├── llm-call.js              One chat-completion call for the autonomous background loops (pondering / reach-out / memorization / tome-graduation) — replaces four byte-identical `defaultCallLLM` copies. THINKING-MODEL handling lives here: a reasoning model bills its chain-of-thought against `max_tokens`, so a small cap returned an empty `message.content` (the "Provider returned empty content" the loops logged). `callProviderChat` uses a generous default cap (free for non-thinking models — they stop when done), falls back to `reasoning_content`/`reasoning` when `content` is empty (`extractContent`, shared with memorization which keeps its own finish_reason handling), and throws a diagnostic naming `finish_reason` (=length → raise the cap) instead of a bare mystery. The safety-critical triage call in `cerebellum.js` (silence-triage) now routes through this too (ward-signed, 0.8.82): its cap was 600 with no reasoning handling, and its empty-content path returns `action:'wait'` — so a thinking model there degraded to a SILENT no-op on a distressed ward (the 1.5-hour-silence class). The call now uses `callProviderChat` (cap 4000 + reasoning recovery); the decision logic is unchanged — a genuine transient failure still degrades to the safe `wait`, never a fabricated decision. **`extractTurnReply(choice)` (0.11.20)** is the INTERACTIVE-turn counterpart to `extractContent`: content wins, but an empty content at `finish_reason='length'` returns `''` (budget exhausted mid-thought — NOT an answer) so a caller never surfaces raw chain-of-thought as the reply (the GLM-5.3 thinking-dump); only a non-length empty falls back to `reasoning_content` (the legitimate proxy-parking case). `callProviderChat` gained an opt-in `reasoningEffort` param — passed by chat callers, NOT by the ward-signed triage call (its request stays byte-identical)
 ├── (quiet success)          Write-tool success results collapse at the `executeToolCall` boundary (0.8.13): a WRITE executor's success branch returns `quietOk(fullText, {id})` and the model sees `ok` (+ the new id when chaining needs it) instead of confirmation prose — success confirmations recur every turn the transcript survives, and carry nothing the model didn't imply by making the call. The safety contract: ONLY genuine success branches opt in (the boundary never classifies text, so a failure can never read as success); READ tools never opt in (the result IS the payload); load-bearing successes stay loud (contact_trusted_person, show_crisis_resources, schedule_push_to_google, schedule_export, memorize_now, village_upsert, convert_ids_to_slugs). Debug escape hatch: PROTO_FAMILIAR_QUIET_TOOLS_DISABLED=1 restores full prose
 ├── schedule-availability.js Coarse availability (stewardship Pass 4, 0.8.24) — LABEL-FREE-by-construction free/busy per day-part (morning/afternoon/evening) for coordinating with a villager the ward permitted. computeAvailability(nodes,{nowMs,days}) marks a part busy when an event or `hold` overlaps it (tasks/reminders don't block time); formatAvailabilityLines renders coarse rows; buildAvailabilityBlock is the villager-DM block, gated on the `schedule` grant ('coarse'|'full'). The derivation NEVER emits a label — structural privacy, not model discretion; 'full' additionally names items (ward's choice). Pure. Permission tier = the EXISTING audience.js `schedule` grant (category-level, V3 model); injected on villager-DM turns in discord-gateway (availabilityBlockFor) as context, and — since the clearance-gated Discord tools (V10, below) — also reachable as the `schedule_availability` tool when the speaker's grant authorises it. Familiar-facing: schedule_availability (own free/busy check) + schedule_add_hold (a 'hold' node — new SCHEDULE_NODE_TYPES member, keep-a-time-free, counted busy)
 ├── routine-review.js        Routine review (stewardship Pass 3, 0.8.21) — pure ledger + due-check + the pivot-menu prompt section. buildNeedsLedger counts met/missed per tracked need over the week (from each need anchor's payload.resolutions); isRoutineReviewDue is true only when the cadence (routineReviewDays) has elapsed AND ≥1 routine actually slipped (a good week manufactures nothing); buildRoutineReviewSection is the first-person pivot-menu text (keep/shrink/move/make-enjoyable/swap/shelve — "not ready yet" a finding, both costs named). RIDES one reflection tick, no new LLM call: server.js's shouldReflect lets a due review claim the tick, getReflectionInput attaches the section, the reflection prompt (pondering.js buildReflectionPrompt) emits a first-person `routine_review` finding, and runPonder's follow-through stamps the cadence + stashes the finding via stewardship.recordRoutineReview. Off-switch routineReviewEnabled + PROTO_FAMILIAR_ROUTINE_REVIEW_DISABLED=1; borrows the reflection slot without colonizing the pondering loop
@@ -241,8 +262,9 @@ lifecycle of the autonomous loops:
 
 **Chat / enrichment:**
 - `POST /api/chat` — validates request, fires `recordUserActivity()`
-  (fire-and-forget timestamp) + `scoreMessage()` → `recordThreat()`
-  on the user text, then `thalamus.enrich()` to assemble static +
+  (fire-and-forget timestamp) + `scoreThreatMessage()` → `recordThreat()`
+  on the user text (the regex floor combined with the ML classifier — see
+  `crisis-classifier.js`), then `thalamus.enrich()` to assemble static +
   dynamic context. **After the context is assembled and before the
   provider fetch, `materializeAttachments` (vision.js) runs ONCE** on
   the full message array — a message carrying `attachments` gains live
@@ -504,7 +526,24 @@ Currently owns:
   Familiar sandboxed read-only access to its own checkout (tomes, logs,
   docs) so it can look things up on purpose. Sandbox + secret denylist
   in `own-files.js`; ward-private only (file contents are shared
-  history, not for gated rooms).
+  history, not for gated rooms). **`read_file` on a session log
+  (`logs/*.json`) returns a compact markdown transcript, not raw JSON
+  (0.11.51)** — `readSessionLog`/`renderSessionMarkdown` render a
+  one-line header + `[HH:MM] speaker: text` lines (day dividers on
+  change), dropping per-message UUIDs and JSON scaffolding (~70%+ fewer
+  chars) and, when over budget, keeping the MOST RECENT part rather than
+  truncating mid-JSON. Non-session files keep the raw read; a corrupt or
+  non-session-shaped file falls back to raw.
+- **`search_sessions` (0.11.50)** — the "let me glance back and find
+  where that was said" capability: a content search across every session
+  log (`logs/*.json`, web + Discord, DMs + group rooms), so in a DM the
+  Familiar can locate a moment the ward mentioned elsewhere without
+  already knowing which log holds it. `searchSessions` in `own-files.js`
+  (same sandbox/denylist; recency-ranked, snippets carry the speaker, and
+  each hit names the log path to open next with `read_file`). Ward-private
+  only — the executor refuses when anyone else is present, and it's absent
+  from `villagerToolNames` so a villager can never reach it. Surfaces via
+  the `files` module (glance-back trigger phrasing).
 - **`relay_message` (Village V6, 0.6.15-alpha)** — carries a message from
   the ward to a villager (DM) or a Discord location. Resolves the target
   against the registry, runs the composed text through the
@@ -588,6 +627,29 @@ mild / safety). Damping for negation / hypothetical / others-speech /
 hyperbolic context. The patterns are tuned for high precision on
 SEVERE (the "cut me off" / "I want to die from embarrassment" false
 positives are the regression cases the test suite watches).
+
+**`crisis-classifier.js`** — the ML distress classifier + the tier-asymmetric
+combination with the regex detector. Pure-JS inference (TF-IDF sublinear+l2 →
+logreg → sigmoid) over a git-ignored, machine-built artifact
+(`models/crisis-classifier.json`, produced offline by
+`scripts/train-crisis-classifier.py`; recall .93 / precision .94, calibrated
+threshold 0.714). `scoreThreatMessage(message, {settings})` is the **one live
+seam** every threat-scoring site now routes through (web chat, Discord ward,
+both voice paths, the diagnostics tracer) — a drop-in for `scoreMessage`
+returning `{level, signals}` plus the ML detail. `combineThreat` is pure and
+tier-asymmetric: the ML **raises** distress the lexicon missed (capped so the
+classifier ALONE tops out at HIGH, never SEVERE), **softens** only a
+MILD/MODERATE over-fire on a confident not-distress read (never severe/high),
+and the (future) normalization head raises + arms a pushback posture. The
+classifier's say rides the audit trail as an `ml_classifier` signal. Graceful
+degradation is absolute and one-directional: a disabled/absent/unparseable
+artifact yields NO ML signal, so "no classifier" falls back to the regex floor
+— toward the *more* sensitive behaviour, never a softer one. Off-switches:
+`PROTO_FAMILIAR_CRISIS_CLASSIFIER_DISABLED=1` / `crisisClassifierEnabled`
+(synced), plus `PROTO_FAMILIAR_CRISIS_NORMALIZATION_DISABLED=1` /
+`crisisNormalizationEnabled` for the normalization head; also inert under
+`PROTO_FAMILIAR_THREAT_DISABLED=1`. The normalizer (`letters-v1`) and tokenizer
+are mirrored byte-for-byte against the Python trainer, pinned by a parity test.
 
 **`threat-tracker.js`** — persistent decaying scalar at
 `tomes/.threat-state.json` with 3-day half-life. Cap MAX=10, floor 0,
@@ -855,24 +917,42 @@ out. `noticing.js` holds the pure logic — wake conditions (a due intention who
 condition passes, a contact gap past the baseline p90, a readiness gap, an aging
 untriggered intention, an aging floating task (`AGING_TASK_MS`), an overdue
 unresolved event (`OVERDUE_EVENT_GRACE_MS`, reached via the window's `linked`
-endpoints — ward-signed 0.8.98, the Familiar ASKS the outcome and records it, it
-never assumes done/missed); **no wake condition → no turn**), the condition
-code-gate (`conditionPasses` — evaluated here, not left to the model, since no
-human reads this turn), the code-built ≤5-item situation report, the ward-signed
+endpoints — ward-signed 0.8.98; the Familiar checks what was said and CLOSES the
+loop when my human already answered, else asks — it never assumes done/missed);
+**no wake condition → no turn**), the condition code-gate (`conditionPasses` —
+evaluated here, not left to the model, since no human reads this turn), the
+code-built situation report for the non-event conditions, the ward-signed
 prompt (`buildNoticingPrompt` — threat-tier line only at moderate+, flag_distress
 clause only when that tool is in hand), and the injectable `runOneNoticingTick`.
+**Role (entity-as-subject, ward-signed 0.11.86):** the prompt is the Familiar's
+own reflection, so it assembles as a **`system`** message next to identity
+(`noticingMessages`), never a `user` turn (which framed it as being operated); a
+bare `(a quiet moment)` cue fills the `user` slot only because several providers
+refuse a completion with no user turn. **Loop-closing (0.11.86):** overdue events
+render as a *notepad* in `buildNoticingPrompt` — each with its slug id and the
+named closing tools (`schedule_calibrate_link` + `schedule_resolve`, now in
+`NOTICING_REGISTRY_TOOL_NAMES`), so the Familiar can grade the graph + mark it
+done rather than only being told about it. It checks the conversation FIRST and
+closes when my human answered (prompted or unprompted), only asking otherwise —
+and when the answer scrolled out of the look-back window it digs with
+`search_conversation` (session-search.js: raw-transcript search, a `since_hours`
+window reads back keyword-free).
 `noticing-loop.js` is the singleton that drives it, self-paced (`set_next_check`,
 clamped [5min,6h], adaptive default). The bounded, tool-using deliberation runs
-in `server.js`'s `noticingDeliberate` (`composeNoticingTools`: intention CRUD + a
-few schedule reads + the noticing-scoped `reach_out_to_ward` warm-knock and
-`set_next_check`; a reach-out refused during quiet hours is not counted as
-acting). It assembles the same recent context a live chat turn / warm reach-out
-gets — identity (static block), the time anchor, **recent conversation
-(`getRecentSessionMessages` → `formatRecentMessagesForContext`) and recent
-memories (`getRecentMemoryLines`, today+yesterday)** — so it doesn't decide blind
-to what was just said. That context is **information only** (ward decision, no
-suppression instruction): it never nudges a stand-down, and the recent context is
-worded to yield to the no-look-away posture at elevated threat. **Does NOT stand down at elevated threat** (ward-signed,
+in `server.js`'s `noticingDeliberate`. It assembles the same recent context a live
+chat turn / warm reach-out gets — identity (static block), the time anchor,
+recent conversation and recent memories (`getRecentMemoryLines`, today+yesterday)
+— so it doesn't decide blind to what was just said. **When an outcome is open,
+`getRecentSessionMessages` reads back to the OLDEST open event (`since`, capped at
+`max`) instead of a fixed 6-turn tail** — a day of unrelated chatter can't
+otherwise bury the one exchange where my human said how something went. That
+context is **information only** (ward decision, no suppression instruction): it
+never nudges a stand-down, and yields to the no-look-away posture at elevated
+threat. **No-nag ledger (`noticing-outcomes.js`):** an event already ASKED about
+(a reach-out actually went out, still unresolved) is suppressed from surfacing for
+`ASK_COOLDOWN_MS` (20h) — closing writes a real resolution, so it never depends on
+the model's say-so; a per-event closed/asked/left line logs the outcome. This
+loop-closing set is a ward-sign-off path. **Does NOT stand down at elevated threat** (ward-signed,
 safety-significant — the tier shifts the register, never skips the turn; joins
 the safety-critical sign-off set). A proactive act resets the wait streak; a
 stand-down increments it (`source:'noticing'`). Every decision-reaching tick —
@@ -1001,13 +1081,32 @@ a room) and intercepted before any turn, beside `!update`/`!call`.
     locked, atomic, wholesale-top-level `mergeSettings` write the HTTP
     `PUT /api/settings` uses, so a Discord change and a web change can't
     tear the file. `pfconn:*` custom_ids; a `__default__` sentinel clears a
-    feature override back to the primary.
+    feature override back to the primary. A **Reasoning effort** submenu
+    (0.11.20) sets each connection's `reasoningEffort` (Default/Low/High/Max/Off
+    — the Discord twin of the connection-editor dropdown) by rewriting the whole
+    `connections` array through the same `patchWardSettings`; `__default__`
+    clears the override.
   - Both interaction handlers **re-check that the clicking user is the ward**
     on every event (`interactionIsWard` → `discordWardUserId`) — a villager
     clicking a forwarded control is refused. The gateway's
     `INTERACTION_CREATE` dispatch routes by custom_id prefix
     (`pfconsent:`/`pfqueue:`/`pfconn:`). Ward `!consent` now points at both
     new commands (discoverability) rather than only the web app.
+
+*Connection resolution + readiness (0.11.91).* Every LLM call site — the
+chat proxy, both tool loops, and all autonomous loops — resolves its endpoint
+through `resolveProviderUrl(conn)` (`providers.js`) and gates on
+`connectionReady(conn)` instead of the old scattered `conn.apiKey && conn.model`
+checks. `connectionReady` requires a model and a key *only when the provider
+needs one* (`providerRequiresKey` → false for `custom` / `ollama` / `lmstudio`),
+so a keyless local or custom OpenAI-compatible endpoint is a first-class
+connection. A connection may carry a `baseUrl`; for the base-URL providers it is
+canonicalised by `normalizeBaseUrl` (bare host / `…/vN` / full endpoint all
+accepted). Outbound requests attach `Authorization: Bearer …` via
+`authHeader(apiKey)` — present only when a key is set, since local servers
+reject a malformed header rather than a missing one. This includes the triage
+deliberation (`cerebellum.decideTriageViaLLM`), so the caring spine now runs on
+a keyless local model too.
 
 *Clearance-gated tools (V10, `docs/discord-tools-build-spec.md`).*
 `handleTurn` runs a tool loop (reusing `cerebellum.runToolCallLoop`;
@@ -1027,8 +1126,49 @@ are audit-logged (`discord-write-log.js` → `GET /api/discord-writes`). A
 whole-loop failure falls back to a plain reply; a tool chain with no closing
 text stays quiet. Default ON (`discordToolsEnabled`); off-switch
 `PROTO_FAMILIAR_DISCORD_TOOLS_DISABLED=1`.
-Off-switch: `PROTO_FAMILIAR_DISCORD_DISABLED=1`. Observability:
-`GET /api/discord/status`.
+**Message persisted before the model call (0.11.20).** `handleTurn` writes my
+human's turn to the session *before* the LLM call, not at the reply — so a
+thinking model that spends its whole budget reasoning (GLM-5.3) can throw or
+return empty without the turn dropping the very message it was answering (the
+reported vanishing-message loop). Reply extraction uses `extractTurnReply`, so
+raw chain-of-thought is never delivered as the reply; `callChatRaw` sends
+`reasoning_effort` (`resolveReasoningEffort`) and its cap is 8000. On my human's
+own direct turn an empty result yields an honest note (`THINKING_BUDGET_NOTE`)
+rather than dead air or a CoT dump; villager/ambient empties stay quiet. Every
+downstream branch reuses the one persisted turn (no double-record).
+**Keyword-lore (tomes) server-side (0.11.21).** Tomes are keyword-triggered
+lore; the browser matched them against `state.tomeCache`, so a Discord turn
+(no browser) was blind to them. `tome-lore.js` is a faithful Node port of
+`app.js`'s `activateTomeEntries` (keys / secondary-selective logic / constant /
+probability / position / insertion_order / per-entry scanDepth / case+whole-word
+/ groups / recursion / delay / triggers / characterFilter — every input
+injected, pure, tested). `tome-store.js` `readAllTomes(dir)` reads the same
+`tomes/*.json` files the endpoints write. `handleTurn` calls `activeDiscordLore`
+(off-switch `PROTO_FAMILIAR_DISCORD_TOMES_DISABLED=1`, reuses the `tome*` scan
+settings): it scans prior history + the live message, then injects activated
+entries — `sys_top`+`before_char` as the system LEAD (above identity),
+`after_char`+`sys_bottom` as the TAIL, `at_depth` as a system message near the
+turn. Fail-soft: a bad/corrupt tome degrades to no lore, never throws into the
+turn. **Parity is hand-maintained** (app.js is a classic script, no ES modules,
+so no single shared source without a build step); tests pin the behavior — change
+one engine, change the other. Timed effects (sticky/cooldown) aren't persisted
+across Discord turns yet (v1); `delay` works via the session turn count.
+**Live tome macros + the manual tome (0.11.22).** Tome content can carry macros
+that resolve at INJECTION time so the lore reads true now: `tome-macros.js`
+`resolveTomeMacros(text, settings)` folds `{{user}}`/`{{char}}` (via `macros.js`)
+plus toggle macros (`{{visionActive}}`/`{{voiceActive}}`/`{{discordActive}}`/
+`{{ponderingActive}}`/`{{warmthActive}}`/`{{noticingActive}}`/`{{calendarActive}}`/
+`{{browserActive}}` → on/off from the ward-facing setting) and value macros
+(`{{charName}}`/`{{userName}}`/`{{activeModel}}`/`{{scanDepth}}`). Applied
+server-side via `foldLoreForPrompt(activated, resolve)`; the browser mirrors the
+same names in `applyNameVars` (**hand-maintained parity**, a test pins the shared
+name set). `manual-tome.js` ships the **Familiar Manual** — a protected
+(`graduationExempt`), enabled-by-default lorebook whose entries explain each
+feature + where its setting lives, keyed to how a ward asks ("send you pictures"),
+quoting live macros so "Vision is currently {{visionActive}}" stays accurate.
+`ensureManualTome(TOMES_DIR)` seeds it ONCE on boot (flag `.manual-tome-seeded.json`)
+so a ward who deletes or edits it is never overridden. Off-switch:
+`PROTO_FAMILIAR_DISCORD_DISABLED=1`. Observability: `GET /api/discord/status`.
 
 *Presence modes (V8).* Messages the Familiar isn't addressed in resolve
 to `action: 'observe'` (lurk, and active turns it sits out): the message
@@ -1596,6 +1736,23 @@ Apr 5) still collects all seven days. Each period is guarded independently — o
 period never aborts the sweep. Existing installs catch up automatically on the next
 scheduled pass (≤6 h); `POST /api/entity/lifecycle {force:true}` triggers it now.
 
+**Fold-on-re-consolidate (0.11.50).** Ingesting a *past* session mints a
+past-dated `daily` into a span the ladder had already rolled up (and whose original
+dailies were pruned). Two failures used to follow: a single late daily never
+re-qualified (the ≥2 floor) → it sat orphaned at `daily` forever; and ≥2 late
+dailies regenerated the weekly from **only the newcomers** and *replaced* the row
+→ the original week's summary was clobbered. Fixed by folding, not replacing:
+`consolidate_to_weekly` feeds the existing weekly summary back into the LLM as the
+prior summary (`_consolidation_prompt`'s fold branch) so nothing it held is lost,
+and `_distinct_past_weeks` re-qualifies a week off even **one** new daily when a
+rollup already exists. Monthly/yearly never prune their sources, so they regenerate
+completely (no fold needed); they instead re-roll a period when a source is newer
+than the rollup — `_distinct_past_periods` compares each source's
+`max(updated_at, created_at)` against the rollup's `updated_at` (`_rollup_updated_at`).
+This terminates: a re-roll bumps the rollup's `updated_at` above all its sources, so
+the next pass sees nothing newer. Weekly still prunes the folded newcomers, so it
+never re-enumerates the same week.
+
 **Recall tracking** (`memory.search` → `_touch_recall`) — pure observability:
 bumps `recall_count` + `last_recalled_at` for everything surfaced.
 
@@ -1629,14 +1786,14 @@ candidates and re-screens every graduated item against the care matcher
 (defence in depth). `auto_snapshot` runs before any identity trim. Ward-block
 graduations land in `graduation_log`; thalamus surfaces unacknowledged ones as
 a `[GRADUATION NOTICE]` block (TTL-cached, ward-private turns only,
-non-blocking), and the Familiar calls `graduation_acknowledge` once mentioned.
+non-blocking), and the Familiar calls `acknowledge_graduation` once mentioned.
 Tested in `phylactery/tests/test_graduation.py`.
 
 The sibling `[DISCLOSURE NOTICE]` block (ward-disclosure Phase B) works the same
 way for the content-gating re-tag pass: when `content-regate.js` opens one of the
 ward's own formerly-private facts to be governed by content rules, thalamus
 surfaces it (ward-private turns only) so nothing opens behind the ward's back;
-the Familiar calls `disclosure_acknowledge` once mentioned, or `keep_memory_private`
+the Familiar calls `acknowledge_disclosure` once mentioned, or `keep_memory_private`
 to revert a fact to strictly-private on the ward's word.
 
 **Encrypted backup/restore** (`backup.py`) — "back up / restore my Familiar":
@@ -1817,7 +1974,9 @@ POST /api/chat  { messages, userMessage: userInput, … }
        │                                    detection + RAG query, not "last role:'user'"
        ▼  server.js
 recordUserActivity()                     (fire-and-forget)
-scoreMessage(userMessage)                ← crisis-signals.js
+scoreThreatMessage(userMessage)          ← crisis-classifier.js (regex floor + ML)
+   │  regex level (crisis-signals.js)  combined with  ML distress p (models/crisis-classifier.json)
+   │  tier-asymmetric: raise-only for severe/high, classifier-alone capped ≤ HIGH, mild/moderate softenable
    if level ≠ 0 → recordThreat(level, signals)   ← threat-tracker.js (logged: "[threat] scored ±N")
        │
        ▼
@@ -2200,7 +2359,17 @@ Once tagged, an event's `outcome` is immutable — the LLM later reasons about a
 
 **Floating-task aging (0.7.x).** A floating task (no `when`) used to compute `ageDays` from `task.when` only — so it was always `null` and every floating task read as brand-new forever, with no staleness to prioritise. Now age falls back to `created_at` (which Unruh already serialised), the candidate carries a `floating` flag, and both surfaces show it — the candidate block (`[floating — no time set]` + `Floating for: Nd — still no time assigned`) and the `[Temporal Context]` open-tasks list (`(floating Nd — no time set)`). The prompt gains a dedicated FLOATING TASKS directive: the aged ones earn a gentle "when shall we put this?" in a calm moment, and the Familiar pins the agreed time with the new **`schedule_assign_time(id, when)`** tool (thin wrapper over `updateScheduleNode` → Unruh `schedule_update_node`, which always supported setting `when_ts` — the capability existed end-to-end but had no Familiar-facing surface). Turning a someday into a real `when` is itself counted as progress.
 
-**Addressing schedule nodes by id (0.7.x).** Every schedule editing tool — `schedule_assign_time`, `schedule_snooze_task`, `schedule_resolve`, and `schedule_delete` — is keyed by a node **id**, but the human-readable schedule renders **labels**. Both surfaces that show schedule state now also surface the ids the tools need, so the Familiar can *act on* what it can *see* (the CLAUDE.md operability rule: a tool whose key argument the Familiar can never name is a tool it can never use):
+**Threads — a ponder can follow its own side roads (0.11.76).** Unruh's `related_to` interest edges were built and unused. Now `interest_record` takes `related_to` (a label): a `drawn_to` curiosity recorded from a ponder is linked to the topic it grew out of (`_link_related`, idempotent, either direction). `interest_related(id)` (→ `relatedInterests` in thalamus) lists one-hop neighbours with decayed weights, excluding standing values and bookmarks. In `pondering-loop.js`, after the weighted pick, a `threadChance` roll (default 0.35) hops to a weighted pick among the neighbours; `runPonder` receives `{ threadFrom }` and the grounding block opens with "I got here from thinking about X". The tick result carries `threadFrom` for the log. Off when `getRelated` isn't wired.
+
+**`views` — a home for opinions (0.11.76).** The memory categories were all about a person's *life*; an opinion had nowhere to go and was forced into `emotional_content` or dropped before it could reach the `me` register. `views` (an opinion, a taste, a take — the Familiar's own included) is now a full consent category: `REMEMBER_CATS`, the Village registry list, both remember-map UIs (default `ask`), the villager `!consent` aliases (`views|opinions|takes`), and the category→tag map on both sides (`general:open`). `resolveRememberGate` gains `aboutMe`: a fact about ME with no one else named needs nobody's consent, in any channel; the flag never opens a fact about a villager or a named third party.
+
+**"Is my Familiar alive?" (0.11.77).** Sidebar → Diagnostics → a modal reading `GET /api/health` `loops` (a dot, name, and up/down word per worker) and the five event logs (`/api/noticing-events`, `/api/reachout-events`, `/api/triage-events`, `/api/page-watch-events`, `/api/discord-writes`), each with its own filter; one log failing never blanks the others. The logs were curl-only before this. Beside it, Settings → "Wander chance" is the `ponderThreadChance` dial (synced, 0–1, default 0.35; clamped in `clampChance`) behind the pondering loop's thread hop.
+
+**"What I think" (`me` register read-back, 0.11.73).** `enrich()` lists the newest eight `register:'me'` memories (`memory_list` gained a `register` filter) and renders them via `formatMyViewsBlock` (`recent-ponderings.js`) as the "What I think" dynamic section on ward-private turns, ahead of the ponderings block — each line carries its id for `update_memory_by_id`. This closes the loop opened by the `about_me` extractor route: a view the Familiar voiced last week reaches it this week. Gated rooms and static-only fetches skip it, like the ponderings.
+
+**In-place edits (`schedule_edit`, 2026-09 audit).** Rename, move the start, or set/clear the end of an existing item by id (thin wrapper over the same `updateScheduleNode`). Before this the Familiar's only edits were `schedule_assign_time` (start only) and `schedule_set_lead`; a rename meant delete + re-add, losing the id and every consequence edge hanging off it. Rides the `schedule-write` surfacing module.
+
+**Addressing schedule nodes by id (0.7.x).** Every schedule editing tool — `schedule_edit`, `schedule_assign_time`, `schedule_snooze_task`, `schedule_resolve`, and `schedule_delete` — is keyed by a node **id**, but the human-readable schedule renders **labels**. Both surfaces that show schedule state now also surface the ids the tools need, so the Familiar can *act on* what it can *see* (the CLAUDE.md operability rule: a tool whose key argument the Familiar can never name is a tool it can never use):
 - **`[Temporal Context]`** (`temporal-format.js`) appends a compact `[schedule ids]` legend at the end of the block — mirroring the knowledge-graph id legend — listing `label [type] = id` for both routine phases and the window, deduped, skipping nodes with no id. This is the only path by which a **phase** id reaches the model (phases are otherwise label-only in "Today's rhythm").
 - **`[Surface candidates]`** (`surface-context.js`) prints an `id:` line under each candidate, so a floating task surfaced for time-assignment carries its id in the same place the Familiar reads about it.
 
@@ -2317,7 +2486,8 @@ re-implement this split anywhere else.
 | `GET/PUT/DELETE /api/entity/memories/:granularity/:date` (server.js) | Accepts the composite `:date`, splits via `parseMemoryKey`, passes `date` + `slug` separately to thalamus. **Never reintroduce a plain-date regex here.** |
 | `GET/PUT/DELETE /api/entity/memories/by-id/:id` + `POST …/move` (server.js) | The unique-handle surface (registered BEFORE `:granularity/:date` so `by-id` isn't swallowed as a granularity). The only way to address one of many standalone facts that share a date; `…/move` re-files a mis-dated fact. |
 | `thalamus.readMemory` / `updateMemory` / `deleteMemory` | Pass `slug` through to entity-core's tools. `updateMemory` without the slug is the shadow-file hazard. |
-| `thalamus.readMemoryById` / `updateMemoryById` / `deleteMemoryById` / `moveMemoryDate` | By-id wrappers over the `memory_*_by_id` / `memory_move_date` MCP tools. |
+| `thalamus.readMemoryById` / `updateMemoryById` / `deleteMemoryById` / `moveMemoryDate` | By-id wrappers over the `memory_*_by_id` / `memory_move_date` MCP tools. `updateMemoryById` also carries `subjects` + `attributionConfidence` (the fuzzy-attribution re-resolution write path). |
+| `thalamus.listUnresolvedAttributions` | Best-effort wrapper over `memory_list_unresolved_attributions` — memories with a real `attribution_confidence` below threshold, aged past `min_age_days`. Feeds the noticing re-sweep wake condition; returns `{items:[]}` on failure (never throws into the tick). |
 | `update_memory` / `delete_memory` executors (cerebellum.js) | Split the model-supplied key; their tool descriptions teach the `YYYY-MM-DD_slug` addressing. |
 | `read_memory_by_id` / `move_memory_date` / `update_memory_by_id` / `delete_memory_by_id` executors (cerebellum.js) | The Familiar's by-id surface; ids ride in on `recall` / `list_memories`. `move_memory_date` cleans up facts filed under the wrong day; `update_/delete_by_id` safely correct or remove ONE per-fact row. The by-date `update_memory`/`delete_memory` are journal-bucket/significant only (scoped `slug IS NULL`). |
 | `save_memory` executor | Auto-derives the slug (`deriveMemorySlug`) and returns the composite key in its confirmation so the Familiar knows the address of what it just wrote. |
@@ -2352,7 +2522,7 @@ that is the contract talking — update all seams together or stop.
 | Content-gating re-tag | 30min tick (opt-in, default OFF) | Settings "Review my private notes for content-sharing" + `PROTO_FAMILIAR_CONTENT_REGATE_DISABLED=1` | The Familiar reviews EXISTING ward-private ward-self facts and, with a batched judgment, opens the ones that may be content-gated (`audience → ward-content-gated`, optionally correcting the `content_tag`) while keeping the rest private. Conservative (unsure → keep); code-selects candidates (ward-private + no third-party subject only); a reviewed-tracker judges each once; every opening writes a `[DISCLOSURE NOTICE]` the ward reads + is revertible (`keep_memory_private`). Never on the chat path |
 | Needs tracking | 30min tick (opt-in, default OFF) | Settings "Track unmet needs" + `PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1` | Marks a recurring need-window's occurrence `missed` once its window elapses unresolved (the needs-fulfilment ledger). Stands down at moderate+ threat; only the lapse is made factual — never auto-confirms a projected consequence |
 | Memory coverage sweep | 10min tick (default ON) | Settings "Memory coverage sweep" + `PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1` | Memorizes PAST days that never ingested (day-anchoring Phase 2); skips today + completed days; only enqueues into the memorization worker — no LLM call of its own |
-| Noticing | 20min base pulse + self-set cadence (default ON) | Settings "Let my Familiar notice on its own" + `PROTO_FAMILIAR_NOTICING_DISABLED=1` | The Familiar's own turn: code-gated wake conditions (due intentions, rhythm deviation, readiness gaps, aging intents/tasks, overdue events) → bounded tool-using deliberation. Runs at ALL threat tiers (ward-signed no-stand-down); every decision-reaching tick logs to `logs/noticing-events.jsonl` |
+| Noticing | 20min base pulse + self-set cadence (default ON) | Settings "Let my Familiar notice on its own" + `PROTO_FAMILIAR_NOTICING_DISABLED=1` | The Familiar's own turn: code-gated wake conditions (due intentions, rhythm deviation, readiness gaps, aging intents/tasks, overdue events, fuzzy-attribution re-sweep) → bounded tool-using deliberation. The re-sweep resurfaces memories saved with a low real `attribution_confidence` (aged ≥1 day) so the Familiar re-resolves who a fact was really about (`recall`/`read_memory_by_id` → `update_memory_by_id` with corrected `subjects` + firmed `attribution_confidence`); gated by `noticingAttributionResweepEnabled` + `PROTO_FAMILIAR_ATTRIBUTION_RESWEEP_DISABLED=1`. Runs at ALL threat tiers (ward-signed no-stand-down); every decision-reaching tick logs to `logs/noticing-events.jsonl` |
 | Media retention | 6h tick (default ON) | Settings toggle + `PROTO_FAMILIAR_MEDIA_RETENTION_DISABLED=1` | Voice Pass 4 §9, the 13th worker. Curates aged voice-clip SOUNDS: code gates pick candidates (audio past `voiceNoteRetentionDays`, not stripped, not `keep`, has a transcript) → ONE batched LLM judgment names which sounds to keep → the rest `media.stripAudio` (bytes gone, transcript+meta+slugs survive). The transcript ALWAYS survives. Fail-soft: an LLM error or unparseable response keeps everything that pass (never strips on doubt). Defers during a live call + at moderate+ threat |
 | Google Calendar sync | 60s wake + ward interval (hourly default; opt-in, default OFF) | Settings "Google Calendar sync" + `PROTO_FAMILIAR_GCAL_DISABLED=1` | Fetch the ward's iCal feed → Unruh `gcal_ingest` (parse + reconcile + change-classify) → route ONLY `new` ids to the projection cue. Failure degrades silently and never reconciles deletions |
 | Discord gateway | 30s supervisor | Settings toggle + `PROTO_FAMILIAR_DISCORD_DISABLED=1` | Bidirectional Discord presence; follows Settings (token/enable) without restart |
@@ -2716,6 +2886,24 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   runner is an injected `onTurn` seam server.js wires to the chat path. Hard
   off-switch `PROTO_FAMILIAR_VOICE_CALL_DISABLED=1`. The web adapter + the real
   `onTurn` wiring are the next 2b slice.
+  - **Barge-in is engine-level and noise-robust (0.11.53).** The engine handles
+    `asr-partial` in `onWorkerFrame`: while it's `speaking`, a recognised partial
+    that clears a 2-char floor AND passes the same `transcriptFilter`
+    (`isLikelyNoiseTranscript`) the finals use → `adapter.stopPlayback()` (once per
+    playback, `bargeSent` guard). Barging on *recognised words* (not raw audio
+    onset) is what rejects coughs/keyboard/fans/music — non-speech never decodes to
+    words. Transport-neutral: it's the trigger the Discord adapter had been missing
+    entirely (nothing called its `stopPlayback` before), and an additive backstop
+    to the web adapter's instant browser-driven `{t:'barge'}`. Off-switch
+    `PROTO_FAMILIAR_VOICE_BARGE_DISABLED=1` (default ON). A per-reply **barge-window log** (0.11.81) makes a non-firing barge legible — `barge window: N partial(s) heard while speaking, barged=…` — so 0 heard (no words reached the engine over its own speech: a timing/receive gap) is distinguishable from N heard but held by a guard (`too-short`/`filtered-as-noise`). The `{barged:true}` return
+    → `onReplyInterrupted` recording is unchanged.
+  - **Non-fatal group joins (0.11.53).** The Discord adapter's `sub.on('data')`
+    handler is now fully wrapped in try/catch: the opusscript shared-heap move a
+    second speaker's decoder triggers (detaching an existing decoder's buffer) can
+    throw in the resample *after* the guarded `decode()`, and that used to escape
+    the stream event and crash the whole voice stack on a subsequent join. Now a
+    bad frame is logged (rate-limited) and skipped; the call continues for everyone
+    else (graceful degradation).
   - **Hybrid ASR (ward-configurable, default ON).** The streaming 20 M zipformer
     is lossy (uppercase, no punctuation, weak on hard words). Since a call
     utterance has an explicit boundary (Discord speaking-end / web release), the
@@ -2911,6 +3099,30 @@ annotation-only). The audio-tagging model still needs its live pin
 speaker models. The long-term care-detection ambition on top of §8.4 is a
 separate, ward-signed spec and deliberately NOT built here.
 
+- **Text-in-voice interleave (`voice-discord-server.js` + `call-engine.js`)** — a
+  Discord voice channel carries a small attached text chat that shares the voice
+  channel's id. While a call is live there, a message TYPED into that chat becomes
+  a spoken turn interleaved into the same call: the repair path ("that word was
+  'Phylactery', not 'philosophy'") and a way to show me a picture mid-call. The
+  gateway intercepts a MESSAGE_CREATE on the live call's channel
+  (`isCallOnChannel`) and hands it to `handleCallText`, which resolves the speaker
+  itself (ward / registered villager / stranger — a stranger falls through to
+  normal text handling, fail-closed; my own + other bots' messages are skipped),
+  then feeds it through the engine's new **`injectTextTurn`** — the SAME
+  `handleTurn` → `runOneTurn` → `onTurn` → adapter-playback machinery a spoken turn
+  uses, so the reply is spoken aloud and the turn is gated to the call's audience
+  (who can HEAR it — the VC roster's lowest clearance) and stored in the same
+  per-tag session. The engine stays transport-neutral: a text turn is just a turn
+  tagged `source:'text'` carrying opaque `textNotes`. **Images:** an image shared
+  in the call chat is ingested at the CALL's audience tag (via `ingestDiscordMedia`,
+  which keeps the ward/villager-yes / stranger-never gate) and DESCRIBED
+  (`describeAsset`, look-once-keep-forever), and the description rides in as a
+  one-off `textNotes` note — so I can talk about a picture even on a voice model
+  that can't see. A caption + image → caption is the turn, image rides as a note;
+  an image with no caption → the description becomes the turn. Off-switch
+  `PROTO_FAMILIAR_VOICE_TEXT_INTERLEAVE_DISABLED=1` (default ON; falls the whole
+  feature back to normal text handling).
+
 ## Security design
 
 - **API key handling:** key travels browser → `localhost` only. Server
@@ -2959,3 +3171,33 @@ separate, ward-signed spec and deliberately NOT built here.
   build instruction for the Phylactery milestone (A→B→G→…).
 - [`docs/research/`](research/) — research notes that feed future
   design decisions (task-handling obstacles, etc.).
+
+## Offline ASR model choice (0.11.84)
+
+The voice-note / call FINAL transcription model is ward-selectable. `offline-asr-models.js`
+is the single source of truth: three entries keyed `sensevoice` (default, multilingual,
+bundled), `whisper` (opt-in, multilingual, more accurate, heavier), `parakeet` (opt-in,
+English-only NeMo transducer — the one that supports hotword/name biasing). Each has its own
+`models/audio/<dir>` so switching never overwrites another, and a `kind` that drives the
+recogniser config.
+
+- **Config is a pure function.** `offlineRecognizerConfig({kind,files,at})` returns the sherpa
+  `OfflineRecognizer` config for the family (senseVoice / whisper / transducer), discovering
+  encoder/decoder/joiner/model files by shape (names differ per family + quantisation). The
+  worker's `buildRecognizer` just lists the dir and wraps it — so the branching is unit-tested
+  without the engine or a real model. Unknown kind → SenseVoice (degrade to the working path).
+- **Selection + fallback.** `resolveOfflineAsr(settings)` (voice-transcribe.js) picks the
+  selected model if it's downloaded, else falls back to SenseVoice if THAT is present, else
+  none (the streaming text carries the final). Both voice servers pass it to the engine as
+  `offlineModelDir`/`offlineModelKind` resolvers (evaluated at call start), so choosing an
+  upgrade that isn't fetched yet never breaks a call.
+- **Download is opt-in and now in-app (0.11.117).** Whisper/Parakeet are pinned
+  (`voice-model-pins.json`: `asr-offline-whisper` = sherpa-onnx-whisper-small, `asr-offline-parakeet`),
+  so the fetch machinery will download them. The ward never needs a terminal: picking one in
+  Settings fetches it **on switch** if it isn't on disk, and a **Remove** button deletes it to
+  reclaim disk. Endpoints: `POST /api/voice/asr-model/install {key}` (a one-model plan through the
+  shared `fetchVoicePlanWithProgress` → `models/audio/<catalogueId>/`), `POST /api/voice/asr-model/remove {key}`
+  (rm the model dir; the SenseVoice default is refused — it's the fallback). `GET /api/voice/asr-model`
+  reports `{options:[{key,label,installed,pinned,removable}], selected, using, present, fellBack, installed}`
+  for the picker (the ✓/remove/status). Setting: `voiceOfflineAsrModel` (synced, default `sensevoice`).
+  (`npm run pin:whisper` / `pin:parakeet` remain the maintainer re-pin path.)

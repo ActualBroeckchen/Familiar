@@ -216,8 +216,14 @@ def record(
     payload: dict | None = None,
     delta: float = DEFAULT_RECORD_DELTA,
     tau_days: float = DEFAULT_TAU_DAYS,
+    related_to: str | None = None,
 ) -> dict[str, Any]:
-    """Record a moment of engagement with `topic`. Creates the node as
+    """Record a moment of engagement with `topic`.
+
+    `related_to` names the topic this one grew out of (by label). When it
+    resolves to an existing node, a `related_to` edge links the two — the
+    rabbit-hole trail the pondering loop can later walk instead of only
+    sampling by weight. Nothing happens when the label is unknown. Creates the node as
     a curiosity if it doesn't exist; otherwise applies decay-then-add
     so accumulated weight reflects recent engagement rather than
     historical sum.
@@ -250,10 +256,12 @@ def record(
             conn, node_type="curiosity", label=topic,
             payload=payload_dict, weight=delta, ts=ts,
         )
-        return {
+        out = {
             "ok": True, "id": node_id, "type": "curiosity",
             "raw_weight": delta, "effective_weight": delta,
         }
+        out.update(_link_related(conn, node_id=node_id, related_label=related_to, ts=ts))
+        return out
 
     # Existing node. Standing values: touch but don't change weight.
     if existing["type"] == "standing_value":
@@ -280,10 +288,66 @@ def record(
         "UPDATE nodes SET weight = ?, last_touched = ?, updated_at = ? WHERE id = ?",
         (new_raw, ts, ts, existing["id"]),
     )
-    return {
+    out = {
         "ok": True, "id": existing["id"], "type": existing["type"],
         "raw_weight": new_raw, "effective_weight": new_raw,
     }
+    out.update(_link_related(conn, node_id=existing["id"], related_label=related_to, ts=ts))
+    return out
+
+
+def _link_related(
+    conn: sqlite3.Connection, *, node_id: str, related_label: str | None, ts: str,
+) -> dict[str, Any]:
+    """Link `node_id` to the topic named by `related_label` with one
+    `related_to` edge (idempotent, either direction counts). Returns
+    {related_to_id} when linked, {} otherwise."""
+    if not related_label or not related_label.strip():
+        return {}
+    parent = _find_by_label(conn, related_label)
+    if parent is None or parent["id"] == node_id:
+        return {}
+    dup = conn.execute(
+        """SELECT 1 FROM edges
+            WHERE kind = 'related_to'
+              AND ((src_id = ? AND dst_id = ?) OR (src_id = ? AND dst_id = ?))
+            LIMIT 1""",
+        (parent["id"], node_id, node_id, parent["id"]),
+    ).fetchone()
+    if dup is None:
+        _insert_edge(conn, src_id=parent["id"], dst_id=node_id, kind="related_to", ts=ts)
+    return {"related_to_id": parent["id"]}
+
+
+def related_interests(
+    conn: sqlite3.Connection,
+    *,
+    id: str,
+    limit: int = 6,
+    tau_days: float = DEFAULT_TAU_DAYS,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Topics one `related_to` hop from `id`, either direction, with decayed
+    weights, strongest first. Standing values and bookmarks are not hops —
+    a thread wanders between curiosities, not into always-on values."""
+    rows = conn.execute(
+        """SELECT n.* FROM edges e
+             JOIN nodes n ON n.id = CASE WHEN e.src_id = ? THEN e.dst_id ELSE e.src_id END
+            WHERE e.kind = 'related_to' AND (e.src_id = ? OR e.dst_id = ?)
+              AND n.layer = 'interest'
+              AND n.type NOT IN ('bookmark', 'standing_value')""",
+        (id, id, id),
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        if row["id"] in seen or row["id"] == id:
+            continue
+        seen.add(row["id"])
+        w = effective_weight(row["weight"], row["last_touched"], now=now, tau_days=tau_days)
+        out.append(_node_row_to_dict(row, eff_weight=w, tier=tier_for_weight(w)))
+    out.sort(key=lambda n: n["weight"], reverse=True)
+    return out[:limit]
 
 
 def bookmark(

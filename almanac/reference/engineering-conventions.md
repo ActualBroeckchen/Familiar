@@ -31,7 +31,22 @@ sources:
     path: llm-call.js
   - id: voice-transcribe-js
     type: file
-    path: voice-transcribe.js
+    path: src/voice/voice-transcribe.js
+  - id: tome-macros-js
+    type: file
+    path: src/tomes/tome-macros.js
+  - id: build-prompt-catalog
+    type: file
+    path: scripts/build-prompt-catalog.mjs
+  - id: prompt-catalog-test
+    type: file
+    path: tests/prompt-catalog.test.mjs
+  - id: crisis-classifier
+    type: file
+    path: src/safety/crisis-classifier.js
+  - id: crisis-classifier-test
+    type: file
+    path: tests/crisis-classifier.test.mjs
 ---
 
 # Engineering Conventions
@@ -39,7 +54,12 @@ sources:
 This page is a lookup reference for the repo-wide operating rules recorded in `CLAUDE.md`
 that apply across every component, not just one subsystem. Use it to check a specific
 convention before making a change; use [Architecture](../architecture) for how the
-components these rules govern actually fit together.
+components these rules govern actually fit together. Some rules below name a file by its bare
+basename (`cerebellum.js`, `thalamus.js`, `llm-call.js`) because those files still live at the
+repository root; others (`voice-transcribe.js`, `tome-macros.js`) moved under `src/<domain>/`
+during the Stage 1 reorganization — see
+[Domain folder layout](../decisions/domain-folder-layout) for which files stayed and which
+moved.
 
 ## Versioning
 
@@ -184,6 +204,15 @@ injected directly by `server.js`/`thalamus.js`/`temporal-format.js` rather than 
 through a macro-substitution call site [@claude-md]. Reintroducing a macro token into one of
 those blocks is a regression CLAUDE.md records having already fixed once (the 0.7.83 audit).
 
+Tome (lorebook) content is a fourth, deliberately named exception to the closed three-boundary
+list above, added in 0.11.22-alpha: `tome-macros.js`'s `resolveTomeMacros(text, settings)`
+resolves `{{user}}`/`{{char}}` plus a set of toggle and value macros inside injected Tome
+entries specifically, because a lorebook entry can describe live ward-facing state and is only
+accurate if resolved at injection time rather than at authoring time [@tome-macros-js]. See
+[Tomes and keyword lore](../architecture/tomes-and-lore) for the full macro table, why toggle
+macros read the ward-facing setting rather than the deployment env off-switch, and the
+self-documenting Familiar Manual tome this boundary exists to serve.
+
 The browser's own prompt assembly is a separate implementation of the same boundary-1
 principle: `public/app.js`'s `applyNameVars` resolves `{{user}}` and `{{char}}`, plus two
 time macros, `{{elapsedTime}}` and `{{timeSinceLastSession}}`, at every segment
@@ -264,6 +293,43 @@ Behavioral changes (not relocations, comments, or renames) to `crisis-signals.js
 before shipping [@claude-md]. See [Proactivity over caution](../decisions/proactivity-over-caution)
 and [Safety spine](../architecture/safety-spine) for why.
 
+## Prompt catalog: a live-source review page for every prompt and tool description
+
+`scripts/build-prompt-catalog.mjs` (`npm run prompts:catalog`) generates `docs/prompt-catalog.html`,
+a single self-contained page listing all 16 prompts the Familiar reads plus all 104
+`BUILTIN_TOOLS` descriptions, each with its file:line, a one-line purpose note, the text as
+authored, a copy button, and one search box over everything [@build-prompt-catalog]. It exists
+so reviewing every prompt for wording or safety implications does not mean grepping the tree by
+hand — the shipping commit's own framing was "I seriously need to go over all the prompts"
+[@build-prompt-catalog].
+
+The generator reads LIVE source on every run and stores no prompt copy of its own, so the page
+cannot drift out of sync with the code; adding a prompt to the catalog is one manifest entry in
+`PROMPTS`, added centrally rather than touching the prompt's own source file — a property that
+matters because several prompt files are the safety-critical ones named above
+[@build-prompt-catalog]. Two capture modes cover how a prompt's text actually exists in source:
+`'literal'` lifts the authored template or string verbatim by locating a unique anchor at the
+literal's opening delimiter, with a scanner that handles escapes, `${…}` interpolation brace
+depth (including a nested template literal inside an interpolation), and adjacent string
+concatenation (a plain string literal followed by `+` and a template literal), so an
+interpolated slot like `${focusBlock}` shows as-authored rather than resolved
+[@build-prompt-catalog]. `'render'` instead imports the real function for a
+prompt that code assembles per-branch (the tier-by-tier `[CARE CHECK]` block — see
+[Safety spine](../architecture/safety-spine)) and renders each variant, rather than guessing at a
+single literal [@build-prompt-catalog]. `tests/prompt-catalog.test.mjs` pins the scanner and
+extractor logic directly, including the nested-interpolation and concatenation cases
+[@prompt-catalog-test].
+
+The generator fails loudly on purpose: a drifted or duplicate anchor, or an anchor that does not
+sit at a literal's start, throws naming the entry, and an empty prompt block is never emitted
+silently — a stale catalog that looks fine is judged worse than one that refuses to build
+[@build-prompt-catalog]. Safety prompts (triage, care-check, noticing, content-regate) carry a
+"safety sign-off" badge in the generated page, so a reviewer sees at a glance which entries need
+human sign-off before their wording changes, per the rule above [@build-prompt-catalog]. The
+generated `docs/prompt-catalog.html` is committed as a snapshot (so it opens with no build step)
+and is deliberately a local file, not something published externally, because it surfaces the
+Familiar's own inner-voice and care-related framing verbatim [@build-prompt-catalog].
+
 ## Test discipline: assert, not narrate
 
 A test file must contain assertions. A passing test that is mostly prose narration
@@ -274,6 +340,25 @@ covering test was an AI debugging monologue asserting nothing—just describing 
 happen instead of verifying what *does*. Test the actual wire shape, not a convenient
 stand-in: if the code must handle bare date strings like `2026-07-06`, the test must exercise
 exactly that shape, not a convenience substitute.
+
+## A test whose outcome depends on an absent file is not a real test
+
+A pre-existing test for `scoreMessageMl(message, { artifact: null })` asserted the result
+was `null`, and it only passed because CI has no local copy of the git-ignored
+`models/crisis-classifier.json` artifact — the implementation used `artifact ?? loadArtifact()`,
+so an explicitly-passed `null` was treated as "unspecified" and fell through to loading the
+real model whenever one happened to be present on disk [@crisis-classifier-test]. The bug
+surfaced only once a real model was trained and placed locally for the 0.12.0-alpha work on
+[the crisis classifier](../architecture/safety-spine); the same test, run in an environment
+where the artifact existed, returned the model's real score instead of `null`
+[@crisis-classifier]. The fix: `crisis-classifier.js`'s `scoreMessageMl` and
+`scoreThreatMessage` now check `artifact === undefined` rather than using `??`, so an
+explicitly-passed artifact — including `null`, meaning "no model" — is always authoritative,
+and the default is loaded only when the caller omits the key entirely [@crisis-classifier].
+The general lesson: if a test's outcome can flip depending on whether an unrelated file
+happens to exist on the machine running it, it is not exercising the code path it claims to —
+make the behavior deterministic in both conditions, and actually run the test both ways
+before trusting it.
 
 ## Guards on shared primitives demand full-suite audit
 

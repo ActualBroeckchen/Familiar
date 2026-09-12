@@ -4,7 +4,7 @@
 // discarding every entry even when most of them were complete.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseTopics, salvageTopics, parseRelations } from '../memorization.js';
+import { parseTopics, salvageTopics, parseRelations } from '../src/memory/memorization.js';
 
 const topic = (n) => ({
   title:    `Topic ${n}`,
