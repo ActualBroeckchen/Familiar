@@ -7,7 +7,7 @@ import {
   parseReachoutDecision,
   buildReachoutPrompt,
   decideReachoutViaLLM,
-} from '../reachout.js';
+} from '../src/warmth/reachout.js';
 
 // ── getWarmVillagers ────────────────────────────────────────────────
 

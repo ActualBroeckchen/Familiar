@@ -195,6 +195,14 @@ const SEPARATELY_COMPOSED_EXECUTORS = new Set([
   ...VOICE_CALL_TOOLS.map((t) => t.function.name),
 ]);
 
+// Executor-only aliases for tools renamed for verb_noun consistency in the
+// acknowledge family (graduation_acknowledge -> acknowledge_graduation,
+// disclosure_acknowledge -> acknowledge_disclosure). Kept callable for one
+// release so a model mid-conversation that recalls the old name still lands,
+// but deliberately NOT advertised — never add a name here that IS in
+// BUILTIN_TOOLS. Remove this set (and the aliases in cerebellum.js) after 0.12.
+const DEPRECATED_ALIAS_EXECUTORS = new Set(['graduation_acknowledge', 'disclosure_acknowledge']);
+
 test('BUILTIN_TOOLS carries the full registry in OpenAI function format', () => {
   assert.ok(BUILTIN_TOOLS.length >= 20);
   for (const t of BUILTIN_TOOLS) {
@@ -224,7 +232,14 @@ test('BUILTIN_TOOLS carries the full registry in OpenAI function format', () => 
   // executor — a typo, a forgotten built-in def — still fails loudly).
   for (const n of names) assert.ok(n in TOOL_EXECUTORS, `no executor for ${n}`);
   for (const n of Object.keys(TOOL_EXECUTORS)) {
-    assert.ok(names.includes(n) || SEPARATELY_COMPOSED_EXECUTORS.has(n), `executor ${n} not advertised`);
+    assert.ok(
+      names.includes(n) || SEPARATELY_COMPOSED_EXECUTORS.has(n) || DEPRECATED_ALIAS_EXECUTORS.has(n),
+      `executor ${n} not advertised`,
+    );
+  }
+  // The deprecated aliases must genuinely be aliases-only — never re-advertised.
+  for (const n of DEPRECATED_ALIAS_EXECUTORS) {
+    assert.ok(!names.includes(n), `${n} is a deprecated alias and must not be in BUILTIN_TOOLS`);
   }
 });
 
@@ -293,6 +308,16 @@ test('read_memory_by_id: a missing id is caught before any store call', async ()
   assert.match(out, /need the memory id/i);
 });
 
+test('search_sessions: refuses when someone else is present (ward-private gate)', async () => {
+  const out = await executeToolCall('search_sessions', JSON.stringify({ query: 'dentist' }), { wardPrivate: false });
+  assert.match(out, /Someone else is here/i);
+});
+
+test('search_sessions: an empty query is caught before any file scan', async () => {
+  const out = await executeToolCall('search_sessions', JSON.stringify({ query: '   ' }), { wardPrivate: true });
+  assert.match(out, /something to look for/i);
+});
+
 test('move_memory_date: a missing id and a bad date are each caught before any store call', async () => {
   assert.match(await executeToolCall('move_memory_date', JSON.stringify({ date: '2026-01-01' })), /need the memory id/i);
   assert.match(await executeToolCall('move_memory_date', JSON.stringify({ id: 'abc', date: 'june 22' })), /YYYY-MM-DD/);
@@ -300,8 +325,21 @@ test('move_memory_date: a missing id and a bad date are each caught before any s
 
 test('update_memory_by_id / delete_memory_by_id: missing args are caught before any store call', async () => {
   assert.match(await executeToolCall('update_memory_by_id', JSON.stringify({ content: 'x' })), /need the memory id/i);
-  assert.match(await executeToolCall('update_memory_by_id', JSON.stringify({ id: 'abc' })), /need the new content/i);
+  // id alone with no field to change → nothing to do (content is optional now
+  // that an attribution-only fix carries none).
+  assert.match(await executeToolCall('update_memory_by_id', JSON.stringify({ id: 'abc' })), /nothing to change/i);
+  // A non-numeric attribution_confidence is caught before any store call.
+  assert.match(await executeToolCall('update_memory_by_id', JSON.stringify({ id: 'abc', attribution_confidence: 'high' })), /number from 0 to 1/i);
   assert.match(await executeToolCall('delete_memory_by_id', '{}'), /need the memory id/i);
+});
+
+test('noticing toolset: the fuzzy-attribution re-sweep can recall, read, and correct a memory', async () => {
+  const { composeNoticingTools } = await import('../cerebellum.js');
+  const names = composeNoticingTools({}).map(t => t.function.name);
+  // Without the write tool the sweep could notice a shaky memory but never fix it.
+  for (const t of ['recall', 'read_memory_by_id', 'update_memory_by_id']) {
+    assert.ok(names.includes(t), `noticing toolset is missing ${t}`);
+  }
 });
 
 test('schedule_delete: a missing id is caught before any Unruh call', async () => {

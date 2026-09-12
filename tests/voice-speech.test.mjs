@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 
 import { speakableText, splitForSpeech, prepareForSpeech, capSentenceLength, splitForUtterances,
   normalizeTranscriptCase,
-} from '../voice-speech.js';
-import { MAX_CHAR_IN_SENTENCE, MIN_CHAR_IN_SENTENCE } from '../voice-generation.js';
-import { encodeWav, parseWav, wavHeader, floatToPcm16, WAV_STREAMING_LENGTH } from '../voice-audio-features.js';
+} from '../src/voice/voice-speech.js';
+import { MAX_CHAR_IN_SENTENCE, MIN_CHAR_IN_SENTENCE } from '../src/voice/voice-generation.js';
+import { encodeWav, parseWav, wavHeader, floatToPcm16, WAV_STREAMING_LENGTH } from '../src/voice/voice-audio-features.js';
 
 // ── ASR case rescue — the streaming zipformer shouts; un-shout it ────────
 test('normalizeTranscriptCase: ALL CAPS → sentence case, and "i" → "I"', () => {

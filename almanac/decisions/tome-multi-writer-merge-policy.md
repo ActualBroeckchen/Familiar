@@ -1,6 +1,6 @@
 ---
 title: "Tome Multi-Writer Merge Policy"
-topics: [decisions, memorization]
+topics: [decisions, memorization, tomes]
 sources:
   - id: founding-conversation
     type: conversation
@@ -97,6 +97,8 @@ page as the design brief to start from, not as a description of current behavior
 - [Session memorization](../architecture/session-memorization) — what actually ships today: one
   automated writer, one Tome, serialized by a per-Tome mutex, with no competing-writer
   reconciliation logic yet.
+- [Tomes and keyword lore](../architecture/tomes-and-lore) — the activation engine and entry
+  format every Tome is scanned and injected through, independent of how many writers touch it.
 - [Per-feature model routing](per-feature-model-routing) — the related, already-shipped decision
   that lets different background jobs (which this page's "sifter" and "main agent" writers map
   onto) use different model connections.

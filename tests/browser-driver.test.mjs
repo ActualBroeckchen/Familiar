@@ -1,13 +1,40 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { findChromium, status, extractPageData } from '../browser-driver.js';
-import { buildRefTable, isProtectedField } from '../browser-lens.js';
+import { findChromium, status, extractPageData, settlePage } from '../src/browser/browser-driver.js';
+import { buildRefTable, isProtectedField } from '../src/browser/browser-lens.js';
 
 test('status() before any launch reports not running, never throws', () => {
   const s = status();
   assert.equal(s.running, false);
   assert.equal(s.tabs, 0);
+});
+
+test('settlePage: waits for load → networkidle → a floor, bounded, swallowing rejections', async () => {
+  // The JS-render fix: after domcontentloaded we wait for the page to finish
+  // loading + wiring before reading it, but never hang on a site that never
+  // idles. A mock page proves the contract with no browser.
+  const calls = [];
+  const pg = {
+    waitForLoadState: async (state, opts) => {
+      calls.push({ kind: 'load-state', state, timeout: opts?.timeout });
+      if (state === 'networkidle') throw new Error('never goes idle'); // must be swallowed
+    },
+    waitForTimeout: async (ms) => { calls.push({ kind: 'floor', ms }); },
+  };
+  await assert.doesNotReject(() => settlePage(pg, { total: 3500 }));
+  assert.deepEqual(calls.map(c => c.kind === 'load-state' ? c.state : 'floor'),
+    ['load', 'networkidle', 'floor']);
+  // Every wait is bounded to the remaining budget (can't exceed total).
+  for (const c of calls) {
+    const t = c.timeout ?? c.ms;
+    if (typeof t === 'number') assert.ok(t >= 0 && t <= 3500, `bounded: ${t}`);
+  }
+});
+
+test('settlePage: total:0 still resolves without throwing', async () => {
+  const pg = { waitForLoadState: async () => {}, waitForTimeout: async () => {} };
+  await assert.doesNotReject(() => settlePage(pg, { total: 0 }));
 });
 
 test('findChromium returns a path or null, never throws', () => {
@@ -68,8 +95,63 @@ live('extractPageData walks the real DOM into the lens shape; css resolves + act
   }
 });
 
+live('extractPageData pierces OPEN shadow DOM (nodes, css that resolves + acts, text)', async () => {
+  const { chromium } = await import('playwright-core');
+  const browser = await chromium.launch({ headless: true, executablePath: exe });
+  const page = await (await browser.newContext({ viewport: { width: 1280, height: 800 } })).newPage();
+  try {
+    // A Reddit-shaped page: the real content lives inside nested open shadow
+    // roots, which document.querySelectorAll and innerText both skip.
+    await page.setContent(`
+      <main>
+        <h1>Light heading</h1>
+        <a href="/light">Light link</a>
+        <reddit-post></reddit-post>
+      </main>
+      <script>
+        const host = document.querySelector('reddit-post');
+        const root = host.attachShadow({ mode: 'open' });
+        root.innerHTML =
+          '<h2>Shadow heading</h2>' +
+          '<a href="/shadow-a">Shadow link A</a>' +
+          '<button aria-label="Upvote">up</button>' +
+          '<p id="log">idle</p>' +
+          '<nested-thing></nested-thing><p>Shadow prose here.</p>';
+        root.querySelector('button').addEventListener('click', () => root.getElementById('log').textContent = 'VOTED');
+        const nested = root.querySelector('nested-thing');
+        const nroot = nested.attachShadow({ mode: 'open' });
+        nroot.innerHTML = '<a href="/deep">Deep nested link</a>';
+      </script>`);
+    await page.waitForTimeout(50);
+
+    const data = await extractPageData(page);
+    const names = data.nodes.map(n => n.name);
+    // Content from every shadow level is present, not just the light DOM.
+    for (const expected of ['Light link', 'Shadow link A', 'Upvote', 'Deep nested link']) {
+      assert.ok(names.includes(expected), `missing "${expected}"; got: ${names.join(', ')}`);
+    }
+    // Shadow prose reaches the text channel (innerText alone would miss it).
+    assert.ok(data.text.includes('Shadow prose here.'), 'shadow prose missing from text');
+
+    // The shadow button's css must resolve to exactly one element via Playwright's
+    // piercing locator, and clicking it must actually reach the shadow handler.
+    const upvote = data.nodes.find(n => n.name === 'Upvote');
+    assert.ok(upvote && upvote.css, 'no css for shadow button');
+    assert.equal(await page.locator(upvote.css).count(), 1, `shadow css not unique: ${upvote.css}`);
+    await page.locator(upvote.css).click();
+    await page.waitForTimeout(50);
+    assert.equal(
+      await page.evaluate(() => document.querySelector('reddit-post').shadowRoot.getElementById('log').textContent),
+      'VOTED',
+      'click did not reach the shadow-DOM handler',
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
 // ── Auto-fetch state machine (injected spawn — no real download) ───────────
-import { startChromiumFetch, chromiumInstallState, systemBrowserCandidates } from '../browser-driver.js';
+import { startChromiumFetch, chromiumInstallState, systemBrowserCandidates } from '../src/browser/browser-driver.js';
 import { EventEmitter } from 'node:events';
 
 test('systemBrowserCandidates finds Windows Chrome AND Edge (why the download was forced on Windows)', () => {

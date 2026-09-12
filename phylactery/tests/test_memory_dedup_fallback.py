@@ -19,7 +19,7 @@ def _plain_conn():
             id TEXT PRIMARY KEY, kind TEXT, register TEXT, granularity TEXT,
             date_key TEXT, slug TEXT, content TEXT, audience TEXT,
             subjects_json TEXT, care_weight TEXT, category TEXT, content_tag TEXT,
-            consent_pending INTEGER DEFAULT 0, confidence REAL DEFAULT 1.0,
+            consent_pending INTEGER DEFAULT 0, confidence REAL DEFAULT 1.0, attribution_confidence REAL,
             source_json TEXT, created_at TEXT, updated_at TEXT,
             recall_count INTEGER DEFAULT 0, last_recalled_at TEXT
         )

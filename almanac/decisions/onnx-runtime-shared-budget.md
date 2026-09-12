@@ -7,26 +7,33 @@ sources:
     path: docs/voice-build-spec.md
   - id: audio-worker
     type: file
-    path: audio-worker.mjs
+    path: src/voice/audio-worker.mjs
   - id: embed-py
     type: file
     path: phylactery/src/phylactery/embed.py
   - id: architecture-doc
     type: file
     path: docs/architecture.md
+  - id: call-engine-js
+    type: file
+    path: src/voice/call-engine.js
 ---
 
 # ONNX Runtime: Shared Budget, Not Shared Process
 
-**Status: decided, and shipped as far as Pass 1 goes.** Proto-Familiar runs two independent
-ONNX Runtime consumers on the same reference hardware — Phylactery's `fastembed`
+**Status: decided and shipped, through the live two-way call path.** Proto-Familiar runs two
+independent ONNX Runtime consumers on the same reference hardware — Phylactery's `fastembed`
 (`all-MiniLM-L6-v2`) embedder for memory retrieval, and the [Voice](../architecture/voice)
 milestone's speech models (`sherpa-onnx-node`) — and decided against merging them into one
 process to share a single ONNX Runtime instance. Instead they share a *budget*: static
 per-model thread caps and process isolation, with the audio side already carrying its own
 env-configurable caps in `audio-worker.mjs` [@audio-worker]. Live two-way conversation (Pass 2:
-streaming ASR, barge-in, the compute governor) is not yet built, but the isolation shape this
-decision produced already ships in Pass 1's TTS path.
+streaming ASR at 0.10.20-alpha, the call-engine spine and web call client through 0.10.2x, and
+barge-in at 0.10.49/0.10.80-alpha) has since shipped on top of the isolation shape this decision
+produced in Pass 1's TTS path, and the compute governor this decision anticipated is now the
+`isCallActiveFromFile` flag `call-engine.js` writes and roughly a dozen background loops
+(pondering, memorization, tome-graduation, reachout, gcal-sync, page-watch, memory-sweep, and
+others) read to defer their own compute-heavy work while a call is active [@call-engine-js].
 
 ## Context
 
@@ -85,10 +92,11 @@ deadlock, and [Voice](../architecture/voice)'s later footprint measurements foun
 venvs (Phylactery's and [Unruh](../architecture/unruh)'s combined) already cost more disk than
 the entire default voice install — the two-process shape was not, in practice, the dominant cost
 this project's accessibility framing worried about. The static caps in `audio-worker.mjs` are
-the concrete, already-shipped result of reason 2 above; Pass 2's compute governor (barge-in,
-live interference measurement between a call and a concurrent `mem_search`) extends the same
-budget-sharing shape to the harder simultaneous case, rather than revisiting whether to share a
-runtime at all.
+the concrete, already-shipped result of reason 2 above; Pass 2's compute governor (the
+`isCallActiveFromFile` deferral flag, live interference measurement in `voice-bench.js` between
+a call and a concurrent `mem_search`, and barge-in) extends the same budget-sharing shape to the
+harder simultaneous case, rather than revisiting whether to share a runtime at all — and that
+extension has since shipped, not just been designed.
 
 ## Related
 

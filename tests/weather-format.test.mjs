@@ -7,7 +7,7 @@ import {
   tempBand, precipBand, windBand, formatTemp,
   precipTransition, buildNowWeatherLine, WEATHER_STALE_MS,
   formatWeatherVague, forecastAtHour, isAdverseHour, formatItemWeather, weatherArc,
-} from '../weather-format.js';
+} from '../src/weather/weather-format.js';
 
 const T = (iso) => Date.parse(iso);
 

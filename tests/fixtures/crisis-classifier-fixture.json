@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "kind": "tfidf-logreg",
+  "normalizer": { "version": "letters-v1" },
+  "tokenizer": { "ngram": [1, 2], "sublinear_tf": true, "norm": "l2" },
+  "distress": {
+    "vocab": { "die": 0, "happy": 1, "want": 2, "want die": 3, "love": 4 },
+    "idf": [2.0, 2.5, 1.5, 3.0, 2.2],
+    "coef": [3.0, -3.5, 0.5, 4.0, -2.0],
+    "intercept": -1.0
+  },
+  "normalization": {
+    "vocab": { "better off": 0, "no point": 1, "peace": 2, "everyone": 3 },
+    "idf": [3.0, 3.0, 2.5, 2.0],
+    "coef": [4.0, 3.0, 1.0, 0.5],
+    "intercept": -1.5
+  }
+}

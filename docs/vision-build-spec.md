@@ -493,14 +493,20 @@ allotment (rather than a separate pay-as-you-go vision key):
   its image param — path / url / base64 — materializing a temp file only when a
   path is wanted, and passing the first-person describe prompt into whatever
   prompt-shaped field exists).
-- **Routing:** `resolveVisionCapable` returns **false** for a `zai-coding`
-  connection (the coding chat models can't take live `image_url` parts, so the
-  materializer stands images in), while `resolveVisionConnection` still treats
-  it as **describe-capable**; `describeAsset` then routes to
-  `describeViaZaiVision` instead of `callProviderChat`. Net effect: a Coding-Plan
-  connection assigned to the `vision` feature makes every image **described via
-  the coding allotment**, then read as a stand-in — the Pass 2 path, on z.ai's
-  quota.
+- **Routing (model-aware since 0.11.40).** `resolveVisionCapable`/
+  `resolveVideoCapable` are no longer blanket-false for `zai-coding` — they
+  consult the ward tri-state + the name heuristic like every provider. A
+  **text/code coding model** (GLM-4.6) reads blind: the materializer stands its
+  images in, `resolveVisionConnection` still treats the connection as
+  **describe-capable**, and `describeAsset` routes to `describeViaZaiVision`
+  (this MCP) instead of `callProviderChat` — every image described via the coding
+  allotment, then read as a stand-in (the Pass 2 path, on z.ai's quota). A
+  **natively-multimodal coding model** (GLM 5.3 Flash) reads capable: the coding
+  chat endpoint IS the same OpenAI-compat surface as standard z.ai, so it takes
+  live `image_url` AND `video_url` parts and never reaches this MCP. The
+  describe path itself is image-only and guards non-image kinds at the door
+  (0.11.39), so a video is never handed to `analyze_image` (the reported
+  coding-plan `HTTP 400` image-parse error).
 - **Graceful + gated:** any spawn/connect/call failure returns `{ok:false}` and
   the description stays null (retried later); nothing breaks. Off-switch
   `PROTO_FAMILIAR_ZAI_VISION_DISABLED=1`; the spawn command is overridable via

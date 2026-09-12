@@ -12,8 +12,8 @@ import {
   saveAsset, getAsset, getAssetMeta, setAssetDescription, listAssets,
   deleteAsset, resolveAssetId, buildStandin, contentWithStandins,
   addAssetLink, removeAssetLink, assetsForNode, drainPendingImages,
-  readImageSize, MEDIA_MAX_BYTES, IMAGE_MIME_EXT,
-} from '../media.js';
+  readImageSize, isAnimatedGif, MEDIA_MAX_BYTES, IMAGE_MIME_EXT,
+} from '../src/vision/media.js';
 import { slugifyLabel, meaningSlugId } from '../slug-ids.js';
 
 // ── Fixtures: minimal-but-valid encoded headers, so readImageSize is tested
@@ -57,6 +57,23 @@ test('readImageSize parses PNG / GIF / JPEG headers', () => {
   assert.deepEqual(readImageSize(gif(3, 5)), { width: 3, height: 5 });
   assert.deepEqual(readImageSize(jpeg(7, 11)), { width: 7, height: 11 });
   assert.equal(readImageSize(Buffer.from('not an image')), null);
+});
+
+test('isAnimatedGif: two+ Graphic Control Extension blocks → animated; one or none → still', () => {
+  const gce = Buffer.from([0x21, 0xf9, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00]);
+  assert.equal(isAnimatedGif(Buffer.concat([gif(4, 4), gce, gce])), true, 'multi-frame gif');
+  assert.equal(isAnimatedGif(Buffer.concat([gif(4, 4), gce])), false, 'a single GCE (e.g. transparency) is still');
+  assert.equal(isAnimatedGif(gif(4, 4)), false, 'no frames → still');
+  assert.equal(isAnimatedGif(PNG_1x1), false, 'a PNG is not a gif');
+  assert.equal(isAnimatedGif(Buffer.from('x')), false, 'garbage → false, never throws');
+});
+
+test('saveAsset stamps animated:true on an animated gif only', async () => {
+  const gce = Buffer.from([0x21, 0xf9, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00]);
+  const moving = await track(await saveAsset({ buffer: Buffer.concat([gif(9, 9), gce, gce]), mime: 'image/gif', label: 'reaction' }));
+  const still  = await track(await saveAsset({ buffer: gif(11, 13), mime: 'image/gif', label: 'plain' }));
+  assert.equal(moving.animated, true);
+  assert.equal(still.animated, undefined, 'a still image carries no animated flag');
 });
 
 test('saveAsset stores bytes + meta and round-trips', async () => {

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runMemorySweepTick } from '../memory-sweep-loop.js';
+import { runMemorySweepTick } from '../src/memory/memory-sweep-loop.js';
 
 const conn = () => ({ provider: 'nanogpt', apiKey: 'sk', model: 'm' });
 const seg = (date) => ({ startIdx: 0, endIdx: 1, count: 2, messages: [{}, {}] });

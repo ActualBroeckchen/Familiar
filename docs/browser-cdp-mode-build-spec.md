@@ -1,12 +1,32 @@
 # Browser CDP mode — driving the ward's own logged-in Chrome (§9 Horizon #2)
 
-> **STATUS: PARKED (design accepted, deferred). No code yet.** The ward reviewed
-> this design and chose to **spec-and-park** it: the owned-profile browser
-> (Passes 1–4 + page watches) has only just entered real use, and CDP mode — like
-> the Horizon #3 task-flows — should wait until the cheaper modes are proven in
-> practice. The design below is settled and ready to build when the ward decides;
-> the three load-bearing decisions in §7 are **answered** (recorded inline). Do
-> not start implementation without a fresh ward go-ahead.
+> **STATUS: BUILT (0.11.31-alpha), pending desktop shakeout.** The ward gave the
+> fresh go-ahead and this shipped to spec: `browser-cdp-arm.js` (the arm gate),
+> the `ensureContext` CDP branch driving a dedicated tab in the ward's Chrome,
+> the disconnect-never-close teardown invariant, the forced single-domain
+> allowlist, arm-expiry→owned-profile drop with the RULE-B note, the
+> `/api/browser/cdp-arm|cdp-disarm` endpoints, the Settings arm surface,
+> `cdpModeEnabled` (default OFF) + `PROTO_FAMILIAR_BROWSER_CDP_DISABLED=1`.
+> **The arm-gate logic is fully unit-tested** (`tests/browser-cdp-arm.test.mjs`:
+> domain normalisation, private/loopback refusal, the single-domain allowlist,
+> expiry + the one-shot note, disarm, env hard-disable). **The live CDP attach +
+> real-Chrome drive still needs a ward desktop shakeout** (§8 — it cannot run in
+> headless CI, same posture as the headed-handoff hand-back): launch Chrome with
+> `--remote-debugging-port=9222`, arm a domain in Settings, and confirm the
+> Familiar drives that tab and that disarm/expiry/`browse_close` leave your
+> Chrome and its other tabs untouched.
+>
+> **Setup accessibility (0.11.32, ward-requested).** Gate 1 (the ward launches
+> debug Chrome themselves) is a real barrier for this app's audience — hand-adding
+> `--remote-debugging-port=9222` to a shortcut is exactly the techie step the app
+> exists to spare them. `cdp-launcher.js` + `POST /api/browser/cdp-setup` add a
+> **one-click "Set up my Chrome"** button that drops a double-clickable Desktop
+> launcher (per-OS). It preserves gate 1 — the app writes a shortcut, the ward
+> still chooses to run it — and IMPROVES the blast radius: the launcher uses a
+> **dedicated Chrome profile**, so the drivable browser starts logged out and
+> holds only the sites the ward signs into there; their everyday Chrome (bank,
+> email) is never exposed to the debug port. Ward-approved deviation from the
+> spec's "attach to your everyday Chrome."
 >
 > This is the highest-stakes variant in the whole browser milestone: the blast
 > radius is the ward's *authenticated life* (email, bank, socials — every site

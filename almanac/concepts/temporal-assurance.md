@@ -8,10 +8,10 @@ sources:
     note: "Second founding design conversation, after the identity conversation recorded in eury-as-agent-identity, in which the maintainer named the core feeling and scoped it into an MVP."
   - id: event-alerts-js
     type: file
-    path: event-alerts.js
+    path: src/schedule/event-alerts.js
   - id: stewardship-js
     type: file
-    path: stewardship.js
+    path: src/schedule/stewardship.js
   - id: templates-py
     type: file
     path: unruh/src/unruh/templates.py

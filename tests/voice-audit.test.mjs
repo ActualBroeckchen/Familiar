@@ -23,7 +23,7 @@ const read = (f) => fs.readFile(path.join(ROOT, f), 'utf8');
 // ── A3: the browse-all list was serving the muffled cut ───────────
 
 test('browsing voices offers every voice once, at the best available quality', async () => {
-  const { listClips } = await import('../voice-clips.js');
+  const { listClips } = await import('../src/voice/voice-clips.js');
   const opts = { rootDir: ROOT, limit: 2000 };
 
   const best = listClips({ ...opts, variant: 'best' });
@@ -81,7 +81,7 @@ test('the ward-voice endpoint measures the clip — the import was missing', asy
   // `measureVoiceClip` was called inside a try/catch WITHOUT being imported, so
   // the ReferenceError was swallowed and no clip would ever have been measured.
   // A silent catch around an unimported name is invisible forever.
-  assert.match(srv, /measureVoiceClip.*from '\.\/voice-audio-features\.js'/,
+  assert.match(srv, /measureVoiceClip.*from '[^']*voice-audio-features\.js'/,
     'measureVoiceClip is used but not imported — the catch would hide it');
 });
 
@@ -132,7 +132,7 @@ test('read-aloud-by-default reuses the button rather than a parallel path', asyn
 
 test('voice notes are capped per message, and the cap matches what I can hear', async () => {
   const app = await read('public/app.js');
-  const src = await read('voice-transcribe.js');
+  const src = await read('src/voice/voice-transcribe.js');
 
   // Uncapped, this uploaded before checking anything — twenty notes at up to
   // 24 MB is half a gigabyte from one message, and only the newest four would
@@ -149,13 +149,23 @@ test('voice notes are capped per message, and the cap matches what I can hear', 
 // ── B: config I could not verify, so stopped relying on ───────────
 
 test('the recogniser states its feature config instead of inheriting one', async () => {
-  const worker = await read('audio-worker.mjs');
-  const fn = worker.slice(worker.indexOf('function buildRecognizer('));
-  const body = fn.slice(0, fn.indexOf('\n}\n'));
-  // I could not confirm from the installed package whether an absent
-  // `featConfig` leaves sherpa's C++ defaults or zeroes them, and a zeroed
-  // sample rate produces garbage rather than an error.
-  assert.match(body, /featConfig: \{ sampleRate: 16000, featureDim: 80 \}/);
+  // Behaviour, not source text: the config the worker feeds sherpa must STATE
+  // the 16 kHz / 80-dim fbank rather than inherit it (an absent featConfig may
+  // leave the C++ defaults or zero them; a zeroed sample rate produces garbage,
+  // not an error). Assert the pure builder's output for every model family,
+  // since that is what the worker now wraps (offline-asr-models.js). The old
+  // version scraped buildRecognizer's source for the literal and broke the
+  // moment the config moved into the shared builder, though nothing real changed.
+  const { offlineRecognizerConfig } = await import('../src/voice/offline-asr-models.js');
+  const filesByKind = {
+    sensevoice: ['model.int8.onnx', 'tokens.txt'],
+    whisper:    ['enc-encoder.onnx', 'dec-decoder.onnx', 'tokens.txt'],
+    parakeet:   ['encoder.onnx', 'decoder.onnx', 'joiner.onnx', 'tokens.txt'],
+  };
+  for (const [kind, files] of Object.entries(filesByKind)) {
+    const cfg = offlineRecognizerConfig({ kind, files, at: (f) => f });
+    assert.deepEqual(cfg.featConfig, { sampleRate: 16000, featureDim: 80 }, `${kind} states featConfig`);
+  }
 });
 
 // ── The meta-check: no new orphans ────────────────────────────────
@@ -165,7 +175,7 @@ test('nothing in the voice surface is documented as working while being unreacha
   // and worker-only code. This is the specific list the audit resolved, so a
   // regression re-breaks a named promise rather than a generic rule.
   const surfaces = (await Promise.all(
-    ['server.js', 'public/app.js', 'voice-clips.js', 'voice-transcribe.js'].map(read),
+    ['server.js', 'public/app.js', 'src/voice/voice-clips.js', 'src/voice/voice-transcribe.js'].map(read),
   )).join('\n');
 
   for (const [name, promise] of [
@@ -243,7 +253,7 @@ test('no comment claims a file or function that does not exist', async () => {
   // (the function is `shippableSources`) and another the manifest field
   // `upstreamAsset` (it is `upstream.asset`). Both would send a reader looking
   // for something that was never there.
-  const cat = await read('voice-catalogue.js');
+  const cat = await read('src/voice/voice-catalogue.js');
   assert.doesNotMatch(cat, /`shippableVoices\(\)`/, 'stale function name is back');
   assert.match(cat, /`shippableSources\(\)`/);
 

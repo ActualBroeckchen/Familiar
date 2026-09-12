@@ -160,6 +160,55 @@
             <div class="field-actions">
               <button class="btn-secondary" id="web-search-configure-btn" type="button">⚙ Configure search backend…</button>
             </div>
+            <details class="field" id="reddit-settings" style="margin-top:10px">
+              <summary>Reddit reading</summary>
+              <div class="field-row" style="margin-top:8px">
+                <label for="reddit-reader-enabled">Read Reddit via its API</label>
+                <input type="checkbox" id="reddit-reader-enabled" checked>
+              </div>
+              <p class="field-hint">Reddit blocks the in-app browser's automated traffic, so I read it through Reddit's JSON API instead. The public path needs no setup. For pages Reddit still refuses, add API credentials below — a free “script” app at <code>reddit.com/prefs/apps</code> — and I'll use the sanctioned API, which never hits the block.</p>
+                <label for="reddit-user-agent" class="field-label">User-Agent (optional)</label>
+                <input type="text" id="reddit-user-agent" placeholder="proto-familiar/1.0 (by /u/yourname)" autocomplete="off">
+                <label for="reddit-client-id" class="field-label">API client ID (optional)</label>
+                <input type="text" id="reddit-client-id" autocomplete="off">
+                <label for="reddit-client-secret" class="field-label">API client secret (optional)</label>
+                <input type="password" id="reddit-client-secret" autocomplete="off">
+                <label for="reddit-username" class="field-label">Reddit username (optional)</label>
+                <input type="text" id="reddit-username" autocomplete="off">
+                <label for="reddit-password" class="field-label">Reddit password (optional)</label>
+                <input type="password" id="reddit-password" autocomplete="off">
+              <p class="field-hint hint-keep">Stored in your own settings on this machine. If you'd rather not keep the password here, set the <code>PROTO_FAMILIAR_REDDIT_*</code> environment variables instead — they take precedence.</p>
+            </details>
+            <div class="field-row" style="margin-top:10px">
+              <label for="video-fileapi-enabled">Send longer clips to Gemini (File API)</label>
+              <input type="checkbox" id="video-fileapi-enabled">
+            </div>
+            <p class="field-hint">Short video clips ride inline to any video-capable model. LONGER clips (past ~20&nbsp;seconds) need Google's upload path — turn this on and, on a pending video, use “🎬 Watch full clip” to have your Gemini connection watch the whole thing. Needs a Google Gemini connection.</p>
+            <details class="field" id="cdp-settings" style="margin-top:10px">
+              <summary>Drive my own Chrome (advanced)</summary>
+              <div class="field-row" style="margin-top:8px">
+                <label for="cdp-mode-enabled">Allow driving my own Chrome</label>
+                <input type="checkbox" id="cdp-mode-enabled">
+              </div>
+              <p class="field-hint hint-keep">For a site you're logged into, your Familiar can drive a <strong>real Chrome</strong> instead of its logged-out browser — the natural way past login walls and sites that block automation. It stays <strong>inert</strong> until you (1) open the special Chrome and (2) arm it for one site, briefly. Your Familiar can ask for an arm; it can never arm itself.</p>
+              <div class="field-actions">
+                <button class="btn-secondary" id="cdp-setup-btn" type="button">① Set up my Chrome…</button>
+              </div>
+              <p class="field-hint" id="cdp-setup-status" aria-live="polite">One-time: I'll put a “Start Familiar Chrome” shortcut on your Desktop. It opens a fresh, separate Chrome (not your everyday one) — log into the sites you want help with there.</p>
+              <div class="field-row" style="margin-top:8px">
+                <input type="text" id="cdp-arm-domain" placeholder="github.com" autocomplete="off" style="flex:1">
+                <select id="cdp-arm-minutes" class="ke-select" style="max-width:120px">
+                  <option value="15">15 min</option>
+                  <option value="30">30 min</option>
+                  <option value="60">60 min</option>
+                </select>
+              </div>
+              <div class="field-actions">
+                <button class="btn-secondary" id="cdp-arm-btn" type="button">② Arm for this site</button>
+                <button class="btn-ghost" id="cdp-disarm-btn" type="button">Disarm</button>
+              </div>
+              <p class="field-hint" id="cdp-arm-status" aria-live="polite">Not armed.</p>
+            </details>
           </div>
         </div>
 
@@ -177,6 +226,12 @@
             <button id="notif-sound-test" class="btn-ghost" type="button" title="Play a test chime" style="margin-left:6px">▶</button>
           </div>
           <div class="field-hint">A soft chime when a new message arrives while this tab is open — always for proactive ones (reminders, check-ins), and for replies only when the tab isn't focused, so an active conversation stays quiet.</div>
+
+          <div class="field-row" style="margin-top:8px">
+            <label for="crisis-classifier-toggle">Let my Familiar's deeper read of my words raise concern</label>
+            <input type="checkbox" id="crisis-classifier-toggle" checked>
+          </div>
+          <div class="field-hint">On by default. On top of the plain phrase-spotting it always does, your Familiar runs a second, trained read of your messages — it catches distress worded in ways a fixed keyword list would miss, and it eases off when something only sounds alarming but isn't (venting about a software bug, say). It only ever adds to the always-on phrase detector: off just drops this extra layer, it never stops your Familiar noticing plain crisis words. It can raise concern, or gently soften a mild over-read — never clear a real crisis.</div>
 
           <h3 class="section-label" style="margin-top:16px">Voice</h3>
           <div class="field-row">
@@ -261,6 +316,15 @@
             <span>Let me notice sounds in the room on a call — a dog barking, a TV, running water — so I can be a better listener to where you are. It's just for the moment; these sounds are never saved and never change how I read your safety. Needs the small audio-tagging model. Off by default.</span>
           </label>
 
+          <h4 class="section-label" style="margin-top:16px; font-size:0.9em; opacity:0.85">Voice transcription model</h4>
+          <p class="field-hint">Whisper and NeMo Parakeet are more accurate than the default, SenseVoice. Pick one and it downloads and switches over on its own (a few hundred MB, one time); until it's ready, calls and voice notes keep using SenseVoice. You can remove an upgrade any time to free the space.</p>
+          <div class="action-row" style="margin-top:8px; align-items:center; gap:8px; flex-wrap:wrap">
+            <label for="voice-offline-asr-model" style="font-size:0.85em">Voice transcription model</label>
+            <select id="voice-offline-asr-model" aria-label="Voice transcription model"></select>
+            <button type="button" id="voice-offline-asr-remove" class="btn-secondary" style="font-size:0.8em" hidden>Remove download</button>
+          </div>
+          <p class="field-hint" id="voice-offline-asr-model-state" style="margin-top:6px" aria-live="polite"></p>
+
           <h4 class="section-label" style="margin-top:16px; font-size:0.9em; opacity:0.85">Who's speaking (voiceprint)</h4>
           <p class="field-hint">If I learn your voice, I can tell on a call when someone else is in the room and keep our private things private until we're alone again. Your voiceprint stays on this machine and is never synced.</p>
           <div class="action-row" style="margin-top:8px; align-items:center; gap:8px; flex-wrap:wrap">
@@ -330,7 +394,16 @@
             <span class="chevron">▾</span>
           </button>
           <div class="section-content" id="content-debug">
-            <p class="field-hint">Generate a plain-text report with system info, the recent in-app event log, and the last sent prompt summary. Paste into a bug report.</p>
+            <div class="field-row">
+              <label for="organ-status-block">Organ-status readout in context</label>
+              <select id="organ-status-block" class="ke-select">
+                <option value="degraded">Only when one is down</option>
+                <option value="always">Always show</option>
+                <option value="off">Never (tool only)</option>
+              </select>
+            </div>
+            <p class="field-hint">A small 🟢/⚫ readout of which organs (Phylactery, Unruh, Village, Tomes) answered this turn. My Familiar can also check live any time by running its <code>organ_status</code> tool.</p>
+            <p class="field-hint" style="margin-top:10px">Generate a plain-text report with system info, the recent in-app event log, and the last sent prompt summary. Paste into a bug report.</p>
             <div class="action-row" style="margin-top:4px">
               <button id="diagnostics-btn" class="btn-secondary">🩺 Generate diagnostic report</button>
             </div>
@@ -344,6 +417,10 @@
             <p class="field-hint" style="margin-top:10px">Measure whether this machine can hold a spoken conversation — and what it would take up on disk. Takes a few minutes; best run on mains power.</p>
             <div class="action-row" style="margin-top:4px">
               <button id="voice-bench-btn" class="btn-secondary">🎤 Voice benchmark</button>
+            </div>
+            <p class="field-hint" style="margin-top:10px">Which background loops are actually running right now, plus their own decision logs (noticing, warm reach-out, triage, page watch, Discord writes) — so a quiet Familiar and a stuck one don't look the same.</p>
+            <div class="action-row" style="margin-top:4px">
+              <button id="loops-health-btn" class="btn-secondary">💓 Is my Familiar alive?</button>
             </div>
           </div>
         </div>
@@ -521,7 +598,7 @@
   <input type="file" id="file-input" accept=".txt,.md,.json" style="display:none" aria-hidden="true">
 
   <!-- Hidden image picker for the composer attach button (vision) -->
-  <input type="file" id="image-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple style="display:none" aria-hidden="true">
+  <input type="file" id="image-input" accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,video/quicktime,video/x-matroska,video/mpeg,video/3gpp" multiple style="display:none" aria-hidden="true">
 
   <!-- Connections modal (moved from the sidebar) -->
   <div class="modal-backdrop hidden" id="connections-modal" role="dialog" aria-modal="true" aria-labelledby="connections-modal-title">
@@ -539,7 +616,21 @@
             <option value="zai">Z.ai — Standard API</option>
             <option value="zai-coding">Z.ai — Coding Plan</option>
             <option value="google">Google AI Studio — Gemini</option>
+            <option value="openrouter">OpenRouter</option>
+            <option value="openai">OpenAI</option>
+            <option value="deepseek">DeepSeek</option>
+            <option value="groq">Groq</option>
+            <option value="mistral">Mistral</option>
+            <option value="togetherai">Together AI</option>
+            <option value="ollama">Ollama (local)</option>
+            <option value="lmstudio">LM Studio (local)</option>
+            <option value="custom">Custom — any OpenAI-compatible URL</option>
           </select>
+        </div>
+        <div class="field" id="base-url-field" style="display:none">
+          <label for="base-url-input">Base URL</label>
+          <input type="text" id="base-url-input" placeholder="http://localhost:11434" autocomplete="off" spellcheck="false">
+          <p class="field-hint" id="base-url-hint">The server's address. A bare host or a <code>/v1</code> base both work (I add <code>/chat/completions</code>). Ollama defaults to <code>http://localhost:11434</code>, LM Studio to <code>http://localhost:1234</code>.</p>
         </div>
         <div class="field">
           <label for="api-key">API Key</label>
@@ -901,6 +992,55 @@
     </div>
   </div>
 
+  <!-- Loops & logs modal ("Is my Familiar alive?") — loop-alive readout +
+       the five background-loop decision logs, each with its own filter. -->
+  <div class="modal-backdrop hidden" id="loops-health-modal" role="dialog" aria-modal="true" aria-labelledby="loops-health-title">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2 class="modal-title" id="loops-health-title">Is my Familiar alive?</h2>
+        <button class="icon-btn modal-close" id="loops-health-close" aria-label="Close" data-ms-icon="close"></button>
+      </div>
+      <div class="modal-body">
+        <p class="field-hint hint-keep">Which background loops are running right now, and their own decision logs — a quiet loop and a stuck one don't look the same from here.</p>
+
+        <div id="loops-status-row" class="loops-status-row"></div>
+
+        <div class="ke-tabs" role="tablist">
+          <button class="ke-tab ke-tab-active" data-loops-tab="noticing"  role="tab">Noticing</button>
+          <button class="ke-tab"               data-loops-tab="reachout" role="tab">Reach-out</button>
+          <button class="ke-tab"               data-loops-tab="triage"   role="tab">Triage</button>
+          <button class="ke-tab"               data-loops-tab="pagewatch" role="tab">Page watch</button>
+          <button class="ke-tab"               data-loops-tab="discord"  role="tab">Discord writes</button>
+        </div>
+
+        <div class="ke-pane ke-pane-active" id="loops-pane-noticing">
+          <input type="search" id="loops-search-noticing" class="vl-search" placeholder="Filter noticing log…" aria-label="Filter noticing log" autocomplete="off">
+          <div id="loops-list-noticing" class="loops-log-list"></div>
+        </div>
+        <div class="ke-pane" id="loops-pane-reachout">
+          <input type="search" id="loops-search-reachout" class="vl-search" placeholder="Filter reach-out log…" aria-label="Filter reach-out log" autocomplete="off">
+          <div id="loops-list-reachout" class="loops-log-list"></div>
+        </div>
+        <div class="ke-pane" id="loops-pane-triage">
+          <input type="search" id="loops-search-triage" class="vl-search" placeholder="Filter triage log…" aria-label="Filter triage log" autocomplete="off">
+          <div id="loops-list-triage" class="loops-log-list"></div>
+        </div>
+        <div class="ke-pane" id="loops-pane-pagewatch">
+          <input type="search" id="loops-search-pagewatch" class="vl-search" placeholder="Filter page-watch log…" aria-label="Filter page-watch log" autocomplete="off">
+          <div id="loops-list-pagewatch" class="loops-log-list"></div>
+        </div>
+        <div class="ke-pane" id="loops-pane-discord">
+          <input type="search" id="loops-search-discord" class="vl-search" placeholder="Filter Discord writes…" aria-label="Filter Discord writes log" autocomplete="off">
+          <div id="loops-list-discord" class="loops-log-list"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="loops-health-refresh" class="btn-secondary" type="button">↻ Refresh</button>
+        <button id="loops-health-done" class="btn-ghost" type="button">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Knowledge editor modal (Phylactery) -->
   <div class="modal-backdrop hidden" id="knowledge-modal" role="dialog" aria-modal="true" aria-labelledby="knowledge-modal-title">
     <div class="modal modal-wide modal-resizable" id="knowledge-modal-inner">
@@ -1148,6 +1288,11 @@
             <input type="number" id="pondering-scale" value="1" min="1" max="10" step="0.5">
             <div class="field-hint">Multiplies the base ponder interval. 1× = default cadence (30 min – 6 hr). 2× doubles every interval (1 hr – 12 hr). Use this to dial token cost down without disabling entirely. Only stretches, never speeds up.</div>
           </div>
+          <div class="field">
+            <label for="pondering-thread-chance">Wander chance <span id="pondering-thread-chance-val" style="font-variant-numeric:tabular-nums">35%</span></label>
+            <input type="range" id="pondering-thread-chance" min="0" max="100" step="5" value="35" aria-label="Wander chance">
+            <div class="field-hint">How often a ponder follows a side road off its topic instead of staying put. 0% = never wander, 100% = always.</div>
+          </div>
           <div class="field-row" style="margin-top:12px">
             <label for="ponder-web-toggle">Look things up while pondering</label>
             <input type="checkbox" id="ponder-web-toggle" checked>
@@ -1164,6 +1309,12 @@
             <input type="checkbox" id="memory-sweep-toggle" checked>
           </div>
           <div class="field-hint">On by default. A slow background pass (every ~10 min) that memorizes any <em>past</em> day whose conversations never got ingested — for when a session didn't roll over cleanly (you switched sessions or cleared history). It only enqueues into the normal memorization worker (no extra LLM calls of its own) and skips the current day (handled live) and days already done. See the Coverage tab. Off leaves memorization to session-end and the Memorize-now button only.</div>
+
+          <div class="field-row" style="margin-top:12px">
+            <label for="session-unify-toggle">One conversation across web &amp; Discord</label>
+            <input type="checkbox" id="session-unify-toggle" checked>
+          </div>
+          <div class="field-hint">On by default. Your web chat and your Discord DM are the <em>same</em> ongoing conversation: a message you send on one surface shows up on the other, and the open web chat quietly pulls in new Discord turns every few seconds (it only adds new messages — it never disturbs what you're typing or have selected). Villager DMs and group channels are never merged in. Off keeps the two surfaces as separate sessions.</div>
         </div>
 
         <!-- SESSIONS PANE — saved-session handling (moved from the standalone Logs modal + sidebar) -->

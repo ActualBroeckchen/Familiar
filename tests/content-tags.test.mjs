@@ -4,7 +4,7 @@ import {
   normalizeTag, topicVisibleToGrants, unionTopicGrants,
   memoryVisibleToVillager, categoryToTag, levelRank,
   isTopic, isLevel, sanitizeTopicGrants,
-} from '../content-tags.js';
+} from '../src/memory/content-tags.js';
 
 test('normalizeTag: accepts colon/hyphen strings and objects; unknown topic → null', () => {
   assert.deepEqual(normalizeTag('medical:sensitive'), { topic: 'medical', level: 'sensitive' });

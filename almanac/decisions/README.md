@@ -14,7 +14,7 @@ implemented**, or **proposed**. A "proposed" or "not yet implemented" status is 
 the page's honest record of how far the decision has actually traveled from conversation into
 code.
 
-Twenty-two decisions live here. Grouped by the question each one answers:
+Twenty-six decisions live here. Grouped by the question each one answers:
 
 ## Naming and module identity
 
@@ -35,6 +35,10 @@ The safety cluster records both the incidents that shaped Proto-Familiar's appro
 intervention, and the structural defenses built to prevent those failure modes from
 reoccurring.
 
+- [Self-originated interest and the `me` register](self-originated-interest-and-me-register) —
+  why the Familiar's individuality read as generic assistant-friendliness: the interest layer
+  mirrored the human's chat topics and the Familiar's own standing views were filed under the
+  human; a ponder can now plant its own curiosity (`drawn_to`) and self-facts route to `me`.
 - [Proactivity over caution](proactivity-over-caution) — the incident where caution-biased
   language in a safety prompt reproduced dangerous passivity at the worst possible moment,
   producing a standing rule against "bias toward staying quiet" in every prompt that decides
@@ -55,9 +59,9 @@ reoccurring.
   including the credential/payment gates and the consent-vault handoff flow — see
   [Browser](../architecture/browser) for the built subsystem.
 - [CDP mode: driving the ward's own Chrome](browser-cdp-mode) — the browser milestone's §9
-  Horizon #2 alternate engine backing, designed in full and deliberately parked with no code
-  because the owned SSRF-proxy floor it depends on cannot apply to a Chrome instance the app
-  did not launch.
+  Horizon #2 alternate engine backing: designed in full, deliberately parked while the owned
+  SSRF-proxy floor it cannot rely on proved itself elsewhere, then shipped to spec at
+  0.11.31-alpha behind a forced single-domain allowlist and two human gates nothing can fake.
 
 ## The Initiative build spec: wait-streak and contact rhythm
 
@@ -79,6 +83,10 @@ and of what is normal for its bond with the ward:
   reconciliation policy for a Tome receiving writes from more than one source.
 - [Per-feature model routing](per-feature-model-routing) — letting the ward bind each background
   LLM job to its own saved connection instead of one shared provider.
+- [Attribution confidence: degrade the attribution, not the fact](attribution-confidence-degrades-not-drops)
+  — why a memory whose subject is unclear is downweighted in recall rather than dropped or
+  guessed at, and the three-layer stack (extraction, Phylactery recall, a noticing re-resolution
+  sweep) that implements it.
 
 ## Vision and multimodal input
 
@@ -97,6 +105,13 @@ and of what is normal for its bond with the ward:
   the project's low-end reference hardware, sharing static thread caps rather than one ONNX
   Runtime instance.
 
+## Extending Proto-Familiar: a plugin surface
+
+- [Plugin surface ("Grimoire"): Psycheros-compatible, walled off from the safety paths](plugin-surface-safety-wall)
+  — the decision to make Familiar source-compatible with Psycheros plugins via a tiered Node/Deno
+  loader, and the one hard divergence: plugin-contributed context is excluded from crisis, threat,
+  and triage scoring by construction. Design approved and build spec written; no code shipped yet.
+
 ## Operating rules applied across components
 
 - [Exact values are code's job](exact-values-in-code) — the rule that any machine-correct value
@@ -112,6 +127,9 @@ and of what is normal for its bond with the ward:
 - [Local process over VM/Docker sandboxing](local-process-over-vm-sandboxing) — why every
   autonomous loop runs inside one continuously-running Node process instead of a sandboxed or
   lazily-woken alternative.
+- [Domain folder layout](domain-folder-layout) — why domain-specific modules moved from a flat
+  repository root into `src/<domain>/` folders one domain at a time, and which cross-cutting
+  files were deliberately left at the root.
 
 ## How the decisions connect
 
@@ -126,7 +144,8 @@ incident → [Wait-streak experiment](wait-streak-experiment) non-crisis applica
 passive or intrusive: [Structural authorization](../concepts/structural-authorization) concept
 → [Proactivity over caution](proactivity-over-caution) → [Trust tiers gate reads, not
 writes](trust-tiers-gate-reads-not-writes) → [Injection guard](../architecture/injection-guard-gap) wiring
-history.
+history → [Plugin surface safety wall](plugin-surface-safety-wall), the same discipline applied in
+advance to a not-yet-built extension surface.
 
 **The entity stance** — Why the Familiar is not a tool the user operates, but an entity the
 code helps serve: [Entity-as-subject](../concepts/entity-as-subject) concept → [Eury as the

@@ -14,7 +14,7 @@ import {
   buildStewardshipBlock,
   recordRoutineReview,
   readStewardshipState,
-} from '../stewardship.js';
+} from '../src/schedule/stewardship.js';
 
 // ── tierAtLeastModerate ────────────────────────────────────────────
 test('tierAtLeastModerate: true for moderate, high, severe', () => {

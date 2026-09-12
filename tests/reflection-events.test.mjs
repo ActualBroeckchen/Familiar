@@ -13,7 +13,7 @@ import os from 'os';
 // Point the module's LOGS_DIR at a temp dir by importing after chdir? The
 // module resolves LOGS_DIR from its own file location, so instead we test the
 // public behavior against the real logs dir with a unique marker and clean up.
-import { appendReflectionEvent, readReflectionEvents, REFLECTION_LOG_FILE } from '../reflection-events.js';
+import { appendReflectionEvent, readReflectionEvents, REFLECTION_LOG_FILE } from '../src/pondering/reflection-events.js';
 
 test('appends and reads back a heartbeat, newest first', async () => {
   const marker = `test-${Date.now()}-${Math.random().toString(36).slice(2)}`;

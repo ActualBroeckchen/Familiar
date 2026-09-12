@@ -48,6 +48,17 @@ const PROVIDER_MODELS = {
     'gemini-2.0-flash',
     'gemini-2.0-flash-lite',
   ],
+  // OpenAI-compatible cloud presets (model ids are hints — the field is free-text).
+  openai:      ['gpt-4o', 'gpt-4o-mini', 'o3-mini'],
+  openrouter:  ['openai/gpt-4o-mini', 'anthropic/claude-3.5-sonnet', 'deepseek/deepseek-chat', 'meta-llama/llama-3.3-70b-instruct'],
+  deepseek:    ['deepseek-chat', 'deepseek-reasoner'],
+  groq:        ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'],
+  mistral:     ['mistral-large-latest', 'mistral-small-latest'],
+  togetherai:  ['meta-llama/Llama-3.3-70B-Instruct-Turbo', 'deepseek-ai/DeepSeek-V3'],
+  // Local / custom — free-text model; these are just common hints.
+  ollama:      ['llama3.1', 'qwen2.5', 'mistral-nemo'],
+  lmstudio:    [],
+  custom:      [],
 };
 
 const PROVIDER_DEFAULT_MODEL = {
@@ -55,7 +66,29 @@ const PROVIDER_DEFAULT_MODEL = {
   zai:          'glm-4.7',
   'zai-coding': 'glm-4.7',
   google:       'gemini-2.5-flash',
+  openai:       'gpt-4o-mini',
+  openrouter:   'openai/gpt-4o-mini',
+  deepseek:     'deepseek-chat',
+  groq:         'llama-3.3-70b-versatile',
+  mistral:      'mistral-small-latest',
+  togetherai:   'deepseek-ai/DeepSeek-V3',
+  // ollama / lmstudio / custom: no default — the user names their local model.
 };
+
+// Providers whose endpoint URL comes from a user-supplied base URL, and whose
+// API key is optional (local servers ignore it). Mirrors providers.js
+// PROVIDER_KEYLESS / BASE_URL_PROVIDERS — keep in sync (classic script, no import).
+const BASE_URL_PROVIDERS = new Set(['custom', 'ollama', 'lmstudio']);
+const KEYLESS_PROVIDERS   = new Set(['custom', 'ollama', 'lmstudio']);
+function providerNeedsKey(p) { return !KEYLESS_PROVIDERS.has(p); }
+function providerNeedsBaseUrl(p) { return p === 'custom'; }
+// Client mirror of providers.js connectionReady: a usable connection has a model,
+// a base URL when one is required (custom), and a key unless the provider is keyless.
+function connUsable(c) {
+  if (!c || !(c.model ?? '').trim()) return false;
+  if (providerNeedsBaseUrl(c.provider) && !(c.baseUrl ?? '').trim()) return false;
+  return !!((c.apiKey ?? '').trim() || !providerNeedsKey(c.provider));
+}
 
 // ── ID generation ────────────────────────────────────────────
 function generateId() {
@@ -109,6 +142,7 @@ function buildSessionInfo() {
     messageCount: state.messages.length,
     provider:     state.provider,
     model:        state.model,
+    baseUrl:      state.baseUrl,
     elapsedMsSinceLastMessage: elapsedTime,
   };
 }
@@ -165,6 +199,7 @@ const SESSION_IDLE_MS = 3 * 60 * 60 * 1000;
 const state = {
   provider:          'nanogpt',
   apiKey:            '',
+  baseUrl:           '',
   model:             'gpt-4o-mini',
   streaming:         true,
   temperature:       0.8,
@@ -242,6 +277,9 @@ const state = {
   // PROTO_FAMILIAR_PONDERING_DISABLED=1 env var on the server.
   ponderingEnabled:        true,
   ponderingIntervalScale:  1,
+  // Chance [0,1] a free-cycle ponder hops to a related topic (a thread edge)
+  // instead of staying on its weighted pick — Settings → "Wander chance".
+  ponderThreadChance:      0.35,
   // Unattended web research on a ponder tick (§8.5). When on, the Familiar can
   // look a few things up mid-ponder instead of only recombining what it holds —
   // model NAMES what to look up, code does the bounded reads. Default ON; the
@@ -275,6 +313,11 @@ const state = {
   // wake-condition-gated turns to notice and act. Off via this toggle or
   // PROTO_FAMILIAR_NOTICING_DISABLED=1 on the server.
   noticingEnabled:         true,
+  // Fuzzy-attribution re-sweep: a noticing wake condition that resurfaces
+  // memories saved unsure who did what, for the Familiar to re-resolve. Rides
+  // the noticing loop (only active when noticing is on). Default-ON; off via
+  // this key or PROTO_FAMILIAR_ATTRIBUTION_RESWEEP_DISABLED=1 on the server.
+  noticingAttributionResweepEnabled: true,
   // Weather sense (W-A). Default-ON but inert until the ward adds a location.
   // Off via this toggle or PROTO_FAMILIAR_WEATHER_DISABLED=1 on the server.
   weatherEnabled:          true,
@@ -286,11 +329,21 @@ const state = {
   // memorizes past days that never ingested. Off via this toggle or the
   // PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1 env var on the server.
   memorySweepEnabled:      true,
+  sessionUnifyEnabled:     true,
   tomeGraduationEnabled:   false,   // opt-in: writes to the canonical self
   contentRegateEnabled:    false,   // opt-in: Familiar re-tags existing ward-private facts for content-sharing
   needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
   memoryLifecycleEnabled:  false,   // opt-in: distill-only memory lifecycle (adds patterns, never demotes)
   notificationSounds:      true,    // in-app chime on new messages (default on)
+  organStatusBlock:        'degraded', // organ-status readout in the context: 'degraded' (show only when one is down) | 'always' | 'off'
+  redditReaderEnabled:     true,     // read Reddit via its JSON API (browser is anti-bot-walled)
+  redditUserAgent:         '',       // optional descriptive UA for Reddit requests
+  redditClientId:          '',       // optional Reddit script-app OAuth credentials
+  redditClientSecret:      '',
+  redditUsername:          '',
+  redditPassword:          '',
+  cdpModeEnabled:          false,    // allow driving the ward's own Chrome over CDP (default OFF; inert without an arm)
+  videoFileApiEnabled:     false,    // longer clips → Gemini File API upload path (default OFF)
   // Context-sensitive tool surfacing (default OFF until behaviorally tested):
   // only core + triggered tool modules are advertised per turn; the Familiar
   // pulls anything else via request_tools. Sticky = extra turns a surfaced
@@ -392,6 +445,13 @@ const state = {
   // is server-synced so the gateway (which runs server-side) can read it.
   discordEnabled:    false,
   discordToolsEnabled: true,   // clearance-gated tools on Discord turns; default ON
+  // Custom Discord emotes viewed once, described, and rewritten to alt-text the
+  // Familiar can read (:tiredcat: [= a tired cat]). Default ON; off via this key
+  // or PROTO_FAMILIAR_DISCORD_EMOTES_DISABLED=1 on the server.
+  discordEmotesEnabled: true,
+  // Tenor/Giphy gifs (gifv embeds, served as mp4) become watchable media — the
+  // mp4 to a video-capable model, a still frame otherwise. Off → they stay a link.
+  discordGifEmbedsEnabled: true,
   discordBotToken:   '',
   discordWardUserId: '',
   // Auto-register a new guild channel as a Location the moment it's seen,
@@ -410,6 +470,16 @@ const state = {
   // ride live per request (older ones degrade to text stand-ins server-side).
   visionEnabled: true,
   visionMaxLiveImages: 4,
+  // Crisis ML classifier (docs/crisis-classifier-build-spec.md) — a raise-only
+  // second opinion on distress + a pro-suicide-register warning. Default ON, but
+  // INERT until a trained model artifact exists and the seam is wired (gated on
+  // ward sign-off). Kept here so the off-switches are declared with the feature.
+  crisisClassifierEnabled: true,
+  crisisNormalizationEnabled: true,
+  // An animated GIF rides as VIDEO to a video-capable model (so I see the
+  // motion), and as a still frame to an image-only one. Off → a gif is always a
+  // plain image. Also gated server-side by PROTO_FAMILIAR_GIF_AS_VIDEO_DISABLED.
+  gifAsVideoEnabled: true,
   // Image→threat scoring (ward-signed, §15.1): a distressing image I share can
   // raise my Familiar's concern, same as if I'd typed it. Raise-only for now.
   visionThreatScoring: true,
@@ -462,6 +532,10 @@ const state = {
   voiceProactiveGreetings: true,   // group calls: say a short hello aloud when someone joins (rides the next silence, stands down under distress). Default ON.
   voiceKeepAudio: false,           // §9: record a call to an audio asset (deliberate; default OFF)
   voiceSpeakerModel: 'campplus',   // §8: which speaker-embedding model — 'campplus' (default) | 'titanet-large' (opt-in upgrade)
+  // Offline ASR model for the accurate voice-note/call transcription pass —
+  // 'sensevoice' (default, bundled) | 'whisper' | 'parakeet' (opt-in upgrades,
+  // downloaded separately; falls back to SenseVoice until installed).
+  voiceOfflineAsrModel: 'sensevoice',
   // Transient (never synced/saved): images picked in the composer, awaiting send.
   pendingAttachments: [],
 
@@ -484,7 +558,7 @@ const state = {
 // sessionStartedAt, …) stays local — syncing it across devices would
 // be weird (e.g. device A's idle timer applying to device B).
 const SERVER_SYNCED_KEYS = [
-  'provider', 'apiKey', 'model', 'streaming', 'temperature', 'maxTokens',
+  'provider', 'apiKey', 'baseUrl', 'model', 'streaming', 'temperature', 'maxTokens',
   'userName', 'charName',
   'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
   'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns', 'toolRoundsPerTurn',
@@ -500,12 +574,14 @@ const SERVER_SYNCED_KEYS = [
   'browseSiteMode', 'browseSiteList', 'browseConfirmDomains', 'browseConfirmMode',
   'phylacteryConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
-  'ponderingEnabled', 'ponderingIntervalScale', 'followupsEnabled',
+  'ponderingEnabled', 'ponderingIntervalScale', 'ponderThreadChance', 'followupsEnabled',
   'ponderWebEnabled', 'ponderWebRoundsPerTick', 'ponderWebReadsPerDay',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
-  'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'weatherEnabled', 'weatherUnit',
+  'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'noticingAttributionResweepEnabled', 'weatherEnabled', 'weatherUnit',
   'intentionStandingPerPhase', 'intentionOpenOneShots',
-  'memorySweepEnabled', 'uiShowAdvanced',
+  'memorySweepEnabled', 'sessionUnifyEnabled', 'uiShowAdvanced', 'organStatusBlock',
+  'redditReaderEnabled', 'redditUserAgent', 'redditClientId', 'redditClientSecret', 'redditUsername', 'redditPassword',
+  'cdpModeEnabled', 'videoFileApiEnabled',
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'contentRegateEnabled', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
@@ -514,14 +590,15 @@ const SERVER_SYNCED_KEYS = [
   'gcalWriteEnabled', 'gcalWriteCommand',
   'gcalCalendarAttribution', 'gcalIcalUrls', 'gcalCliCalendars',
   'trustedContacts', 'userDiscordWebhook',
-  'discordEnabled', 'discordToolsEnabled', 'discordBotToken', 'discordWardUserId',
+  'discordEnabled', 'discordToolsEnabled', 'discordEmotesEnabled', 'discordGifEmbedsEnabled', 'discordBotToken', 'discordWardUserId',
   'villageAutoRegisterLocations',
   'featureConnections',
-  'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring',
+  'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring', 'gifAsVideoEnabled',
+  'crisisClassifierEnabled', 'crisisNormalizationEnabled',
   'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode', 'voiceCallOfflineTranscribe', 'voiceCallSettleMs',
   'mediaRetentionEnabled', 'voiceNoteRetentionDays', 'voiceEscalationFactor',
   'voiceGuestPolicy', 'voiceGuestThreshold', 'voiceGuestEnterSegments', 'voiceGuestExitSegments', 'voiceGuestExitQuietSec',
-  'voiceAudioTaggingEnabled', 'voiceProactiveJoin', 'voiceProactiveGreetings', 'voiceKeepAudio', 'voiceSpeakerModel',
+  'voiceAudioTaggingEnabled', 'voiceProactiveJoin', 'voiceProactiveGreetings', 'voiceKeepAudio', 'voiceSpeakerModel', 'voiceOfflineAsrModel',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -1005,11 +1082,17 @@ function loadPersisted() {
       || state.ponderingIntervalScale > 10) {
     state.ponderingIntervalScale = 1;
   }
+  if (typeof state.ponderThreadChance !== 'number'
+      || state.ponderThreadChance < 0
+      || state.ponderThreadChance > 1) {
+    state.ponderThreadChance = 0.35;
+  }
   if (typeof state.warmthEnabled !== 'boolean') state.warmthEnabled = true;
   if (typeof state.contactBaselinesEnabled !== 'boolean') state.contactBaselinesEnabled = true;
   if (typeof state.waitStreakEnabled !== 'boolean') state.waitStreakEnabled = true;
   if (typeof state.noticingEnabled !== 'boolean') state.noticingEnabled = true;
   if (typeof state.memorySweepEnabled !== 'boolean') state.memorySweepEnabled = true;
+  if (typeof state.sessionUnifyEnabled !== 'boolean') state.sessionUnifyEnabled = true;
   if (!Number.isInteger(state.warmthQuietHoursStart)
       || state.warmthQuietHoursStart < 0 || state.warmthQuietHoursStart > 23) {
     state.warmthQuietHoursStart = 23;
@@ -1019,6 +1102,9 @@ function loadPersisted() {
     state.warmthQuietHoursEnd = 8;
   }
   if (!Array.isArray(state.trustedContacts)) state.trustedContacts = [];
+  if (!['sensevoice', 'whisper', 'parakeet'].includes(state.voiceOfflineAsrModel)) {
+    state.voiceOfflineAsrModel = 'sensevoice';
+  }
   migrateLegacyConnection();
 }
 
@@ -1180,9 +1266,22 @@ async function syncSettingsFromServer() {
 async function autoResumeMostRecentSession() {
   let remote;
   try {
-    const r = await fetch('/api/active-session');
-    if (!r.ok) return;
-    remote = await r.json();
+    // Prefer the ward-private "current conversation" pointer (the one shared with
+    // the Discord DM) so opening the web adopts the unified session — including
+    // turns just sent on Discord. Fall back to the raw most-recent session when
+    // unification is off or no pointer is set yet. The scoped pointer never
+    // surfaces a villager DM / guild room (privacy).
+    if (sessionUnifyOn()) {
+      try {
+        const ar = await fetch('/api/session/active');
+        if (ar.ok) remote = await ar.json();
+      } catch { /* fall through to the unscoped endpoint */ }
+    }
+    if (!remote?.sessionId) {
+      const r = await fetch('/api/active-session');
+      if (!r.ok) return;
+      remote = await r.json();
+    }
   } catch { return; }
 
   if (!remote?.sessionId) return;
@@ -1235,13 +1334,15 @@ async function autoResumeMostRecentSession() {
  * so the "primary connection" abstraction has something to point at.
  */
 function migrateLegacyConnection() {
-  if (state.connections.length === 0 && (state.apiKey ?? '').trim() && (state.model ?? '').trim()) {
+  if (state.connections.length === 0 && connUsable({ provider: state.provider, apiKey: state.apiKey, baseUrl: state.baseUrl, model: state.model })) {
     const conn = {
       id:       generateId(),
       name:     'Primary',
       provider: state.provider,
       apiKey:   state.apiKey,
+      baseUrl:   state.baseUrl,
       model:    state.model,
+      baseUrl:  state.baseUrl,
     };
     state.connections = [conn];
     state.primaryConnectionId = conn.id;
@@ -1292,16 +1393,16 @@ function getConnectionSequence() {
   const primary = getPrimaryConnection();
   if (primary) {
     seq.push(primary);
-  } else if ((state.apiKey ?? '').trim() && (state.model ?? '').trim()) {
+  } else if (connUsable({ provider: state.provider, apiKey: state.apiKey, baseUrl: state.baseUrl, model: state.model })) {
     seq.push({
       id: '_live', name: 'Current fields',
-      provider: state.provider, apiKey: state.apiKey, model: state.model,
+      provider: state.provider, apiKey: state.apiKey, baseUrl: state.baseUrl, model: state.model,
     });
   }
   for (const id of state.fallbackConnectionIds) {
     if (id === state.primaryConnectionId) continue;
     const c = state.connections.find(x => x.id === id);
-    if (c && c.provider && (c.apiKey ?? '').trim() && (c.model ?? '').trim()) {
+    if (c && c.provider && connUsable(c)) {
       seq.push(c);
     }
   }
@@ -1336,18 +1437,21 @@ function syncFieldsToPrimaryConnection() {
   conn.provider = state.provider;
   conn.apiKey   = state.apiKey;
   conn.model    = state.model;
+  conn.baseUrl  = state.baseUrl;
 }
 
 function saveNewConnection(name) {
   const trimmed = (name || '').trim();
   if (!trimmed) return null;
-  if (!(state.apiKey ?? '').trim() || !(state.model ?? '').trim()) return null;
+  if (!connUsable({ provider: state.provider, apiKey: state.apiKey, baseUrl: state.baseUrl, model: state.model })) return null;
   const conn = {
     id:       generateId(),
     name:     trimmed,
     provider: state.provider,
     apiKey:   state.apiKey,
+    baseUrl:   state.baseUrl,
     model:    state.model,
+    baseUrl:  state.baseUrl,
   };
   state.connections.push(conn);
   if (!state.primaryConnectionId) state.primaryConnectionId = conn.id;
@@ -1495,6 +1599,58 @@ function renderConnectionsList() {
       if (c) { c.visionCapable = e.target.value; saveSettings(); }
     });
     info.appendChild(visRow);
+
+    // Video capability tri-state — its own axis, because far fewer models take a
+    // live video part than take images, and a wrong Auto attempt ships megabytes
+    // before the provider rejects it. Auto only says yes for families we know
+    // (Gemini, Qwen-VL, GLM-V/flash, explicit -video); NanoGPT proxies a huge
+    // model space no heuristic can cover, so this is how the ward pins any
+    // video-capable connection they've confirmed (GLM 5.3 Flash, a NanoGPT video
+    // model, …). Stored on the connection, which already syncs.
+    const vidRow = document.createElement('div');
+    vidRow.className = 'conn-vision';
+    const dcur = conn.videoCapable === 'yes' || conn.videoCapable === 'no' ? conn.videoCapable : 'auto';
+    const dId = `conn-video-${conn.id}`;
+    vidRow.innerHTML =
+      `<label for="${dId}">Can watch video?</label>` +
+      `<select id="${dId}" class="ke-select">` +
+      `<option value="auto"${dcur === 'auto' ? ' selected' : ''}>Auto</option>` +
+      `<option value="yes"${dcur === 'yes' ? ' selected' : ''}>Yes</option>` +
+      `<option value="no"${dcur === 'no' ? ' selected' : ''}>No</option>` +
+      `</select>`;
+    vidRow.querySelector('select').addEventListener('change', (e) => {
+      const c = state.connections.find(x => x.id === conn.id);
+      if (c) { c.videoCapable = e.target.value; saveSettings(); }
+    });
+    info.appendChild(vidRow);
+
+    // Reasoning effort (always-on-thinking models like GLM-5.3). Default = the
+    // app's sensible choice (low for z.ai reasoning models, nothing sent
+    // elsewhere); Low/High/Max override it; Off never sends it. Stored on the
+    // connection, which already syncs. Set this to Low on a GLM-5.3 connection
+    // if replies come back as raw "thinking" — 5.3 reasons at max by default.
+    const reRow = document.createElement('div');
+    reRow.className = 'conn-vision';   // reuse the same compact row styling
+    const rcur = ['low', 'high', 'max', 'off'].includes(conn.reasoningEffort) ? conn.reasoningEffort : '';
+    const rId = `conn-effort-${conn.id}`;
+    reRow.innerHTML =
+      `<label for="${rId}">Reasoning effort</label>` +
+      `<select id="${rId}" class="ke-select">` +
+      `<option value=""${rcur === ''    ? ' selected' : ''}>Default</option>` +
+      `<option value="low"${rcur === 'low'  ? ' selected' : ''}>Low</option>` +
+      `<option value="high"${rcur === 'high' ? ' selected' : ''}>High</option>` +
+      `<option value="max"${rcur === 'max'  ? ' selected' : ''}>Max</option>` +
+      `<option value="off"${rcur === 'off'  ? ' selected' : ''}>Off</option>` +
+      `</select>`;
+    reRow.querySelector('select').addEventListener('change', (e) => {
+      const c = state.connections.find(x => x.id === conn.id);
+      if (c) {
+        if (e.target.value) c.reasoningEffort = e.target.value;
+        else delete c.reasoningEffort;   // Default = unset
+        saveSettings();
+      }
+    });
+    info.appendChild(reRow);
 
     // Actions column
     const actions = document.createElement('div');
@@ -1648,6 +1804,89 @@ async function saveToServer() {
   } catch { /* non-critical */ }
 }
 
+// ── Live session sync (composer-safe) ────────────────────────────────
+// The ward's web chat and their Discord DM are ONE session (auto-unify). This
+// poller pulls in turns that arrived on the OTHER surface and APPENDS them.
+//
+// ⚠️ HARD INVARIANT: it NEVER re-renders or touches the composer — it does not
+// read, write, focus, or clear #user-input, and does not rebuild the input area.
+// It only appends bubbles to #messages (or, for a rare tool-carrying turn,
+// re-renders the message LIST — still never the composer). So typing, the caret,
+// and text selection in the input are never disturbed.
+const SESSION_POLL_MS = 3000;
+let _sessionPollTimer = null;
+
+function sessionUnifyOn() { return state.sessionUnifyEnabled !== false; }
+
+function isNearBottom() {
+  const s = $('messages-scroller');
+  if (!s) return true;
+  return s.scrollHeight - s.scrollTop - s.clientHeight < 80;
+}
+
+// Claim the current session as the ward's active private conversation, so their
+// next Discord DM continues THIS one. Gated on the unify toggle; fire-and-forget.
+async function claimActiveSession(sessionId) {
+  if (!sessionUnifyOn() || !sessionId) return;
+  try {
+    await fetch('/api/session/active', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+    });
+  } catch { /* non-critical */ }
+}
+
+async function pollSessionDelta() {
+  // Guards: a session must be open, the tab visible, and NOT mid-send/stream
+  // (the typing indicator is the in-flight signal). id-dedupe below is the belt.
+  if (!state.sessionId) return;
+  if (document.hidden) return;
+  const typing = $('typing-indicator');
+  if (typing && !typing.classList.contains('hidden')) return;
+
+  let data;
+  try {
+    const r = await fetch(`/api/logs/${encodeURIComponent(state.sessionId)}?afterCount=${state.messages.length}`);
+    if (!r.ok) return;
+    data = await r.json();
+  } catch { return; }
+  const incoming = Array.isArray(data?.newMessages) ? data.newMessages : [];
+  if (!incoming.length) return;
+
+  const known = new Set(state.messages.map(m => m.id).filter(Boolean));
+  // Proactive turns (server-appended reminders / reach-outs / triage — id prefix
+  // `outbox:`) are owned by the outbox-injection path (fetchOutbox → it renders
+  // them with the ping + ack). Skipping them here is what stops the same message
+  // showing twice on web now that the server also records it in the session log.
+  const fresh = incoming.filter(m =>
+    !(m.id && known.has(m.id)) &&
+    !(typeof m.id === 'string' && m.id.startsWith('outbox:')));
+  if (!fresh.length) return;
+
+  const atBottom = isNearBottom();
+  const startIdx = state.messages.length;
+  for (const m of fresh) state.messages.push(m);
+
+  // Plain turns append in place; a rare tool-carrying turn needs the tool-block
+  // layout, so re-render the message LIST (still never the composer).
+  const needsFull = fresh.some(m => m.role === 'tool' || (Array.isArray(m.tool_calls) && m.tool_calls.length));
+  if (needsFull) {
+    renderAllMessages();
+  } else {
+    fresh.forEach((m, k) => appendMessageEl(m, startIdx + k));
+    if (atBottom) scrollToBottom();
+  }
+  // The appended turns are already ON the server (that's where they came from),
+  // so persist to localStorage only — no server POST, no write-back loop.
+  try { localStorage.setItem('pf_history', JSON.stringify(state.messages)); } catch { /* ignore */ }
+  refreshTopicGutter();
+}
+
+function startSessionPoller() {
+  if (_sessionPollTimer) return;
+  _sessionPollTimer = setInterval(() => { pollSessionDelta(); }, SESSION_POLL_MS);
+}
+
 // ── Macro substitution ──────────────────────────────────────────
 /**
  * Format a millisecond duration as a compact human string: "47s", "5m",
@@ -1767,7 +2006,26 @@ function applyNameVars(text) {
     .replace(/\{\{timeSinceLastSession\}\}/gi, () => {
       const ms = timeSinceLastSessionEnded();
       return ms !== null ? formatDuration(ms) : 'no prior session';
-    });
+    })
+    // Live-settings macros for tome content (the self-documenting manual tome).
+    // ⚠️ PARITY: the names + on/off logic mirror TOME_MACROS in tome-macros.js
+    // (server); keep the two in sync — a test pins the shared name set.
+    .replace(/\{\{\s*visionActive\s*\}\}/gi,    () => (state.visionEnabled    !== false ? 'on' : 'off'))
+    .replace(/\{\{\s*videoActive\s*\}\}/gi,     () => (state.videoEnabled     !== false ? 'on' : 'off'))
+    .replace(/\{\{\s*voiceActive\s*\}\}/gi,     () => (state.voiceEnabled     === true  ? 'on' : 'off'))
+    .replace(/\{\{\s*discordActive\s*\}\}/gi,   () => (state.discordEnabled   === true  ? 'on' : 'off'))
+    .replace(/\{\{\s*ponderingActive\s*\}\}/gi, () => (state.ponderingEnabled !== false ? 'on' : 'off'))
+    .replace(/\{\{\s*warmthActive\s*\}\}/gi,    () => (state.warmthEnabled    !== false ? 'on' : 'off'))
+    .replace(/\{\{\s*noticingActive\s*\}\}/gi,  () => (state.noticingEnabled  !== false ? 'on' : 'off'))
+    .replace(/\{\{\s*calendarActive\s*\}\}/gi,  () => (state.gcalEnabled      === true  ? 'on' : 'off'))
+    .replace(/\{\{\s*browserActive\s*\}\}/gi,   () => (state.browseEnabled    === true  ? 'on' : 'off'))
+    .replace(/\{\{\s*charName\s*\}\}/gi,         () => (state.charName || 'the Familiar'))
+    .replace(/\{\{\s*userName\s*\}\}/gi,         () => (state.userName || 'my human'))
+    .replace(/\{\{\s*activeModel\s*\}\}/gi,      () => {
+      const c = (state.connections || []).find(x => x.id === state.primaryConnectionId);
+      return c?.name || c?.model || 'not set';
+    })
+    .replace(/\{\{\s*scanDepth\s*\}\}/gi,        () => String(state.tomeScanDepth ?? 4));
 }
 
 // ── Message building ─────────────────────────────────────────────
@@ -1950,12 +2208,20 @@ function _buildApiMessagesInner(userInput) {
 }
 
 // ── Markdown rendering ───────────────────────────────────────────
+// A complete HTML escaper — the five characters that carry meaning in HTML
+// markup. `'` is included so a value placed in a SINGLE-quoted attribute can't
+// break out either (today every attribute here is double-quoted, so it's
+// belt-and-suspenders; a proper escaper covers both quote styles so a future
+// single-quoted attribute is safe by default). Used only to build HTML strings
+// (never .textContent), so the entities are decoded back on parse — a value
+// round-trips unchanged through an input/textarea in every browser.
 function esc(str) {
   return str
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /**
@@ -2583,27 +2849,32 @@ function renderAllMessages() {
     // Orphaned tool result (shouldn't normally appear) — skip
     if (msg.role === 'tool') { i++; continue; }
 
-    // Strip the leading [HH:MM] tag from the displayed content. The tag
-    // is metadata for the LLM (added by toApiMessage so the Familiar
-    // perceives per-message timing) and the LLM occasionally echoes it
-    // back into responses; the chat UI already shows times via its own
-    // timestamp element, so the tag in the message body is just noise
-    // to the human reader. Memorization and RAG still see the raw
-    // content via state.messages, so they keep the temporal signal.
-    const displayContent = stripDisplayTimestamps(msg.content ?? '');
-    const html = msg.role === 'user'
-      ? esc(displayContent).replace(/\n/g, '<br>')
-      : renderMarkdown(displayContent);
-    const { el, copyBtn, speakBtn } = createMessageEl(msg.role, html, msg.timestamp, msg.attachments, msg.speaker);
-    el.dataset.msgIndex = String(i);
-    const capturedContent = msg.content;
-    wireCopyButton(copyBtn, () => capturedContent);
-    wireSpeakButton(speakBtn, () => capturedContent);
-    container.appendChild(el);
+    appendMessageEl(msg, i);
     i++;
   }
   refreshTopicGutter();
   scrollToBottom();
+}
+
+// Render ONE plain (user/assistant/error) message and append it to #messages.
+// The single place that turns a stored message into a bubble — reused by the
+// full render AND the live poller, so an appended Discord/other-surface turn
+// looks identical to one rendered on load. Appends only; never touches the
+// composer. Strips the leading [HH:MM] tag (LLM-perceived timing metadata the
+// UI shows via its own timestamp element); state.messages keeps the raw content
+// so memorization/RAG still see the temporal signal.
+function appendMessageEl(msg, index) {
+  const displayContent = stripDisplayTimestamps(msg.content ?? '');
+  const html = msg.role === 'user'
+    ? esc(displayContent).replace(/\n/g, '<br>')
+    : renderMarkdown(displayContent);
+  const { el, copyBtn, speakBtn } = createMessageEl(msg.role, html, msg.timestamp, msg.attachments, msg.speaker);
+  if (Number.isInteger(index)) el.dataset.msgIndex = String(index);
+  const capturedContent = msg.content;
+  wireCopyButton(copyBtn, () => capturedContent);
+  wireSpeakButton(speakBtn, () => capturedContent);
+  $('messages').appendChild(el);
+  return el;
 }
 
 // ── API communication ────────────────────────────────────────────
@@ -2702,23 +2973,66 @@ async function uploadImage(file) {
   return res.json();
 }
 
+const VIDEO_INLINE_MAX_CLIENT = 20 * 1024 * 1024;         // media.js VIDEO_MAX_BYTES (inline cap)
+const VIDEO_STORE_MAX_CLIENT  = 300 * 1024 * 1024;        // media.js VIDEO_STORE_MAX_BYTES (File-API path)
+
+// Recognise a media file by MIME OR filename extension — some video files
+// (.mov/.mkv especially) arrive with an empty or odd `type` on paste/drop, so a
+// MIME-only check would silently ignore them. Extension → a real video MIME so
+// the raw upload still carries a Content-Type the store accepts.
+const VIDEO_EXT_MIME = { mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', qt: 'video/quicktime', mkv: 'video/x-matroska', mpg: 'video/mpeg', mpeg: 'video/mpeg', '3gp': 'video/3gpp' };
+function videoMimeFor(file) {
+  const t = (file?.type || '').toLowerCase();
+  if (t.startsWith('video/')) return t;
+  const ext = (/\.([a-z0-9]+)$/i.exec(file?.name || '')?.[1] || '').toLowerCase();
+  return VIDEO_EXT_MIME[ext] || '';
+}
+function isImageFile(file) { return (file?.type || '').startsWith('image/') || /\.(jpe?g|png|webp|gif)$/i.test(file?.name || ''); }
+function isVideoFile(file) { return !!videoMimeFor(file); }
+function isMediaFile(file) { return !!file && (isImageFile(file) || isVideoFile(file)); }
+
+async function uploadVideo(file) {
+  const cap = state.videoFileApiEnabled ? VIDEO_STORE_MAX_CLIENT : VIDEO_INLINE_MAX_CLIENT;
+  if (file.size > cap) {
+    throw new Error(state.videoFileApiEnabled
+      ? 'that clip is over ~300 MB — too big even for the upload path'
+      : 'that clip is over ~20 MB — send a shorter one, or turn on “Send longer clips to Gemini” in Settings');
+  }
+  const label = (file.name && !/^(video|clipboard)\.?\w*$/i.test(file.name)) ? file.name : '';
+  const qs = new URLSearchParams();
+  if (label) qs.set('label', label);
+  if (state.sessionId) qs.set('sessionId', state.sessionId);
+  const res = await fetch(`/api/media${qs.toString() ? `?${qs}` : ''}`, {
+    method: 'POST',
+    headers: { 'Content-Type': videoMimeFor(file) || file.type },  // ext-derived MIME for empty-type clips (.mov/.mkv)
+    body: file,   // video rides raw — no canvas downscale
+  });
+  if (!res.ok) {
+    let msg = `upload failed (${res.status})`;
+    try { msg = (await res.json())?.error || msg; } catch { /* keep */ }
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
 async function addPendingImages(fileList) {
   if (!visionActive()) return;
   state.pendingAttachments ||= [];
-  const files = Array.from(fileList || []).filter(f => f && f.type && f.type.startsWith('image/'));
+  const files = Array.from(fileList || []).filter(isMediaFile);
   for (const file of files) {
     if (state.pendingAttachments.length >= VISION_MAX_PER_MESSAGE) {
-      appendErrorMessage(`I can hold up to ${VISION_MAX_PER_MESSAGE} images per message.`);
+      appendErrorMessage(`I can hold up to ${VISION_MAX_PER_MESSAGE} items per message.`);
       break;
     }
+    const isVideo = isVideoFile(file);
     try {
-      const meta = await uploadImage(file);
+      const meta = isVideo ? await uploadVideo(file) : await uploadImage(file);
       if (meta?.id) {
-        state.pendingAttachments.push({ id: meta.slugs?.[0] || meta.id, sha: meta.id });
+        state.pendingAttachments.push({ id: meta.slugs?.[0] || meta.id, sha: meta.id, kind: meta.kind || (isVideo ? 'video' : 'image'), bytes: meta.bytes });
         renderAttachStrip();
       }
     } catch (err) {
-      appendErrorMessage(`Couldn't attach that image: ${err.message}`);
+      appendErrorMessage(`Couldn't attach that ${isVideo ? 'video' : 'image'}: ${err.message}`);
     }
   }
 }
@@ -2733,6 +3047,46 @@ function clearPendingAttachments() {
   renderAttachStrip();
 }
 
+// Have the Familiar watch a full (too-big-to-inline) video clip via the Gemini
+// File API (docs/video-build-spec.md §4). Isolated from the normal send path:
+// it hits /api/video-understand and drops the answer into the chat as a turn.
+async function askAboutClip(a) {
+  const gemini = (Array.isArray(state.connections) ? state.connections : [])
+    .find(c => /gemini/i.test(c.model || '') && /^(google|gemini)$/i.test(c.provider || ''));
+  const conn = gemini || (typeof getPrimaryConnection === 'function' ? getPrimaryConnection() : null);
+  if (!conn?.apiKey) { appendErrorMessage('I need a Google Gemini connection (with an API key) to watch a long clip.'); return; }
+  const input = $('user-input');
+  const promptText = (input?.value || '').trim();
+  const waiting = createMessageEl('assistant', '🎬 Watching the clip…');
+  $('messages').appendChild(waiting.el);
+  scrollToBottom();
+  try {
+    const r = await (await fetch('/api/video-understand', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assetId: a.sha || a.id, prompt: promptText, provider: conn.provider, model: conn.model, apiKey: conn.apiKey, baseUrl: conn.baseUrl }),
+    })).json();
+    waiting.el.remove();
+    if (!r?.ok) { appendErrorMessage(r?.error || "I couldn't watch that clip."); return; }
+    const ts = new Date().toISOString();
+    const userMsg = { role: 'user', content: promptText || '(watch this clip)', timestamp: ts, id: generateId(), attachments: [{ id: a.id, sha: a.sha, kind: 'video' }] };
+    const asstMsg = { role: 'assistant', content: r.text, timestamp: ts, id: generateId() };
+    state.messages.push(userMsg, asstMsg);
+    const uEl = createMessageEl('user', esc(userMsg.content).replace(/\n/g, '<br>'), ts, userMsg.attachments);
+    $('messages').appendChild(uEl.el);
+    const aEl = createMessageEl('assistant', renderMarkdown(r.text), ts);
+    if (aEl.copyBtn) wireCopyButton(aEl.copyBtn, () => r.text);
+    if (aEl.speakBtn) wireSpeakButton(aEl.speakBtn, () => r.text);
+    $('messages').appendChild(aEl.el);
+    saveHistory();
+    removePendingAttachment(a.id);
+    if (input) input.value = '';
+    scrollToBottom();
+  } catch (err) {
+    waiting.el.remove();
+    appendErrorMessage(`I couldn't watch that clip: ${err.message}`);
+  }
+}
+
 function renderAttachStrip() {
   const strip = $('attach-strip');
   if (!strip) return;
@@ -2744,9 +3098,11 @@ function renderAttachStrip() {
     if (a.kind === 'audio') { strip.appendChild(renderVoiceChip(a)); continue; }
     const chip = document.createElement('div');
     chip.className = 'attach-chip';
-    const img = document.createElement('img');
+    const isVideo = a.kind === 'video';
+    const img = document.createElement(isVideo ? 'video' : 'img');
     img.src = `/api/media/${encodeURIComponent(a.id)}`;
-    img.alt = 'pending image';
+    if (isVideo) { img.muted = true; img.setAttribute('playsinline', ''); img.preload = 'metadata'; }
+    else img.alt = 'pending image';
     const rm = document.createElement('button');
     rm.type = 'button';
     rm.className = 'attach-chip-remove';
@@ -2764,6 +3120,17 @@ function renderAttachStrip() {
     chip.appendChild(img);
     chip.appendChild(rm);
     chip.appendChild(tag);
+    // A clip too big to inline gets a "watch full clip" action (Gemini File API).
+    if (isVideo && state.videoFileApiEnabled && (a.bytes || 0) > VIDEO_INLINE_MAX_CLIENT) {
+      const watch = document.createElement('button');
+      watch.type = 'button';
+      watch.className = 'attach-chip-tag';
+      watch.setAttribute('aria-label', 'Have my Familiar watch the whole clip (Gemini)');
+      watch.title = 'Watch full clip (Gemini File API)';
+      watch.textContent = '🎬';
+      watch.addEventListener('click', (e) => { e.stopPropagation(); askAboutClip(a); });
+      chip.appendChild(watch);
+    }
     if (a.tagLabel) {
       const badge = document.createElement('span');
       badge.className = 'attach-chip-badge';
@@ -3202,7 +3569,7 @@ async function sendMessage(userInput) {
   if (!userInput && !attachments.length) return;
   clearPendingAttachments();
 
-  if (!state.apiKey.trim()) {
+  if (providerNeedsKey(state.provider) && !state.apiKey.trim()) {
     appendErrorMessage('Enter your API key in the Settings panel first.');
     return;
   }
@@ -3237,6 +3604,9 @@ async function sendMessage(userInput) {
 
   // Optimistic UI
   appendUserMessage(userInput, userTimestamp, attachments);
+  // Claim this as the ward's active private conversation, so their next Discord
+  // DM continues THIS session (auto-unify). Fire-and-forget; gated on the toggle.
+  claimActiveSession(state.sessionId);
   setInputLocked(true);
   setTyping(true);
   setStatus('busy');
@@ -3408,7 +3778,7 @@ async function generateAndStoreHandoff(messages, sessionId) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        provider: conn.provider, apiKey: conn.apiKey, model: conn.model,
+        provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
         messages: [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: recent },
@@ -3463,7 +3833,9 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
     body: JSON.stringify({
       provider:    conn.provider,
       apiKey:      conn.apiKey,
+      baseUrl:     conn.baseUrl,   // custom/local endpoint (resolved server-side)
       model:       conn.model,
+      reasoningEffort: conn.reasoningEffort,   // server resolves (default low for z.ai reasoning models)
       messages:    apiMessages,
       stream:      true,
       temperature: state.temperature,
@@ -3678,7 +4050,9 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
     body: JSON.stringify({
       provider:    conn.provider,
       apiKey:      conn.apiKey,
+      baseUrl:     conn.baseUrl,   // custom/local endpoint (resolved server-side)
       model:       conn.model,
+      reasoningEffort: conn.reasoningEffort,   // server resolves (default low for z.ai reasoning models)
       messages:    apiMessages,
       stream:      false,
       temperature: state.temperature,
@@ -3909,6 +4283,7 @@ function readSettingsFromUI() {
   state.provider          = $('provider-select').value;
   state.apiKey            = $('api-key').value;
   rememberProviderApiKey(state.provider, state.apiKey);
+  if ($('base-url-input')) state.baseUrl = $('base-url-input').value.trim();
   state.model             = $('model-input').value.trim();
   state.streaming         = $('streaming-toggle').checked;
   state.temperature       = parseFloat($('temperature').value);
@@ -3922,6 +4297,10 @@ function readSettingsFromUI() {
   if ($('pondering-scale')) {
     const n = parseFloat($('pondering-scale').value);
     state.ponderingIntervalScale = Number.isFinite(n) && n >= 1 && n <= 10 ? n : 1;
+  }
+  if ($('pondering-thread-chance')) {
+    const n = parseInt($('pondering-thread-chance').value, 10);
+    state.ponderThreadChance = Number.isFinite(n) && n >= 0 && n <= 100 ? n / 100 : 0.35;
   }
   if ($('ponder-web-toggle')) state.ponderWebEnabled = $('ponder-web-toggle').checked;
   if ($('ponder-web-reads')) {
@@ -3938,7 +4317,17 @@ function readSettingsFromUI() {
   if ($('browse-site-list')) state.browseSiteList = $('browse-site-list').value;
   if ($('browse-confirm-domains')) state.browseConfirmDomains = $('browse-confirm-domains').value;
   if ($('browse-confirm-mode')) state.browseConfirmMode = $('browse-confirm-mode').value;
+  if ($('organ-status-block')) state.organStatusBlock = $('organ-status-block').value;
+  if ($('reddit-reader-enabled')) state.redditReaderEnabled = $('reddit-reader-enabled').checked;
+  if ($('reddit-user-agent'))    state.redditUserAgent    = $('reddit-user-agent').value.trim();
+  if ($('reddit-client-id'))     state.redditClientId     = $('reddit-client-id').value.trim();
+  if ($('reddit-client-secret')) state.redditClientSecret = $('reddit-client-secret').value.trim();
+  if ($('reddit-username'))       state.redditUsername    = $('reddit-username').value.trim();
+  if ($('reddit-password'))       state.redditPassword    = $('reddit-password').value;
+  if ($('cdp-mode-enabled'))      state.cdpModeEnabled    = $('cdp-mode-enabled').checked;
+  if ($('video-fileapi-enabled')) state.videoFileApiEnabled = $('video-fileapi-enabled').checked;
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
+  if ($('session-unify-toggle')) state.sessionUnifyEnabled = $('session-unify-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('content-regate-toggle')) state.contentRegateEnabled = $('content-regate-toggle').checked;
   if ($('needs-tracking-toggle')) state.needsTrackingEnabled = $('needs-tracking-toggle').checked;
@@ -3966,8 +4355,13 @@ function readSettingsFromUI() {
     if (was !== state.visionEnabled) window.dispatchEvent(new Event('vision-enabled-changed'));
   }
   if ($('vision-threat-toggle')) state.visionThreatScoring = $('vision-threat-toggle').checked;
+  if ($('crisis-classifier-toggle')) state.crisisClassifierEnabled = $('crisis-classifier-toggle').checked;
   if ($('voice-call-threat-toggle')) state.voiceThreatScoring = $('voice-call-threat-toggle').checked;
   if ($('voice-call-lang') && $('voice-call-lang').value) state.voiceAsrLanguage = $('voice-call-lang').value;
+  if ($('voice-offline-asr-model')) {
+    state.voiceOfflineAsrModel = ['sensevoice', 'whisper', 'parakeet'].includes($('voice-offline-asr-model').value)
+      ? $('voice-offline-asr-model').value : 'sensevoice';
+  }
   if ($('voice-call-mode')) state.voiceCallMode = $('voice-call-mode').value === 'open' ? 'open' : 'push';
   if ($('voice-call-offline-toggle')) state.voiceCallOfflineTranscribe = $('voice-call-offline-toggle').checked;
   if ($('voice-proactive-join-toggle')) state.voiceProactiveJoin = $('voice-proactive-join-toggle').checked;
@@ -4106,11 +4500,18 @@ function setIfNotFocused(el, prop, value) {
 function writeSettingsToUI() {
   setIfNotFocused($('provider-select'), 'value',   state.provider);
   setIfNotFocused($('api-key'),         'value',   state.apiKey);
+  if ($('base-url-input')) setIfNotFocused($('base-url-input'), 'value', state.baseUrl || '');
+  updateProviderFieldVisibility(state.provider);
   setIfNotFocused($('model-input'),     'value',   state.model);
   setIfNotFocused($('streaming-toggle'),'checked', state.streaming);
   if ($('handoff-toggle')) setIfNotFocused($('handoff-toggle'), 'checked', state.handoffEnabled !== false);
   if ($('pondering-toggle')) setIfNotFocused($('pondering-toggle'), 'checked', state.ponderingEnabled !== false);
   if ($('pondering-scale'))  setIfNotFocused($('pondering-scale'),  'value',   state.ponderingIntervalScale ?? 1);
+  if ($('pondering-thread-chance')) {
+    const pct = Math.round((state.ponderThreadChance ?? 0.35) * 100);
+    setIfNotFocused($('pondering-thread-chance'), 'value', pct);
+    if ($('pondering-thread-chance-val')) $('pondering-thread-chance-val').textContent = `${pct}%`;
+  }
   if ($('ponder-web-toggle')) setIfNotFocused($('ponder-web-toggle'), 'checked', state.ponderWebEnabled !== false);
   if ($('ponder-web-reads'))  setIfNotFocused($('ponder-web-reads'),  'value',   state.ponderWebReadsPerDay ?? 12);
   if ($('warmth-toggle'))      setIfNotFocused($('warmth-toggle'),      'checked', state.warmthEnabled !== false);
@@ -4123,10 +4524,20 @@ function writeSettingsToUI() {
   if ($('browse-site-list'))   setIfNotFocused($('browse-site-list'),   'value',   state.browseSiteList || '');
   if ($('browse-confirm-domains')) setIfNotFocused($('browse-confirm-domains'), 'value', state.browseConfirmDomains || '');
   if ($('browse-confirm-mode')) setIfNotFocused($('browse-confirm-mode'), 'value', state.browseConfirmMode || 'refuse');
+  if ($('organ-status-block')) setIfNotFocused($('organ-status-block'), 'value', state.organStatusBlock || 'degraded');
+  if ($('reddit-reader-enabled')) setIfNotFocused($('reddit-reader-enabled'), 'checked', state.redditReaderEnabled !== false);
+  if ($('reddit-user-agent'))    setIfNotFocused($('reddit-user-agent'),    'value', state.redditUserAgent || '');
+  if ($('reddit-client-id'))     setIfNotFocused($('reddit-client-id'),     'value', state.redditClientId || '');
+  if ($('reddit-client-secret')) setIfNotFocused($('reddit-client-secret'), 'value', state.redditClientSecret || '');
+  if ($('reddit-username'))       setIfNotFocused($('reddit-username'),      'value', state.redditUsername || '');
+  if ($('reddit-password'))       setIfNotFocused($('reddit-password'),      'value', state.redditPassword || '');
+  if ($('cdp-mode-enabled'))      setIfNotFocused($('cdp-mode-enabled'),     'checked', state.cdpModeEnabled === true);
+  if ($('video-fileapi-enabled')) setIfNotFocused($('video-fileapi-enabled'), 'checked', state.videoFileApiEnabled === true);
   { const m = state.browseSiteMode || 'open'; const show = m !== 'open';
     if ($('browse-site-list')) $('browse-site-list').style.display = show ? '' : 'none';
     if ($('browse-site-list-hint')) $('browse-site-list-hint').style.display = show ? '' : 'none'; }
   if ($('memory-sweep-toggle')) setIfNotFocused($('memory-sweep-toggle'), 'checked', state.memorySweepEnabled !== false);
+  if ($('session-unify-toggle')) setIfNotFocused($('session-unify-toggle'), 'checked', state.sessionUnifyEnabled !== false);
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
   if ($('content-regate-toggle')) setIfNotFocused($('content-regate-toggle'), 'checked', state.contentRegateEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
@@ -4151,8 +4562,10 @@ function writeSettingsToUI() {
   if ($('vision-enabled-toggle')) setIfNotFocused($('vision-enabled-toggle'), 'checked', state.visionEnabled !== false);
   if ($('read-aloud-default-toggle')) setIfNotFocused($('read-aloud-default-toggle'), 'checked', state.readAloudByDefault === true);
   if ($('vision-threat-toggle')) setIfNotFocused($('vision-threat-toggle'), 'checked', state.visionThreatScoring !== false);
+  if ($('crisis-classifier-toggle')) setIfNotFocused($('crisis-classifier-toggle'), 'checked', state.crisisClassifierEnabled !== false);
   if ($('voice-call-threat-toggle')) setIfNotFocused($('voice-call-threat-toggle'), 'checked', state.voiceThreatScoring !== false);
   if ($('voice-call-lang')) setIfNotFocused($('voice-call-lang'), 'value', state.voiceAsrLanguage ?? 'en');
+  if ($('voice-offline-asr-model')) setIfNotFocused($('voice-offline-asr-model'), 'value', state.voiceOfflineAsrModel ?? 'sensevoice');
   if ($('voice-call-mode')) setIfNotFocused($('voice-call-mode'), 'value', state.voiceCallMode === 'open' ? 'open' : 'push');
   if ($('voice-call-offline-toggle')) setIfNotFocused($('voice-call-offline-toggle'), 'checked', state.voiceCallOfflineTranscribe !== false);
   if ($('voice-proactive-join-toggle')) setIfNotFocused($('voice-proactive-join-toggle'), 'checked', state.voiceProactiveJoin === true);
@@ -4208,6 +4621,19 @@ function writeSettingsToUI() {
   setIfNotFocused($('tome-match-whole-words'),'checked', state.tomeMatchWholeWords ?? false);
   setIfNotFocused($('max-empty-retries'),     'value',   state.maxEmptyRetries ?? 2);
   refreshModelSuggestions(state.provider);
+}
+
+// Show the Base URL field only for base-URL providers (custom + local presets),
+// and soften the API-key field's placeholder when the provider is keyless.
+function updateProviderFieldVisibility(provider) {
+  const baseField = $('base-url-field');
+  if (baseField) baseField.style.display = BASE_URL_PROVIDERS.has(provider) ? '' : 'none';
+  const baseInput = $('base-url-input');
+  if (baseInput) {
+    baseInput.placeholder = provider === 'lmstudio' ? 'http://localhost:1234' : 'http://localhost:11434';
+  }
+  const keyInput = $('api-key');
+  if (keyInput) keyInput.placeholder = providerNeedsKey(provider) ? 'Bearer token…' : 'optional for local servers';
 }
 
 function refreshModelSuggestions(provider) {
@@ -4540,7 +4966,7 @@ function showMemorizationNotice(count) {
  * Returns the jobId, or null on error / when memorization isn't possible.
  */
 async function memorizeSessionToTome(messages, sessionId, opts = {}) {
-  if (!state.apiKey.trim()) return null;
+  if (providerNeedsKey(state.provider) && !state.apiKey.trim()) return null;
   if (!Array.isArray(messages) || messages.length < 2) return null;
   const payload = {
     sessionId,
@@ -4551,6 +4977,7 @@ async function memorizeSessionToTome(messages, sessionId, opts = {}) {
     messages,
     provider:     state.provider,
     apiKey:       state.apiKey,
+    baseUrl:       state.baseUrl,
     model:        state.model,
     audienceTag:  'ward-private',
   };
@@ -4579,7 +5006,7 @@ async function memorizeSessionToTome(messages, sessionId, opts = {}) {
  * Used in the `beforeunload` handler — fetch() won't reliably deliver there.
  */
 function memorizeViaBeacon(messages, sessionId, opts = {}) {
-  if (!state.apiKey.trim()) return false;
+  if (providerNeedsKey(state.provider) && !state.apiKey.trim()) return false;
   if (!Array.isArray(messages) || messages.length < 2) return false;
   const payload = {
     sessionId,
@@ -4590,6 +5017,7 @@ function memorizeViaBeacon(messages, sessionId, opts = {}) {
     messages,
     provider:     state.provider,
     apiKey:       state.apiKey,
+    baseUrl:       state.baseUrl,
     model:        state.model,
     audienceTag:  'ward-private',
   };
@@ -5210,6 +5638,8 @@ function closeLogsModal() {
   closeKnowledgeModal();
 }
 
+let _logsSortMode = 'recent';   // 'recent' | 'location'
+
 async function refreshLogsList() {
   const container = $('logs-list');
   container.innerHTML = '<p class="logs-loading">Loading…</p>';
@@ -5222,7 +5652,50 @@ async function refreshLogsList() {
       return;
     }
 
+    // Sort by the ward's chosen mode. 'recent' keeps the server's newest-first
+    // order; 'location' groups by where the session happened, newest-first within.
+    if (_logsSortMode === 'location') {
+      sessions.sort((a, b) =>
+        (a.locationLabel || '').localeCompare(b.locationLabel || '')
+        || new Date(b.startedAt) - new Date(a.startedAt));
+    }
+
     container.innerHTML = '';
+
+    // Sort toolbar (calm, single control — reused across refreshes).
+    const bar = document.createElement('div');
+    bar.className = 'logs-toolbar';
+    bar.innerHTML =
+      `<label class="logs-sort-label">Sort <select id="logs-sort" class="ke-select">` +
+      `<option value="recent"${_logsSortMode === 'recent' ? ' selected' : ''}>Most recent</option>` +
+      `<option value="location"${_logsSortMode === 'location' ? ' selected' : ''}>By location</option>` +
+      `</select></label>`;
+    bar.querySelector('#logs-sort').addEventListener('change', (e) => {
+      _logsSortMode = e.target.value === 'location' ? 'location' : 'recent';
+      refreshLogsList();
+    });
+
+    // "Close all open" — finalize every unfinished session at once (skips the
+    // active one). Only shown when there's more than one still open, so it stays
+    // out of the way otherwise.
+    const openStale = sessions.filter(s => !s.endedAt && s.sessionId !== state.sessionId);
+    if (openStale.length > 1) {
+      const closeAll = document.createElement('button');
+      closeAll.className = 'btn-secondary log-action-btn';
+      closeAll.textContent = `Close all open (${openStale.length})`;
+      closeAll.style.marginLeft = '8px';
+      closeAll.addEventListener('click', async () => {
+        if (!confirm(`Mark ${openStale.length} unfinished sessions as ended?`)) return;
+        closeAll.disabled = true;
+        try {
+          await Promise.all(openStale.map(s =>
+            fetch(`/api/logs/${s.sessionId}/close`, { method: 'POST' }).catch(() => {})));
+        } finally { refreshLogsList(); }
+      });
+      bar.appendChild(closeAll);
+    }
+    container.appendChild(bar);
+
     for (const s of sessions) {
       const isActive  = s.sessionId === state.sessionId;
 
@@ -5243,13 +5716,15 @@ async function refreshLogsList() {
 
       const modelStr  = [s.provider, s.model].filter(Boolean).join(' / ');
       const countStr  = `${s.messageCount} msg${s.messageCount !== 1 ? 's' : ''}`;
+      const locLabel  = s.locationLabel || 'Web chat';
+      const locClass  = `log-loc log-loc-${esc(s.platform || 'web')}`;
 
       const row = document.createElement('div');
       row.className = 'log-row' + (isActive ? ' log-row-active' : '');
 
       row.innerHTML = `
         <div class="log-info">
-          <div class="log-date">${esc(startStr)} → ${esc(endStr)}${isActive ? ' <span class="log-current">(current)</span>' : ''}</div>
+          <div class="log-date"><span class="${locClass}" title="Where this session happened">${esc(locLabel)}</span> ${esc(startStr)} → ${esc(endStr)}${isActive ? ' <span class="log-current">(current)</span>' : ''}</div>
           <div class="log-meta">${esc(modelStr)} · ${esc(countStr)}</div>
         </div>
         <div class="log-actions"></div>
@@ -5271,6 +5746,39 @@ async function refreshLogsList() {
       memBtn.title = 'Auto-summarize or manually mark topics for this session';
       memBtn.addEventListener('click', () => openMemorizeChoice(s));
       actions.appendChild(memBtn);
+
+      // Continue on Discord (#2): make THIS session the ward's active private
+      // conversation, so their next Discord DM continues it. Only for the ward's
+      // own (ward-private) sessions and only when unification is on — binding a
+      // villager's session as ward-private would be a privacy leak.
+      if (s.wardPrivate && sessionUnifyOn()) {
+        const contBtn = document.createElement('button');
+        contBtn.className = 'btn-secondary log-action-btn';
+        contBtn.textContent = 'Continue on Discord';
+        contBtn.title = 'Your next Discord DM will continue this session';
+        contBtn.addEventListener('click', async () => {
+          await claimActiveSession(s.sessionId);
+          contBtn.textContent = '✓ DM continues this';
+          contBtn.disabled = true;
+          setTimeout(() => { contBtn.textContent = 'Continue on Discord'; contBtn.disabled = false; }, 4000);
+        });
+        actions.appendChild(contBtn);
+      }
+
+      // Close out a session that never got finalized (still reads as open). Not
+      // for the active session — that one IS ongoing; ending it is "new chat".
+      if (!s.endedAt && !isActive) {
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'btn-secondary log-action-btn';
+        closeBtn.textContent = 'Close out';
+        closeBtn.title = 'Mark this unfinished session as ended';
+        closeBtn.addEventListener('click', async () => {
+          closeBtn.disabled = true;
+          try { await fetch(`/api/logs/${s.sessionId}/close`, { method: 'POST' }); }
+          finally { refreshLogsList(); }
+        });
+        actions.appendChild(closeBtn);
+      }
 
       const delBtn = document.createElement('button');
       delBtn.className = 'btn-ghost log-action-btn';
@@ -5391,6 +5899,11 @@ function init() {
   // device has loaded, silently load it (empty local) or offer a banner.
   autoResumeMostRecentSession().catch(() => {});
 
+  // Live session sync: append turns that land on the other surface (Discord DM)
+  // into the open web session. Self-guarded (visible tab, not mid-send, id-dedupe)
+  // and composer-safe — see pollSessionDelta.
+  startSessionPoller();
+
   // Outbox polling (M11 reminders, M12 silence triage). Cheap GET every
   // 30s; pending items are injected as chat messages in the active session.
   startOutboxPolling();
@@ -5500,21 +6013,24 @@ function init() {
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
     'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle',
-    'pondering-toggle', 'pondering-scale', 'ponder-web-toggle', 'ponder-web-reads',
+    'pondering-toggle', 'pondering-scale', 'pondering-thread-chance', 'ponder-web-toggle', 'ponder-web-reads',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
     'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle', 'browse-toggle', 'page-watch-toggle',
     'browse-site-mode', 'browse-site-list', 'browse-confirm-domains', 'browse-confirm-mode',
+    'organ-status-block',
     'memory-sweep-toggle',
     'tool-surfacing-toggle', 'tool-sticky-turns', 'tool-rounds-per-turn',
     'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',
     'routine-review-toggle', 'routine-review-days',
     'tome-graduation-toggle', 'tome-graduation-tidy', 'needs-tracking-toggle',
     'notif-sound-toggle',
+    'reddit-reader-enabled', 'reddit-user-agent', 'reddit-client-id', 'reddit-client-secret', 'reddit-username', 'reddit-password',
+    'cdp-mode-enabled', 'video-fileapi-enabled',
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
     'event-alerts-toggle', 'event-alerts-lead', 'elapsed-stamp-hours',
-    'weather-toggle', 'vision-enabled-toggle', 'vision-threat-toggle',
-    'voice-call-threat-toggle', 'voice-call-lang', 'voice-call-mode',
+    'weather-toggle', 'vision-enabled-toggle', 'vision-threat-toggle', 'crisis-classifier-toggle',
+    'voice-call-threat-toggle', 'voice-call-lang', 'voice-call-mode', 'voice-offline-asr-model',
     'voice-call-offline-toggle', 'voice-call-settle', 'voice-proactive-join-toggle', 'voice-greetings-toggle', 'audio-tagging-toggle',
     'gcal-write-toggle', 'gcal-write-command',
     'gcal-ical-urls', 'gcal-cli-calendars',
@@ -5539,6 +6055,9 @@ function init() {
     el.addEventListener('input',  () => {
       if (id === 'temperature') {
         $('temp-display').textContent = parseFloat(el.value).toFixed(2);
+      }
+      if (id === 'pondering-thread-chance' && $('pondering-thread-chance-val')) {
+        $('pondering-thread-chance-val').textContent = `${el.value}%`;
       }
       readSettingsFromUI();
     });
@@ -5612,6 +6131,45 @@ function init() {
   }
   $('browse-activity-btn')?.addEventListener('click', renderBrowserActivity);
 
+  // CDP mode: arm/disarm the ward's own Chrome for one site, briefly. Arming is
+  // a WARD action (this button) — never something the Familiar can do.
+  async function refreshCdpArmStatus() {
+    const el = $('cdp-arm-status'); if (!el) return;
+    try {
+      const st = await (await fetch('/api/browser/status')).json();
+      const c = st?.cdp;
+      if (c?.armed) {
+        const mins = Math.max(0, Math.round((c.remainingMs || 0) / 60000));
+        el.textContent = `Armed on ${c.domain} — ~${mins} min left${st.mode === 'cdp' ? ', connected now' : ''}.`;
+      } else {
+        el.textContent = 'Not armed.';
+      }
+    } catch { el.textContent = 'Not armed.'; }
+  }
+  $('cdp-setup-btn')?.addEventListener('click', async () => {
+    const el = $('cdp-setup-status'); if (el) el.textContent = 'Setting up…';
+    try {
+      const r = await (await fetch('/api/browser/cdp-setup', { method: 'POST' })).json();
+      if (el) el.textContent = r?.ok
+        ? `✓ Done — “${r.filename}” is on your Desktop. ${r.instructions}`
+        : (r?.error || 'Could not set that up.');
+    } catch { if (el) el.textContent = 'Could not reach the server to set that up.'; }
+  });
+  $('cdp-arm-btn')?.addEventListener('click', async () => {
+    const domain = ($('cdp-arm-domain')?.value || '').trim();
+    const minutes = Number($('cdp-arm-minutes')?.value || 15);
+    if (!domain) { $('cdp-arm-status').textContent = 'Enter a site to arm (e.g. github.com).'; return; }
+    try {
+      const r = await (await fetch('/api/browser/cdp-arm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ domain, minutes }) })).json();
+      $('cdp-arm-status').textContent = r?.ok ? `Armed on ${r.domain} for ${r.minutes} min.` : (r?.error || 'Could not arm.');
+    } catch { $('cdp-arm-status').textContent = 'Could not reach the server to arm.'; }
+  });
+  $('cdp-disarm-btn')?.addEventListener('click', async () => {
+    try { await fetch('/api/browser/cdp-disarm', { method: 'POST' }); } catch {}
+    refreshCdpArmStatus();
+  });
+  $('cdp-settings')?.addEventListener('toggle', (e) => { if (e.target.open) refreshCdpArmStatus(); });
+
   // Provider change → refresh model suggestions and set sane default. Also
   // auto-fill the API key field from any saved connection using the same
   // provider, so a user with multiple saved keys per provider doesn't have
@@ -5622,6 +6180,7 @@ function init() {
   $('provider-select').addEventListener('change', e => {
     const prov  = e.target.value;
     const input = $('model-input');
+    updateProviderFieldVisibility(prov);
     refreshModelSuggestions(prov);
     if (!PROVIDER_MODELS[prov]?.includes(input.value)) {
       input.value = PROVIDER_DEFAULT_MODEL[prov] || '';
@@ -5744,7 +6303,7 @@ function init() {
 
   $('user-input')?.addEventListener('paste', (e) => {
     if (!visionActive()) return;
-    const items = Array.from(e.clipboardData?.items || []).filter(it => it.type?.startsWith('image/'));
+    const items = Array.from(e.clipboardData?.items || []).filter(it => it.type?.startsWith('image/') || it.type?.startsWith('video/'));
     if (!items.length) return;
     e.preventDefault();
     addPendingImages(items.map(it => it.getAsFile()).filter(Boolean));
@@ -5759,7 +6318,7 @@ function init() {
     ['dragleave', 'drop'].forEach(ev => dropZone.addEventListener(ev, () => dropZone.classList.remove('drag-over')));
     dropZone.addEventListener('drop', (e) => {
       if (!visionActive()) return;
-      const files = Array.from(e.dataTransfer?.files || []).filter(f => f.type?.startsWith('image/'));
+      const files = Array.from(e.dataTransfer?.files || []).filter(isMediaFile);
       if (files.length) { e.preventDefault(); addPendingImages(files); }
     });
   }
@@ -5865,6 +6424,23 @@ function init() {
   });
   $('diagnostics-download').addEventListener('click', downloadDiagnosticReport);
 
+  // Loops & logs ("Is my Familiar alive?")
+  $('loops-health-btn')?.addEventListener('click', openLoopsHealthModal);
+  $('loops-health-close')?.addEventListener('click', closeLoopsHealthModal);
+  $('loops-health-done')?.addEventListener('click', closeLoopsHealthModal);
+  $('loops-health-modal')?.addEventListener('click', e => {
+    if (e.target === $('loops-health-modal')) closeLoopsHealthModal();
+  });
+  $('loops-health-refresh')?.addEventListener('click', () => loadLoopsHealth({ force: true }));
+  document.querySelectorAll('[data-loops-tab]').forEach(el => {
+    el.addEventListener('click', () => loopsSwitchTab(el.dataset.loopsTab));
+  });
+  $('loops-search-noticing')?.addEventListener('input',  () => renderLoopsLog('noticing'));
+  $('loops-search-reachout')?.addEventListener('input',  () => renderLoopsLog('reachout'));
+  $('loops-search-triage')?.addEventListener('input',    () => renderLoopsLog('triage'));
+  $('loops-search-pagewatch')?.addEventListener('input', () => renderLoopsLog('pagewatch'));
+  $('loops-search-discord')?.addEventListener('input',   () => renderLoopsLog('discord'));
+
   // Trigger tracer (regex/keyword diagnostic)
   $('trace-surfacing-btn')?.addEventListener('click', () => openTraceModal({ surfacingOnly: true, autoRun: true }));
   $('voice-bench-btn')?.addEventListener('click', openVoiceBenchModal);
@@ -5876,6 +6452,15 @@ function init() {
   initVoiceTuning();
   initVoiceprints();
   refreshVoiceBackendPane();
+  refreshOfflineAsrModelUi();
+  $('voice-offline-asr-model')?.addEventListener('change', (e) => {
+    const key = ['sensevoice', 'whisper', 'parakeet'].includes(e.target.value) ? e.target.value : 'sensevoice';
+    state.voiceOfflineAsrModel = key;
+    saveSettings();                       // the choice syncs immediately (free + instant)
+    ensureOfflineAsrDownloaded(key);      // …then fetch it if it isn't on disk yet
+    refreshOfflineAsrModelUi();
+  });
+  $('voice-offline-asr-remove')?.addEventListener('click', (e) => { removeOfflineAsrModel(e.currentTarget?.dataset?.key); });
   $('voice-picker-close')?.addEventListener('click', closeVoicePicker);
   $('voice-picker-done')?.addEventListener('click', closeVoicePicker);
   $('voice-picker-more')?.addEventListener('click', () => loadVoicePage(false));
@@ -6121,7 +6706,7 @@ function init() {
         setStatus('Nothing to memorize yet.');
         return;
       }
-      if (!state.apiKey.trim()) {
+      if (providerNeedsKey(state.provider) && !state.apiKey.trim()) {
         setStatus('Set an API key in Settings first.');
         return;
       }
@@ -6800,7 +7385,7 @@ function closeMemorizeChoice() {
  * Session Memories tome via memorization.js#findOrCreateSessionMemoriesTome.
  */
 async function runAutoSummarize(session) {
-  if (!state.apiKey.trim()) {
+  if (providerNeedsKey(state.provider) && !state.apiKey.trim()) {
     setMemorizeChoiceStatus('Set an API key in Settings first.', true);
     return;
   }
@@ -6840,6 +7425,7 @@ async function runAutoSummarize(session) {
         messages,
         provider:    state.provider,
         apiKey:      state.apiKey,
+        baseUrl:      state.baseUrl,
         model:       state.model,
         audienceTag: 'ward-private',
       }),
@@ -7132,16 +7718,29 @@ function manualMemorizeEndTopic(msgIndex) {
 let _pendingSummaryTopic = null;
 
 async function generateTopicSummary(topic, rangeMessages) {
-  const convText = rangeMessages
-    .map(m => `${m.role === 'user' ? (state.userName || 'My human') : 'Me'}: ${m.content ?? ''}`)
-    .join('\n\n');
+  // Conversation data rides as role-faithful turns — my human's lines as `user`,
+  // my own as `assistant` — never flattened into one blob, and never all crammed
+  // into a single user turn (correct turn assignment, per the entity-as-subject
+  // role rule). A registered speaker (a villager in a shared room) keeps a
+  // `[Name]:` label so they aren't read as my human; the ward's own turns stay
+  // unlabelled — the role carries them — matching the extraction transcript.
+  // The `speaker` rides through too, so the server's name-field stamp resolves a
+  // villager turn to their slug instead of defaulting it to ward-<slug>.
+  const convTurns = rangeMessages
+    .filter(m => m && (m.role === 'user' || m.role === 'assistant') && String(m.content ?? '').trim())
+    .map(m => {
+      if (m.role !== 'user') return { role: 'assistant', content: String(m.content ?? '') };
+      const c = String(m.content ?? '');
+      const content = m.speaker && !/^\[[^\]]+\]:/.test(c) ? `[${m.speaker}]: ${c}` : c;
+      return m.speaker ? { role: 'user', content, speaker: m.speaker } : { role: 'user', content };
+    });
 
   const userLabel = userNamedTopicLabel(topic);
   const focusBlock = userLabel
     ? `\n\n### Focus topic\nMy human named this topic "${userLabel}". I will center the entry on that topic. I'll skip tangential threads in the conversation that don't bear on it.`
     : '';
 
-  const prompt = `I am writing a Tome entry for myself, the Familiar. The entry is my own private notes to myself — first-person reference material that gets injected back into my context (and therefore resurfaces in my "brain") when its keywords appear in a future conversation. I write in my own individual voice as {{char}}. In order for everything to work well, I follow the craft rules below carefully.${focusBlock}
+  const instruction = `I am writing a Tome entry for myself, the Familiar. The entry is my own private notes to myself — first-person reference material that gets injected back into my context (and therefore resurfaces in my "brain") when its keywords appear in a future conversation. I write in my own individual voice as {{char}}. In order for everything to work well, I follow the craft rules below carefully.${focusBlock}
 
 I will return ONLY valid JSON (no markdown fences, no commentary) with exactly these fields, otherwise the Tome may break and be unusable:
 {
@@ -7180,10 +7779,17 @@ I will pick a sticky value (integer, number of turns the entry stays active afte
   - 2    = brief states that typically resolve quickly.
   - 3    = moderate states needing a few exchanges (distraction, sleep note, transition).
   - 4–5  = complex/intense states taking multiple turns to navigate (paralysis, RSD, emotional dysregulation).
-  - 8+   = ongoing modes that should persist across the whole session.
+  - 8+   = ongoing modes that should persist across the whole session.`;
 
-Conversation excerpt:
-${convText}`;
+  // My own thinking (the instruction) is a SYSTEM message; the conversation I'm
+  // distilling rides as its own role-faithful turns between two system framings;
+  // the closing directive re-anchors the JSON task after the transcript so a turn
+  // that ends on my human's line doesn't tempt a conversational reply.
+  const messages = [
+    { role: 'system', content: instruction },
+    ...convTurns,
+    { role: 'system', content: "That's the conversation I'm distilling. Now I write my Tome entry as JSON, exactly per the rules above — my own first-person notes, in my voice." },
+  ];
 
   try {
     const resp = await fetch('/api/chat', {
@@ -7192,8 +7798,9 @@ ${convText}`;
       body: JSON.stringify({
         provider:    state.provider,
         apiKey:      state.apiKey,
+        baseUrl:      state.baseUrl,
         model:       state.model,
-        messages:    [{ role: 'user', content: prompt }],
+        messages,
         stream:      false,
         temperature: 0.25,
         max_tokens:  800,
@@ -8269,6 +8876,110 @@ function downloadVoiceBench() {
 // as my human browses rather than demanding a 350 MB download first.
 
 const VP = { offset: 0, limit: 40, total: 0, searchTimer: null, playing: null, chosen: null };
+
+// Short display names for the offline ASR models — the endpoint's own
+// `label` is descriptive ("SenseVoice — multilingual (default)"), fine for
+// an option row but too long for a one-line status sentence.
+const OFFLINE_ASR_SHORT_NAME = { sensevoice: 'SenseVoice', whisper: 'Whisper', parakeet: 'NeMo Parakeet' };
+
+/**
+ * Fill the offline-ASR-model picker and its status line from
+ * GET /api/voice/asr-model. Reports what's installed, selected, and in use, and
+ * re-fetches after the select changes. Whisper/Parakeet are opt-in upgrades that
+ * now download in-app on switch (ensureOfflineAsrDownloaded) and can be removed
+ * to reclaim disk (removeOfflineAsrModel); this reflects that state (the ✓
+ * marker, the Remove button, the status line).
+ */
+// The offline-ASR model currently downloading (key), or null — so the UI can
+// show progress and suppress a second fetch or a remove mid-download.
+let _asrInstalling = null;
+
+async function refreshOfflineAsrModelUi() {
+  const sel = $('voice-offline-asr-model'), st = $('voice-offline-asr-model-state'), rm = $('voice-offline-asr-remove');
+  if (!sel) return;
+  try {
+    const r = await (await fetch('/api/voice/asr-model')).json();
+    if (!r?.ok) return;
+    if (Array.isArray(r.options) && r.options.length) {
+      // A ✓ marks what's actually downloaded, so the picker shows disk state.
+      sel.innerHTML = r.options.map(o => `<option value="${o.key}">${o.installed ? '✓ ' : ''}${o.label}</option>`).join('');
+    }
+    const want = state.voiceOfflineAsrModel ?? 'sensevoice';
+    sel.value = r.options?.some(o => o.key === want) ? want : (r.selected || 'sensevoice');
+    const opt = (r.options || []).find(o => o.key === sel.value);
+    const usingName = OFFLINE_ASR_SHORT_NAME[r.using] || r.using;
+    const selectedName = OFFLINE_ASR_SHORT_NAME[r.selected] || r.selected;
+    // Remove button: only for an installed, removable upgrade that's the pick,
+    // and never mid-download.
+    if (rm) {
+      const showRemove = !!opt && opt.installed && opt.removable && !_asrInstalling;
+      rm.hidden = !showRemove;
+      if (opt) rm.dataset.key = opt.key;
+    }
+    if (st) {
+      if (_asrInstalling) {
+        st.textContent = `Downloading ${OFFLINE_ASR_SHORT_NAME[_asrInstalling] || _asrInstalling}… this runs once and can take a minute or two. It switches over automatically when it's ready.`;
+      } else if (r.present && !r.fellBack) {
+        st.textContent = r.selected === 'sensevoice' ? `Using ${usingName}.` : `Using ${usingName} — downloaded and active.`;
+      } else if (opt && !opt.pinned) {
+        st.textContent = `${selectedName} isn't available to download in this build yet, so calls and voice notes use SenseVoice.`;
+      } else if (r.selected && r.selected !== 'sensevoice' && (!r.present || r.fellBack)) {
+        st.textContent = `${selectedName} isn't downloaded — using SenseVoice for now. Pick it again to download it.`;
+      } else {
+        st.textContent = `Using ${usingName}.`;
+      }
+    }
+  } catch { /* leave the static hint in place */ }
+}
+
+/**
+ * Download the chosen offline-ASR upgrade if it isn't on disk yet — the
+ * "download when I switch to it" behaviour. SenseVoice is bundled; an unpinned
+ * or already-installed model is a no-op. One at a time (the flag). Errors land
+ * in the status line, never a thrown turn.
+ */
+async function ensureOfflineAsrDownloaded(key) {
+  if (!key || key === 'sensevoice' || _asrInstalling) return;
+  let info;
+  try { info = await (await fetch('/api/voice/asr-model')).json(); } catch { return; }
+  const opt = (info?.options || []).find(o => o.key === key);
+  if (!opt || opt.installed || !opt.pinned) return;   // nothing to fetch (or no source)
+  _asrInstalling = key;
+  refreshOfflineAsrModelUi();
+  try {
+    const res = await (await fetch('/api/voice/asr-model/install', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }),
+    })).json();
+    _asrInstalling = null;
+    if (!res?.ok) {
+      const st = $('voice-offline-asr-model-state');
+      if (st) st.textContent = `Couldn't download ${OFFLINE_ASR_SHORT_NAME[key] || key}: ${res?.message || res?.reason || 'unknown error'}. Still using SenseVoice.`;
+    }
+  } catch (e) {
+    _asrInstalling = null;
+    const st = $('voice-offline-asr-model-state');
+    if (st) st.textContent = `Download failed: ${String(e?.message ?? e)}. Still using SenseVoice.`;
+  } finally {
+    _asrInstalling = null;
+    refreshOfflineAsrModelUi();
+  }
+}
+
+/** Remove an installed offline-ASR upgrade to reclaim disk, then refresh. */
+async function removeOfflineAsrModel(key) {
+  if (!key || key === 'sensevoice' || _asrInstalling) return;
+  const st = $('voice-offline-asr-model-state');
+  try {
+    const res = await (await fetch('/api/voice/asr-model/remove', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }),
+    })).json();
+    if (!res?.ok && st) st.textContent = `Couldn't remove it: ${res?.message || res?.reason || 'unknown error'}.`;
+  } catch (e) {
+    if (st) st.textContent = `Remove failed: ${String(e?.message ?? e)}.`;
+  } finally {
+    refreshOfflineAsrModelUi();
+  }
+}
 
 /**
  * Fill the call-language picker from the languages actually installed.
@@ -9375,9 +10086,11 @@ function keOpenCoverageDay(date) {
   const sessions = entry.sessions ?? [];
   const rows = sessions.map(s => {
     const done = s.memorized >= s.total;
-    const flag = s.flag ? ` <span class="ke-badge ke-badge-register">${esc(s.flag)}</span>` : '';
+    // A real failure flag reads as an alert; a group-room slice is just info.
+    const flag  = s.flag ? ` <span class="ke-badge ke-badge-register">${esc(s.flag)}</span>` : '';
+    const group = s.sharedRoom ? ` <span class="ke-badge">group</span>` : '';
     return `<div class="ke-cov-srow">${done ? '✓' : '○'} <code>${esc(s.sessionId.slice(0, 8))}</code> `
-      + `<span class="field-hint">${s.memorized}/${s.total} msgs</span>${flag}</div>`;
+      + `<span class="field-hint">${s.memorized}/${s.total} msgs</span>${flag}${group}</div>`;
   }).join('');
   det.innerHTML = `
     <div class="ke-detail-header">
@@ -9396,13 +10109,13 @@ function keOpenCoverageDay(date) {
 
 async function keMemorizeDay(date) {
   const status = $('ke-cov-status');
-  if (!state.apiKey.trim()) { status.textContent = 'Set an API key in Settings first.'; return; }
+  if (providerNeedsKey(state.provider) && !state.apiKey.trim()) { status.textContent = 'Set an API key in Settings first.'; return; }
   const force = !!$('ke-cov-force')?.checked;
   status.textContent = 'Queuing…';
   try {
     const res = await fetch('/api/memorize-day', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ date, force, provider: state.provider, apiKey: state.apiKey, model: state.model }),
+      body: JSON.stringify({ date, force, provider: state.provider, apiKey: state.apiKey, baseUrl: state.baseUrl, model: state.model }),
     });
     if (!res.ok) throw new Error(await keReadServerError(res));
     const { enqueued, deduped, requested } = await res.json();
@@ -9468,7 +10181,7 @@ function keCovImportBody(commit) {
     source: $('ke-cov-import-source').value,
     filename: _keImportFilename || undefined,
     fallbackDate: $('ke-cov-import-date').value || undefined,
-    ...(commit ? { commit: true, provider: state.provider, apiKey: state.apiKey, model: state.model } : {}),
+    ...(commit ? { commit: true, provider: state.provider, apiKey: state.apiKey, baseUrl: state.baseUrl, model: state.model } : {}),
   };
 }
 
@@ -9506,7 +10219,7 @@ async function keCovImportCommit() {
   if (_keBatchFiles) return keCovBatchCommit();
   const status = $('ke-cov-import-status');
   if (!_keImportPreviewed) { status.textContent = 'Preview first.'; return; }
-  if (!state.apiKey.trim()) { status.textContent = 'Set an API key in Settings first.'; return; }
+  if (providerNeedsKey(state.provider) && !state.apiKey.trim()) { status.textContent = 'Set an API key in Settings first.'; return; }
   if (!confirm(`Import ${_keImportPreviewed.days} day(s) and memorize them now? This runs ~${_keImportPreviewed.days} extraction pass(es).`)) return;
   status.textContent = 'Importing…';
   $('ke-cov-import-commit').disabled = true;
@@ -9588,7 +10301,7 @@ async function keCovBatchPreview() {
 async function keCovBatchCommit() {
   const status = $('ke-cov-import-status');
   if (!_keBatchPreview) { status.textContent = 'Preview first.'; return; }
-  if (!state.apiKey.trim()) { status.textContent = 'Set an API key in Settings first.'; return; }
+  if (providerNeedsKey(state.provider) && !state.apiKey.trim()) { status.textContent = 'Set an API key in Settings first.'; return; }
   const ready = _keBatchPreview.filter(f => f.ok && !f.needsDate && f.days);
   if (!ready.length) { status.textContent = 'No file is ready — set the missing dates and Preview again.'; return; }
   if (!confirm(`Import ${ready.length} file(s) and memorize them now? This runs one extraction pass per day.`)) return;
@@ -9601,7 +10314,7 @@ async function keCovBatchCommit() {
         files: keBatchFilesPayload(),
         selfNames: $('ke-cov-import-self').value,
         source: $('ke-cov-import-source').value,
-        commit: true, provider: state.provider, apiKey: state.apiKey, model: state.model,
+        commit: true, provider: state.provider, apiKey: state.apiKey, baseUrl: state.baseUrl, model: state.model,
       }),
     });
     if (!res.ok) throw new Error(await keReadServerError(res));
@@ -10261,13 +10974,14 @@ async function keOpenRememberMap() {
     const data = await res.json();
     const map = data.map ?? {};
     const standing = data.standing ?? {};
-    const categories = ['basics', 'emotional_content', 'health_info', 'relationships', 'whereabouts'];
+    const categories = ['basics', 'emotional_content', 'health_info', 'relationships', 'whereabouts', 'views'];
     const labels = {
       basics: 'Basics (name, age, daily facts)',
       emotional_content: 'Emotional content (feelings, struggles)',
       health_info: 'Health information (meds, conditions)',
       relationships: 'Relationships (family, friends)',
       whereabouts: 'Whereabouts (location, travel)',
+      views: 'Views (opinions, tastes)',
     };
     function selFor(cat) {
       const v = map[cat];
@@ -10937,15 +11651,6 @@ function teIsoToLocalHhMm(iso) {
   return `${hh}:${mm}`;
 }
 
-// Stored timestamp → "YYYY-MM-DDTHH:MM" for pre-filling a datetime-local
-// input from an existing schedule node.
-function teIsoToDatetimeLocal(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const pad = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 
 // Stored timestamp → friendly local datetime string for list rows ("today 22:00",
 // "tomorrow 09:30", "Mon 10:00", "May 30 14:00"). Keeps the timezone
@@ -12052,6 +12757,168 @@ async function teLoadRounds() {
   }
 }
 
+// ── Loops & logs ("Is my Familiar alive?") ──────────────────────────
+// A ward-facing console: which background loops are actually running
+// (GET /api/health), plus their own decision logs, so a quiet Familiar
+// and a stuck one don't look the same from here. Each log's raw fetch is
+// cached so a per-log filter box re-renders instantly on every keystroke
+// instead of re-fetching (the shared list-search pattern).
+const LOOPS_TABS = ['noticing', 'reachout', 'triage', 'pagewatch', 'discord'];
+const LOOPS_LOG_ENDPOINTS = {
+  noticing:  '/api/noticing-events',
+  reachout:  '/api/reachout-events',
+  triage:    '/api/triage-events',
+  pagewatch: '/api/page-watch-events',
+  discord:   '/api/discord-writes',
+};
+// kind -> array (loaded) | null (failed — distinct from "loaded, empty") | undefined (not yet loaded)
+let _loopsLogCache = {};
+
+function openLoopsHealthModal() {
+  $('loops-health-modal')?.classList.remove('hidden');
+  loopsSwitchTab('noticing');
+  loadLoopsHealth();
+}
+function closeLoopsHealthModal() {
+  $('loops-health-modal')?.classList.add('hidden');
+}
+
+function loopsSwitchTab(name) {
+  if (!LOOPS_TABS.includes(name)) return;
+  for (const t of LOOPS_TABS) {
+    const btn  = document.querySelector(`[data-loops-tab="${t}"]`);
+    const pane = $(`loops-pane-${t}`);
+    if (btn)  btn.classList.toggle('ke-tab-active',  t === name);
+    if (pane) pane.classList.toggle('ke-pane-active', t === name);
+  }
+  if (!(name in _loopsLogCache)) loadLoopsLog(name);
+}
+
+async function loadLoopsHealth({ force = false } = {}) {
+  await Promise.all([
+    loadLoopsStatus(),
+    ...LOOPS_TABS.filter(t => force || !(t in _loopsLogCache)).map(t => loadLoopsLog(t)),
+  ]);
+}
+
+// Names shown for each GET /api/health loops.* key — see server.js's
+// health route for the canonical key set.
+const LOOPS_STATUS_NAMES = {
+  pondering: 'Pondering', noticing: 'Noticing', reachout: 'Warm reach-out',
+  memorySweep: 'Memory sweep', gcalSync: 'Google Calendar sync', pageWatch: 'Page watch',
+};
+
+async function loadLoopsStatus() {
+  const el = $('loops-status-row');
+  if (!el) return;
+  el.innerHTML = '<p class="logs-empty">Loading…</p>';
+  try {
+    const r = await fetch('/api/health');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    const loops = (data?.loops && typeof data.loops === 'object') ? data.loops : {};
+    const keys = Object.keys(LOOPS_STATUS_NAMES).filter(k => k in loops);
+    if (!keys.length) { el.innerHTML = '<p class="logs-empty">No loop status reported by /api/health.</p>'; return; }
+    el.innerHTML = keys.map(k => {
+      const up   = !!loops[k];
+      const word = up ? 'up' : 'down';
+      const name = teEscapeHtml(LOOPS_STATUS_NAMES[k]);
+      return `<span class="loops-status-item">
+        <span class="loops-dot ${up ? 'ok' : 'err'}" role="img" aria-label="${name}: ${word}" title="${name}: ${word}">●</span>
+        ${name} <span class="loops-status-word">(${word})</span>
+      </span>`;
+    }).join('');
+  } catch {
+    el.innerHTML = '<p class="logs-empty">Couldn’t reach /api/health — loop status unavailable right now.</p>';
+  }
+}
+
+async function loadLoopsLog(kind) {
+  const list = $(`loops-list-${kind}`);
+  if (list) list.innerHTML = '<p class="logs-empty">Loading…</p>';
+  try {
+    const r = await fetch(LOOPS_LOG_ENDPOINTS[kind]);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    _loopsLogCache[kind] = Array.isArray(data) ? data : [];
+  } catch {
+    // A failed fetch degrades only THIS log — the other four render fine.
+    _loopsLogCache[kind] = null;
+  }
+  renderLoopsLog(kind);
+}
+
+// Each log carries different fields (see cerebellum.js's appendXEventLog
+// call sites and discord-write-log.js) — this is the one place that reads
+// them into a common { at, label, meta, reason } shape for rendering.
+function loopsRowSummary(kind, e) {
+  const at = e.loggedAt || e.at || e.ts || null;
+  if (kind === 'noticing') {
+    const label = e.acted ? 'acted' : (e.reason || 'looked');
+    const bits = [];
+    if (Array.isArray(e.toolsCalled) && e.toolsCalled.length) bits.push(`tools: ${e.toolsCalled.join(', ')}`);
+    if (e.threatTier) bits.push(`threat: ${e.threatTier}`);
+    if (e.error) bits.push(`error: ${e.error}`);
+    const reason = Array.isArray(e.wakeConditions) && e.wakeConditions.length
+      ? `Woken by: ${e.wakeConditions.join(', ')}` : '';
+    return { at, label, meta: bits.join(' · '), reason };
+  }
+  if (kind === 'reachout') {
+    const REASONS = {
+      reached_ward: 'reached out to my human', reached_villager: `reached out to ${e.villager || 'a villager'}`,
+      llm_said_wait: 'considered, chose to wait', delivery_failed: 'delivery failed',
+      unknown_villager: 'unknown villager', rate_limited: 'rate limited',
+      ward_active: 'stood down — my human is active',
+    };
+    return { at, label: REASONS[e.reason] || (e.reason || '—'), meta: e.error ? `error: ${e.error}` : '', reason: e.messagePreview || '' };
+  }
+  if (kind === 'triage') {
+    const label = e.acted ? 'reached out' : (e.reason === 'llm_said_wait' ? 'considered, chose to wait' : (e.reason || '—'));
+    const bits = [];
+    if (e.threat?.tier) bits.push(`threat: ${e.threat.tier}`);
+    if (Number.isFinite(e.silenceMs)) bits.push(`silence: ${Math.round(e.silenceMs / 60000)}min`);
+    return { at, label, meta: bits.join(' · '), reason: e.decision?.message || '' };
+  }
+  if (kind === 'pagewatch') {
+    return {
+      at, label: `checked ${e.checked ?? 0}, changed ${e.changed ?? 0}, surfaced ${e.surfaced ?? 0}`,
+      meta: e.failed ? `${e.failed} failed` : '', reason: '',
+    };
+  }
+  if (kind === 'discord') {
+    return { at, label: `${e.villager || 'someone'} → ${e.tool || 'a tool'}`, meta: e.locationKey || '', reason: e.args || '' };
+  }
+  return { at, label: '—', meta: '', reason: '' };
+}
+
+function renderLoopsLog(kind) {
+  const list = $(`loops-list-${kind}`);
+  if (!list) return;
+  const raw = _loopsLogCache[kind];
+  if (raw === null) {
+    list.innerHTML = '<p class="logs-empty">Couldn’t reach this log right now — the other logs above are unaffected.</p>';
+    return;
+  }
+  if (!Array.isArray(raw)) { list.innerHTML = '<p class="logs-empty">Loading…</p>'; return; }
+  if (!raw.length) { list.innerHTML = '<p class="logs-empty">Nothing logged yet — this loop hasn’t reached a decision.</p>'; return; }
+  const q = ($(`loops-search-${kind}`)?.value || '').trim().toLowerCase();
+  const rows = raw.map(e => loopsRowSummary(kind, e))
+    .filter(s => !q || `${s.label} ${s.meta} ${s.reason}`.toLowerCase().includes(q));
+  if (!rows.length) { list.innerHTML = `<p class="logs-empty">Nothing matches “${teEscapeHtml(q)}”.</p>`; return; }
+  list.innerHTML = rows.map(s => {
+    const when = teEscapeHtml(teIsoToLocalFriendly(s.at));
+    const abs  = teEscapeHtml(s.at || '');
+    return `
+    <div class="log-row">
+      <div class="log-info">
+        <div class="log-date" title="${abs}">${when} <span class="log-meta">${teEscapeHtml(s.label)}</span></div>
+        ${s.meta ? `<div class="log-meta">${teEscapeHtml(s.meta)}</div>` : ''}
+        ${s.reason ? `<p class="field-hint">${teEscapeHtml(s.reason)}</p>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
 async function teEditPhase(id, phase) {
   if (!phase) return;
   const label = prompt('Phase label:', phase.label);
@@ -12336,6 +13203,17 @@ async function injectOutboxAsChatMessage(item) {
   const content = stripDisplayTimestamps(formatOutboxAsMessageContent(item));
   if (!content) return;
 
+  // Shared stable id with the SERVER's proactive session-append (proactive-session.js
+  // proactiveMessageId) — so the same reminder isn't shown twice. If it's already in
+  // the transcript (loaded from the log on open, or a prior inject), don't re-render
+  // or re-ping; just settle the bookkeeping. Mirrors `outbox:<id>` — keep in sync.
+  const msgId = `outbox:${item.id}`;
+  if (state.messages.some(m => m.id === msgId)) {
+    _injectedOutboxIds.add(item.id);
+    if (item.kind !== 'triage') await acknowledgeOutboxItem(item.id);
+    return;
+  }
+
   // If this item was already SPOKEN into a live voice call (delivery recorded by
   // the voice-call push adapter, Pass 2d), my human just heard it — the chat
   // copy is a record for the session log, not something to ping about again.
@@ -12365,7 +13243,7 @@ async function injectOutboxAsChatMessage(item) {
     timestamp,
     proactive:  true,
     outboxKind: item.kind,
-    id:         generateId(),
+    id:         msgId,
   });
   el.dataset.msgIndex = String(state.messages.length - 1);
   saveHistory();
@@ -12509,6 +13387,7 @@ const VL_REMEMBER_CATS = [
   { key: 'health_info',      label: 'Health info',      default: 'ask' },
   { key: 'relationships',    label: 'Relationships',    default: 'ask' },
   { key: 'whereabouts',      label: 'Whereabouts',      default: 'ask' },
+  { key: 'views',            label: 'Views & opinions', default: 'ask' },
 ];
 
 let _vlReg  = null;   // local registry cache; null = needs reload
@@ -13298,6 +14177,9 @@ function vlServerName(guildId) {
   return s?.name || `Server ${guildId}`;
 }
 
+// Collapse state for the server list, kept across re-renders within a session.
+let _vlServersCollapsed = false;
+
 async function vlLoadServers() {
   try {
     const r = await fetch('/api/village/servers');
@@ -13315,22 +14197,31 @@ function vlRenderServers() {
     return;
   }
   box.classList.remove('hidden');
-  box.innerHTML = `<div class="vl-knocks-head">🖥 Servers <span class="field-hint">— the Discord servers my Familiar is in, derived from where it's been. Naming only; access is set by Locations + circles below.</span></div>`
-    + _vlServers.map((s, i) => {
-      const sub = [
-        `id ${esc(s.guildId)}`,
-        s.lastSeenAt ? `seen ${new Date(s.lastSeenAt).toLocaleDateString()}` : '',
-      ].filter(Boolean).join(' · ');
-      return `<div class="vl-knock" data-si="${i}">
-        <div class="vl-knock-info">
-          <div class="vl-knock-name">${esc(s.name || `Server ${s.guildId}`)}</div>
-          <div class="vl-knock-sub">${sub}</div>
-        </div>
-        <div class="vl-knock-actions">
-          <button class="btn-ghost vl-server-x" type="button" title="Forget this server (it reappears if my Familiar is active there again)" aria-label="Forget server">${msIcon('close')}</button>
-        </div>
-      </div>`;
-    }).join('');
+  const collapsed = _vlServersCollapsed;
+  const rows = _vlServers.map((s, i) => {
+    const sub = [
+      `id ${esc(s.guildId)}`,
+      s.lastSeenAt ? `seen ${new Date(s.lastSeenAt).toLocaleDateString()}` : '',
+    ].filter(Boolean).join(' · ');
+    return `<div class="vl-knock" data-si="${i}">
+      <div class="vl-knock-info">
+        <div class="vl-knock-name">${esc(s.name || `Server ${s.guildId}`)}</div>
+        <div class="vl-knock-sub">${sub}</div>
+      </div>
+      <div class="vl-knock-actions">
+        <button class="btn-ghost vl-server-x" type="button" title="Forget this server (it reappears if my Familiar is active there again)" aria-label="Forget server">${msIcon('close')}</button>
+      </div>
+    </div>`;
+  }).join('');
+  box.innerHTML = `<button class="vl-servers-toggle vl-knocks-head" type="button" aria-expanded="${!collapsed}" aria-controls="vl-servers-body">
+      <span class="hint-chev">▶</span> 🖥 Servers <span class="vl-servers-count">(${_vlServers.length})</span>
+    </button>
+    <div class="field-hint">— the Discord servers my Familiar is in, derived from where it's been. Naming only; access is set by Locations + circles below.</div>
+    <div id="vl-servers-body" class="vl-servers-body${collapsed ? ' hidden' : ''}">${rows}</div>`;
+  box.querySelector('.vl-servers-toggle')?.addEventListener('click', () => {
+    _vlServersCollapsed = !_vlServersCollapsed;
+    vlRenderServers();
+  });
   box.querySelectorAll('.vl-knock').forEach(row => {
     const s = _vlServers[Number(row.dataset.si)];
     row.querySelector('.vl-server-x').addEventListener('click', () => vlDismissServer(s));

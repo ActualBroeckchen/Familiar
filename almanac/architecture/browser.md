@@ -4,22 +4,22 @@ topics: [architecture, browser, safety]
 sources:
   - id: browser-lens-js
     type: file
-    path: browser-lens.js
+    path: src/browser/browser-lens.js
   - id: browser-proxy-js
     type: file
-    path: browser-proxy.js
+    path: src/browser/browser-proxy.js
   - id: browser-driver-js
     type: file
-    path: browser-driver.js
+    path: src/browser/browser-driver.js
   - id: browser-js
     type: file
-    path: browser.js
+    path: src/browser/browser.js
   - id: browser-grants-js
     type: file
-    path: browser-grants.js
+    path: src/browser/browser-grants.js
   - id: browser-audit-js
     type: file
-    path: browser-audit.js
+    path: src/browser/browser-audit.js
   - id: cerebellum-js
     type: file
     path: cerebellum.js
@@ -34,19 +34,19 @@ sources:
     path: tests/browser-tools.test.mjs
   - id: ponder-research-js
     type: file
-    path: ponder-research.js
+    path: src/pondering/ponder-research.js
   - id: ponder-web-budget-js
     type: file
-    path: ponder-web-budget.js
+    path: src/pondering/ponder-web-budget.js
   - id: browser-driver-test
     type: file
     path: tests/browser-driver.test.mjs
   - id: page-watch-js
     type: file
-    path: page-watch.js
+    path: src/browser/page-watch.js
   - id: page-watch-loop-js
     type: file
-    path: page-watch-loop.js
+    path: src/browser/page-watch-loop.js
   - id: browser-server-js
     type: file
     path: server.js
@@ -56,6 +56,24 @@ sources:
   - id: browser-cdp-spec
     type: file
     path: docs/browser-cdp-mode-build-spec.md
+  - id: browser-cdp-arm-js
+    type: file
+    path: src/browser/browser-cdp-arm.js
+  - id: browser-cdp-arm-test
+    type: file
+    path: tests/browser-cdp-arm.test.mjs
+  - id: cdp-launcher-js
+    type: file
+    path: src/browser/cdp-launcher.js
+  - id: reddit-reader-js
+    type: file
+    path: src/browser/reddit-reader.js
+  - id: reddit-reader-test
+    type: file
+    path: tests/reddit-reader.test.mjs
+  - id: websearch-js
+    type: file
+    path: src/search/websearch.js
 ---
 
 # Browser: Click-and-Fill Web Access
@@ -64,7 +82,9 @@ The browser subsystem lets the Familiar navigate, read, and act on live web page
 click, fill, scroll, and multi-step flows — instead of only reading a page through the
 existing static `read_webpage` extractor. It shipped in five passes: Pass 1 (0.11.0, the
 spine: driver, lens, guarded proxy, `browse_open`/`see`/`act`/`close`, the audit log), Pass 2
-(0.11.1, screenshots, tabs, downloads, history), Pass 3a (0.11.3, synchronous safety gates),
+(0.11.1, screenshots, tabs, downloads, history, closed by `read_webpage`'s re-backing onto the
+live DOM at 0.11.2 — see "`read_webpage` is re-backed onto the live DOM" below), Pass 3a (0.11.3,
+synchronous safety gates),
 Pass 3b (0.11.4, the ward-in-the-loop and consent-gated surfaces), and Pass 4 (0.11.7,
 unattended web research on [pondering](pondering) ticks), followed by two async
 refinements to Pass 3b's synchronous hard-stops: `browseConfirmMode: 'ask'` approve-resume
@@ -81,9 +101,16 @@ Work continued past the spec's four passes: two Chromium-acquisition hardening f
 0.11.12, covered below), page watches (0.11.13, a scheduled watch-and-notify loop that reuses
 the static web-read path rather than the driver), and a run of interaction-model refinements
 (0.11.14–0.11.16) that made refs meaning-bearing, let the model act by naming what it sees, gave
-it awareness of images on a page, and added page-level scroll. A CDP-attach engine backing for
-the ward's own logged-in Chrome (spec §9 Horizon #2) is fully designed but deliberately parked,
-not built — see the CDP mode section below.
+it awareness of images on a page, and added page-level scroll, followed by a JS-render timing
+fix (0.11.23, covered below) that made reads and acts wait for a page's own JS to finish wiring
+up before touching it, open shadow-DOM piercing plus a per-browse reader mirror (0.11.28,
+covered below) that closed the shadow-DOM half of the extraction gap the 0.11.23 fix left open,
+and a Reddit JSON-API reader (0.11.29, covered below) that routes `read_webpage` around
+Reddit's anti-bot wall entirely, because that wall blocks the browser's own traffic regardless
+of what the shadow-DOM fix rendered. A CDP-attach engine backing for the ward's own logged-in
+Chrome (spec §9 Horizon #2), specced in full and deliberately parked while the owned-profile
+modes proved themselves, shipped at 0.11.31-alpha once the ward gave the go-ahead — see the
+CDP mode section below.
 
 The feature is opt-in (`settings.browseEnabled`, default off, with a hard
 `PROTO_FAMILIAR_BROWSE_DISABLED` env kill switch) and ward-only: the `browse_*` tools are
@@ -165,6 +192,33 @@ refs, and `getByRole(name)` is ambiguous whenever a page has duplicate accessibl
 the CSS-path resolver was the fallback the installed API actually supports, not the first
 choice from the spec [@browser-driver-js].
 
+## Reading before a JS-driven page has finished wiring itself up (0.11.23)
+
+An early live use surfaced a page the Familiar could partly see but not act on: it read some
+links on a Carrd-built interactive site but a click or follow did nothing. The root cause was
+timing, not the ref/generation model above — `navigate()`, `readPage()`, and `act()` all read
+the DOM at Playwright's `domcontentloaded` event, which fires once the HTML is parsed but
+*before* a page's external JS has run and wired up its interactivity, so a snapshot taken then
+reads a half-built page and a click lands on an element that has not been attached to its
+handler yet [@browser-driver-js]. The re-snapshot after an act had the same problem from the
+other side: a fixed 150ms wait was too short for any JS-driven effect — a framework re-render,
+a Carrd section swap, a client-side route or hash change.
+
+`settlePage(pg, { total })` fixes both without risking a hang: after `domcontentloaded`, it
+best-effort-waits for Playwright's `load` event, then a short `networkidle` window, then a
+small fixed floor for framework microtasks and hash-nav handlers to finish — each wait is
+individually try/caught and clamped against a shared deadline, so a page that never goes fully
+idle (analytics, websockets, long-polling) cannot hang the turn; it just falls through to the
+floor and proceeds [@browser-driver-js]. `navigate()` and `readPage()` call it with a 3.5s
+budget before their first read, and `act()` calls it with a 2s budget in place of the old fixed
+150ms before re-snapshotting [@browser-driver-js]. A URL or hash change is still caught
+independently by `computeDelta()`'s before/after URL diff, so an in-page anchor navigation
+still reads as movement even though `settlePage()` itself only waits, it does not inspect
+content. The fix is general — it helps any SPA or framework-rendered page, not just the site
+that surfaced it. At the time of this fix, shadow-DOM and iframe traversal were still a separate,
+open gap; open shadow DOM is now pierced — see "Piercing open shadow DOM" below — while iframe
+traversal remains unaddressed.
+
 ## SSRF is enforced by a proxy the app owns, not a pre-navigation check
 
 Two naive designs for blocking requests to loopback, private, and link-local addresses both
@@ -221,6 +275,28 @@ text-only reads [@browser-js]:
   documents, images, and audio — never an executable — with a size cap [@browser-js].
 - **`browse_tabs`** (list/switch/close) and **`browse_history`** (query
   `logs/browser-actions.jsonl`) round out the tool surface [@browser-js] [@browser-audit-js].
+
+## `read_webpage` is re-backed onto the live DOM (the last Pass 2 item, 0.11.2)
+
+`read_webpage` is re-backed by this driver, not left on the static extractor alone. This was the
+one item `docs/browser-build-spec.md` originally placed inside Pass 2 and held back until the
+driver had shipped [@browser-build-spec]; it landed as Pass 2's closing commit at 0.11.2, before
+Pass 3a, so it has been true since early in the milestone [@browser-js]. `browseRead({ url })`
+reads the live JS-rendered DOM through an ephemeral, tab-cap-exempt page (`driver.readPage`) and
+runs the result through `websearch.js`'s shared `extractReadable(html, { url, maxChars })` — the
+same Readability-to-markdown pipeline the static path uses — so browser-backed and static output
+can never drift into two different formats [@browser-js]. The `read_webpage` executor calls
+`shouldBrowserRead(settings)` first, which is true only when browsing is enabled, the ward has
+not forced `webReadBackend: 'static'`, and a Chromium is actually available; otherwise, and on
+any failure of the live read itself (`browseRead` never throws — a caught error returns
+`{ ok: false }`), the executor falls through to the pre-existing static `fetchReadable` floor
+[@browser-js]. This closes the class of silent failure where a modern JS-only page extracted as
+boilerplate or nothing under the static-only path, while keeping the static extractor as the
+degradation floor for a browser-disabled or driver-unavailable turn.
+
+A site the ward's site mode blocks is refused before either path runs, and reports a distinct
+`blocked` result rather than silently falling through to the static floor — the same distinct
+signal the Pass 3a site-modes section below describes for `browse_open` [@browser-js].
 
 ## What Pass 3a (0.11.3) added: synchronous safety gates
 
@@ -563,50 +639,217 @@ at, let alone which one [@browser-lens-js].
 below-the-fold or lazy-loaded/infinite-scroll content that `browse_see`'s viewport-only outline
 level would otherwise never mention.
 
-## CDP mode (Horizon #2): driving the ward's own Chrome — designed, not built
+## Piercing open shadow DOM, and a per-browse reader mirror (0.11.28)
+
+A ward report — the Familiar could see some links on a site but the actual content was missing
+or unclickable — traced to a gap neither the ref/generation model nor the JS-render settle fix
+above touches: `document.querySelectorAll` and `main.innerText` both silently skip shadow DOM,
+so a modern web-component site (Reddit's `shreddit-*` elements, many framework apps) rendered
+its real content inside open shadow roots and the extractor read it as empty chrome
+[@browser-driver-js]. This closes the "iframe and shadow-DOM traversal" gap named in the
+JS-render settle section above, for shadow DOM specifically; iframe traversal is still not
+crossed.
+
+The in-page walk in `browser-driver.js`'s `EXTRACT_FN` now collects every *open* shadow root,
+nested roots included, and queries interactable nodes and image nodes across all of them, then
+appends each shadow root's own `innerText` to the page text channel — because `innerText` skips
+shadow content the same way `querySelectorAll` does [@browser-driver-js]. A shadow-DOM element
+cannot be addressed by a document-rooted CSS path the way a light-DOM element can, so such
+elements are stamped with a unique `data-pfsx` marker and addressed by
+`[data-pfsx="…"]`; Playwright's locator resolves that selector through an open shadow root, so
+the existing act-time resolve-and-click path (described above in "Refs never hold a live
+element") works unchanged once a shadow element has a marker. Light-DOM elements keep their
+natural `uniqueCss` path, so a non-shadow site's extraction output is byte-identical to before —
+this is a strict addition, not a rewrite of the extraction path [@browser-driver-js].
+
+**`browse_open` also gained an opt-in reader mirror.** `readerMirrorUrl(url)` in `browser.js` is
+a pure function that maps a well-known heavy front-end to a lighter, server-rendered
+equivalent when one exists — currently Reddit's `www`/`new`/`np`/`amp`/`m` hosts to
+`old.reddit.com`, which has no shadow DOM, no login wall, and no infinite scroll, with the
+path, query, and hash preserved [@browser-js]. It is a safe no-op for `old.reddit.com` itself,
+for Reddit's media/API subdomains, and for any non-Reddit URL, so passing `reader:true` is
+always harmless even when no mirror applies [@browser-js]. `browse_open({ url, reader: true })`
+swaps to the mirror before the site-mode and driver checks run, and the result notes the swap
+("I opened the lighter old.reddit.com reader mirror for this.") so the Familiar knows which page
+it actually opened [@browser-js]. Nothing is auto-rewritten: the Familiar opts in per browse call
+only when an app-style page has already read badly, matching this page's shipped pattern of
+opt-in surfaces layered on a safe default rather than an automatic rewrite that could surprise
+the model about which page it is looking at.
+
+## Reddit reads bypass the browser entirely: a JSON-API interceptor (0.11.29)
+
+The reader mirror above swaps in `old.reddit.com` for `browse_open`, but a ward report showed
+it does not solve Reddit for `read_webpage`: Reddit's anti-bot layer fingerprints automated
+*browser* traffic and 403s it before the page renders, on every Reddit host including the
+mirror — no amount of DOM-extraction polish gets past a wall that blocks the request before
+render [@reddit-reader-js]. The fix is a different door rather than a better browser: plain
+HTTP against Reddit's own JSON API carries no headless-browser fingerprint at all.
+
+**`reddit-reader.js` intercepts `read_webpage` in `cerebellum.js`, before the browser/static
+path ever runs.** `TOOL_EXECUTORS.read_webpage` checks `isRedditUrl(url)` first; on a match it
+calls `readReddit(url, { settings })` and returns its text immediately on `ok` or `hard` outcomes,
+falling through to the normal browser/static read only when the module throws or the URL is not
+a recognized Reddit listing shape [@reddit-reader-js]. This sits one level above the
+`shouldBrowserRead`/`browseRead`/static-`fetchReadable` fallback chain described above in
+"`read_webpage` is re-backed onto the live DOM" — Reddit never reaches that chain at all once the
+interceptor claims the URL. It is a distinct mechanism from the `browse_open` reader mirror: the
+mirror still exists for interactive click-and-fill browsing, where Reddit's anti-bot wall is a
+still-open gap this fix does not address, since `browse_open` still drives a real browser.
+
+`redditApiPath(url)` normalizes a front-end Reddit URL (post, comments page, subreddit or user
+listing, search) to its `.json` endpoint, bounding `limit` and forcing `raw_json=1`, and returns
+`null` for media/API/oauth subdomains or non-Reddit hosts, so the interceptor is a safe no-op
+outside the shapes it understands [@reddit-reader-js]. `fetchRedditJson` reuses
+`websearch.js`'s `guardedFetch` — the same SSRF guard every other web read goes through — which
+gained a headers/method/body override in this change specifically to carry a descriptive
+User-Agent, a JSON `Accept` header, and the OAuth token POST [@reddit-reader-js] [@websearch-js].
+Two tiers are available: the public `.json` endpoint (default, no setup, but rate-limited and
+still refusable from a datacenter IP) and, when the ward sets script-app credentials in Settings,
+the OAuth password-grant API on `oauth.reddit.com` with an in-memory-only bearer token, which
+does not touch the anti-bot wall at all [@reddit-reader-js]. Both tiers, the URL-to-`.json`
+mapping, and the honest-degradation outcomes are pinned by `tests/reddit-reader.test.mjs`, which
+stubs the fetch layer to exercise the public/403/non-JSON/OAuth flows without a live Reddit
+dependency [@reddit-reader-test]. `parseRedditReadable` renders a
+comments page (post plus threaded top comments, capped) or a listing (numbered posts with score,
+comment count, age, and a snippet) into plain text, and `readReddit` runs that text through
+`injection-guard.js`'s `sanitizeExternal()` before returning it, because comment and post bodies
+are user-authored content read from a third party like any other web page
+[@reddit-reader-js]. A definitive Reddit-side outcome (blocked, or an OAuth auth failure) comes
+back with `hard:true` so the executor reports it honestly instead of silently falling through to
+the also-walled browser path; an unrecognized page shape falls through instead.
+
+The feature is on by default (`settings.redditReaderEnabled`, opt out per ward) with a hard
+`PROTO_FAMILIAR_REDDIT_DISABLED` env kill switch, and credentials/UA are read from
+`PROTO_FAMILIAR_REDDIT_*` environment variables first, then Settings [@reddit-reader-js]. Because
+the interceptor sits inside `read_webpage` rather than inside `browser.js`, it is also a new,
+separate wired call site for the injection guard beyond the ones recorded on
+[Injection guard: wiring history](injection-guard-gap).
+
+**This fix was not the end of the story.** The public `.json` endpoint the paragraphs above
+describe is itself blocked from a datacenter/server IP at the network layer — the same
+anti-bot wall catches a plain Node fetch, not just a headless-browser fingerprint — so a
+ward running the app outside a residential network still saw empty reads. 0.11.30 added a
+third tier, fetched through the ward's own authenticated browser session, and generalized
+the whole "which door gets me into this site" question into a registry any future gated
+site can join — see [Reader router](reader-router) for the fix and the pattern it now
+follows.
+
+## CDP mode (Horizon #2): driving the ward's own Chrome (0.11.31-alpha)
 
 `docs/browser-cdp-mode-build-spec.md` specs an alternate engine backing for the same `browse_*`
-tool surface: instead of the Familiar's own isolated profile, it would attach to the ward's
+tool surface: instead of the Familiar's own isolated profile, attach to the ward's
 **already-running, already-logged-in** Chrome via `chromium.connectOverCDP()`, so tasks that the
-owned-profile mode has to hand back to the ward — anything behind a login — could proceed without
-a handoff [@browser-cdp-spec]. The ward reviewed the design and chose to **spec-and-park** it
-rather than build it now: the owned-profile browser this page describes had only just entered
-real use, and CDP mode belongs in the same "prove the cheaper modes first" bucket as the
-still-undesigned delegated task-flow horizon [@browser-cdp-spec]. No code exists yet — the design
-is settled and answered (§7 of the spec), and this section exists so that work is not lost before
-a future ward go-ahead revives it.
+owned-profile mode has to hand back to the ward — anything behind a login — can proceed without
+a handoff [@browser-cdp-spec]. The design was specced in full and deliberately parked while the
+owned-profile browser this page describes proved itself in real use; the ward then gave the
+go-ahead and it was built to the letter at 0.11.31-alpha. See
+[CDP mode: driving the ward's own Chrome](../decisions/browser-cdp-mode) for why the design is
+shaped the way it is — the forced single-domain allowlist, the two independent human acts
+nothing can fake, and the arm-expiry drop to the owned profile — this section covers how that
+design landed in code.
 
-The design's central problem is that this page's "SSRF is enforced by a proxy the app owns"
-guarantee cannot apply under CDP: that guarantee depends on the app launching the browser through
-`launch({proxy})`, and CDP attaches to a browser it did not launch, so the network floor degrades
-from an airtight IP-resolution check to a best-effort URL allowlist [@browser-cdp-spec]. See
-[CDP mode: driving the ward's own Chrome](../decisions/browser-cdp-mode) for why that degraded
-floor, plus a forced single-domain allowlist and two independent human acts nothing can fake,
-were judged an acceptable design for a capability this high-stakes — read it in full before
-resuming this work.
+**The central problem the design had to answer:** this page's "SSRF is enforced by a proxy the
+app owns" guarantee cannot apply under CDP, because that guarantee depends on the app launching
+the browser through `launch({proxy})`, and CDP attaches to a browser it did not launch. The
+network floor degrades from an airtight IP-resolution check to a best-effort URL allowlist
+[@browser-cdp-spec]. The shipped code closes that gap with a scope narrow and short-lived enough
+to stand in for the missing guarantee, not by pretending the guarantee still holds.
 
-## What is deliberately still deferred
+**`browser-cdp-arm.js` is the arm gate** — the ward-only, time-boxed grant that is the whole
+network floor under CDP. `armCdp({domain, minutes})` normalizes a ward-supplied domain (refusing
+IPs and private/loopback/metadata literals), clamps the duration to a 15-minute default and a
+60-minute ceiling, and stores the arm in memory only — a process restart drops it, because a
+time-boxed grant must never silently survive one [@browser-cdp-arm-js]. `armAllowsHost(host)` is
+the request-level check every CDP-mode navigation and subresource goes through: it is `false`
+whenever no arm is active, and otherwise matches only the armed domain or a subdomain of it,
+which makes the armed domain the allowlist rather than a typed list the ward maintains
+[@browser-cdp-arm-js]. `CDP_ENDPOINT` is hardcoded to `127.0.0.1:9222`, so the app can never be
+pointed at a remote CDP target even by configuration [@browser-cdp-arm-js]. This module is pure
+and fully unit-tested (`tests/browser-cdp-arm.test.mjs`: domain normalization, private/loopback
+refusal, the allowlist, expiry plus its one-shot note, disarm, and the env hard-disable)
+[@browser-cdp-arm-test] — the same "safety-critical judgment lives in a pure, fixture-tested
+module" pattern the fill-source gate above already follows.
 
-`read_webpage` is not re-backed by this driver. It stays on its existing static extractor even
-after Pass 1 through 4 have shipped, on purpose: `read_webpage` is an always-on, widely used
-tool, and the spec's ordering is to prove the driver on the opt-in `browse_*` surface first,
-then flip the always-on tool to it only once the driver has shaken out under real use
-[@browser-build-spec]. This is the one item the spec originally placed inside Pass 2 that
-remains undone as of 0.11.7.
+**`browser-driver.js`'s `ensureContext` branches on `cdpArmActive()`.** When an arm is live it
+calls `ensureCdpContext()`, which attaches via `connectOverCDP(CDP_ENDPOINT)`, opens a
+**dedicated** new tab in the ward's browser rather than reusing one of their existing tabs, and
+installs the same `armAllowsHost` check as a `context.route` guard on that tab so a page cannot
+pivot the Familiar's CDP session off the armed domain [@browser-driver-js] [@browser-cdp-arm-js].
+If a context is already open in the wrong mode (CDP when the arm just ended, or owned when an
+arm just started), `ensureContext` closes it first via `closeBrowser`, which is where the
+milestone's hardest invariant lives: the `cdp` branch closes only the dedicated tab it opened
+and then **disconnects** — it never calls `browser.close()` on the ward's real Chrome, and the
+ward's other tabs are untouched [@browser-driver-js]. An arm that lapses mid-task drops back to
+the owned profile automatically, with a one-shot first-person note
+(`consumeCdpDropNote`/RULE B) prepended to the next tool result so the Familiar always knows
+what it is actually driving and never claims a logged-in result it no longer has
+[@browser-driver-js] [@browser-js]. `engineMode()` and `browserStatus()` surface the current
+mode and armed domain for the audit trail and the Settings UI [@browser-driver-js].
+
+**One-click setup, then arm: a two-step ward flow.** The ward turns CDP mode on in Settings
+(`cdpModeEnabled`, default off) inside a collapsed "Drive my own Chrome (advanced)" panel, which
+now walks through two steps rather than arming directly. Step ① "Set up my Chrome…" hits
+`POST /api/browser/cdp-setup`, which `cdp-launcher.js` serves: it locates the ward's installed
+Chrome/Edge/Chromium (`findWardChrome`), then writes a double-clickable Desktop launcher that
+opens that browser with `--remote-debugging-port=9222` — the ward still performs the actual
+launch; the app only lays down the shortcut [@cdp-launcher-js]. Step ② "Arm for this site" is
+the existing domain field and Arm/Disarm buttons hitting `POST /api/browser/cdp-arm` and
+`/api/browser/cdp-disarm`, gated on `cdpModeEnabled` plus the hard env off-switch
+`PROTO_FAMILIAR_BROWSER_CDP_DISABLED=1` [@browser-cdp-arm-js]. The model has
+no tool that can call any of these three endpoints; `cerebellum.js`'s `browse_open` description
+only tells the Familiar it may **ask** the ward to arm a domain for a logged-in task, never that
+it can set up or arm one itself, so a hostile page can never talk the Familiar into self-arming.
+Every `browse_open` and `browse_act` audit entry stamps `mode` and, under CDP, `cdpDomain`, so a
+review of `logs/browser-actions.jsonl` can tell at a glance which actions ran under CDP
+[@browser-js].
+
+**The launcher deviates from the original spec on purpose: a dedicated profile, not the ward's
+everyday Chrome.** The build spec's premise (and this page's own framing above) is attaching to
+the ward's *already-running, already-logged-in* Chrome — their real, everyday profile. The
+shipped one-click launcher does not do that: `cdp-launcher.js` points `--user-data-dir` at a
+separate, dedicated profile (`~/.proto-familiar/cdp-chrome`) that starts logged out, rather than
+the ward's real profile with bank and email logins already in it. The module's own header
+records this as a ward-approved deviation, made because it is strictly safer — the
+Familiar-drivable Chrome only ever holds whatever sites the ward deliberately signs into inside
+that dedicated profile, so the debug port is never a path to the ward's actual banking or email
+session [@cdp-launcher-js]. A ward who wants CDP to reach an *already*-logged-in everyday
+session can still skip the launcher and start their own Chrome with the debug flag by hand; the
+one-click path trades that convenience for the narrower blast radius by default.
+
+**What is shipped versus what is still unverified.** All of the above is built and the arm-gate
+logic is fully unit-tested, but the live attach-and-drive against a real Chrome instance cannot
+run in headless CI — there is no actual Chrome with a debug port to attach to in that
+environment — so it needs the same kind of ward desktop shakeout the headed-handoff hand-back
+required before it could be trusted: launch Chrome with `--remote-debugging-port=9222`, arm a
+domain, and confirm the drive works and that disarm, expiry, and `browse_close` leave the
+ward's own Chrome and its other tabs untouched [@browser-cdp-spec].
+
+## The whole spec is built, and work has continued past it
 
 The whole browser milestone specced in `docs/browser-build-spec.md`'s Passes 1 through 4 is now
-built, including both Pass 3b refinements named above (`browseConfirmMode: 'ask'`
-approve-resume, 0.11.5, and the headed handoff hand-back-and-resume, 0.11.6) and Pass 4's
-unattended pondering research (0.11.7, shipped as a plan-and-read loop rather than the spec's
-tool-calling design). What remains is `read_webpage`'s re-backing onto this driver.
+built, including `read_webpage`'s re-backing (above, 0.11.2), both Pass 3b refinements named
+earlier (`browseConfirmMode: 'ask'` approve-resume, 0.11.5, and the headed handoff
+hand-back-and-resume, 0.11.6), and Pass 4's unattended pondering research (0.11.7, shipped as a
+plan-and-read loop rather than the spec's tool-calling design). Work has continued past the
+spec's four passes — see the Chromium-acquisition, page-watches, ref, image/scroll,
+JS-render-settle, shadow-DOM, and Reddit-JSON-reader sections above — and the §9 Horizon #2 CDP
+mode described above is also now built, at 0.11.31-alpha, pending its desktop shakeout. The
+driver's own in-page walk still does not cross an iframe boundary, which remains the one open
+extraction gap. Interactive `browse_open`/`browse_act` on Reddit also remains open: the JSON
+reader fixes `read_webpage` only, and a real click-and-fill session there still drives a browser
+Reddit's anti-bot wall can fingerprint.
 
 ## Related
 
+- [Reader router: reading gated and blocked sites](reader-router) — the 0.11.30
+  generalization of the Reddit-JSON fix above into a per-site backend registry and a
+  reachability doctor, built on a new `browser-driver.contextRequest` primitive this page's
+  driver now exposes.
 - [Browser milestone: guardrails in code, not prompts](../decisions/browser-guardrails-in-code)
   — the design decisions behind the SSRF proxy, the Stranger-tier default, and the consent,
   vault, and handoff surfaces Pass 3 built.
-- [CDP mode: driving the ward's own Chrome](../decisions/browser-cdp-mode) — the settled,
-  parked design for the Horizon #2 alternate engine backing, and why its degraded network floor
+- [CDP mode: driving the ward's own Chrome](../decisions/browser-cdp-mode) — the shipped
+  design for the Horizon #2 alternate engine backing, and why its degraded network floor
   was judged acceptable.
 - [Exact values are code's job](../decisions/exact-values-in-code) — the general rule
   `readVaultEntry()` applies to secrets, and the readable-slug-id law page watches and

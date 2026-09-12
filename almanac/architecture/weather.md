@@ -7,16 +7,16 @@ sources:
     path: docs/weather-build-spec.md
   - id: weather-source
     type: file
-    path: weather-source.js
+    path: src/weather/weather-source.js
   - id: weather-providers
     type: file
-    path: weather-providers.js
+    path: src/weather/weather-providers.js
   - id: weather-format
     type: file
-    path: weather-format.js
+    path: src/weather/weather-format.js
   - id: weather-mirror
     type: file
-    path: weather-mirror.js
+    path: src/weather/weather-mirror.js
   - id: unruh-location
     type: file
     path: unruh/src/unruh/location.py
@@ -25,10 +25,10 @@ sources:
     path: unruh/src/unruh/migrations/0006_locations.sql
   - id: weather-service
     type: file
-    path: weather-service.js
+    path: src/weather/weather-service.js
   - id: event-alerts
     type: file
-    path: event-alerts.js
+    path: src/schedule/event-alerts.js
 ---
 
 # Weather

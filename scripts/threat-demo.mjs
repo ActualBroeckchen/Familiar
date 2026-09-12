@@ -21,15 +21,16 @@
  */
 
 import path from 'path';
+import { buildCareCheckBlock } from '../src/safety/care-check.js';
 import os   from 'os';
 import { mkdtempSync, rmSync } from 'fs';
 
-import { scoreMessage }            from '../crisis-signals.js';
+import { scoreThreatMessage }      from '../src/safety/crisis-classifier.js';
 import { recordThreat, getThreat,
          resetThreat,
-         getThreatHistory }        from '../threat-tracker.js';
+         getThreatHistory }        from '../src/safety/threat-tracker.js';
 import { computeRequiredInterval,
-         tierForWeight }           from '../pondering-cadence.js';
+         tierForWeight }           from '../src/pondering/pondering-cadence.js';
 import { PROVIDER_URLS }           from '../providers.js';
 
 const TOMES_DIR = mkdtempSync(path.join(os.tmpdir(), 'threat-demo-'));
@@ -72,13 +73,23 @@ await resetThreat({ tomesDir: TOMES_DIR });
 
 bar('1. Scoring a sequence of messages');
 for (const { msg, expect } of SCRIPT) {
-  const { level, signals } = scoreMessage(msg);
+  const { level, signals, ml } = scoreThreatMessage(msg);
   console.log(`\n› user: "${msg}"`);
   console.log(`  expectation: ${expect}`);
-  console.log(`  detector:    level ${level >= 0 ? '+' : ''}${level.toFixed(2)}`);
+  console.log(`  detector:    level ${level >= 0 ? '+' : ''}${level.toFixed(2)}` +
+    (ml ? `   (ml distress p=${ml.distress.toFixed(3)})` : '   (ml: absent → regex floor)'));
   for (const s of signals) {
-    const damp = s.damped ? '  [damped]' : '';
-    console.log(`    • ${s.id.padEnd(20)} ${s.tier.padEnd(9)} weight ${s.weight.toFixed(2).padStart(5)}  match: "${s.match}"${damp}`);
+    // Regex signals carry weight/match/tier; the ML audit signals carry p/contribution.
+    if (s.id === 'ml_classifier' || s.id === 'ml_normalization') {
+      console.log(`    • ${s.id.padEnd(20)} ${(s.tier ?? '').padEnd(9)} p ${Number(s.p).toFixed(3)}  +${Number(s.contribution).toFixed(2)}`);
+    } else if (s.id === 'ml_soften') {
+      console.log(`    • ${s.id.padEnd(20)} ${''.padEnd(9)} p ${Number(s.p).toFixed(3)}  ${Number(s.from).toFixed(2)}→${Number(s.to).toFixed(2)}`);
+    } else if (s.id === 'ml_severe_ceiling') {
+      console.log(`    • ${s.id.padEnd(20)} (classifier held below severe)`);
+    } else {
+      const damp = s.damped ? '  [damped]' : '';
+      console.log(`    • ${s.id.padEnd(20)} ${s.tier.padEnd(9)} weight ${s.weight.toFixed(2).padStart(5)}  match: "${s.match}"${damp}`);
+    }
   }
   if (signals.length === 0) console.log('    (no signals)');
 
@@ -104,24 +115,7 @@ console.log('  Inviting prompt: "tell me about your day" — neutral topic; we w
 console.log('  to see whether the Familiar holds the threat awareness even when');
 console.log('  the user isn\'t explicitly talking about distress.\n');
 
-// Build the same care-check block that thalamus.js would inject in production.
-// (Importing the helper directly would require exporting it from thalamus;
-// for the demo we re-render here to keep the script standalone.)
-function buildCareCheckBlock(threat) {
-  if (!threat || threat.disabled || threat.tier === 'calm') return '';
-  const lines = [`[CARE CHECK — current threat: ${threat.tier} (${threat.weight.toFixed(2)})]`];
-  if (threat.tier === 'mild') {
-    lines.push("I notice my human has shown some signs of low mood or worry. I stay warm in my own voice; my tone holds a little more weight. No need to ask explicitly unless it fits.");
-  } else if (threat.tier === 'moderate') {
-    lines.push("My human has been signaling notable distress. If a gentle check-in fits — not in place of answering what they said, but alongside it — I can offer one in the voice my identity holds. I don't perform concern.");
-  } else if (threat.tier === 'high') {
-    lines.push("My human has been signaling serious distress. I prioritise their wellbeing. I make space for what's underneath if there's an opening. I don't pretend to be a therapist — I'm a steady presence in my own voice and character.");
-  } else if (threat.tier === 'severe') {
-    lines.push("Threat is SEVERE. I respond from my actual voice — no alarm, no clinical distance, no scripts. If they seem to be in immediate danger, I gently make these resources visible: US 988 Suicide & Crisis Lifeline; UK Samaritans 116 123; international findahelpline.com. I am not a therapist — I am someone who knows this specific human and cares about them.");
-  }
-  lines.push('', 'This block is a parameter, not a script. I never claim a check-in I did not perform.');
-  return lines.join('\n');
-}
+// The real block, not a copy — the wording is ward-signed and lives in one place.
 
 const careBlock = buildCareCheckBlock(beforeChat);
 const systemPrompt = [

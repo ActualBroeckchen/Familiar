@@ -15,7 +15,7 @@ import {
   FILTER_THRESHOLD,
   FILTER_RETRY_BUDGET,
   FILTER_SAFE_REFUSAL,
-} from '../outgoing-filter.js';
+} from '../src/safety/outgoing-filter.js';
 
 test('constants match the signed-off build-spec values', () => {
   assert.equal(FILTER_THRESHOLD, 0.70);

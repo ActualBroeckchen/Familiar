@@ -16,7 +16,7 @@ sources:
 
 ## Context
 
-Weather sense required the Familiar to know where the ward is so it could fetch relevant conditions. The naive approach would pass the place name ("Seattle") or coordinates to the model so it could reason about them. That would cross a privacy boundary: the model would retain geographic information across sessions, across the multi-embodiment boundary, and potentially in any future checkpoint or audit. Even location labels like "home" and "work" could be combined with conversation history to infer a place.
+Weather sense required the Familiar to know where the ward is so it could fetch relevant conditions. The naive approach would pass the place name ("Seattle") or coordinates to the model so it could reason about them. That would cross a privacy boundary: the model would retain geographic information across sessions, across the [multi-embodiment](../concepts/multi-embodiment) boundary, and potentially in any future checkpoint or audit. Even location labels like "home" and "work" could be combined with conversation history to infer a place.
 
 The decision was motivated by the principle that unnecessary data should not be centralized: the Familiar's identity lives in [Phylactery](../architecture/phylactery), its schedule and interests in [Unruh](../architecture/unruh), but its geography should stay local — known only to the Node runtime that serves the ward directly.
 
@@ -40,3 +40,4 @@ This is a stability gain. The Familiar's geographic context is as minimal as the
 
 - [Weather](../architecture/weather) — the autonomous loop that consumes weather sense via the location-privacy boundary.
 - [Unruh](../architecture/unruh) — the temporal-context specialist that holds schedule and location references.
+- [Multi-embodiment](../concepts/multi-embodiment) — the canonical-store model whose boundary this decision keeps geographic data out of.

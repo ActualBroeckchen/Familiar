@@ -4,7 +4,10 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { listOwnFiles, readOwnFile } from '../own-files.js';
+import {
+  listOwnFiles, readOwnFile, searchSessions,
+  isSessionLogPath, renderSessionMarkdown, readSessionLog,
+} from '../own-files.js';
 
 // Build a throwaway "repo root" so tests don't depend on the real tree.
 async function makeRoot() {
@@ -113,4 +116,155 @@ test('listOwnFiles: directories sort before files', async () => {
   const firstFileIdx = r.entries.findIndex(e => e.type === 'file');
   const lastDirIdx = r.entries.map(e => e.type).lastIndexOf('dir');
   assert.ok(lastDirIdx < firstFileIdx, 'all dirs come before files');
+});
+
+// ── searchSessions: glance back through past conversations ──────────
+
+async function makeLogsRoot() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pf-sessions-'));
+  await fs.mkdir(path.join(root, 'logs'));
+  const write = (name, obj) => fs.writeFile(path.join(root, 'logs', name), JSON.stringify(obj));
+  // An older web DM where the ward mentions the dentist.
+  await write('s-old.json', {
+    sessionId: 's-old', startedAt: '2026-01-01T09:00:00Z', updatedAt: '2026-01-01T09:10:00Z',
+    location: { platform: 'web', label: 'Web chat' },
+    messages: [
+      { id: 'a', role: 'user', content: 'I have a dentist appointment next week', timestamp: '2026-01-01T09:00:00Z' },
+      { id: 'b', role: 'assistant', content: 'Noted — want a reminder?', timestamp: '2026-01-01T09:01:00Z' },
+    ],
+  });
+  // A newer group room where someone else also says "dentist".
+  await write('s-new.json', {
+    sessionId: 's-new', startedAt: '2026-03-02T18:00:00Z', updatedAt: '2026-03-02T18:30:00Z',
+    location: { platform: 'discord', kind: 'guild', label: 'Cozy Server #general' },
+    messages: [
+      { id: 'c', role: 'user', speaker: 'Chen', content: 'my dentist is great', timestamp: '2026-03-02T18:00:00Z' },
+    ],
+  });
+  // A secret file living in logs/ must never surface.
+  await fs.writeFile(path.join(root, 'logs', 'settings.json'), '{"apiKey":"dentist SECRET"}');
+  // A corrupt log must be skipped, not throw.
+  await fs.writeFile(path.join(root, 'logs', 's-bad.json'), '{ this is not json');
+  return root;
+}
+
+test('searchSessions: finds a term across logs, newest first, with the log path', async () => {
+  const root = await makeLogsRoot();
+  const r = await searchSessions('dentist', { root });
+  assert.equal(r.ok, true);
+  // Two real matches (s-new group room + s-old web) — newest first.
+  assert.equal(r.hits.length, 2);
+  assert.equal(r.hits[0].sessionId, 's-new');
+  assert.equal(r.hits[1].sessionId, 's-old');
+  // Each hit names where to read next.
+  assert.equal(r.hits[0].path, 'logs/s-new.json');
+  assert.equal(r.hits[0].locationLabel, 'Cozy Server #general');
+});
+
+test('searchSessions: snippet carries the speaker in a group room', async () => {
+  const root = await makeLogsRoot();
+  const r = await searchSessions('dentist', { root });
+  const group = r.hits.find(h => h.sessionId === 's-new');
+  assert.equal(group.snippets[0].speaker, 'Chen');
+  assert.match(group.snippets[0].text, /dentist/);
+});
+
+test('searchSessions: never returns a secret file, and skips corrupt logs', async () => {
+  const root = await makeLogsRoot();
+  const r = await searchSessions('dentist', { root });
+  assert.ok(r.hits.every(h => !h.path.endsWith('settings.json')), 'secret file must never surface');
+  // s-bad.json is corrupt — it is silently skipped, the call still succeeds.
+  assert.equal(r.ok, true);
+});
+
+test('searchSessions: all terms must appear in the same message', async () => {
+  const root = await makeLogsRoot();
+  // "dentist" is in s-old, "reminder" is in s-old's assistant turn, but never
+  // together in one message — so a two-term query requiring both finds nothing.
+  const r = await searchSessions('dentist reminder', { root });
+  assert.equal(r.ok, true);
+  assert.equal(r.hits.length, 0);
+});
+
+test('searchSessions: empty query is refused; missing logs dir is empty not an error', async () => {
+  const root = await makeLogsRoot();
+  const bad = await searchSessions('   ', { root });
+  assert.equal(bad.ok, false);
+  const noLogs = await fs.mkdtemp(path.join(os.tmpdir(), 'pf-nologs-'));
+  const r = await searchSessions('anything', { root: noLogs });
+  assert.equal(r.ok, true);
+  assert.equal(r.hits.length, 0);
+});
+
+// ── Session logs read as a compact transcript, not raw JSON ─────────
+
+test('isSessionLogPath: only plain logs/<id>.json qualify', () => {
+  assert.equal(isSessionLogPath('logs/s-abc.json'), true);
+  assert.equal(isSessionLogPath('logs\\s-abc.json'), true);
+  assert.equal(isSessionLogPath('tomes/ponderings.json'), false);
+  assert.equal(isSessionLogPath('logs/sub/x.json'), false);
+  assert.equal(isSessionLogPath('logs/s-abc.md'), false);
+});
+
+test('renderSessionMarkdown: compact transcript with speakers, no JSON scaffolding', () => {
+  const { markdown } = renderSessionMarkdown({
+    sessionId: 's-1', location: { platform: 'discord', kind: 'guild', label: '#general' },
+    messages: [
+      { id: 'uuid-aaaa-bbbb', role: 'user', speaker: 'Chen', content: 'hi there', timestamp: '2026-06-14T14:03:00Z' },
+      { id: 'uuid-cccc-dddd', role: 'assistant', content: 'hello Chen', timestamp: '2026-06-14T14:04:00Z' },
+      { id: 'uuid-eeee', role: 'user', content: 'next day', timestamp: '2026-06-15T09:00:00Z' },
+    ],
+  });
+  assert.match(markdown, /Session s-1 · #general · 2026-06-14 → 2026-06-15 · 3 messages/);
+  assert.match(markdown, /\[14:03\] Chen: hi there/);
+  assert.match(markdown, /\[14:04\] me: hello Chen/);      // assistant → "me"
+  assert.match(markdown, /— 2026-06-15 —/);                 // day divider on change
+  assert.ok(!markdown.includes('uuid-aaaa'), 'per-message UUIDs must not appear');
+  assert.ok(!markdown.includes('"role"') && !markdown.includes('{'), 'no JSON scaffolding');
+});
+
+test('renderSessionMarkdown: attachments show as brief markers', () => {
+  const { markdown } = renderSessionMarkdown({
+    sessionId: 's-2', location: { platform: 'web' },
+    messages: [{ role: 'user', content: 'look at this', timestamp: '2026-06-14T10:00:00Z',
+      attachments: [{ id: 'x', kind: 'image', mime: 'image/png' }] }],
+  });
+  assert.match(markdown, /my human: look at this \[image\]/);
+});
+
+test('renderSessionMarkdown: keeps the most recent part when over budget, and flags it', () => {
+  const messages = [];
+  for (let i = 0; i < 400; i++) {
+    messages.push({ role: i % 2 ? 'assistant' : 'user', content: `line number ${i} `.repeat(6),
+      timestamp: `2026-06-14T10:${String(i % 60).padStart(2, '0')}:00Z` });
+  }
+  const { markdown, trimmed } = renderSessionMarkdown({ sessionId: 's-3', messages }, { maxChars: 2000 });
+  assert.equal(trimmed, true);
+  assert.ok(markdown.length <= 2000 + 200, 'stays near the budget');
+  // The LAST line is kept; an early one is dropped.
+  assert.ok(markdown.includes('line number 399'), 'most recent kept');
+  assert.ok(!markdown.includes('line number 0 '), 'oldest dropped when over budget');
+});
+
+test('readSessionLog: renders a real log file to markdown through the sandbox', async () => {
+  const root = await makeLogsRoot();
+  const r = await readSessionLog('logs/s-old.json', { root });
+  assert.equal(r.ok, true);
+  assert.match(r.content, /Session s-old/);
+  assert.match(r.content, /my human: I have a dentist appointment next week/);
+  assert.ok(!r.content.includes('{'), 'no raw JSON');
+});
+
+test('readSessionLog: a corrupt log falls back rather than throwing', async () => {
+  const root = await makeLogsRoot();
+  const r = await readSessionLog('logs/s-bad.json', { root });
+  assert.equal(r.ok, false);
+  assert.equal(r.fallback, true);
+});
+
+test('readSessionLog: refuses a secret file even at a logs path', async () => {
+  const root = await makeLogsRoot();
+  const r = await readSessionLog('logs/settings.json', { root });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /off-limits/);
 });

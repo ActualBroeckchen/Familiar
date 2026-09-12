@@ -16,8 +16,8 @@
  *   TEMP_KEY=sk-... node scripts/ponder-from-interests.mjs [--model "..."]
  */
 import { withUnruh, parseToolText } from './_unruh-mcp.mjs';
-import { pickInterest }             from '../interest-picker.js';
-import { ponderOnce }               from '../pondering.js';
+import { pickInterest }             from '../src/pondering/interest-picker.js';
+import { ponderOnce }               from '../src/pondering/pondering.js';
 
 function parseArgs(argv) {
   const args = {};

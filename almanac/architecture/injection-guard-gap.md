@@ -14,6 +14,9 @@ sources:
   - id: architecture-doc
     type: file
     path: docs/architecture.md
+  - id: reddit-reader-js
+    type: file
+    path: src/browser/reddit-reader.js
 ---
 
 # Injection Guard: From Documented-but-Unwired to Two Wired Boundaries
@@ -32,6 +35,11 @@ triage in a group setting. What shipped:
   [browser milestone](browser)'s `browser.js`, shipped later (0.11.0), is a second wired call
   site: every page snapshot and act verdict passes through `sanitizeExternal()` before it can
   reach a prompt, on top of the Stranger-tier framing that page content also gets there.
+  `reddit-reader.js` (0.11.29) is a third: it intercepts `read_webpage` for Reddit URLs before
+  either the browser or static path runs, and sanitizes the parsed post/comment text through the
+  same `sanitizeExternal()` before returning it, because Reddit comment and post bodies are
+  user-authored like any other third-party web content — see [Browser](browser) for the
+  interceptor's full mechanics [@reddit-reader-js].
 - **Village:** `discord-gateway.js`'s new `inboundContent()` helper (both ingestion sites —
   spoken turns and observed messages) sanitizes villager/stranger text only. The constraints
   are structural, not behavioral: the ward's own words never pass through the guard on any

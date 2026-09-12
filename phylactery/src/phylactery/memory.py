@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Any
 
 from phylactery.db import get_conn, insert_with_slug_retry, new_id, slug_id, now_iso
@@ -138,6 +138,27 @@ def _decay_weight(last_recalled_at: str | None, care_weight: str | None) -> floa
     return weight
 
 
+# The lowest a fuzzy-attribution memory can be pushed in ranking. It always
+# stays retrievable (a floor, never zero) — the point is "downweight, never
+# lose": a solid fact whose WHO is unresolved sinks below confident ones but is
+# still there for a later sweep to fix.
+_ATTRIBUTION_FLOOR = 0.2
+
+
+def _attribution_weight(attribution_confidence) -> float:
+    """Ranking multiplier for how sure we are WHO a memory is about. Unset/None
+    (old rows, or a write that omitted it) → 1.0, so nothing is retroactively
+    downweighted. A set value is clamped into [floor, 1.0] so a low-attribution
+    memory is down-ranked but never filtered out."""
+    if attribution_confidence is None:
+        return 1.0
+    try:
+        v = float(attribution_confidence)
+    except (TypeError, ValueError):
+        return 1.0
+    return max(_ATTRIBUTION_FLOOR, min(1.0, v))
+
+
 # ── Search (RAG) ──────────────────────────────────────────────────────────────
 
 def search(
@@ -168,6 +189,7 @@ def search(
             rows = conn.execute(f"""
                 SELECT m.id, m.granularity, m.register, m.date_key, m.content, m.audience,
                        m.content_tag, m.care_weight, m.last_recalled_at, m.source_json,
+                       m.attribution_confidence,
                        v.distance
                 FROM memory_vecs v
                 JOIN memories m ON m.id = v.memory_id
@@ -176,7 +198,11 @@ def search(
                 ORDER BY v.distance
             """, [q_vec, k] + aud_params).fetchall()
             # Convert distance → similarity, apply retrieval-decay, re-sort.
-            # score = similarity × decay_weight (down-rank only; never a filter cutoff).
+            # score = similarity × decay_weight × attribution_weight
+            # (down-rank only; never a filter cutoff). attribution_weight is the
+            # memory's attribution_confidence, or 1.0 when unset — so a fact whose
+            # WHO is fuzzy sinks in ranking but is never lost, while old/omitted
+            # rows are untouched.
             scored = []
             for r in rows:
                 if gating and not memory_visible_to_grants(r["content_tag"], topic_grants):
@@ -184,9 +210,12 @@ def search(
                 dist = r["distance"] if "distance" in r.keys() else 0.0
                 similarity = max(0.0, 1.0 - dist / 2.0)
                 dw = _decay_weight(r["last_recalled_at"], r["care_weight"])
-                score = similarity * dw
+                aw = _attribution_weight(r["attribution_confidence"] if "attribution_confidence" in r.keys() else None)
+                score = similarity * dw * aw
                 item = {"id": r["id"], "granularity": r["granularity"], "register": r["register"],
                         "date": r["date_key"], "excerpt": (r["content"] or "")[:300], "score": round(score, 4)}
+                if aw < 1.0:
+                    item["attribution_confidence"] = round(aw, 2)
                 lbl = _source_label(r["source_json"])
                 if lbl:
                     item["source"] = lbl
@@ -620,6 +649,7 @@ _CATEGORY_TO_TOPIC = {
     "health_info": "medical",
     "relationships": "relationships",
     "whereabouts": "location",
+    "views": "general",
 }
 _TAG_SENSITIVE_CATEGORIES = {"emotional_content", "health_info"}
 
@@ -645,6 +675,7 @@ def create(
     content_tag: str | None = None,
     consent_pending: bool = False,
     confidence: float = 1.0,
+    attribution_confidence: float | None = None,
     standalone: bool = False,
     register: str = "episodic",
     source_meta: dict | None = None,
@@ -733,18 +764,21 @@ def create(
             # category (never left NULL on a fresh fact, so the Phase 4 gate
             # always has a value to reason about).
             tag = (content_tag or "").strip() or category_to_tag(category)
+            # NULL when unset → recall treats it as fully attributed (weight 1.0),
+            # so a write that omits it is never downweighted.
+            attr_conf = None if attribution_confidence is None else max(0.0, min(1.0, attribution_confidence))
             insert_sql = """
                 INSERT INTO memories(id,kind,register,granularity,date_key,slug,content,
                     audience,subjects_json,care_weight,category,content_tag,consent_pending,
-                    confidence,source_json,created_at,updated_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    confidence,attribution_confidence,source_json,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """
             rec_id = insert_with_slug_retry(
                 conn, insert_sql,
                 lambda cid: (cid, "narrative", register, granularity, dk, slug,
                              content, audience, subj_json, care_weight, category, tag,
                              1 if consent_pending else 0, max(0.0, min(1.0, confidence)),
-                             source, now, now),
+                             attr_conf, source, now, now),
                 label=content, kind="mem",
             )
 
@@ -762,21 +796,26 @@ def list_memories(
     limit: int = 50,
     offset: int = 0,
     conn: sqlite3.Connection | None = None,
+    register: str | None = None,
 ) -> list[dict]:
+    """Newest-first browse. `register` narrows to one register — e.g. 'me', the
+    standing truths I hold about myself, which the chat turn reads back so what
+    I've come to think actually reaches me."""
     own_conn = conn is None
     if own_conn:
         conn = get_conn()
     try:
+        where = ["kind='narrative'"]
+        params: list = []
         if granularity:
-            rows = conn.execute(
-                "SELECT id,granularity,register,date_key,content,audience,content_tag,care_weight FROM memories WHERE granularity=? AND kind='narrative' ORDER BY date_key DESC LIMIT ? OFFSET ?",
-                (granularity, limit, offset),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT id,granularity,register,date_key,content,audience,content_tag,care_weight FROM memories WHERE kind='narrative' ORDER BY date_key DESC LIMIT ? OFFSET ?",
-                (limit, offset),
-            ).fetchall()
+            where.append("granularity=?"); params.append(granularity)
+        if register:
+            where.append("register=?"); params.append(register)
+        rows = conn.execute(
+            "SELECT id,granularity,register,date_key,content,audience,content_tag,care_weight FROM memories "
+            f"WHERE {' AND '.join(where)} ORDER BY date_key DESC, rowid DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        ).fetchall()
         return [_row_to_list_item(r) for r in rows]
     finally:
         if own_conn:
@@ -986,6 +1025,8 @@ def update_memory_by_id(
     audience: str | None = None,
     care_weight: str | None = None,
     content_tag: str | None = None,
+    attribution_confidence: float | None = None,
+    subjects: list[str] | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     own_conn = conn is None
@@ -1015,12 +1056,63 @@ def update_memory_by_id(
         if care_weight is not None:
             sets.append("care_weight=?")
             params.append(care_weight if care_weight != "" else None)
+        # Re-resolution: raise attribution once a fuzzy WHO is pinned, and set the
+        # now-known subject. Clamped 0-1; unset leaves both untouched.
+        if attribution_confidence is not None:
+            sets.append("attribution_confidence=?")
+            params.append(max(0.0, min(1.0, attribution_confidence)))
+        if subjects is not None:
+            sets.append("subjects_json=?")
+            params.append(json.dumps(subjects))
         params.append(mem_id)
         with conn:
             conn.execute(f"UPDATE memories SET {', '.join(sets)} WHERE id=?", params)
         if new_content is not None:
             _upsert_embedding(conn, mem_id, new_content)
         return {"ok": True, "id": mem_id}
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def list_unresolved_attributions(
+    threshold: float = 0.5,
+    min_age_days: int = 1,
+    limit: int = 10,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    """Aging memories whose WHO is still fuzzy — attribution_confidence set and
+    below `threshold`, last touched at least `min_age_days` ago (so a just-saved
+    hedge gets a beat before it's surfaced for re-resolution). Ordered
+    most-unsure first. This is the code gate for the noticing loop's
+    re-resolution wake: no rows → no wake. Nulls (fully attributed) never match."""
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        cutoff = (datetime.utcnow() - timedelta(days=max(0, min_age_days))).isoformat()
+        rows = conn.execute(
+            "SELECT id, content, subjects_json, date_key, attribution_confidence "
+            "FROM memories "
+            "WHERE kind='narrative' AND attribution_confidence IS NOT NULL "
+            "  AND attribution_confidence < ? AND updated_at <= ? "
+            "ORDER BY attribution_confidence ASC, updated_at ASC LIMIT ?",
+            (threshold, cutoff, max(1, limit)),
+        ).fetchall()
+        items = []
+        for r in rows:
+            try:
+                subs = json.loads(r["subjects_json"]) if r["subjects_json"] else []
+            except (TypeError, ValueError):
+                subs = []
+            items.append({
+                "id": r["id"],
+                "content": r["content"] or "",
+                "subjects": subs,
+                "date": r["date_key"],
+                "attribution_confidence": r["attribution_confidence"],
+            })
+        return {"items": items}
     finally:
         if own_conn:
             conn.close()

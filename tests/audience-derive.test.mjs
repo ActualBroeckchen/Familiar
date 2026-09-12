@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveMemoryAudience, AUDIENCE_TAG_WARD_OPEN } from '../audience.js';
+import { deriveMemoryAudience, AUDIENCE_TAG_WARD_OPEN } from '../src/village/audience.js';
 
 // Categories with ascending trust (by permissionScore of their grants):
 //   strangers (0, public) < friends (1) < family (3, narrowest among categories).

@@ -4,13 +4,13 @@ topics: [architecture, vision]
 sources:
   - id: media-js
     type: file
-    path: media.js
+    path: src/vision/media.js
   - id: vision-js
     type: file
-    path: vision.js
+    path: src/vision/vision.js
   - id: zai-vision-js
     type: file
-    path: zai-vision.js
+    path: src/vision/zai-vision.js
   - id: slug-ids-js
     type: file
     path: slug-ids.js
@@ -19,24 +19,36 @@ sources:
     path: server.js
   - id: memorization-js
     type: file
-    path: memorization.js
+    path: src/memory/memorization.js
   - id: cerebellum-js
     type: file
     path: cerebellum.js
   - id: discord-gateway-js
     type: file
-    path: discord-gateway.js
+    path: src/discord/discord-gateway.js
   - id: providers-js
     type: file
     path: providers.js
   - id: claude-md
     type: file
     path: CLAUDE.md
+  - id: gemini-file-api-js
+    type: file
+    path: src/vision/gemini-file-api.js
+  - id: video-build-spec
+    type: file
+    path: docs/video-build-spec.md
+  - id: discord-emotes-js
+    type: file
+    path: src/discord/discord-emotes.js
+  - id: discord-gif-embeds-js
+    type: file
+    path: src/discord/discord-gif-embeds.js
 ---
 
 # Vision and Media Input
 
-Proto-Familiar 0.9.0 introduces multimodal image input, letting the ward send images to the Familiar alongside messages. The vision system is built in layers: a content-addressed media store (`media.js`), a materialization seam (`vision.js`) that converts stored attachments into provider-consumable image data at chat time, and graceful degradation when modality is not available.
+Proto-Familiar 0.9.0 introduces multimodal image input, letting the ward send images to the Familiar alongside messages. The vision system is built in layers: a content-addressed media store (`media.js`), a materialization seam (`vision.js`) that converts stored attachments into provider-consumable image data at chat time, and graceful degradation when modality is not available. Starting in 0.11.33-alpha, the same store and materialization seam grow a `video` media kind, covered in the Video media section below [@video-build-spec].
 
 The load-bearing constraint is that `message.content` stays a plain string forever. Media rides beside it as an optional `attachments` field, so every existing string-assuming consumer keeps working untouched. The reference seam where attachments become LLM-visible content is exactly one code path: `materializeAttachments()` in `vision.js` [@vision-js].
 
@@ -161,6 +173,41 @@ Images are saved through `saveAsset()` with `origin.surface='discord'`, `origin.
 
 **Import structure**: `discord-gateway.js` imports `saveAsset` + caps from `media.js` and `materializeAttachments` + `resolveVisionCapable` from `vision.js`. No cycle: `media.js` and `vision.js` do not import `discord-gateway.js`.
 
+## Video media (0.11.33 – 0.11.40)
+
+Video rides the exact rails [Message attachments ride beside content](../decisions/message-attachments-format) predicted for a future modality: `message.content` stays a string, video is another `attachments` entry, and `materializeAttachments()` stays the one seam that turns a stored reference into a provider content-part [@video-build-spec]. "A video-capable model is a change here, not a message-format migration" is that decision's own framing, now exercised.
+
+**Store.** `media.js` adds a `video` kind: `VIDEO_MIME_EXT` recognizes mp4/webm/mov/mkv/mpeg/3gp, folded into the shared `MEDIA_KINDS` table alongside images and audio [@media-js]. Two separate byte ceilings apply to the same asset: `VIDEO_MAX_BYTES` (20 MB) is the **inline-eligibility** cap — base64-encoding a bigger clip would blow the provider request-size cap — while `VIDEO_STORE_MAX_BYTES` (300 MB) is what the store will accept onto disk at all, so a long clip destined for upload has somewhere to live before it is ever sent anywhere [@media-js]. `buildStandin()` gained a video voice ("what I saw when I watched" / "I haven't watched this one yet" / "I have no way to watch videos right now") [@video-build-spec].
+
+**Materializer.** `resolveVideoCapable(connection, settings)` in `vision.js` decides whether a video rides live: a ward per-connection `videoCapable` tri-state (`'yes'`/`'no'`/`auto`) takes priority, and `auto` falls back to `looksVideoCapable()`, a name-based allowlist [@vision-js]. `DEFAULT_MAX_LIVE_VIDEOS` fixes the live-video budget at 1 per turn (newest-first), tighter than the 4-image budget, because a wrong live attempt ships megabytes rather than kilobytes [@vision-js]. A live video becomes a `{type:'video_url', video_url:{url:'data:...'}}` content part; anything over budget or on a non-video-capable connection degrades to a text stand-in, reusing the same blind-confabulation guard images use [@vision-js].
+
+**`looksVideoCapable()` is deliberately tighter than its vision counterpart.** [Vision capability defaults to BLIND](../decisions/vision-capability-defaults) already established the asymmetry principle — default ambiguous cases toward the cheap-to-be-wrong branch, require positive evidence before the expensive-to-be-wrong branch — for images. Video inherits that principle and tightens it further: the allowlist recognizes only names it actually knows (Gemini, Qwen-VL, GLM-V/GLM 5.3 Flash, an explicit `-video` suffix), and any provider whose model-name space is too large to pattern-match (NanoGPT, which proxies many underlying models under one connection) relies entirely on the ward's explicit `'yes'` rather than a name guess [@video-build-spec].
+
+**Ingress.** `POST /api/media` accepts `video/*` bodies alongside `image/*` and `audio/*` [@server-js]. The web composer attaches raw video (no client-side downscale, unlike images) up to the applicable cap and renders a `<video>` thumbnail chip; because `materializeAttachments()` already runs on every chat turn, a video attachment needs no per-surface wiring to reach the model [@video-build-spec].
+
+**Discord video ingest (0.11.34-alpha).** `ingestDiscordImages()` in `discord-gateway.js` became `ingestDiscordMedia()`, which also fetches video attachments raw (no resizer — video isn't proxy-resizable the way images are) at arrival time, capped to `VIDEO_MAX_BYTES` and gated by the same ward-always/villager-yes/stranger-never audience rule and per-message + hourly caps images use [@discord-gateway-js]. `isDiscordVideoAttachment()` detects a video by MIME type or, when Discord reports `application/octet-stream`, by file extension; an over-cap clip is skipped by its declared size before any bytes are downloaded [@discord-gateway-js].
+
+**Connection-editor tri-state (0.11.36-alpha).** A "Can watch video?" Auto/Yes/No control sits under the vision one in the Connections editor and is stored on the connection object (`conn.videoCapable`) [@video-build-spec]. This is the robust answer to "which models take video": `looksVideoCapable()`'s Auto only recognizes the families it knows by name, so a ward on a proxy provider like NanoGPT pins their confirmed video-capable connection to `Yes` explicitly rather than waiting on a heuristic that structurally cannot cover an unbounded model space [@video-build-spec].
+
+**Provider reality: `video_url` is not universal.** Every inline chat request goes through the OpenAI chat-completions shape (`providers.js`), even Google's Gemini via its `.../openai/chat/completions` compatibility endpoint [@providers-js]. There is no universal `video_url` content part in that shape: Qwen/DashScope and Zhipu's GLM-V/GLM 5.3 Flash accept it on their OpenAI-compat gateways, but Google's own compat layer does not — native Gemini instead wants `inline_data`/`file_data` on a different, non-OpenAI-compat endpoint [@video-build-spec]. So the inline path is honest but provider-dependent: it works wherever `video_url` is accepted (Qwen-VL, GLM-V, and video models proxied through NanoGPT) and degrades cleanly to a text stand-in everywhere else, via the existing modality-reject fallback [@video-build-spec]. GLM's video contract was checked against z.ai's own API reference and the MetaGLM cookbook: the same `{type:'video_url', video_url:{url:...}}` shape, with a 200 MB provider-side size limit well above the 20 MB inline cap — leaving a 20–200 MB GLM clip unreachable by either path today, a documented gap rather than a bug, since the File-API upload path below is Gemini-only [@video-build-spec].
+
+## The File-API path for long clips (Gemini-only, 0.11.35-alpha)
+
+A clip too big to inline (over `VIDEO_MAX_BYTES` but under the 300 MB store ceiling) cannot ride the OpenAI-compat `video_url` part at all; each provider that supports longer video has its own upload-and-reference flow, and only Google's is built. The path is deliberately isolated rather than folded into the shared chat handler, the same posture [CDP mode](../decisions/browser-cdp-mode) takes for a capability whose live behavior cannot be exercised from CI [@video-build-spec]:
+
+- **`gemini-file-api.js`** is a new, standalone module; every exported function takes an injectable `fetchFn` for testability [@gemini-file-api-js]. `uploadVideoToGemini()` drives Gemini's resumable upload (start → upload+finalize → poll `files.get` until `ACTIVE`); `toGeminiRequest()` translates the OpenAI-ish chat history into Gemini's native `contents` shape (system → `system_instruction`, assistant → `model`, the `file_data` reference attached to the final user turn); `generateWithGeminiFile()` calls the native `models/<model>:generateContent` endpoint (not the OpenAI-compat one); `answerAboutVideo()` orchestrates the three. Every failure path returns `{ok:false}` rather than throwing, so a caller always has a defined fallback [@gemini-file-api-js].
+- **A dedicated endpoint, not `/api/chat`.** `POST /api/video-understand {assetId, prompt, provider, model, apiKey}` in `server.js` is a separate route from the streaming/tool-loop chat handler, so a bug in the Gemini upload/poll cycle has zero blast radius on the main turn path [@server-js]. It is default-off (`videoFileApiEnabled`), ward-only, gated by `PROTO_FAMILIAR_VIDEO_DISABLED=1`, and validates that the target connection is actually Gemini before calling out [@server-js].
+- **Client surface.** A too-big-to-inline pending video shows a "Watch full clip" button; clicking it posts to the endpoint (the composer's typed text becomes the prompt) and the answer lands in the chat as a normal turn. A non-Gemini primary connection is refused with an explicit message rather than silently misrouting [@video-build-spec].
+- **Live shakeout still open.** Every piece above is unit-tested against a stubbed Google backend, but the real resumable-upload round-trip has not been exercised against Gemini's live API — it needs the ward's own key, the same class of gap [CDP mode](../decisions/browser-cdp-mode) records for its own live attach-and-drive [@video-build-spec].
+
+**Known follow-ups, named rather than silently deferred**: Discord has no long-video path (the endpoint is web-only); the File-API answer is one non-streaming turn, not wired into the tool-call loop; no other provider has an uploader behind the same seam yet; a stood-in long clip has no describe/thumbnail step [@video-build-spec].
+
+## Known gaps in video (v1)
+
+There is no video-describe path: `describeAsset()` is image-only, so a stood-in video carries only its marker text and the don't-invent guard, never a semantic description. Frame-extraction-based description would need an `ffmpeg` dependency the project has deliberately avoided for images (see the pure-JS image-dimension reading above) and is left for a later pass [@video-build-spec].
+
+**`describeAsset()` refuses non-image assets at the door (0.11.39).** Before this fix, a shared video on a blind connection reached the synchronous describe path anyway: `ensureDescribed()` queued it, the resolved connection's image analyzer received the video's bytes, and the request came back `HTTP 400 图片输入格式/解析错误` (image parse error) — reported on both web and on a z.ai coding-plan connection, where the analyzer is the `analyze_image` MCP tool (GLM-4.6V), an image-only tool [@video-build-spec]. `describeAsset()` now checks `meta.kind` before touching any connection and returns `{ok:false, reason:'not-image'}` for any non-image kind; a missing `kind` (a legacy pre-video image asset) still passes through untouched [@vision-js]. `ensureDescribed()` skips non-image attachments so a video is never even queued. `tests/vision.test.mjs` pins the `not-image` return, proven red before the guard existed [@vision-js].
+
 ## z.ai Coding Plan vision allotment (0.9.5-alpha, PR #220)
 
 The z.ai Coding Plan delivers vision through a separate, quota-isolated channel: a "Vision Understanding" MCP server (`@z_ai/mcp-server`, powered by GLM-4.6V) with its own 5-hour prompt resource pool, distinct from the coding-prompt allotment [@zai-vision-js]. The `zai-coding` provider connects to `https://api.z.ai/api/coding/paas/v4/chat/completions` [@providers-js].
@@ -171,11 +218,63 @@ A `zai-coding` connection can DESCRIBE images via this allotment, even though it
 
 **Graceful**: any spawn/connect/call failure returns `{ok:false}`, leaving the image description null (retried later) and never breaking the chat turn [@zai-vision-js]. Off-switch: `PROTO_FAMILIAR_ZAI_VISION_DISABLED=1` [@zai-vision-js]. Shutdown is wired into `server.js` via dynamic import [@zai-vision-js].
 
-**Live capability**: `resolveVisionCapable()` returns `false` for `zai-coding` (the coding chat models cannot see images on the wire), so images always degrade to stand-ins in the live turn [@vision-js]. This is separate from describe-capability: `isDescribeCapable()` returns `true` for `zai-coding` because it can describe through the Vision MCP [@vision-js].
+**Live capability is by MODEL, not blanket-blind (0.11.40).** `resolveVisionCapable()` and `resolveVideoCapable()` used to hard-block every `zai-coding` connection, on the assumption that coding-plan chat models are text-only. That blanket block was wrong for GLM 5.3 Flash — the first natively-multimodal GLM-5 — which takes live `image_url` and `video_url` parts on the SAME OpenAI-compat chat surface as standard z.ai; the coding endpoint (`/api/coding/paas/v4/chat/completions`) differs only in URL path and quota pool, not request shape [@video-build-spec]. `looksVisionCapable()`/`looksVideoCapable()` now match `glm-?5[.\d]*-?flash` (GLM 5.3 Flash) and `resolveVisionCapable()`/`resolveVideoCapable()` no longer short-circuit on `provider === 'zai-coding'`; they fall through to the ward tri-state and the name heuristic like any other provider [@vision-js]. Older text/code coding models (bare GLM-4.6) still fail the heuristic and stay blind, routing images to the image-only `analyze_image` describe MCP as before; a ward `'yes'` on either tri-state forces a coding connection they've confirmed. This is what closed the reported gap: the ward could confirm GLM 5.3 Flash watched video on the coding plan, but the code was blocking it categorically. `tests/vision.test.mjs` pins `resolveVisionCapable`/`resolveVideoCapable` returning `true` for a `glm-5.3-flash` `zai-coding` connection and `false` for a bare `glm-4.7` one [@vision-js].
 
-**Net effect**: a ward on the Coding Plan assigns their `zai-coding` connection to the vision feature → every image is DESCRIBED via the coding vision allotment, then read as a text stand-in, on z.ai's quota rather than a separate pay-as-you-go vision key [@vision-js].
+This is separate from describe-capability: `isDescribeCapable()` still returns `true` for every `zai-coding` connection regardless of model, because even a blind coding model can describe through the Vision MCP [@vision-js].
+
+**Net effect**: a ward on the Coding Plan with an older text/code coding model assigned to vision gets every image DESCRIBED via the coding vision allotment, then read as a text stand-in. A ward with a GLM 5.3 Flash coding connection gets live `image_url`/`video_url` parts on that same connection — no separate pay-as-you-go vision key needed either way [@vision-js]. The 0.11.39 `not-image` describe guard (see Known gaps in video above) still applies underneath this as defense-in-depth: even a blind coding model's shared video never reaches the image-only describe MCP [@video-build-spec].
 
 **Unverified**: the real @z_ai/mcp-server spawn was NOT tested end-to-end (requires a coding key + network access) [@zai-vision-js]. Built defensively with runtime schema discovery and graceful degradation; the `analyze_image` param name/shape is the main unknown. All failures degrade to `description=null`, never breaking the chat path.
+
+## Custom Discord emote alt-text (0.11.113-alpha)
+
+A custom Discord emote arrives in message content as an opaque token — `<:name:id>` (static) or `<a:name:id>` (animated) — that carries no visible meaning; unicode emoji need no help because the model reads them directly [@discord-emotes-js]. `src/discord/discord-emotes.js` makes custom emotes readable by riding the same describe pipeline images use, rather than adding a second vision path: `parseEmotes()` extracts the distinct emotes in a message (deduped by id), `emoteCdnUrl()` builds the Discord CDN URL (animated → gif, static → png, at `cdn.discordapp.com/emojis/`), and `rewriteEmotes()` turns a described emote's token into alt-text the model reads as ordinary words — `<:tiredcat:123>` becomes `:tiredcat: [= a very tired-looking cat]` [@discord-emotes-js].
+
+**Reuse over reinvention**: `describeUnseenEmotes()` fetches an emote's image bytes and hands them to the existing `saveAsset()` → `describeAsset()` pipeline (the same one the Image description caching section above uses for photos), tagged `origin.surface: 'discord-emote'` and `audienceTag: 'ward-private'` [@discord-emotes-js]. This means an emote description automatically inherits content-dedup, the injection-guard sanitization on the description text, z.ai-coding vision routing, and the describe-once cache — none of that logic is duplicated. The module itself owns only parsing, the CDN URL shape, and a small persisted map at `tomes/.discord-emotes.json` (emote id → `{name, assetId, description}`) that the text rewrite reads [@discord-emotes-js].
+
+**Viewed once, then saved, never blocking a turn**: in `discord-gateway.js`, the model-facing content — both the replayed history and the current turn — is rewritten from the cache via `rewriteEmotes()` just before the API message array is assembled, while the *stored* session turn keeps the raw `<:name:id>` token so replays stay accurate as descriptions land later [@discord-emotes-js]. An emote not yet in the cache is described in the background (`describeUnseenEmotes(...).catch(() => {})`, fire-and-forget) so the description is ready by its next use; the first sighting of a new emote therefore still reads as the plain `:name:` shorthand, and the alt-text only appears from the following use onward [@discord-emotes-js].
+
+**Fail-soft and gating**: any fetch, describe, or cache-write hiccup leaves the plain `:name:` shorthand — still legible, never a broken turn [@discord-emotes-js]. The feature defaults ON; it is disabled via the `discordEmotesEnabled` setting or `PROTO_FAMILIAR_DISCORD_EMOTES_DISABLED=1` [@discord-emotes-js]. It is a sibling of the same Discord-media improvement pass that fixed text-less image turns at 0.11.112; that pass's Discord-media batch (text-less image turns → custom-emote alt-text → animated-gif-as-video) completes with the gif handling below.
+
+## Animated GIF as video (0.11.115-alpha)
+
+An animated GIF is a short silent clip wearing an `image/gif` MIME type. On a video-capable connection, the Familiar now sends it AS video — a `video_url` content part — so it reads the motion instead of a frozen first frame; on an image-only connection it still rides as a plain image and the provider first-frames it (the "gifst") [@vision-js].
+
+**Rides the existing image/video split, not a new seam.** A gif is still stored as `kind:'image'` in the media store; nothing about ingest or storage changes. The image/video fork happens only at the `materializeAttachments()` content-part boundary in `vision.js` — the same seam the Video media section above added for the `video` kind. Sending a gif as video is a materializer branch, not a message-format change, consistent with [Message attachments ride beside content](../decisions/message-attachments-format) [@vision-js].
+
+**Detection is pure code, minted at save time.** `isAnimatedGif(buf)` counts GIF Graphic Control Extension blocks (the 3-byte `0x21 0xF9 0x04` header that precedes each frame); two or more means motion, matching the same "read the header, no native decoder" posture as the image-dimension readers described above [@media-js]. `saveAsset()` calls it once, at save time, and stamps `animated: true` on the gif's metadata only when `kind === 'image'` and `mime === 'image/gif'` [@media-js]. Per [Exact values are minted in code, not guessed](../decisions/exact-values-in-code), the flag is never inferred from a filename.
+
+**Why a gif-as-video must not poison the vision cache.** A `video_url` gif part is video, not image, so a provider rejecting it says nothing about whether the connection can see ordinary images. `materializeAttachments()` therefore tracks a gif routed as video in its own `gifsAsVideo` counter, separate from `imagesLive` [@vision-js]. In `server.js`, the mid-turn modality-reject fallback (both the non-streaming and streaming chat loops) fires on either counter being positive (`imagesLiveThisTurn > 0 || gifsAsVideoThisTurn > 0`), but caches vision capability `'no'` only when a real image was rejected (`imagesLiveThisTurn > 0`); a rejected gif-as-video part leaves the connection's vision capability untouched [@server-js]. Without this split, one gif refused through `video_url` would silently blind the connection to every future image.
+
+**The retry must not re-offer the same rejected part.** `fallbackToStandins()` in `server.js` now forces both `visionCapable:'no'` and `videoCapable:'no'` on the retry materialization, so the re-run never re-emits the exact content part the provider just rejected — whether that was a live image or a gif-as-video [@server-js]. This also closed a pre-existing gap where the fallback forced vision off but left video live, which would have retried a rejected video part unchanged.
+
+**Discord's media proxy would destroy the motion.** `discordResizeUrl()` skips the media-proxy resize specifically for gifs and fetches the asset raw instead, because Discord's proxy returns a resized gif as a single still frame — applying the normal downscale would throw away the animation before it ever reached the Familiar [@discord-gateway-js]. The raw fetch is still bounded by `MEDIA_MAX_BYTES`; an over-cap gif stands in as text like any oversized attachment. The web composer already sent gifs unmodified (no canvas flatten; `downscaleImage` short-circuits `image/gif`), so both surfaces now deliver an animated gif intact.
+
+**Off-switch**: `gifAsVideoEnabled()` defaults ON, controlled by the `gifAsVideoEnabled` setting (synced via `SERVER_SYNCED_KEYS`) or `PROTO_FAMILIAR_GIF_AS_VIDEO_DISABLED=1`; when off, a gif is always sent as a plain still image [@vision-js]. The feature is also inert whenever `resolveVideoCapable()` returns false for the connection, since gif-as-video only ever activates on top of an already video-capable connection [@vision-js].
+
+This section originally scoped out Tenor/Giphy picker gifs (a link embed, not an attachment); the next section closes that gap.
+
+## Tenor/Giphy gif embeds as watchable media (0.11.116-alpha)
+
+The gifs people actually pick on Discord — from the Tenor/Giphy picker, or a pasted tenor.com/giphy.com link — are not message attachments at all. Discord resolves the pick into a `type: 'gifv'` **embed** on the message (`msg.embeds`), serves the motion as an **mp4** (`embed.video`), and carries a still poster in `embed.thumbnail` [@discord-gif-embeds-js]. Before this pass the gateway only read `msg.attachments`, so these gifs were invisible: the Familiar saw a bare tenor.com link in the text and nothing else.
+
+**A new pure module mirrors the emote split.** `src/discord/discord-gif-embeds.js` follows the same pure-parsing-only shape as `discord-emotes.js` above — the gateway alone touches the network [@discord-gif-embeds-js]:
+
+- `isGifEmbed(embed)` gates on Discord's own `type:'gifv'`, a Tenor/Giphy `provider.name`, a known gif host (`tenor.com`, `giphy.com`, `gfycat.com`), or a direct `.gif` URL rendered as an image embed. The gate is deliberately conservative so an ordinary link-preview/article embed — which also carries a `thumbnail` — is never mistaken for media [@discord-gif-embeds-js].
+- `directMediaUrl(node)` picks which URL to fetch bytes from, preferring Discord's proxied `proxy_url` over a bare `url`, because `embed.video.url` is sometimes the tenor *page* rather than the media file (which would fetch as HTML) [@discord-gif-embeds-js]. This is [Exact values are minted in code, not guessed](../decisions/exact-values-in-code) applied to an uncertain third-party API shape: validate and prefer the reliably-direct field instead of trusting one guess.
+- `labelFromGifPage(pageUrl)` recovers a descriptive slug from the page URL (`.../view/cat-flopping-over-gif-12345` → `"cat flopping over"`), stripping a trailing `-gif-<id>` (Tenor) or a mixed letter+digit id (Giphy), and returning `''` for a slug-less URL so an asset is never labelled `"view"` [@discord-gif-embeds-js]. The label seeds the saved asset's meaning-bearing slug and doubles as a hint before any describe pass runs.
+- `parseGifEmbeds(msg)` returns the deduplicated, fetchable media references for a message; it does no network I/O itself.
+
+**Wiring rides the same rails as a real attachment.** `ingestDiscordMedia()` in `discord-gateway.js` (the function `ingestDiscordImages()` became when video landed) folds each parsed gif embed in beside real attachments as a pseudo-attachment `{url, filename}`: the mp4 as a `video` item when a video-capable connection and `PROTO_FAMILIAR_VIDEO_DISABLED` allow it — so it plays as motion exactly like an uploaded gif sent as video (see Animated GIF as video above) — or the still thumbnail as an `image` item otherwise [@discord-gateway-js]. The pseudo-attachment is fetched through the identical `fetchDiscordVideo`/`fetchDiscordImage` helpers (timeout, byte cap, content-type-with-extension-fallback) and saved through the same `saveAsset()` call, so it inherits the same ward-always / registered-villager-yes / stranger-never audience rule (see Discord image ingest above) and the same per-message (`MAX_IMAGES_PER_MESSAGE`) and hourly (`discordMediaPerHour`) caps a real attachment uses [@discord-gateway-js]. Both `handleTurn()` (live turns) and `observeMessage()` (lurked rooms) call `ingestDiscordMedia()`, so both paths gain gif-embed ingest for free.
+
+**Off-switch**: setting `discordGifEmbedsEnabled` (default ON, synced via `SERVER_SYNCED_KEYS`) or `PROTO_FAMILIAR_DISCORD_GIF_EMBEDS_DISABLED=1` [@discord-gif-embeds-js].
+
+**Known v1 limitations, named rather than silently deferred** [@discord-gif-embeds-js]:
+
+1. Only `MESSAGE_CREATE` is handled. A gif embed that Discord resolves *late* via a `MESSAGE_UPDATE` (the picker sometimes fills the embed in asynchronously after the bare-link message arrives) is missed on this pass. The common picker path attaches the `gifv` embed at create time, and the tenor/giphy link still sits in the message text either way, so the gif's identity is not fully lost even when the media ingest is.
+2. An image-only connection gets the mp4's honest "I can't watch it" stand-in text, not a substitute frame, when the embed carries no usable thumbnail. `buildStandin()` already renders a video-description line once one is cached, so describing the free thumbnail onto the video asset would close this gap — deferred, not a bug.
+
+**Testing**: pure-module tests for `discord-gif-embeds.js` plus a pipeline test that feeds `ingestDiscordMedia()` a real `gifv` embed shape with a stubbed `fetch` and asserts a saved `video` asset comes out — exercising the wiring, not just the pure functions, per CLAUDE.md's pipeline-test discipline [@claude-md] (see also [Voice](voice)).
 
 ## Image descriptions feeding threat scoring
 
@@ -197,6 +296,26 @@ The feature is known to false-positive on fictional violence (horror film stills
   chat path got this wiring first; Discord initially did not, a gap named
   [RULE C](../reference/engineering-conventions) in CLAUDE.md's operating rules, fixed in 0.9.6
   [@claude-md].
+- **Video inline core** (0.11.33-alpha): a `video` media kind, tight video-capability detection,
+  and Discord video ingest (0.11.34).
+- **Connection-editor video tri-state** (0.11.36-alpha) and **Gemini File-API path for long clips**
+  (0.11.35-alpha, live shakeout still pending) — see Video media above [@video-build-spec].
+- **GLM video contract verified + describe-guard fix** (0.11.37, 0.11.39): confirmed against
+  z.ai's own API reference and the MetaGLM cookbook, and closed the video-through-image-describer
+  400 by making `describeAsset()` refuse non-image assets — see Known gaps in video above
+  [@video-build-spec].
+- **z.ai coding-plan vision/video by model, not blanket-blind** (0.11.40): GLM 5.3 Flash watches
+  image and video live on the coding plan; older coding models stay blind and describe-only — see
+  the z.ai Coding Plan section above [@video-build-spec].
+- **Custom Discord emote alt-text** (0.11.113-alpha): custom emote tokens are rewritten into
+  described alt-text for the model, riding the existing describe pipeline — see Custom Discord
+  emote alt-text above [@discord-emotes-js].
+- **Animated GIF as video** (0.11.115-alpha): an animated gif is sent as a `video_url` part to a
+  video-capable connection instead of a frozen first frame, completing the Discord-media
+  improvement pass — see Animated GIF as video above [@vision-js, @media-js, @server-js].
+- **Tenor/Giphy gif embeds as watchable media** (0.11.116-alpha): a picker gif's `gifv` embed is
+  ingested as a video or thumbnail image, closing the gap the 0.11.115 pass left open — see Tenor/
+  Giphy gif embeds as watchable media above [@discord-gif-embeds-js, @discord-gateway-js].
 
 Later passes (group-call presence, voiceprint enrolment, room-sound tagging) belong to the voice
 milestone rather than this one; see [Voice](voice) for those.
@@ -210,7 +329,8 @@ Two ward-flagged threat-scoring refinements remain (out of the main spec):
 
 ## Related
 
-- [Vision capability defaults](../decisions/vision-capability-defaults) — the design decision to default unknown models to BLIND and require allowlist proof before sending images live
-- [Message format and attachments](../decisions/message-attachments-format) — the design decision to keep `message.content` as a plain string and ride media beside it
+- [Vision capability defaults](../decisions/vision-capability-defaults) — the design decision to default unknown models to BLIND and require allowlist proof before sending images live; video's tighter allowlist and one-live-clip budget extend the same asymmetry principle
+- [Message format and attachments](../decisions/message-attachments-format) — the design decision to keep `message.content` as a plain string and ride media beside it; video is the modality expansion that decision predicted
 - [Graceful degradation](../reference/engineering-conventions) — the repo-wide principle this subsystem follows
 - [Safety spine](../architecture/safety-spine) — threat detection, tracking, and escalation; now includes image-derived signals
+- [CDP mode](../decisions/browser-cdp-mode) — the same code-is-shipped-but-live-path-unverified posture the Gemini File-API path is in, both needing a ward desktop shakeout before the untested piece can be trusted

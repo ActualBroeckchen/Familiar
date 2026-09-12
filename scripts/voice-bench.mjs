@@ -18,9 +18,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 
-import { runBenchmark, saveReport } from '../voice-bench.js';
-import { composePlan, evaluatePlan, formatBytes } from '../voice-models.js';
-import { STAGE_LABELS } from '../voice-bench-run.js';
+import { runBenchmark, saveReport } from '../src/voice/voice-bench.js';
+import { composePlan, evaluatePlan, formatBytes } from '../src/voice/voice-models.js';
+import { STAGE_LABELS } from '../src/voice/voice-bench-run.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 

@@ -1,13 +1,13 @@
 ---
 title: Session Memorization
-topics: [architecture, memorization]
+topics: [architecture, sessions, memorization, tomes]
 sources:
   - id: claude-md
     type: file
     path: CLAUDE.md
   - id: memorization-js
     type: file
-    path: memorization.js
+    path: src/memory/memorization.js
   - id: server-js
     type: file
     path: server.js
@@ -20,6 +20,12 @@ sources:
   - id: tomes-doc
     type: file
     path: docs/tomes.md
+  - id: ward-consent-queue-js
+    type: file
+    path: src/ward/ward-consent-queue.js
+  - id: memory-coverage-js
+    type: file
+    path: src/memory/memory-coverage.js
   - id: naming-conversation
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/6ad1c817-Naming_a_new_entitycore_module.txt
@@ -31,11 +37,13 @@ sources:
 Session memorization is the pipeline that turns a chat session (or a piece of one) into
 durable lorebook entries the Familiar can be reminded of later. It is a server-side job
 queue owned by `memorization.js`, not a synchronous save: the browser enqueues a job, and a
-single in-process worker calls the configured LLM, parses the response, and writes the
-resulting entries into a dedicated Tome [@memorization-js] [@sessions-doc]. This subsystem is
+single in-process worker runs the [extraction](session-memory-extraction) process (framing the transcript for the LLM,
+calling the configured LLM, parsing the response), and writes the resulting entries into a
+dedicated Tome [@memorization-js] [@sessions-doc]. This subsystem is
 one of the two places long-running memory lives in Proto-Familiar — the other is
 [Phylactery](phylactery), which owns the Familiar's canonical, autonomously-retrieved memory.
-Tomes are explicitly the other kind: human-editable, keyword-triggered lorebook entries, and
+Tomes are explicitly the other kind: human-editable, keyword-triggered lorebook entries (see
+[Tomes and keyword lore](tomes-and-lore) for the activation engine and entry format), and
 memorization is the automated writer that populates one particular Tome with that shape of
 entry [@tomes-doc]. The queue design and its trigger set were a deliberate rewrite to close a
 data-loss bug; see [Session memorization: durable queue](../decisions/session-memorization-queue)
@@ -130,9 +138,30 @@ The consent gate (`resolveRememberGate`) is source-aware and takes `{direct, has
 - **Third-party subjects** (a registered villager subject, OR a named-but-unregistered person → `hasNamedSubjects`) → **asks for sensitive categories in any channel** [@claude-md]. A stranger's sensitive fact is never swept in without asking.
 - **Indirect channels** (group room, shared surface) → **still asks** [@claude-md]. Even ward-private content surfaced indirectly needs explicit consent.
 
-This design killed the confusing flood of date-less consent asks for things the ward said directly. Rationale: memories are what the Familiar *experienced*; being told something directly IS the consent. The `[PENDING MEMORY CONSENT]` block now carries each item's `date` + `reason` (`shared-room`/`third-party`) so asks are explained and time-anchored [@claude-md]. Outcomes are tracked in `.consent-pending.json` for `thalamus.js` to surface.
+This design killed the confusing flood of date-less consent asks for things the ward said directly. Rationale: memories are what the Familiar *experienced*; being told something directly IS the consent. The `[PENDING MEMORY CONSENT]` block now carries each item's `date` + `reason` (`shared-room`/`third-party`) so asks are explained and time-anchored [@claude-md]. Outcomes are tracked in `.consent-pending.json` for `thalamus.js` to surface. The same file also backs a Discord twin of this queue: the ward's `!queue` command in the [Ward Discord console](ward-console) settles items from a Discord menu through the same `confirmConsentMemories`/`dropPendingMemories` calls, so an item settled from either surface disappears from both [@ward-consent-queue-js].
 
 Both paths (day-anchored segmentation and consent gating) extend the same queue and retry mechanics described above rather than replacing them.
+
+### Coverage status: making 'shared-room' transient, not sticky
+
+`memory-coverage.js`'s per-day ledger backs the coverage view the ward sees for past months
+(memorized/uncertain/unmemorized, with uncertain rendering purple). Before 0.11.47,
+`memorization.js`'s success path flagged *every* day that touched a non-ward-private slice
+(a Discord group room, any shared-audience session) with a permanent `'shared-room'` status
+flag, and `deriveStatus` turns any flag on a day into `'uncertain'` regardless of whether that
+day's ward-private content was fully memorized [@memory-coverage-js]. The effect was that a
+month with any group-room activity stayed purple forever, even after every other day in it
+was cleanly memorized — the flag never cleared because nothing in the success path ever
+un-set it.
+
+The fix separates two things that had been conflated into one flag: `sharedRoom` is now a
+separate, sticky, purely informational marker ("this day had group activity") that never
+drives status on its own, while the ledger's `flag` field is reserved for a genuine
+`extract-failed` outcome — the kind of flag that is supposed to be replaceable and clearable
+by a later successful run [@memory-coverage-js]. `recordSegmentRun` and `computeCoverage` both
+migrate any legacy sticky `'shared-room'` flag they encounter into the new `sharedRoom`
+marker on read, so existing months un-purple automatically the next time the coverage view is
+computed, with no re-run of memorization needed [@memory-coverage-js].
 
 The extraction prompts built here also supply a `content_tag` per extracted fact — a topic plus
 a sensitivity level that later controls per-villager disclosure independently of `category`. See
@@ -142,8 +171,12 @@ and the audience floor at recall time.
 
 ## Related
 
+- [Session Memory Extraction](session-memory-extraction) — how transcripts are assembled,
+  prompts are framed, attribution is fixed, and speaker names are handled during extraction.
 - [Session memorization: durable queue](../decisions/session-memorization-queue) — why the
   queue, the dedicated tome, and the trigger set are shaped the way they are.
+- [Session lifecycle](session-lifecycle) — when sessions begin, how they normally end, and the
+  manual close-out mechanism for open sessions.
 - [Phylactery](phylactery) — the canonical, autonomously-retrieved memory store that Tomes are
   deliberately kept separate from.
 - [Content-based memory gating](content-gating) — how the `content_tag` this pipeline extracts
@@ -153,7 +186,14 @@ and the audience floor at recall time.
 - [Per-feature model routing](../decisions/per-feature-model-routing) — how the memorization
   worker resolves which connection to call, independent of whichever connection the ward
   chats on.
+- [Tomes and keyword lore](tomes-and-lore) — the keyword-activation engine and entry format
+  every Tome, including this one, is scanned and injected through.
 - [Tome multi-writer merge policy](../decisions/tome-multi-writer-merge-policy) — a broader,
   not-yet-implemented design for reconciling writes when more than one process can write to the
   same Tome entry; this subsystem's single-writer, mutex-serialized model is the simpler thing
   that shipped instead.
+- [Ward Discord console](ward-console) — the `!queue` command, a Discord twin of the pending
+  memory-consent queue this page describes.
+- [Unified Ward Sessions](session-unification) — the 0.11.47 mechanism that makes the ward's
+  web chat and Discord DM one continuous session; a different subsystem from this page's job
+  queue, but the source of the shared-room coverage fix described above.

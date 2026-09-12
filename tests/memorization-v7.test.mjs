@@ -2,7 +2,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildSharedRoomPrompt, buildPrompt } from '../memorization.js';
+import { buildSharedRoomPrompt, buildPrompt, conversationMessages, buildExtractionMessages, speakerNameField, nameFieldEnabledFor, recordNameFieldResult, extractWithNameFallback, _resetNameFieldCache } from '../src/memory/memorization.js';
+
+const NAME_SAFE = /^[a-zA-Z0-9_-]+$/;   // the OpenAI `name` charset — no spaces/unicode
 
 const MESSAGES = [
   { role: 'user',      content: 'Hi, feeling really stressed today.' },
@@ -42,9 +44,9 @@ test('buildSharedRoomPrompt: does NOT contain the full-detail category list', ()
   assert.doesNotMatch(p, /Example bad/);
 });
 
-test('buildSharedRoomPrompt: includes the conversation text', () => {
-  const p = buildSharedRoomPrompt(MESSAGES);
-  assert.match(p, /feeling really stressed/);
+test('conversationMessages: carries the shared-room conversation as role-faithful turns', () => {
+  const msgs = conversationMessages(MESSAGES, { sharedRoom: true, wardLabel: 'My human' });
+  assert.ok(msgs.some(m => m.role === 'user' && /feeling really stressed/.test(m.content)));
 });
 
 test('buildSharedRoomPrompt: includes topicLabel when provided', () => {
@@ -98,48 +100,218 @@ test('both prompts ask for a content_tag with the topic vocabulary and levels', 
 
 // ── Transcript labelling — never "User" (first-person convention) ──
 
-test('buildPrompt: never labels my human as "User" in the transcript', () => {
-  const p = buildPrompt(MESSAGES, null, 'Bluebell');
-  // The forbidden generic label must not appear as a turn marker.
-  assert.doesNotMatch(p, /^User:/m);
-  assert.doesNotMatch(p, /\nUser: /);
+// ── Role-faithful transcript (conversationMessages) ──────────────────
+// The conversation now rides as real user/assistant turns, not a flattened
+// "Name: text" blob folded into the prompt — so the model natively reads who
+// said what, and the prompt (the Familiar's notes) no longer holds the transcript.
+
+test('conversationMessages (ward DM): the ward is a plain user turn, no "Name:"/"User:" label', () => {
+  const msgs = conversationMessages(MESSAGES);   // sharedRoom defaults false
+  assert.equal(msgs[0].role, 'user');
+  assert.equal(msgs[0].content, 'Hi, feeling really stressed today.');  // raw; the role carries identity
+  assert.ok(!msgs.some(m => /^User: |^My human: |^Bluebell: /.test(m.content)));
 });
 
-test('buildPrompt: labels my human by their configured name', () => {
-  const p = buildPrompt(MESSAGES, null, 'Bluebell');
-  assert.match(p, /Bluebell: Hi, feeling really stressed today\./);
+test('conversationMessages: the Familiar\'s lines are the assistant role, never "Me:"/"Assistant:"', () => {
+  const msgs = conversationMessages(MESSAGES);
+  assert.equal(msgs[1].role, 'assistant');
+  assert.equal(msgs[1].content, "I hear you. What's going on?");
+  assert.ok(!msgs.some(m => /^Me: |^Assistant: /.test(m.content)));
 });
 
-test('buildPrompt: falls back to "My human" when no name is given', () => {
-  const p = buildPrompt(MESSAGES);
-  assert.match(p, /My human: Hi, feeling really stressed today\./);
-  assert.doesNotMatch(p, /^User:/m);
-});
-
-test('buildPrompt: labels my own turns "Me", not "Assistant"', () => {
-  const p = buildPrompt(MESSAGES, null, 'Bluebell');
-  assert.match(p, /Me: I hear you\./);
-  assert.doesNotMatch(p, /^Assistant:/m);
-});
-
-test('buildSharedRoomPrompt: ward by name, never "User"', () => {
-  const p = buildSharedRoomPrompt(MESSAGES, null, 'Bluebell');
-  assert.match(p, /Bluebell: Hi, feeling really stressed today\./);
-  assert.doesNotMatch(p, /^User:/m);
-  assert.doesNotMatch(p, /^Assistant:/m);
-});
-
-test('buildSharedRoomPrompt: preserves name-prefixed villager turns', () => {
+test('conversationMessages (shared room): ward labelled by name, villager prefix kept, Familiar = assistant', () => {
   const sharedMsgs = [
     { role: 'user',      content: 'Hi, feeling stressed.' },          // the ward (unprefixed)
     { role: 'assistant', content: 'I hear you.' },
     { role: 'user',      content: '[Chen]: I brought snacks.' },      // a villager (prefixed)
     { role: 'assistant', content: 'Thanks, Chen.' },
   ];
-  const p = buildSharedRoomPrompt(sharedMsgs, null, 'Bluebell');
-  // The ward's unprefixed turn gets their name; Chen's prefix is kept verbatim,
-  // NOT overwritten with the ward's name.
-  assert.match(p, /Bluebell: Hi, feeling stressed\./);
-  assert.match(p, /\[Chen\]: I brought snacks\./);
-  assert.doesNotMatch(p, /Bluebell: \[Chen\]/);
+  const msgs = conversationMessages(sharedMsgs, { sharedRoom: true, wardLabel: 'Bluebell' });
+  assert.deepEqual(msgs, [
+    { role: 'user',      content: 'Bluebell: Hi, feeling stressed.' },  // unprefixed ward → labelled
+    { role: 'assistant', content: 'I hear you.' },
+    { role: 'user',      content: '[Chen]: I brought snacks.' },        // villager prefix kept verbatim
+    { role: 'assistant', content: 'Thanks, Chen.' },
+  ]);
+});
+
+test('the extraction prompt no longer carries the raw transcript (it rides as its own turns)', () => {
+  const p = buildPrompt(MESSAGES, null, 'Bluebell');
+  assert.doesNotMatch(p, /feeling really stressed/);   // the transcript is not in the notes
+  assert.doesNotMatch(p, /^Bluebell: /m);
+  assert.doesNotMatch(p, /^Me: /m);
+});
+
+test('buildExtractionMessages: notes lead as system, transcript rides faithfully, cue closes as system', () => {
+  const instructions = buildPrompt(MESSAGES, null, 'Bluebell');
+  const msgs = buildExtractionMessages({ instructions, messages: MESSAGES, sharedRoom: false, wardLabel: 'Bluebell' });
+  // system-first (the notes), system-last (the neutral close cue), never a
+  // Familiar-voiced user turn in between.
+  assert.equal(msgs[0].role, 'system');
+  assert.equal(msgs[0].content, instructions);
+  assert.equal(msgs.at(-1).role, 'system');
+  assert.match(msgs.at(-1).content, /only the memories JSON|begin with the \{/i);
+  // The middle is the role-faithful transcript.
+  const middle = msgs.slice(1, -1);
+  assert.deepEqual(middle, conversationMessages(MESSAGES));
+  assert.ok(middle.some(m => m.role === 'user') && middle.some(m => m.role === 'assistant'));
+});
+
+test('both extraction prompts carry the "whose fact is it?" attribution rule', () => {
+  const ward = buildPrompt(MESSAGES);
+  const shared = buildSharedRoomPrompt(MESSAGES);
+  for (const p of [ward, shared]) {
+    assert.match(p, /Whose fact is it\?/);
+    assert.match(p, /\{\{user\}\}/);   // uses the name macro, not "my human", here
+  }
+  // The ward rule forbids folding another's action onto the human.
+  assert.match(ward, /never write \{\{user\}\} as having done another person's action/);
+  // The shared rule leans on the speaker tags and forbids collapsing the room.
+  assert.match(shared, /don't fold the room into \{\{user\}\}/);
+  assert.match(shared, /\[Name\]: before a line is who said it/);
+});
+
+// ── name-field speaker handles (opt-in structural attribution) ──────
+
+test('speakerNameField: code-minted handles are always name-safe', () => {
+  // The whole point: a real name's spaces/unicode never reach the field raw.
+  assert.equal(speakerNameField({ role: 'user', speaker: 'Chen Wei' }), 'chen-wei');
+  assert.match(speakerNameField({ role: 'user', speaker: 'José García' }), NAME_SAFE);
+  assert.match(speakerNameField({ role: 'user', speaker: "O'Brien" }), NAME_SAFE);
+});
+
+test('speakerNameField: ward is ward-<slug> (bond marker + a specific person, never bare)', () => {
+  assert.equal(speakerNameField({ role: 'user', speaker: null, wardName: 'Mary Anne' }), 'ward-mary-anne');
+  assert.match(speakerNameField({ role: 'user', speaker: null, wardName: 'Mary Anne' }), NAME_SAFE);
+  // Unconfigured name still yields a safe fallback, never empty.
+  assert.equal(speakerNameField({ role: 'user', speaker: null, wardName: '' }), 'ward');
+});
+
+test('speakerNameField: material gets session-archive; the Familiar (assistant) gets none', () => {
+  assert.equal(speakerNameField({ role: 'user', material: true, speaker: 'anything' }), 'session-archive');
+  assert.equal(speakerNameField({ role: 'assistant', speaker: 'Chen' }), undefined);  // role carries it
+});
+
+test('conversationMessages withNames: stamps a name per user turn, none on the Familiar', () => {
+  const shared = [
+    { role: 'user',      content: 'hey', speaker: null },          // the ward
+    { role: 'assistant', content: 'hi there' },                    // the Familiar
+    { role: 'user',      content: '[Chen]: brought snacks', speaker: 'Chen' },
+  ];
+  const msgs = conversationMessages(shared, { sharedRoom: true, wardLabel: 'Bluebell', withNames: true });
+  assert.equal(msgs[0].name, 'ward-bluebell');
+  assert.equal('name' in msgs[1], false, 'the assistant turn carries no name');
+  assert.equal(msgs[2].name, 'chen');
+  for (const m of msgs) if (m.name) assert.match(m.name, NAME_SAFE);
+});
+
+test('conversationMessages: withNames off (default) adds no name field — zero behaviour change', () => {
+  const msgs = conversationMessages(MESSAGES);   // default withNames:false
+  assert.ok(!msgs.some(m => 'name' in m), 'no name field unless explicitly opted in');
+});
+
+test('buildExtractionMessages threads withNames to the transcript turns', () => {
+  const instructions = buildPrompt(MESSAGES);
+  const on  = buildExtractionMessages({ instructions, messages: MESSAGES, withNames: true });
+  const off = buildExtractionMessages({ instructions, messages: MESSAGES, withNames: false });
+  assert.ok(on.some(m => m.role === 'user' && m.name), 'names present when on');
+  assert.ok(!off.some(m => 'name' in m), 'no names when off');
+});
+
+test('nameFieldEnabledFor: optimistic by default, ward tri-state and learned cache override', () => {
+  _resetNameFieldCache();
+  const job = { provider: 'prov-a', model: 'm1', baseUrl: null };
+  // Default: optimistic ON (attempt + learn) — no tri-state, nothing learned.
+  assert.equal(nameFieldEnabledFor(job, {}), true, 'optimistic default');
+  assert.equal(nameFieldEnabledFor(job, { connections: [] }), true);
+  // Ward tri-state wins.
+  assert.equal(nameFieldEnabledFor(job, { connections: [{ provider: 'prov-a', model: 'm1', baseUrl: null, nameFieldCapable: 'no' }] }), false);
+  assert.equal(nameFieldEnabledFor(job, { connections: [{ provider: 'prov-a', model: 'm1', baseUrl: null, nameFieldCapable: 'yes' }] }), true);
+  // A learned 'no' turns it off for that provider:model.
+  recordNameFieldResult(job, 'no');
+  assert.equal(nameFieldEnabledFor(job, {}), false, 'learned no');
+  // Ward tri-state still overrides a learned result.
+  assert.equal(nameFieldEnabledFor(job, { connections: [{ provider: 'prov-a', model: 'm1', baseUrl: null, nameFieldCapable: 'yes' }] }), true);
+  _resetNameFieldCache();
+});
+
+test('extractWithNameFallback: success caches capable; a name-field 400 retries bare and caches incapable', async () => {
+  _resetNameFieldCache();
+  // Happy path: names on, provider accepts → returns result, learns 'yes', one call.
+  let calls = 0; let learned = null;
+  const ok = await extractWithNameFallback({
+    withNames: true,
+    buildMessages: (names) => ({ names }),
+    callProviderFn: (m) => { calls++; return { content: 'ok', usedNames: m.names }; },
+    onLearn: (v) => { learned = v; },
+  });
+  assert.equal(ok.usedNames, true);
+  assert.equal(calls, 1);
+  assert.equal(learned, 'yes');
+
+  // Name-field rejection: first call (names) 400s, retry WITHOUT names succeeds → learns 'no'.
+  calls = 0; learned = null;
+  const recovered = await extractWithNameFallback({
+    withNames: true,
+    buildMessages: (names) => ({ names }),
+    callProviderFn: (m) => { calls++; if (m.names) throw new Error('Provider openai returned 400: unknown field name'); return { content: 'ok', usedNames: m.names }; },
+    onLearn: (v) => { learned = v; },
+  });
+  assert.equal(recovered.usedNames, false, 'retried without names');
+  assert.equal(calls, 2);
+  assert.equal(learned, 'no');
+});
+
+test('extractWithNameFallback: a real error is not masked by the name-field retry', async () => {
+  // 400 on BOTH (names and bare) → a genuine bad request, propagates, not learned 'no'.
+  let learned = null;
+  await assert.rejects(() => extractWithNameFallback({
+    withNames: true,
+    buildMessages: (names) => ({ names }),
+    callProviderFn: () => { throw new Error('Provider x returned 400: bad model'); },
+    onLearn: (v) => { learned = v; },
+  }), /returned 400/);
+  assert.equal(learned, null, 'never learned no when the bare retry also failed');
+
+  // A non-400 (e.g. 500) never triggers the retry — surfaces immediately.
+  let calls = 0;
+  await assert.rejects(() => extractWithNameFallback({
+    withNames: true,
+    buildMessages: (names) => ({ names }),
+    callProviderFn: () => { calls++; throw new Error('Provider x returned 500: upstream'); },
+    onLearn: () => {},
+  }), /returned 500/);
+  assert.equal(calls, 1, 'no retry on a 5xx');
+});
+
+test('extractWithNameFallback: names off → one plain call, nothing learned', async () => {
+  let calls = 0; let learned = null;
+  const res = await extractWithNameFallback({
+    withNames: false,
+    buildMessages: (names) => ({ names }),
+    callProviderFn: (m) => { calls++; return { usedNames: m.names }; },
+    onLearn: (v) => { learned = v; },
+  });
+  assert.equal(res.usedNames, false);
+  assert.equal(calls, 1);
+  assert.equal(learned, null);
+});
+
+test('both prompts carry the referent / degrade-dont-drop rule', () => {
+  for (const p of [buildPrompt(MESSAGES), buildSharedRoomPrompt(MESSAGES)]) {
+    assert.match(p, /Who's it about, really\?/);
+    assert.match(p, /unresolved/);                              // the greppable marker
+    assert.match(p, /a hedged memory i can fix later/i);        // degrade, don't drop
+    // confidence is decoupled from attribution, so a hedged fact isn't culled.
+    assert.match(p, /whether the thing happened, not who it's about/);
+  }
+});
+
+test('both prompts describe the optional attribution_confidence field, tied to the unresolved marker', () => {
+  for (const p of [buildPrompt(MESSAGES), buildSharedRoomPrompt(MESSAGES)]) {
+    assert.match(p, /attribution_confidence — OPTIONAL/);
+    assert.match(p, /how sure I am WHO the fact is about/);
+    assert.match(p, /never drops the fact/);          // it's a downweight signal, not a cull
+    assert.match(p, /unresolved/i);                    // tied to the referent rule
+  }
 });

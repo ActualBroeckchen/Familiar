@@ -65,7 +65,7 @@ isn't *loaded*.
 | **interests** | interest_bump, interest_set_standing | trigger |
 | **village** | village_lookup, village_upsert, relay_message, discord-dm | trigger |
 | **web** | web_search, read_webpage, look_up† | trigger (AND webSearchEnabled, as today) |
-| **acks** | acknowledge_deferred_intent, snooze_deferred_intent, memory_confirm_consent, memory_drop_pending, graduation_acknowledge | context-block-driven |
+| **acks** | acknowledge_deferred_intent, snooze_deferred_intent, memory_confirm_consent, memory_drop_pending, acknowledge_graduation | context-block-driven |
 | **files** | list_files, read_file | trigger |
 | **maintenance** | convert_ids_to_slugs, get_trusted_contacts | request-only |
 

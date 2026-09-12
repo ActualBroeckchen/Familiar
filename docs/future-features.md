@@ -105,3 +105,20 @@ Open follow-ups for this area, if/when they earn their slot:
   size and the (date, op) of the most recent destructive call that
   preceded it would make "which snapshot do I restore?" much easier.
 
+## Browser
+
+- **Closed shadow DOM + cross-origin iframe traversal in the extractor.**
+  The page extractor (`browser-driver.js` `EXTRACT_FN`) pierces *open*
+  shadow roots (0.11.28), so Reddit-style web-component sites read fine.
+  Still unhandled: **closed** shadow roots (unreachable from page JS by
+  design — needs CDP `DOM.getFlattenedDocument {pierce:true}` or the a11y
+  tree, so it only lands in/with CDP mode) and **cross-origin iframes**
+  (a `same-origin` iframe's document could be walked via
+  `iframe.contentDocument`, but a cross-origin one is a separate frame the
+  in-page `document` walk can't reach — it needs a Playwright frame-level
+  pass that runs `EXTRACT_FN` per `page.frames()` and merges the nodes,
+  minting cross-frame refs). A page whose real content lives inside an
+  `<iframe>` currently reads as empty. Bounded, real, and rare; worth a
+  pass when an actual site needs it. Same-origin iframes are the cheap
+  first slice; closed shadow DOM rides the CDP work.
+

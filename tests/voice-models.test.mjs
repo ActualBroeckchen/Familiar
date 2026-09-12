@@ -4,7 +4,7 @@ import {
   composePlan, planSize, evaluatePlan, describePlanForConsent, formatBytes,
   isPinned, modelById, AUDIO_MODELS, CEILINGS, CAPABILITY_TIERS, VOICE_ENGINES, applyPins,
   supportedAsrLangs, availableAsrLangs, ASR_LANGUAGES, DEFAULT_ASR_LANG,
-} from '../voice-models.js';
+} from '../src/voice/voice-models.js';
 
 const roles = (plan) => plan.all.map((m) => m.role).sort();
 const ids = (plan) => plan.all.map((m) => m.id).sort();

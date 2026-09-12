@@ -11,7 +11,7 @@ CAPTCHA solver, or a fingerprint-spoofing scraper. The Familiar browses as
 itself, within deterministic guardrails, with every action audited, and hands
 the keyboard to my human at exactly the moments that belong to them (§4.8).
 
-Status: **spec — not yet built.** Browsing owns its own MINOR milestone.
+Status: **shipped through Pass 4 (0.11.7; see the pass ledger at the end).** Browsing owns its own MINOR milestone.
 Builds on the web-search stack (0.7.x) and the vision build spec
 (`docs/vision-build-spec.md` — screenshots become media assets and can ride a
 vision-capable turn).

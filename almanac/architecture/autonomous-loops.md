@@ -10,10 +10,16 @@ sources:
     path: docs/architecture.md
   - id: content-regate-loop
     type: file
-    path: content-regate-loop.js
+    path: src/memory/content-regate-loop.js
   - id: media-retention-loop
     type: file
-    path: media-retention-loop.js
+    path: src/vision/media-retention-loop.js
+  - id: server-js
+    type: file
+    path: server.js
+  - id: app-js
+    type: file
+    path: public/app.js
 ---
 
 # Autonomous Loops
@@ -90,7 +96,9 @@ than owning a `setInterval` of its own [@architecture-doc].)
 Tome graduation and needs tracking are opt-in because they write to
 [Phylactery](phylactery), the canonical self — the milestone note in CLAUDE.md treats writes
 to canonical state as requiring an explicit ward decision, not a shipped default
-[@architecture-doc]. Google Calendar sync is opt-in for a related but distinct reason: it is
+[@architecture-doc]. See [Tomes and keyword lore](tomes-and-lore) for what a Tome is and why
+the self-documenting Familiar Manual tome ships `graduationExempt` so this loop never sweeps
+its entries into Phylactery. Google Calendar sync is opt-in for a related but distinct reason: it is
 the one loop that can eventually reach an external service the ward's real calendar depends
 on, and its write-back path (`schedule_push_to_google`) is gated behind its own separate
 opt-in on top of the loop being enabled at all [@architecture-doc].
@@ -107,13 +115,14 @@ nothing, not the "bias toward staying quiet" pattern that caused real harm when 
 into the *safety* decision itself.
 
 Noticing is the deliberate exception: it is ward-signed to **not** stand down at elevated
-threat, on the reasoning that an aging intention or a widening contact gap is "especially
-useful" to surface exactly when things are hard, not something to suppress [@claude-md]. Threat
+threat, on the reasoning that an aging [intention or round](../architecture/unruh) or a widening
+contact gap is "especially useful" to surface exactly when things are hard, not something to
+suppress [@claude-md]. Threat
 still shifts its *register* — moderate-or-higher renders a tier line in the deliberation prompt,
 and a genuinely alarming read is handed to triage rather than answered with a casual reach-out —
 but the turn itself is never skipped. Because it acts on the ward's safety-adjacent surface, any
 change to when or whether noticing acts requires the same sign-off as the triage files
-[@claude-md].
+[@claude-md]. See [Noticing](noticing) for the architecture of outcome tracking, the anti-nag ledger that prevents repeated asks, and the role-fix that ensures the Familiar's own reflection is framed as entity-as-subject rather than being operated.
 
 ## Shared self-observation: the wait-streak line
 
@@ -136,8 +145,24 @@ weekday-class from session logs and reports nothing until roughly two weeks of h
 see [Contact-rhythm baselines](../decisions/contact-rhythm-baselines) for the conservative
 ward-contact signal and the honesty rule that gates it.
 
+## User-visible observability: the Diagnostics panel (0.11.77)
+
+Loops fail silently by design — the shared contract above requires it — but that leaves the
+ward with no way to tell a genuinely quiet Familiar from one whose loop died. The 2026-09
+audit's fix was to surface what previously only `curl` could see: Sidebar → Diagnostics →
+"Is my Familiar alive?" opens a modal that reads `GET /api/health`'s `loops` object (one entry
+per self-pacing background worker: pondering, noticing, reachout, memory sweep, Google
+Calendar sync, page watch) and renders a status dot per loop, plus tabs over the five event
+logs that were previously reachable only as raw JSON routes — `/api/noticing-events`,
+`/api/reachout-events`, `/api/triage-events`, `/api/page-watch-events`, and
+`/api/discord-writes` [@server-js] [@app-js]. `/api/health`'s own comment states the intent
+plainly: a dead loop should read as `false` in this panel, not as calm silence [@server-js]. A
+loop with no recent entries in its log is the ward-visible signal that something needs
+attention, distinguishing "nothing has happened" from "nothing can happen."
+
 ## Related
 
+- [Noticing](noticing) — the autonomous loop that surfaces aging commitments and overdue events, the no-nag ledger, and how it integrates with entity-as-subject framing.
 - [Pondering](pondering) — the autonomous thought loop, its cadence, and the `read_pondering` tool.
 - [Safety spine](safety-spine) — the crisis-detection and escalation machinery
   silence-triage sits on top of.
@@ -159,3 +184,5 @@ ward-contact signal and the honesty rule that gates it.
 - [Local process over VM/Docker sandboxing](../decisions/local-process-over-vm-sandboxing) — why
   these loops all run inside one continuously-running Node process rather than a separate
   always-on listener waking heavier components lazily.
+- [Self-originated interest and the `me` register](../decisions/self-originated-interest-and-me-register) —
+  the 2026-09 audit that also shipped the Diagnostics panel described above.

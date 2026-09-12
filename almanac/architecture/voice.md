@@ -16,34 +16,34 @@ sources:
     path: PR-voice-pass-0.md
   - id: voice-models
     type: file
-    path: voice-models.js
+    path: src/voice/voice-models.js
   - id: voice-footprint
     type: file
-    path: voice-footprint.js
+    path: src/voice/voice-footprint.js
   - id: voice-fetch
     type: file
-    path: voice-fetch.js
+    path: src/voice/voice-fetch.js
   - id: voice-extract
     type: file
-    path: voice-extract.js
+    path: src/voice/voice-extract.js
   - id: voice-catalogue
     type: file
-    path: voice-catalogue.js
+    path: src/voice/voice-catalogue.js
   - id: voice-bench
     type: file
-    path: voice-bench.js
+    path: src/voice/voice-bench.js
   - id: voice-speech
     type: file
-    path: voice-speech.js
+    path: src/voice/voice-speech.js
   - id: voice-generation
     type: file
-    path: voice-generation.js
+    path: src/voice/voice-generation.js
   - id: voice-backend
     type: file
-    path: voice-backend.js
+    path: src/voice/voice-backend.js
   - id: media
     type: file
-    path: media.js
+    path: src/vision/media.js
   - id: server
     type: file
     path: server.js
@@ -52,37 +52,58 @@ sources:
     path: CLAUDE.md
   - id: audio-worker-current
     type: file
-    path: audio-worker-current.js
+    path: src/voice/audio-worker-current.js
   - id: app-js
     type: file
     path: public/app.js
   - id: voice-audio-tags
     type: file
-    path: voice-audio-tags.js
+    path: src/voice/voice-audio-tags.js
   - id: voice-tagging
     type: file
-    path: voice-tagging.js
+    path: src/voice/voice-tagging.js
   - id: voice-presence-js
     type: file
-    path: voice-presence.js
+    path: src/voice/voice-presence.js
   - id: voice-discord-server-js
     type: file
-    path: voice-discord-server.js
+    path: src/voice/voice-discord-server.js
   - id: voice-discord-adapter-js
     type: file
-    path: voice-discord-adapter.js
+    path: src/voice/voice-discord-adapter.js
   - id: call-engine-js
     type: file
-    path: call-engine.js
+    path: src/voice/call-engine.js
   - id: discord-gateway-js
     type: file
-    path: discord-gateway.js
+    path: src/discord/discord-gateway.js
   - id: village-js
     type: file
-    path: village.js
+    path: src/village/village.js
   - id: media-retention-loop
     type: file
-    path: media-retention-loop.js
+    path: src/vision/media-retention-loop.js
+  - id: offline-asr-models
+    type: file
+    path: src/voice/offline-asr-models.js
+  - id: voice-transcribe
+    type: file
+    path: src/voice/voice-transcribe.js
+  - id: voice-model-pins
+    type: file
+    path: voice-model-pins.json
+  - id: voice-pin
+    type: file
+    path: src/voice/voice-pin.js
+  - id: pin-audio-models-script
+    type: file
+    path: scripts/pin-audio-models.mjs
+  - id: offline-asr-resolve-test
+    type: file
+    path: tests/offline-asr-resolve.test.mjs
+  - id: voice-pin-overlay-test
+    type: file
+    path: tests/voice-pin-overlay.test.mjs
 ---
 
 # Voice
@@ -104,9 +125,13 @@ design — see [Safety spine](safety-spine)'s deferred-work section for why it s
 room sounds for care detection, and what a future ward-signed spec would need to decide
 [@voice-audio-tags]; and a shared-heap decode bug in the `opusscript` Opus decoder that silenced
 one Familiar whenever a second one joined the same Discord call, fixed in 0.11.10-alpha
-[@voice-discord-adapter-js]; and media retention (Pass 4 §9), the default-on background worker
+[@voice-discord-adapter-js]; media retention (Pass 4 §9), the default-on background worker
 that curates aged voice-clip sounds without ever touching their transcripts
-[@media-retention-loop]. See [Vision and media](vision-and-media) for the sibling
+[@media-retention-loop]; text-in-voice interleave (0.11.85-alpha), which lets a message typed
+into a live Discord call's attached text chat become a spoken turn in that same call
+[@call-engine-js]; and making the Whisper/Parakeet offline-ASR upgrades actually installable
+in-app (0.11.117-alpha), after the opt-in download path had shipped scaffolded but unfinished
+[@offline-asr-models]. See [Vision and media](vision-and-media) for the sibling
 multimodal-input milestone that voice's media storage reuses.
 
 ## The footprint budget: disk as an accessibility constraint
@@ -213,6 +238,38 @@ Voice ships through three different mechanisms depending on what the artifact is
 Upstream ships every model as `.tar.bz2`; two small pure-JS dependencies, `tar` and
 `unbzip2-stream`, were added because Node has no built-in bzip2 support
 [@pr-voice-pass-0].
+
+### Shipped pins vs runtime pins: the overlay pattern
+
+Pins serve two separate purposes, and they flow through two separate files. **Shipped pins**
+(`voice-model-pins.json`) are git-tracked: maintainer-committed URLs and hashes for the models
+the Familiar ships with and offers by default. **Runtime pins** are models the ward chooses to
+install at runtime — optional speaker models like CAM++ or TitaNet, fetched on first in-UI
+install — and they are written to a git-ignored overlay, `voice-model-pins.local.json`
+[@voice-pin]. This split exists because of an incident: before the split, `voice-pin.js`'s
+`pinAndInstallModel` function recorded its trust-on-first-install pin by writing into the
+git-tracked `voice-model-pins.json`. That silently dirtied the working copy of every machine
+that installed a speaker model in-UI. The next `git pull` that touched the pins file would abort
+with "Your local changes to voice-model-pins.json would be overwritten by merge" — a file the
+ward never knowingly edited. It was latent for any user who did an in-UI speaker install.
+
+`voice-models.js`'s `loadPins()` function now merges the two tables with `mergePinTables()`
+— shipped pins first, runtime pins second, so a runtime pin overrides a shipped one of the same
+id if both exist [@voice-models]. Both files are optional; their absence is normal, not an error.
+`voice-pin.js` writes ONLY to the overlay file and never touches the tracked file at runtime
+[@voice-pin]. The overlay is git-ignored (`.gitignore` covers both `voice-model-pins.local.json`
+and its `.tmp` rename target), so a ward's in-UI installs never dirty the working copy
+[@voice-pin]. Tests assert this invariant and the merge behavior [@voice-pin-overlay-test]. Because pins only gate DOWNLOADING (sha-verify before bytes hit disk), never
+USING an already-installed model, losing a runtime pin record is harmless once the model is on
+disk — that is why the one-time recovery path (`git checkout -- voice-model-pins.json && git
+pull`) is safe [@voice-pin].
+
+This is an instance of a broader principle: an application must NEVER write a git-tracked file
+at runtime. State the app discovers or the user generates belongs in a git-ignored location,
+not in a file the repo also ships and updates — otherwise the two collide at `git pull` and
+the user is blocked by "local changes" to something they never touched. See
+[Runtime state must not write git-tracked files](../decisions/runtime-state-not-git-tracked)
+for the decision that constrains this area.
 
 ## Licensing and ward-supplied clips
 
@@ -345,19 +402,22 @@ stdio protocol defined in `audio-frame.js`, so `audio-worker-host.js` supervises
 identically — parking, backoff, and idle unload were written once rather than per backend
 [@voice-backend] [@architecture-doc]:
 
-| | `sherpa` (default) | `pocket` (opt-in) |
+| | `pocket` (default) | `sherpa` (fallback) |
 |---|---|---|
-| worker process | `audio-worker.mjs` | `voicebox/` (Python) |
-| install cost | ships with the app; ~216 MB | ~600 MB installed |
-| model | `2026-01` (the only ONNX export available) | `english_2026-04` |
-| continuity across turns | resets per utterance | `copy_state=False` carries the KV cache forward |
+| worker process | `voicebox/` (Python) | `audio-worker.mjs` |
+| install cost | ~600 MB installed | ships with the app; ~216 MB |
+| model | `english_2026-04` | `2026-01` (the only ONNX export available) |
+| continuity across turns | `copy_state=False` carries the KV cache forward | resets per utterance |
 
-`sherpa` stays the default because 600 MB is real cost on the hardware this project targets.
-Choosing `pocket` without it installed falls back to `sherpa` and says so — in the log and on
-`GET /api/voice/status` — carrying the exact command that fixes it [@architecture-doc]
-[@server]. The `pocket` worker is built on first use rather than at boot, because voice engine
-is a per-ward setting, not a fixed install; the running engine is stopped before a new one
-starts so two engines never hold models in memory at once [@architecture-doc]. Installation is
+`pocket` (`voice-backend.js`'s `DEFAULT_BACKEND`) is the configured default, consistent with
+the design-spec framing above that prosody is part of identity rather than a quality setting
+[@voice-backend]. `sherpa` is the built-in fallback: it ships with the app, needs no install,
+and is what a ward transparently gets when `pocket` is chosen but not yet installed — the
+fallback says so, in the log and on `GET /api/voice/status`, carrying the exact command that
+fixes it [@architecture-doc] [@server]. The `pocket` worker is built on first use rather than at
+boot, because voice engine is a per-ward setting, not a fixed install; the running engine is
+stopped before a new one starts so two engines never hold models in memory at once
+[@architecture-doc]. Installation is
 `node scripts/ensure-voicebox.mjs --install`, deliberately **not** wired into the prestart
 hook the way [Phylactery](phylactery) is — unlike Phylactery, `pocket` is optional, and
 downloading 600 MB because someone ran `npm start` would be hostile on a nearly-full laptop
@@ -515,6 +575,68 @@ fixed, filtering out other bots is no longer needed, and **all speakers, includi
 are decoded** — two Familiars conversing by voice over Discord is supported
 [@voice-discord-adapter-js].
 
+## Text-in-voice interleave: typing into a live call (0.11.85-alpha)
+
+A Discord voice channel carries a small attached text chat that shares the voice channel's id.
+While a call is live there, a message typed into that chat becomes a spoken turn interleaved
+into the same call, rather than being handled as an ordinary Discord text message
+[@call-engine-js]. Two cases motivate it: the repair path — typing "that word was 'Phylactery',
+not 'philosophy'" so the Familiar reads the correction and answers by voice — and showing the
+Familiar a picture mid-call on a voice model that cannot see [@voice-discord-server-js].
+
+**The engine stays transport-neutral.** `call-engine.js` gains a public `injectTextTurn(speakerRef,
+text, meta)` that funnels a text-sourced turn through the exact same internal machinery a spoken
+turn uses: `handleTurn` (which still respects the `turnBusy`/`pendingTurn` coalescing and
+serialisation), `runOneTurn`, the injected `onTurn`, and `adapter.playAudio` — so the reply is
+spoken aloud like any other turn [@call-engine-js]. The turn is tagged `source: 'text'` and
+carries an opaque `textNotes` array that `runOneTurn` forwards into the `onTurn` context
+uninterpreted; the engine itself never inspects Discord or knows the text came from a chat
+window. A spoken turn is `source: 'voice'` with `textNotes: null`, so existing call behaviour is
+unchanged [@call-engine-js].
+
+**The controller resolves the speaker itself, not the caller's classification.**
+`voice-discord-server.js` gains `isCallOnChannel(guildId, channelId)` and
+`handleCallText(msg, decision)` on the returned controller. `handleCallText` re-resolves who
+spoke — ward first (via `settings.discordWardUserId`), else a registered villager (via
+`findVillagerByAlias`), else a stranger, which returns `false` and falls through to normal text
+handling — rather than trusting the passed-in `decision`, because `classifyMessage` can
+short-circuit an image-with-no-caption before it resolves a speaker [@voice-discord-server-js].
+The bot's own messages and other bots' messages are skipped the same way the ordinary loop guard
+works. The turn is gated to the **call's** audience — `callAudience(meta)`, the voice-channel
+roster's lowest clearance, i.e. who can *hear* the spoken reply — never the text channel's own
+audience, mirroring the rule a spoken turn already follows: the reply is spoken aloud to the
+whole call, so gating to who can read the text chat would leak a higher-clearance recall aloud
+[@voice-discord-server-js]. The villager is registered under a `text-<id>` ref in the same
+`refToUser` map the voice adapter uses, so `runTurn` resolves their clearance identically to a
+spoken turn, and the turn joins the same per-tag call session rather than being memorised twice
+[@voice-discord-server-js].
+
+**Images are described, not seen.** An image shared in the call chat is ingested at the call's
+audience tag via `ingestDiscordMedia` (exported from `discord-gateway.js`; its own ward-or-
+villager-yes, stranger-never gate still applies) and run through `describeAsset` — a look-once,
+keep-forever description — so the reply can talk about a picture even on a voice model with no
+vision [@voice-discord-server-js] [@discord-gateway-js]. The description rides in as a one-off
+`textNotes` entry, the same shape as the room-sound annotation covered above: it is never stored
+and never moves the threat tier. With a caption and an image together, the caption is the turn
+and the image rides as a note; with an image and no caption, the description itself becomes the
+turn text, so there is still something to answer [@voice-discord-server-js]. A video attachment
+is not described — it becomes a plain "they shared a clip" note — and a failed image fetch or
+describe call degrades to an honest "couldn't make it out" note rather than throwing into the
+call [@voice-discord-server-js].
+
+**Routing happens once, before observe/respond classification.** In `discord-gateway.js`'s
+`MESSAGE_CREATE` handler, after command parsing (`!leave`, `/update`, and similar) and before the
+normal observe/respond branching, a message on a channel with a live call routes to
+`gw.voiceController.handleCallText`; if it returns `true` the gateway returns immediately and
+skips the normal text path entirely, so an interleaved message is never also memorised as an
+ordinary Discord text turn [@discord-gateway-js]. A stranger's message (`handleCallText` returns
+`false`) falls through unchanged to whatever the gateway would otherwise have done with it.
+
+The whole feature is default-on and gated by one off-switch,
+`PROTO_FAMILIAR_VOICE_TEXT_INTERLEAVE_DISABLED=1`, which falls the call's text chat back to
+ordinary text handling — the same discipline every other loop in this codebase follows
+[@voice-discord-server-js].
+
 ## Media retention: curating aged voice clips (Pass 4 §9)
 
 §9 of the build spec is the other later piece this page covers: `media-retention-loop.js` (see
@@ -531,6 +653,91 @@ in the same spirit: an LLM error or an unparseable response keeps *everything* t
 `parseKeepRefs` returns `null` on no-JSON, a state the loop deliberately treats as distinct from
 a valid "keep none" [@media-retention-loop]. Like the noticing loop, it stands down during a live
 call and at moderate-or-higher threat — curation can always wait for a calmer tick.
+
+## Offline ASR upgrades: scaffolded to actually installable (0.11.117)
+
+`offline-asr-models.js` lets a ward choose which model does the FINAL,
+no-one-waiting transcription pass for a voice note or a call: SenseVoice
+(multilingual, the bundled default), Whisper (multilingual, markedly better
+English, heavier), or NeMo Parakeet (English-only transducer, accurate, and
+the only one of the three that supports hotword biasing) [@offline-asr-models].
+The picker shipped in 0.11.84-alpha, but switching to Whisper or Parakeet
+neither downloaded nor activated the model — the opt-in path had the UI
+choice, the catalogue entries, and the worker config scaffolded, but three
+separate gaps kept it from ever completing end to end [@offline-asr-models].
+
+**Gap 1 — the models were never pinned, and the scaffolded Whisper URL was a
+404.** `voice-model-pins.json` had no entry for either upgrade, and `fetchPlan`
+fails closed on an unpinned model: `isPinned()` requires every file to carry
+a URL and a 64-hex sha256 [@voice-model-pins]. The originally-scaffolded
+Whisper asset, `sherpa-onnx-whisper-medium.int8.tar.bz2`, does not exist
+upstream — there is no `medium.int8` archive at all. Both models are now
+pinned: Parakeet to `sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2`, and
+Whisper to `sherpa-onnx-whisper-small.tar.bz2` rather than `medium`
+[@voice-model-pins]. The choice of `small` over `medium` is deliberate:
+medium's archive is 1.9 GB (roughly 3 GB unpacked), too heavy for the small,
+often nearly-full machines the footprint budget described above exists to
+protect, where `small` (610 MB) is the accuracy/footprint sweet spot
+and keeps every language `small` supports [@offline-asr-models]. Pins are
+machine-written by `scripts/pin-audio-models.mjs <id> --upstream`, which
+downloads the candidate, hashes it in flight, and — for archives — unpacks it
+to measure the real disk size, the same machine-written-never-typed discipline
+the rest of the voice supply chain follows (see [exact values are code's
+job](../decisions/exact-values-in-code)) [@pin-audio-models-script].
+
+**Gap 2 — the install plan ignored the ward's choice.** `voicePlanFor('listen')`
+hard-codes `extras: ['asr-offline']` (SenseVoice), so even a correctly-pinned
+upgrade was never targeted by an install [@server]. Two new endpoints close
+this: `POST /api/voice/asr-model/install {key}` builds a one-model plan
+(`{voice: null, capability: [], extras: [model], all: [model]}`) and fetches
+it through a new shared `fetchVoicePlanWithProgress(plan, label)`, extracted
+from the general install-models handler so the progress and failure-detail
+logging lives in one place rather than being duplicated per install path
+[@server]. It unpacks into `models/audio/<catalogueId>/`, the same directory
+the worker reads by `dir` [@server]. `POST /api/voice/asr-model/remove {key}`
+deletes an installed upgrade's directory to reclaim disk, but refuses to
+remove the SenseVoice default — it is the always-there fallback, so voice
+notes keep working even for a ward who switched away from an upgrade
+[@server]. `GET /api/voice/asr-model` reports each option's `{installed,
+pinned, removable}` plus an `installed` map, driven by the new
+`offlineAsrInstallState()` in `voice-transcribe.js`, so the picker can mark
+what is actually on disk rather than what was merely selected
+[@voice-transcribe].
+
+**Gap 3 — no in-app install; the UI sent the ward to a terminal.** The old
+status text told the ward to pin and install from a checkout. The Settings
+picker (`public/app.js`) now downloads the chosen model on switch if it is
+not already present, via `ensureOfflineAsrDownloaded`, marks installed models
+with a checkmark, and offers a Remove button (`removeOfflineAsrModel`) that
+reclaims disk; a module-level `_asrInstalling` guard prevents a double fetch
+or a remove firing mid-download [@app-js].
+
+**The latent bug the never-run path was hiding.** `modelUnpacked()` in
+`voice-transcribe.js` and `offlineRecognizerConfig()` in
+`offline-asr-models.js` both hard-coded the filename `tokens.txt`. The real
+sherpa-onnx Whisper `small` archive — confirmed by actually downloading and
+extracting it, not recalled from memory — ships a *prefixed* `small-tokens.txt`,
+plus both fp32 and int8 encoder/decoder pairs; Parakeet ships a plain
+`tokens.txt` and int8-only transducer files [@offline-asr-models]
+[@voice-transcribe]. Hard-coding the plain name meant a freshly-downloaded
+Whisper would have read as "not installed", and if it had loaded anyway it
+would have picked the heavy fp32 weights over the int8 ones. Both call sites
+now discover the tokens file by shape (`/tokens\.txt$/i`) and prefer an int8
+build when both precisions exist (`findPart` tries `<part>...int8...onnx`
+before the fp32 fallback) — the same discover-by-shape discipline the
+encoder/decoder/joiner lookup already used, rather than assuming a filename
+[@offline-asr-models] [@voice-transcribe].
+
+This is a concrete recurrence of a lesson CLAUDE.md records from the voice
+Pass 1 verification post-mortem: "a test can assert a bug and defend it for
+weeks" [@claude-md]. `offline-asr-resolve.test.mjs` had planted a fake plain
+`tokens.txt` fixture for its Whisper case, so it passed against the broken
+detector; it now plants the real prefixed layout the upstream archive
+actually ships, and the suite would fail again if the hard-coded filename
+ever came back [@offline-asr-resolve-test]. The fix as a whole was verified
+the same way the bug was found — by downloading and extracting both real
+archives with the repo's own `extractArchive` and reading the result, rather
+than trusting the catalogue's assumed filenames.
 
 ## What Pass 0 flagged for later passes
 

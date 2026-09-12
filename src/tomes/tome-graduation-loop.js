@@ -1,0 +1,183 @@
+/**
+ * Tome → Phylactery graduation loop (Phase 4) — the singleton driver.
+ *
+ * Thin wrapper around tome-graduation.js's pure runOneGraduationTick: it
+ * wires the real I/O (load tomes, the LLM judgment, the thalamus write
+ * wrappers, the locked tome edit) and paces itself on a slow interval.
+ *
+ * Default OFF. It writes to the canonical self, so it stays dormant until
+ * my human enables it in Settings (and after they've watched the Phase 3
+ * routing behave in live chat). Hard off-switch:
+ * PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1. Mirrors the reachout/triage
+ * loop shape.
+ */
+
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { isCallActiveFromFile } from '../voice/call-engine.js';
+import { promises as fsp } from 'fs';
+
+import {
+  modifyTomeFile, appendIdentity, createMemoryFull, searchMemory, enrich,
+  searchGraphNodes, createGraphNode, createGraphEdge, getGraphSubgraph,
+} from '../../thalamus.js';
+import { readSettingsSync, primaryConnectionFrom, connectionForFeature } from '../../cerebellum.js';
+import { resolveProviderUrl, connectionReady } from '../../providers.js';
+import { callProviderChat, familiarDeliberationMessages } from '../../llm-call.js';
+import { substituteMacros } from '../../macros.js';
+import { runOneGraduationTick, EXCLUDED_TOME_NAMES } from './tome-graduation.js';
+
+import { REPO_ROOT } from '../../repo-root.js';
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const TOMES_DIR = path.join(REPO_ROOT, 'tomes');
+
+const DEFAULT_TICK_MS = 30 * 60_000;   // 30 min — draining a backlog wants no urgency
+
+let _started  = false;
+let _interval = null;
+let _active   = null;
+
+function tomeGraduationHardDisabled() {
+  return process.env.PROTO_FAMILIAR_TOME_GRADUATION_DISABLED === '1';
+}
+
+function isEnabled() {
+  if (tomeGraduationHardDisabled()) return false;
+  return readSettingsSync().tomeGraduationEnabled === true;   // opt-in
+}
+
+// ── Load every non-dot tome ([{ file, tome }]) ────────────────────
+async function loadTomes() {
+  let files;
+  try { files = await fsp.readdir(TOMES_DIR); }
+  catch { return []; }
+  const out = [];
+  for (const f of files) {
+    if (!f.endsWith('.json') || f.startsWith('.')) continue;
+    try {
+      const tome = JSON.parse(await fsp.readFile(path.join(TOMES_DIR, f), 'utf8'));
+      out.push({ file: path.join(TOMES_DIR, f), tome });
+    } catch { /* skip corrupt */ }
+  }
+  return out;
+}
+
+// ── The judgment prompt (first-person; reuses the Phase 3 rubric) ──
+// Returns only the Familiar's own reflection body. Identity rides separately as
+// its own system message (familiarDeliberationMessages) — this is the Familiar
+// thinking through where its stranded knowledge belongs, never a task handed TO
+// it on a user turn.
+export function buildGraduationPrompt({ items }) {
+  const rubric =
+`I'm tidying knowledge that's been sitting in my tomes, moving anything durable into its right home in my canonical self. For each entry I decide where it belongs:
+- A standing fact about who I am, as I grow and change → my self identity (home "self").
+- A standing fact about who {{user}} is → their identity (home "ward"). About our bond → our relationship (home "relationship").
+- A person, place, or thing and HOW IT CONNECTS to others — a relationship between entities → my knowledge graph (home "graph"). I give the relationship(s) as subject → edge → object, using the entities' canonical labels as I already know them.
+- A moment, event, or pattern with a 'when' → my memory (home "memory").
+- Keyword-triggered context or lore — something that should resurface on a topic but isn't a fact about who someone is, how things connect, or a moment in time → it stays a tome (home "tome").
+When something might durably matter, I bring it into my canonical self rather than leave it stranded. My consolidation passes prune duplicates, merge, and let unused detail decay over time — the way sleep sorts a day's memories — so I lean toward graduating: over-gathering is cheap to correct, and missing something that turns out to matter is not. (A tome is still the right home for genuine keyword-lore — I'm not hoarding facts there out of caution, but I'm not emptying tomes for its own sake either.) I'm also given what I already hold close to each entry: if I already have this fact, I set already_held true and don't write a duplicate. When I graduate a fact, I rewrite it cleanly in my own first-person voice as the content to file.`;
+
+  const list = items.map((it, i) =>
+`Entry ${i + 1} — uid ${it.uid} — from tome "${it.tomeName}"${it.comment ? `, titled "${it.comment}"` : ''}:
+"""
+${(it.content || '').slice(0, 1200)}
+"""
+What I remember about this:
+${it.recall || '(nothing close)'}`).join('\n\n');
+
+  return `${rubric}
+
+The entries to review:
+
+${list}
+
+I reply with ONLY a JSON array — one object per uid, no prose:
+[{ "uid": "…", "home": "self|ward|relationship|graph|memory|tome", "already_held": false, "content": "for an identity or memory home: the fact rewritten in my own voice (omit for graph/tome/already_held)", "filename": "for an identity home: my_identity.md | ward_notes.md | relationship_notes.md", "granularity": "for memory: daily|significant", "relations": "for a graph home: [{ \\"subject\\": {\\"label\\":\\"Chen\\",\\"type\\":\\"person\\"}, \\"edge\\": \\"lives_in\\", \\"object\\": {\\"label\\":\\"Berlin\\",\\"type\\":\\"place\\"} }]" }]`;
+}
+
+// Provider call — mirrors the reachout/triage loops' shape. (If a fourth
+// copy appears, extract a shared callProvider into providers.js.)
+// temperature 0.3 — routing wants steadiness, not flourish. Cap is generous so
+// a thinking model can finish past its reasoning (see llm-call.js).
+// The graduation judgment is the Familiar's own thinking, so it rides as system
+// messages (identity + reflection body) with a bare user cue, not as a `user`
+// turn framing the tidy-up as handed TO them (see familiarDeliberationMessages).
+async function callLLM({ provider, apiKey, model, baseUrl, identity, body }) {
+  return callProviderChat({
+    provider, apiKey, model, baseUrl,
+    messages: familiarDeliberationMessages({
+      identity: identity || '',
+      body,
+      cue: '(a quiet moment to tidy my tomes)',
+    }),
+    temperature: 0.3, maxTokens: 3000,
+  });
+}
+
+async function decideGraduation(candidates) {
+  const s = readSettingsSync();
+  const conn = connectionForFeature(s, 'tomeGraduation');
+  if (!connectionReady(conn)) {
+    throw new Error('no usable primary connection');
+  }
+  const [{ static: identityContext }] = await Promise.all([
+    enrich('', { staticOnly: true }).catch(() => ({ static: '' })),
+  ]);
+  const items = await Promise.all(candidates.map(async (c) => {
+    let recall = '';
+    try {
+      const r = await searchMemory({ query: (c.entry.content || '').slice(0, 200), maxResults: 3 });
+      recall = (Array.isArray(r?.results) ? r.results : [])
+        .map(h => `- (${[h.granularity, h.date].filter(Boolean).join('/')}) ${(h.excerpt || '').trim().slice(0, 160)}`)
+        .join('\n');
+    } catch { /* dedup context is best-effort */ }
+    return { uid: c.uid, tomeName: c.tomeName, comment: c.entry.comment, content: c.entry.content || '', recall };
+  }));
+  // Macros resolve on the reflection body (it carries {{user}}); identity from
+  // enrich is already literal "my human" (a server-injected block), no macros.
+  const body = substituteMacros(buildGraduationPrompt({ items }), s);
+  return callLLM({ provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl, identity: identityContext, body });
+}
+
+async function runTick() {
+  if (!isEnabled()) return { reason: 'disabled' };
+  // Governor (§4.3): defer graduating tome knowledge during a live call.
+  if (await isCallActiveFromFile()) return { reason: 'call-active' };
+  const tidyMode = readSettingsSync().tomeGraduationTidy === 'delete' ? 'delete' : 'pointer';
+  const summary = await runOneGraduationTick({
+    loadTomes,
+    decide:     decideGraduation,
+    deps:       { appendIdentity, createMemoryFull, searchGraphNodes, createGraphNode, createGraphEdge, getGraphSubgraph },
+    modifyTome: modifyTomeFile,
+    tidyMode,
+    excludeNames: EXCLUDED_TOME_NAMES,
+  });
+  if (summary.graduated || summary.failed) {
+    console.log(`[grad] reviewed ${summary.reviewed}: graduated ${summary.graduated}, kept ${summary.keptAsTome}, dup ${summary.alreadyHeld}, failed ${summary.failed} (tidy: ${tidyMode})`);
+  }
+  return summary;
+}
+
+export function startTomeGraduationLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
+  if (_started) return { stop: stopTomeGraduationLoop };
+  if (tomeGraduationHardDisabled()) {
+    console.log('[grad] tome→Phylactery graduation hard-disabled via PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1');
+    return { stop: () => {} };
+  }
+  _started = true;
+  console.log('[grad] tome→Phylactery graduation loop armed (opt-in; idles until "Graduate tome knowledge" is enabled in Settings)');
+  _interval = setInterval(() => {
+    if (_active) return;                 // never overlap ticks
+    _active = runTick()
+      .catch(err => console.warn('[grad] tick error:', err?.message ?? err))
+      .finally(() => { _active = null; });
+  }, tickMs);
+  _interval.unref?.();
+  return { stop: stopTomeGraduationLoop };
+}
+
+export async function stopTomeGraduationLoop() {
+  if (_interval) { clearInterval(_interval); _interval = null; }
+  if (_active) { try { await _active; } catch { /* already logged */ } }
+  _started = false;
+}

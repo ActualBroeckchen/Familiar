@@ -43,7 +43,12 @@ async function ourFiles() {
     for (const e of entries) {
       const r = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) {
-        if (['node_modules', '.git', 'models', 'media', 'voices', 'almanac', 'logs', 'tomes', 'data', '.venv', '__pycache__'].includes(e.name)) continue;
+        // Vendored / caches — skip at ANY depth.
+        if (['node_modules', '.git', '.venv', '__pycache__'].includes(e.name)) continue;
+        // Runtime-state / generated trees live only at the repo ROOT; skip them
+        // there, but do NOT skip a same-named SOURCE folder nested elsewhere —
+        // e.g. src/tomes/ is real code, not the runtime tomes/ store.
+        if (depth === 0 && ['models', 'media', 'voices', 'almanac', 'logs', 'tomes', 'data'].includes(e.name)) continue;
         await walk(r, depth + 1);
       } else if (/\.(js|mjs)$/.test(e.name)) out.push(r);
     }

@@ -10,7 +10,7 @@ sources:
     path: public/app.js
   - id: discord-gateway-js
     type: file
-    path: discord-gateway.js
+    path: src/discord/discord-gateway.js
 ---
 
 # Update

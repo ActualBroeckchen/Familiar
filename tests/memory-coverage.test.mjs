@@ -6,7 +6,7 @@ import os from 'node:os';
 import {
   recordSegmentRun, isSegmentMemorized, segmentMemorizedThrough, computeCoverage,
   incompleteDates, deriveStatus, collectDateSlices,
-} from '../memory-coverage.js';
+} from '../src/memory/memory-coverage.js';
 
 const at = (y, mo, d, h = 12) => new Date(y, mo - 1, d, h).toISOString();
 const msg = (content, ts, role = 'user') => ({ role, content, timestamp: ts });
@@ -33,7 +33,7 @@ test('deriveStatus: empty / partial / complete / uncertain', () => {
   assert.equal(deriveStatus([]), 'empty');
   assert.equal(deriveStatus([{ memorized: 1, total: 3, flag: null }]), 'partial');
   assert.equal(deriveStatus([{ memorized: 3, total: 3, flag: null }]), 'complete');
-  assert.equal(deriveStatus([{ memorized: 3, total: 3, flag: 'shared-room' }]), 'uncertain');
+  assert.equal(deriveStatus([{ memorized: 3, total: 3, flag: 'extract-failed' }]), 'uncertain');
   // one lagging session drags the whole day back to partial
   assert.equal(deriveStatus([
     { memorized: 3, total: 3, flag: null },
@@ -67,10 +67,32 @@ test('new messages after a run drop the active day back to partial', async () =>
   assert.equal((await computeCoverage(opts)).days['2026-06-20'].status, 'partial');
 });
 
-test('a shared-room flag makes a fully-memorized day uncertain', async () => {
+test('a fully-memorized group-room day is COMPLETE, not uncertain (carries an info marker)', async () => {
   await writeLog('s1', [msg('a', at(2026, 6, 20, 9)), msg('b', at(2026, 6, 20, 10), 'assistant')]);
-  await recordSegmentRun({ date: '2026-06-20', sessionId: 's1', throughCount: 2, flag: 'shared-room' }, opts);
+  await recordSegmentRun({ date: '2026-06-20', sessionId: 's1', throughCount: 2, sharedRoom: true }, opts);
+  const cov = await computeCoverage(opts);
+  assert.equal(cov.days['2026-06-20'].status, 'complete');   // no longer purple
+  assert.equal(cov.days['2026-06-20'].sharedRoom, true);     // still visible as "group"
+});
+
+test('a legacy sticky shared-room flag heals to complete on read (no re-run)', async () => {
+  await writeLog('s1', [msg('a', at(2026, 6, 20, 9)), msg('b', at(2026, 6, 20, 10), 'assistant')]);
+  // Simulate an OLD ledger written by the pre-fix code.
+  await fsp.writeFile(ledgerFile, JSON.stringify({
+    version: 1, tz: 'test', days: { '2026-06-20': { segments: { s1: { memorizedThrough: 2, facts: 1, flag: 'shared-room' } } } },
+  }), 'utf8');
+  const cov = await computeCoverage(opts);
+  assert.equal(cov.days['2026-06-20'].status, 'complete');
+  assert.equal(cov.days['2026-06-20'].sharedRoom, true);
+});
+
+test('a real extract-failed flag reads uncertain, and clears to complete on a later success', async () => {
+  await writeLog('s1', [msg('a', at(2026, 6, 20, 9)), msg('b', at(2026, 6, 20, 10), 'assistant')]);
+  await recordSegmentRun({ date: '2026-06-20', sessionId: 's1', throughCount: 2, flag: 'extract-failed' }, opts);
   assert.equal((await computeCoverage(opts)).days['2026-06-20'].status, 'uncertain');
+  // A later successful run passes flag:null → clears it.
+  await recordSegmentRun({ date: '2026-06-20', sessionId: 's1', throughCount: 2, flag: null }, opts);
+  assert.equal((await computeCoverage(opts)).days['2026-06-20'].status, 'complete');
 });
 
 test('incompleteDates lists only partial days', async () => {

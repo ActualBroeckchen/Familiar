@@ -137,11 +137,11 @@ Suggested models (type any valid model name in the field):
 
 **Z.ai — Standard API** — `https://api.z.ai`
 
-Suggested models: `glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`, `glm-4.5`, `glm-4.5-air`, `glm-4-flash`, `glm-z1-rumination`
+Suggested models: `glm-5.3-flash` (natively multimodal — image + video), `glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`, `glm-4.5`, `glm-4.5-air`, `glm-4-flash`, `glm-z1-rumination`
 
-**Z.ai — Coding Plan** — uses a separate quota endpoint (`/api/coding/paas/v4/…`).
+**Z.ai — Coding Plan** — uses a separate quota endpoint (`/api/coding/paas/v4/…`). Same OpenAI-compat chat surface as Standard, so a multimodal model here (`glm-5.3-flash`) watches images + video live too; older text/code models describe images through the Vision MCP instead.
 
-Suggested models: `glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`, `glm-4.5-air`
+Suggested models: `glm-5.3-flash` (multimodal), `glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`, `glm-4.5-air`
 
 **Google AI Studio — Gemini** — `https://generativelanguage.googleapis.com` (OpenAI-compatible surface). Get a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
 

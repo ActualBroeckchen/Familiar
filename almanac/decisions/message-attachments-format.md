@@ -4,7 +4,7 @@ topics: [decisions, vision, architecture]
 sources:
   - id: vision-js
     type: file
-    path: vision.js
+    path: src/vision/vision.js
 ---
 
 # Message attachments ride beside content, not inside it
@@ -38,7 +38,7 @@ This is called a "load-bearing decision" because every future vision-related cha
 
 **Single seam for provider materialization**: The attachment layer is invisible to the rest of the system except at one place: when the message is about to be sent to an LLM provider, `materializeAttachments()` converts stored attachment metadata into provider-consumable image_url data-URL parts (or text stand-ins when vision is unavailable) [@vision-js].
 
-**Easy future modality expansion**: Adding support for audio, video, or documents is a materializer change only, not a message-format migration [@vision-js]. The storage format, message shape, and every consumer stay the same; only `vision.js` needs to know what modalities exist.
+**Easy future modality expansion**: Adding support for audio, video, or documents is a materializer change only, not a message-format migration [@vision-js]. The storage format, message shape, and every consumer stay the same; only `vision.js` needs to know what modalities exist. Video (0.11.33-alpha) confirmed this in practice: [Vision and media](../architecture/vision-and-media) documents the `video` kind riding the same `attachments` field, materialized by the same `materializeAttachments()` seam, with no change to `message.content` or any of its existing string-assuming consumers.
 
 **Audience gating is clean**: Private attachments can be silently dropped from specific audiences without altering the message's string content, because attachments are a separate field [@vision-js]. An attachment shared with the ward but not with a villager contributes nothing to that villager's chat turn — not even a text stand-in.
 

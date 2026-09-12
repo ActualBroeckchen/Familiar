@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shortPonderUid } from '../pondering.js';
+import { shortPonderUid } from '../src/pondering/pondering.js';
 
 test('shortPonderUid: compact slug shape, no lookalike chars', () => {
   for (let i = 0; i < 200; i++) {
@@ -16,8 +16,8 @@ test('shortPonderUid: effectively unique across a large draw', () => {
 });
 
 import { sessionSlugId, outboxSlugId, isLegacyId, shortSlug } from '../slug-ids.js';
-import { rekeyOutboxIds, enqueueOutbox, listOutbox } from '../outbox.js';
-import { rekeyCueState, readCueState, writeCueState } from '../gcal-projection.js';
+import { rekeyOutboxIds, enqueueOutbox, listOutbox } from '../src/safety/outbox.js';
+import { rekeyCueState, readCueState, writeCueState } from '../src/gcal/gcal-projection.js';
 import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';

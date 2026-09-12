@@ -22,8 +22,8 @@
 export const TOOL_MODULES = {
   // core — always advertised (time, memory in/out, id discovery, filing,
   // interests (human's call: they're character, not task), safety, the lid)
-  get_datetime: 'core', get_session_info: 'core',
-  recall: 'core', recall_timeframe: 'core', save_memory: 'core', save_to_tome: 'core',
+  get_datetime: 'core', get_session_info: 'core', organ_status: 'core', reader_doctor: 'core',
+  recall: 'core', recall_timeframe: 'core', search_conversation: 'core', save_memory: 'core', save_to_tome: 'core',
   update_identity: 'core', schedule_find: 'core',
   interest_bump: 'core', interest_set_standing: 'core',
   bookmark_for_later: 'core',   // the Familiar's own initiative (nothing in a user msg triggers it) — always reachable, like the other interest-layer tools
@@ -38,7 +38,7 @@ export const TOOL_MODULES = {
   schedule_export: 'schedule-read',
   schedule_add_event: 'schedule-write', schedule_add_task: 'schedule-write',
   schedule_add_reminder: 'schedule-write', schedule_add_phase: 'schedule-write',
-  schedule_add_need: 'schedule-write', schedule_assign_time: 'schedule-write',
+  schedule_add_need: 'schedule-write', schedule_assign_time: 'schedule-write', schedule_edit: 'schedule-write',
   schedule_snooze_task: 'schedule-write', schedule_resolve: 'schedule-write',
   schedule_delete: 'schedule-write', schedule_link: 'schedule-write',
   schedule_push_to_google: 'schedule-write',  // keeps its gcalWriteEnabled gate too
@@ -70,20 +70,20 @@ export const TOOL_MODULES = {
   // weather — the sky over my human's day (W-B). Surfaced by leaving-the-house
   // language and by the readiness/stewardship agenda + a new outside event
   // landing on the calendar (exactly when the weather matters).
-  weather_today: 'weather', set_current_location: 'weather',
+  weather_today: 'weather', set_current_location: 'weather', delete_location: 'weather',
 
   acknowledge_deferred_intent: 'acks', snooze_deferred_intent: 'acks',
   list_deferred_intents: 'acks', drop_deferred_intent: 'acks',
   memory_confirm_consent: 'acks', memory_drop_pending: 'acks',
-  graduation_acknowledge: 'acks',
-  disclosure_acknowledge: 'acks', keep_memory_private: 'acks',
+  acknowledge_graduation: 'acks',
+  acknowledge_disclosure: 'acks', keep_memory_private: 'acks',
   // Reading my own recent thought in full — the expand path for the pondering
   // index, which renders on every ward turn, so the tool must always be reachable
   // (like recall). Ward-only: it's absent from the villager allowlist, so a
   // villager can never read my private ponderings through it.
   read_pondering: 'core',
 
-  list_files: 'files', read_file: 'files',
+  list_files: 'files', read_file: 'files', search_sessions: 'files',
 
   convert_ids_to_slugs: 'maintenance',
 
@@ -124,7 +124,7 @@ export const MODULE_INDEX =
   'web (search, read pages, look up facts), ' +
   'weather (the sky over my human\'s day today/tomorrow, and moving between their saved places), ' +
   'acks (inspect/file/snooze/drop my own pending deferred intents & tells, confirm/drop memory consent, graduation notices), ' +
-  'files (list/read my own folder), ' +
+  'files (list/read my own folder, search back through my past sessions), ' +
   'maintenance (id tidy-up), ' +
   'stewardship (set the day-start time I open my human\'s day on), ' +
   'intentions (my own forward commitments and rounds: set/list/drop/complete, keep my rounds legible to my human or private), ' +
@@ -198,7 +198,9 @@ const TRIGGERS = {
     blocks: ['[Deferred intents from my free time]', '[PENDING MEMORY CONSENT', '[GRADUATION NOTICE'],
   },
   files: {
-    text: /\b(your (files|folder|logs?)|session log|our (conversation|chat|talk) (on|from|about)|read (the|your) \w+ (file|log|tome))\b/i,
+    // list/read my own folder + search my past sessions. The glance-back intent
+    // ("where did I say that", "in the group chat") surfaces search_sessions.
+    text: /\b(your (files|folder|logs?)|session logs?|our (conversation|chat|talk|sessions?) (on|from|about)|read (the|your) \w+ (file|log|tome)|where (did|do) (i|we|you) (say|mention|talk|bring (it|that) up)|find (that|the|our|where) (conversation|chat|session|thread)|search (my|our|your|the|back through) (logs?|sessions?|chats?|conversations?)|in the (group|other) (chat|room|server)|glance back)\b/i,
     blocks: [],
   },
   maintenance: {

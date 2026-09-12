@@ -5,13 +5,20 @@ import {
   isModalityError, DEFAULT_MAX_LIVE_IMAGES, looksVisionCapable,
   describeAsset, resolveVisionConnection, scoreImageDescriptionThreat,
   graduateImageDescriptionToNode, ensureDescribed,
-} from '../vision.js';
-import { saveAsset, deleteAsset, getAssetMeta, setAssetDescription } from '../media.js';
+} from '../src/vision/vision.js';
+import { saveAsset, deleteAsset, getAssetMeta, setAssetDescription } from '../src/vision/media.js';
 
 function gif(w, h) {
   const b = Buffer.from('GIF89a\x00\x00\x00\x00\x00\x00\x00', 'binary');
   b.writeUInt16LE(w, 6); b.writeUInt16LE(h, 8);
   return b;
+}
+
+// Same header, but with two Graphic Control Extension blocks (0x21 0xF9 0x04 …)
+// — the marker isAnimatedGif counts, so this reads as MORE THAN ONE frame.
+function animGif(w, h) {
+  const gce = Buffer.from([0x21, 0xf9, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00]);
+  return Buffer.concat([gif(w, h), gce, gce]);
 }
 
 const created = [];
@@ -59,11 +66,134 @@ test('looksVisionCapable: recognises vision families, rejects their text-only si
   }
 });
 
-test('a z.ai-coding connection is NOT live-capable (chat cannot see) but IS chosen for describe', async () => {
-  // Live capability: coding chat models can't take image_url → false, so the
-  // materializer stands images in rather than sending them live.
-  assert.equal(await resolveVisionCapable({ provider: 'zai-coding', visionCapable: 'yes' }, {}), false);
-  // Describe: resolveVisionConnection still picks the coding connection (its
+// ── Video (the vision patch) ──────────────────────────────────────
+import { looksVideoCapable, resolveVideoCapable } from '../src/vision/vision.js';
+let _vseq = 5000;
+async function mkVideo(label = 'clip', over = {}) {
+  const b = Buffer.from(`fake-video-bytes-${_vseq++}`);   // unique bytes → unique sha
+  const m = await saveAsset({ buffer: b, mime: 'video/mp4', label, ...over });
+  created.push(m.id);
+  return m;
+}
+
+test('looksVideoCapable: TIGHT — Gemini/Qwen-VL yes; images-only VLMs and text no', () => {
+  for (const m of ['gemini-2.0-flash', 'gemini-1.5-pro', 'qwen2.5-vl-72b', 'qwen3-vl-plus', 'some-video-model', 'glm-5.3-flash', 'glm5.3-flash']) {
+    assert.equal(looksVideoCapable('p', m), true, `${m} should read as video-capable`);
+  }
+  for (const m of ['glm-4.6v', 'pixtral-12b', 'llava-1.6', 'gpt-4o', 'claude-opus-4-8', 'glm-4.6', '']) {
+    assert.equal(looksVideoCapable('p', m), false, `${m} must NOT read as video-capable (image-vision ≠ video)`);
+  }
+});
+
+test("resolveVideoCapable: ward 'yes'/'no' win; auto follows the tight heuristic; off-switch forces false", async () => {
+  assert.equal(await resolveVideoCapable({ videoCapable: 'yes', model: 'glm-4.6' }, {}), true);
+  assert.equal(await resolveVideoCapable({ videoCapable: 'no', model: 'gemini-2.0-flash' }, {}), false);
+  assert.equal(await resolveVideoCapable({ provider: 'google', model: 'gemini-1.5-pro' }, {}), true);
+  assert.equal(await resolveVideoCapable({ provider: 'p', model: 'gpt-4o' }, {}), false);
+  process.env.PROTO_FAMILIAR_VIDEO_DISABLED = '1';
+  try { assert.equal(await resolveVideoCapable({ videoCapable: 'yes', model: 'gemini-1.5-pro' }, {}), false); }
+  finally { delete process.env.PROTO_FAMILIAR_VIDEO_DISABLED; }
+});
+
+test('materialize: a video-capable connection gets a video_url part', async () => {
+  const v = await mkVideo('demo');
+  const msgs = [{ role: 'user', content: 'watch this', attachments: [{ id: v.id }] }];
+  const r = await materializeAttachments(msgs, { connection: { provider: 'google', model: 'gemini-1.5-pro' }, settings: {} });
+  assert.equal(r.videosLive, 1);
+  const parts = r.messages[0].content;
+  assert.ok(Array.isArray(parts));
+  const vp = parts.find(p => p.type === 'video_url');
+  assert.ok(vp && /^data:video\/mp4;base64,/.test(vp.video_url.url), 'a data: video_url part is emitted');
+});
+
+test('materialize: a non-video model stands the clip in (no video_url), with the don\'t-invent guard', async () => {
+  const v = await mkVideo('demo2');
+  const msgs = [{ role: 'user', content: 'watch this', attachments: [{ id: v.id }] }];
+  const r = await materializeAttachments(msgs, { connection: { provider: 'p', model: 'gpt-4o' }, settings: {} });
+  assert.equal(r.videosLive, 0);
+  assert.equal(r.videosStoodIn, 1);
+  assert.equal(typeof r.messages[0].content, 'string');
+  assert.match(r.messages[0].content, /\[video [^\]]+\]/);
+  // A blind video stand-in raises the confabulation guard system line.
+  assert.ok(r.messages.some(m => m.role === 'system' && /never do that|can't see it/i.test(m.content) || /can't watch/i.test(m.content)));
+});
+
+test('materialize: video budget is newest-first (only the newest rides live)', async () => {
+  const a = await mkVideo('older');
+  const b = await mkVideo('newer');
+  const msgs = [{ role: 'user', content: 'two clips', attachments: [{ id: a.id }, { id: b.id }] }];
+  const r = await materializeAttachments(msgs, { connection: { provider: 'google', model: 'gemini-1.5-pro' }, settings: {} });
+  assert.equal(r.videosLive, 1);       // DEFAULT_MAX_LIVE_VIDEOS
+  assert.equal(r.videosStoodIn, 1);
+});
+
+// ── Animated GIF → video on a video-capable model ─────────────────
+async function mkAnimGif(label, over = {}) {
+  const w = over.w ?? _seq++, h = over.h ?? _seq++;
+  const m = await saveAsset({ buffer: animGif(w, h), mime: 'image/gif', label });
+  created.push(m.id);
+  return m;
+}
+
+test('saveAsset stamps animated:true on an animated gif, and leaves a still gif unflagged', async () => {
+  const moving = await mkAnimGif('reaction');
+  const still  = await mk('static');
+  assert.equal(moving.animated, true, 'the multi-frame gif is flagged animated');
+  assert.equal(still.animated, undefined, 'a single-frame gif carries no flag');
+});
+
+test('materialize: an animated gif rides as VIDEO on a video-capable model (sees the motion)', async () => {
+  const g = await mkAnimGif('wiggle');
+  const msgs = [{ role: 'user', content: 'look', attachments: [{ id: g.id }] }];
+  const r = await materializeAttachments(msgs, { connection: { provider: 'google', model: 'gemini-1.5-pro' }, settings: {} });
+  assert.equal(r.gifsAsVideo, 1, 'delivered as a gif-as-video');
+  assert.equal(r.imagesLive, 0, 'a video_url part is NOT counted as a live image (keeps the vision-reject gate honest)');
+  const parts = r.messages[0].content;
+  const vp = parts.find(p => p.type === 'video_url');
+  assert.ok(vp && /^data:image\/gif;base64,/.test(vp.video_url.url), 'the gif bytes ride a video_url part');
+  assert.ok(!parts.some(p => p.type === 'image_url'), 'not also sent as an image');
+});
+
+test('materialize: an animated gif on an image-only model stays an image (the still "gifst")', async () => {
+  const g = await mkAnimGif('wiggle2');
+  const msgs = [{ role: 'user', content: 'look', attachments: [{ id: g.id }] }];
+  // vision yes, video no → the provider first-frames the gif itself.
+  const r = await materializeAttachments(msgs, { connection: { visionCapable: 'yes', videoCapable: 'no' }, settings: {} });
+  assert.equal(r.gifsAsVideo, 0);
+  assert.equal(r.imagesLive, 1);
+  const parts = r.messages[0].content;
+  assert.ok(parts.find(p => p.type === 'image_url'), 'sent as an image_url part');
+  assert.ok(!parts.some(p => p.type === 'video_url'), 'never a video part on an image-only model');
+});
+
+test('materialize: gif-as-video off (setting) → a gif is a plain image even on a video model', async () => {
+  const g = await mkAnimGif('wiggle3');
+  const msgs = [{ role: 'user', content: 'look', attachments: [{ id: g.id }] }];
+  const r = await materializeAttachments(msgs, {
+    connection: { provider: 'google', model: 'gemini-1.5-pro' },
+    settings: { gifAsVideoEnabled: false },
+  });
+  assert.equal(r.gifsAsVideo, 0);
+  assert.ok(r.messages[0].content.find(p => p.type === 'image_url'), 'stays an image when the feature is off');
+});
+
+test('materialize: a STILL gif on a video model is a plain image, not a one-frame video', async () => {
+  const g = await mk('static-on-video');   // single-frame gif → not animated
+  const msgs = [{ role: 'user', content: 'look', attachments: [{ id: g.id }] }];
+  const r = await materializeAttachments(msgs, { connection: { provider: 'google', model: 'gemini-1.5-pro' }, settings: {} });
+  assert.equal(r.gifsAsVideo, 0, 'only ANIMATED gifs route to video');
+  assert.ok(r.messages[0].content.find(p => p.type === 'image_url'));
+});
+
+test('a z.ai-coding connection is capability-by-MODEL: text/code blind, GLM 5.3 Flash sees; still chosen for describe', async () => {
+  // A text/code coding model can't take live image_url parts → false, so the
+  // materializer stands images in (and describes via the Vision MCP).
+  assert.equal(await resolveVisionCapable({ provider: 'zai-coding', model: 'glm-4.7' }, {}), false);
+  // GLM 5.3 Flash is natively multimodal on the SAME coding chat endpoint → live.
+  assert.equal(await resolveVisionCapable({ provider: 'zai-coding', model: 'glm-5.3-flash' }, {}), true);
+  // The ward's explicit 'yes' is now honored (it used to be ignored — the bug).
+  assert.equal(await resolveVisionCapable({ provider: 'zai-coding', model: 'glm-4.7', visionCapable: 'yes' }, {}), true);
+  // Describe: resolveVisionConnection still picks a coding connection (its
   // describe rides the coding-plan Vision MCP allotment).
   const settings = {
     connections: [{ id: 'coding', provider: 'zai-coding', model: 'glm-4.7', apiKey: 'k' }],
@@ -72,6 +202,14 @@ test('a z.ai-coding connection is NOT live-capable (chat cannot see) but IS chos
   };
   const conn = await resolveVisionConnection(settings);
   assert.equal(conn?.provider, 'zai-coding');
+});
+
+test('resolveVideoCapable: GLM 5.3 Flash on the coding plan can watch video', async () => {
+  assert.equal(await resolveVideoCapable({ provider: 'zai-coding', model: 'glm-5.3-flash' }, {}), true);
+  // A text/code coding model still cannot.
+  assert.equal(await resolveVideoCapable({ provider: 'zai-coding', model: 'glm-4.7' }, {}), false);
+  // The ward can still force it on a coding connection they've confirmed.
+  assert.equal(await resolveVideoCapable({ provider: 'zai-coding', model: 'glm-4.7', videoCapable: 'yes' }, {}), true);
 });
 
 test('findConnection matches by provider+model', () => {
@@ -278,6 +416,33 @@ test('describeAsset returns a reason (not a throw) when no connection can see', 
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'no-vision-connection');
   assert.equal((await getAssetMeta(m.id)).description, null);   // stays null (retry later)
+});
+
+test('describeAsset refuses a video without calling the describer (the coding-plan 400)', async () => {
+  const v = await mkVideo('a short clip');
+  let calls = 0;
+  const fetchFn = async () => { calls++; return okCompletion('should never run'); };
+  const settings = { connections: [{ id: 'v', provider: 'zai', model: 'x', apiKey: 'k', visionCapable: 'yes' }], primaryConnectionId: 'v' };
+  const r = await describeAsset(v.id, settings, { fetchFn });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'not-image');
+  assert.equal(calls, 0);                              // never reached the image describer
+  assert.equal((await getAssetMeta(v.id)).description, null);
+});
+
+test('ensureDescribed skips a video and only describes the image beside it', async () => {
+  const img = await mk('an image to describe');
+  const vid = await mkVideo('a clip that must be skipped');
+  const settings = { connections: [{ id: 'v', provider: 'zai', model: 'x', apiKey: 'k', visionCapable: 'yes' }], primaryConnectionId: 'v' };
+  let calls = 0;
+  const fetchFn = async () => { calls++; return okCompletion('the image, described'); };
+  const r = await ensureDescribed(
+    [{ attachments: [{ id: img.id }, { id: vid.id }] }],
+    settings, { fetchFn },
+  );
+  assert.equal(r.described, 1);                        // the image only
+  assert.equal(calls, 1);                              // the video never triggered a describe call
+  assert.equal((await getAssetMeta(vid.id)).description, null);
 });
 
 // ── Image → threat scoring (§15.1, ward-signed) ───────────────────

@@ -26,9 +26,13 @@ import {
   webSocketCtor,
   clampDiscordMediaPerHour,
   isDiscordImageAttachment,
+  isDiscordVideoAttachment,
   discordResizeUrl,
   attributeUserContent,
-} from '../discord-gateway.js';
+  availabilityBlockFor,
+  ingestDiscordMedia,
+} from '../src/discord/discord-gateway.js';
+import { deleteAsset } from '../src/vision/media.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────
 
@@ -95,6 +99,22 @@ describe('classifyMessage — universal ignores', () => {
   });
   it('empty content ignored', () => {
     const d = classifyMessage(dmFrom(WARD_ID, '   '), ctx());
+    assert.equal(d.action, 'ignore');
+    assert.equal(d.reason, 'no-content');
+  });
+  it('empty content but an image attachment is NOT ignored (text-less image)', () => {
+    const d = classifyMessage(
+      dmFrom(WARD_ID, '', { attachments: [{ filename: 'cat.png', content_type: 'image/png' }] }),
+      ctx(),
+    );
+    assert.equal(d.action, 'respond', 'a ward DM with only an image still gets a turn');
+    assert.equal(d.kind, 'ward-dm');
+  });
+  it('empty content with a non-media attachment is still ignored', () => {
+    const d = classifyMessage(
+      dmFrom(WARD_ID, '', { attachments: [{ filename: 'notes.txt', content_type: 'text/plain' }] }),
+      ctx(),
+    );
     assert.equal(d.action, 'ignore');
     assert.equal(d.reason, 'no-content');
   });
@@ -941,7 +961,7 @@ describe('discordChannelIdFromKey — channel resolution for revisits', () => {
 //  2. the ward's own words are NEVER altered (threat scoring reads them raw);
 //  3. sanitization is span-surgical, so a villager relaying genuine distress
 //     passes byte-identical — the guard can never swallow a crisis signal.
-import { inboundContent } from '../discord-gateway.js';
+import { inboundContent } from '../src/discord/discord-gateway.js';
 
 describe('inboundContent (injection guard, Village boundary)', () => {
   const base = { botUserId: 'bot1', charName: 'Eury', villagers: [] };
@@ -1000,6 +1020,15 @@ describe('Discord image ingest helpers (vision Pass 3)', () => {
     assert.equal(isDiscordImageAttachment({}), false);
   });
 
+  it('isDiscordVideoAttachment matches video by mime OR filename extension, not images', () => {
+    assert.equal(isDiscordVideoAttachment({ content_type: 'video/mp4' }), true);
+    assert.equal(isDiscordVideoAttachment({ content_type: 'video/webm; codecs=x' }), true);
+    assert.equal(isDiscordVideoAttachment({ filename: 'clip.MOV' }), true);          // no mime, ext wins
+    assert.equal(isDiscordVideoAttachment({ content_type: 'application/octet-stream', filename: 'movie.mp4' }), true);
+    assert.equal(isDiscordVideoAttachment({ content_type: 'image/png', filename: 'cat.png' }), false);
+    assert.equal(isDiscordVideoAttachment({}), false);
+  });
+
   it('discordResizeUrl downscales via the proxy when the long edge exceeds the cap', () => {
     const url = discordResizeUrl({ proxy_url: 'https://media.discordapp.net/x/cat.png', width: 4000, height: 2000 }, 1568);
     const u = new URL(url);
@@ -1011,5 +1040,93 @@ describe('Discord image ingest helpers (vision Pass 3)', () => {
     assert.equal(discordResizeUrl({ proxy_url: 'https://m/x/s.png', width: 800, height: 600 }, 1568), 'https://m/x/s.png');
     assert.equal(discordResizeUrl({ url: 'https://cdn/x/s.png' }, 1568), 'https://cdn/x/s.png');   // no proxy_url → no resize
     assert.equal(discordResizeUrl({}), '');
+  });
+
+  it('ingestDiscordMedia folds a Tenor gifv embed into a saved video asset (the mp4)', async () => {
+    const realFetch = globalThis.fetch;
+    const created = [];
+    // A tiny fake mp4, served with a video content-type.
+    globalThis.fetch = async () => ({
+      ok: true,
+      headers: { get: (h) => (String(h).toLowerCase() === 'content-type' ? 'video/mp4' : null) },
+      arrayBuffer: async () => new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109]).buffer,
+    });
+    try {
+      const msg = {
+        attachments: [],
+        embeds: [{
+          type: 'gifv',
+          url: 'https://tenor.com/view/cat-flopping-over-gif-12345678',
+          provider: { name: 'Tenor' },
+          video: { proxy_url: 'https://media.discordapp.net/external/h2/https/media.tenor.com/abc/cat.mp4', width: 220, height: 220 },
+          thumbnail: { proxy_url: 'https://media.discordapp.net/external/h1/https/media.tenor.com/abc/cat.png', width: 220, height: 220 },
+        }],
+      };
+      const decision = { isWard: true, villager: null, speakerName: null, locationKey: `test-gif-${Date.now()}` };
+      const res = await ingestDiscordMedia(msg, decision, { audienceTag: 'ward-private', sessionId: null });
+      assert.equal(res.attachments.length, 1, 'the gif embed became one media asset');
+      assert.equal(res.attachments[0].kind, 'video', 'the mp4 is stored as a video');
+      created.push(res.attachments[0].id);
+    } finally {
+      globalThis.fetch = realFetch;
+      for (const id of created) { try { await deleteAsset(id); } catch { /* best-effort */ } }
+    }
+  });
+
+  it('discordResizeUrl never resizes a gif (Discord flattens a resized gif to a still) — animation survives', () => {
+    // A large gif that WOULD otherwise be downscaled: by mime, and by extension.
+    const byMime = discordResizeUrl({ proxy_url: 'https://m/x/big.gif', content_type: 'image/gif', width: 4000, height: 2000 }, 1568);
+    assert.equal(byMime, 'https://m/x/big.gif', 'raw url, no width/height params → the animated bytes come back');
+    const byExt = discordResizeUrl({ proxy_url: 'https://m/x/big.gif', filename: 'party.GIF', width: 4000, height: 2000 }, 1568);
+    assert.equal(byExt, 'https://m/x/big.gif');
+  });
+});
+
+// ── availabilityBlockFor: the villager scheduling coordination block ──────────
+// Regression guard for the reported "Familiar seemed unaware it could schedule
+// with a Care Network person" bug. The pure grant→block logic lives in
+// schedule-availability.test.mjs; this pins the GATEWAY seam that decides,
+// per villager-DM turn, whether to inject the block at all (kind + grant gate),
+// with getWindow injected so no live Unruh is needed.
+describe('availabilityBlockFor (villager scheduling seam)', () => {
+  const stubWindow = async () => ({ ok: true, nodes: [] });
+  const coarse = { schedule: 'coarse' };
+
+  it('coarse grant on a villager DM → injects the coordination block', async () => {
+    const block = await availabilityBlockFor(
+      { kind: 'villager-dm', speakerName: 'Sam', villager: { name: 'Sam' } },
+      coarse,
+      { getWindow: stubWindow },
+    );
+    assert.ok(block.length > 0, 'block should be present');
+    assert.match(block, /Coordinating my human's schedule/);
+    assert.doesNotMatch(block, /full access/); // coarse never names items
+  });
+
+  it('full grant → block present (labels branch allowed)', async () => {
+    const block = await availabilityBlockFor(
+      { kind: 'villager-dm', speakerName: 'Sam' }, { schedule: 'full' }, { getWindow: stubWindow },
+    );
+    assert.ok(block.length > 0);
+  });
+
+  it('no schedule grant → empty (villager cannot arrange time)', async () => {
+    const block = await availabilityBlockFor(
+      { kind: 'villager-dm', speakerName: 'Sam' }, { memories: 'shared' }, { getWindow: stubWindow },
+    );
+    assert.equal(block, '');
+  });
+
+  it('ward DM → empty (the ward is not coordinated-with)', async () => {
+    const block = await availabilityBlockFor({ kind: 'ward-dm' }, null, { getWindow: stubWindow });
+    assert.equal(block, '');
+  });
+
+  it('a thrown window fetch degrades to empty, never throws into the turn', async () => {
+    const block = await availabilityBlockFor(
+      { kind: 'villager-dm', speakerName: 'Sam' }, coarse,
+      { getWindow: async () => { throw new Error('unruh down'); } },
+    );
+    assert.equal(block, '');
   });
 });

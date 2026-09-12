@@ -22,7 +22,7 @@
  * ward-signed and stays where it is; migrating it needs the ward's sign-off.
  */
 
-import { PROVIDER_URLS } from './providers.js';
+import { resolveProviderUrl, authHeader } from './providers.js';
 
 const DEFAULT_MAX_TOKENS = 4000;
 
@@ -37,6 +37,27 @@ const DEFAULT_MAX_TOKENS = 4000;
 export function extractContent(message = {}) {
   const content = message?.content ?? '';
   if (content) return content;
+  return message?.reasoning_content || message?.reasoning || '';
+}
+
+/**
+ * The reply for an INTERACTIVE chat turn, unlike extractContent's blanket
+ * reasoning fallback. A reasoning model whose budget ran out mid-thought
+ * (finish_reason === 'length', empty content) has produced NO answer — only
+ * chain-of-thought parked in reasoning_content. Surfacing that raw CoT as the
+ * reply is the GLM-5.3 "thinking dump" bug. So:
+ *   - real content wins,
+ *   - empty + finish_reason 'length' → '' (budget exhausted: the caller treats
+ *     it as no-reply — an honest note or a closing round, never a CoT dump),
+ *   - empty otherwise → the reasoning fallback (a proxy that legitimately parks
+ *     a *finished* answer in reasoning_content, the case extractContent serves).
+ * Pass the whole `choice` so finish_reason is in scope.
+ */
+export function extractTurnReply(choice = {}) {
+  const message = choice?.message ?? {};
+  const content = message?.content ?? '';
+  if (content && content.trim()) return content;
+  if (choice?.finish_reason === 'length') return '';
   return message?.reasoning_content || message?.reasoning || '';
 }
 
@@ -57,15 +78,39 @@ export function foldReasoningIntoContent(message) {
 }
 
 /**
+ * Arrange a first-person deliberation prompt as the Familiar's OWN framing, not
+ * as something said TO them. The entity-as-subject fix: a prompt written from
+ * the Familiar's point of view ("I'm {{char}}. Nobody's talking to me…") used to
+ * ride as a `user` turn, which frames the entity as being addressed or
+ * instructed rather than thinking. So the Familiar's words go in SYSTEM
+ * message(s) — beside their identity — and the `user` slot carries only a bare,
+ * non-speaking cue, present solely because several providers refuse a completion
+ * with no user turn at all. `identity` is optional (some prompts embed it in
+ * `body`); `cue` defaults to a quiet placeholder. Pure + exported so the role
+ * decision is testable. Mirrors the shape of `noticing.js`'s own
+ * `noticingMessages` — kept separate there on purpose, because that safety
+ * module is deliberately import-free; the two are pinned identical by test.
+ */
+export function familiarDeliberationMessages({ identity = '', body = '', cue = '(a quiet moment)' } = {}) {
+  return [
+    ...(identity ? [{ role: 'system', content: identity }] : []),
+    { role: 'system', content: body },
+    { role: 'user', content: cue },
+  ];
+}
+
+/**
  * Call the provider's chat-completions endpoint and return the assistant text.
  * Throws on a transport/HTTP/parse error or a genuinely empty completion (with
  * a diagnostic message). `fetchFn` is injectable for tests.
  */
 export async function callProviderChat({
   provider, apiKey, model, prompt, messages,
+  baseUrl = null,
   maxTokens = DEFAULT_MAX_TOKENS, temperature = 0.7, fetchFn = fetch,
+  reasoningEffort = null,
 }) {
-  const url = PROVIDER_URLS[provider];
+  const url = resolveProviderUrl({ provider, baseUrl });
   if (!url) throw new Error(`Unknown provider: ${provider}`);
 
   const msgs = Array.isArray(messages) ? messages : [{ role: 'user', content: prompt }];
@@ -73,7 +118,9 @@ export async function callProviderChat({
     method: 'POST',
     headers: {
       'Content-Type':  'application/json',
-      'Authorization': `Bearer ${String(apiKey ?? '').trim()}`,
+      // Omitted for a keyless local/custom endpoint (a Bearer with an empty
+      // key 400s on some servers); required cloud providers always carry one.
+      ...authHeader(apiKey),
     },
     body: JSON.stringify({
       model:       String(model ?? '').trim(),
@@ -81,6 +128,9 @@ export async function callProviderChat({
       stream:      false,
       temperature,
       max_tokens:  maxTokens,
+      // Opt-in only: callers that want it pass a resolved value. The ward-signed
+      // triage call does NOT pass it, so its request stays byte-identical.
+      ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
     }),
   });
 

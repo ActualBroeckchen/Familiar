@@ -182,6 +182,7 @@ def memory_create(
     category: Optional[str] = None,
     consent_pending: Optional[bool] = None,
     confidence: Optional[float] = None,
+    attribution_confidence: Optional[float] = None,
     standalone: Optional[bool] = None,
     register: Optional[str] = None,
     source_meta: Optional[dict] = None,
@@ -203,6 +204,10 @@ def memory_create(
     content_tag is "topic:level" (e.g. medical:sensitive) and decides which of
     my human's Villagers may ever see this fact; omitted → derived from category,
     fail-closed.
+    attribution_confidence (0-1) is how sure I am about WHO the fact is about —
+    separate from confidence (whether it happened). I set it low when a referent
+    is unresolved; recall downweights it rather than dropping it. Omitted → fully
+    attributed.
     """
     result = mem.create(
         content, granularity, date_key=date, slug=slug,
@@ -212,6 +217,7 @@ def memory_create(
         category=category,
         consent_pending=bool(consent_pending),
         confidence=float(confidence) if confidence is not None else 1.0,
+        attribution_confidence=float(attribution_confidence) if attribution_confidence is not None else None,
         standalone=bool(standalone),
         register=register or "episodic",
         source_meta=source_meta if isinstance(source_meta, dict) else None,
@@ -236,6 +242,7 @@ def memory_list(
     granularity: Optional[str] = None,
     limit: Optional[int] = None,
     offset: Optional[int] = None,
+    register: Optional[str] = None,
 ) -> dict[str, Any]:
     """I use this to browse my memories, most-recent first. I reach for it when I want
     to survey what I know or find something I stored recently. Returns thin projections
@@ -243,7 +250,8 @@ def memory_list(
     """
     n = max(1, min(200, int(limit or 50)))
     off = max(0, int(offset or 0))
-    items = mem.list_memories(granularity=granularity, limit=n, offset=off, conn=_c())
+    reg = register if register in mem.VALID_REGISTERS else None
+    items = mem.list_memories(granularity=granularity, limit=n, offset=off, conn=_c(), register=reg)
     return {"memories": items}
 
 
@@ -303,16 +311,23 @@ def memory_update_by_id(
     audience: Optional[str] = None,
     careWeight: Optional[str] = None,
     content_tag: Optional[str] = None,
+    attribution_confidence: Optional[float] = None,
+    subjects: Optional[list[str]] = None,
     instanceId: Optional[str] = None,
 ) -> str:
     """I use this to correct or re-tag one specific memory by its id — the reliable
     handle when many facts share a day. content rewrites the text; audience sets who
     may see it; careWeight is 'high'/'low' or '' to clear; content_tag is the
-    "topic:level" content gate ('' to clear). Auto-snapshots first.
+    "topic:level" content gate ('' to clear). attribution_confidence (0-1) raises
+    how sure I am WHO it's about — I set it high once I've resolved a fuzzy referent
+    (and pass subjects to record the now-known person). Auto-snapshots first.
     """
     result = mem.update_memory_by_id(
         id, new_content=content, audience=audience, care_weight=careWeight,
-        content_tag=content_tag, conn=_c()
+        content_tag=content_tag,
+        attribution_confidence=attribution_confidence,
+        subjects=subjects,
+        conn=_c()
     )
     if not result.get("ok"):
         return f"Update failed: {result.get('error', 'unknown')}"
@@ -472,6 +487,21 @@ def memory_list_content_gate_candidates(limit: int = 40) -> dict[str, Any]:
     { items: [{ id, date, content, content_tag, category }] }."""
     items = mem.list_content_gate_candidates(limit=limit, conn=_c())
     return {"items": items}
+
+
+@mcp.tool()
+def memory_list_unresolved_attributions(
+    threshold: float = 0.5, min_age_days: int = 1, limit: int = 10,
+) -> dict[str, Any]:
+    """Aging memories where I'm still unsure WHO they're about — attribution below
+    `threshold`, saved at least `min_age_days` ago. This is what my noticing turn
+    looks at to re-resolve a fuzzy referent once the conversation resurfaces: if I
+    can now tell who it was, I update the memory (content + subjects) and raise its
+    attribution_confidence; if not, I leave it. Returns
+    { items: [{ id, content, subjects, date, attribution_confidence }] }."""
+    return mem.list_unresolved_attributions(
+        threshold=threshold, min_age_days=min_age_days, limit=limit, conn=_c()
+    )
 
 
 @mcp.tool()

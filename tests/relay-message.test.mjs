@@ -7,7 +7,7 @@ import {
   initCerebellumTools,
   BUILTIN_TOOLS,
 } from '../cerebellum.js';
-import { discordChannelIdFromKey } from '../discord-gateway.js';
+import { discordChannelIdFromKey } from '../src/discord/discord-gateway.js';
 
 const relay = TOOL_EXECUTORS.relay_message;
 

@@ -2,8 +2,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { geocode, fetchForecast } from '../weather-source.js';
-import { fetchOpenMeteo, fetchMetNorway, utcToLocalNaive } from '../weather-providers.js';
+import { geocode, fetchForecast } from '../src/weather/weather-source.js';
+import { fetchOpenMeteo, fetchMetNorway, utcToLocalNaive } from '../src/weather/weather-providers.js';
 
 // A fake fetch that returns a canned JSON body.
 function jsonFetch(body, { ok = true, status = 200 } = {}) {

@@ -35,12 +35,12 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createAudioWorker } from '../audio-worker-host.js';
-import { resolveVoice } from '../voices.js';
-import { encodeWav } from '../voice-audio-features.js';
-import { prepareForSpeech } from '../voice-speech.js';
-import { DEFAULT_NUM_STEPS, DEFAULT_TTS_TEMPERATURE } from '../voice-generation.js';
-import { MODELS_SUBDIR } from '../voice-fetch.js';
+import { createAudioWorker } from '../src/voice/audio-worker-host.js';
+import { resolveVoice } from '../src/voice/voices.js';
+import { encodeWav } from '../src/voice/voice-audio-features.js';
+import { prepareForSpeech } from '../src/voice/voice-speech.js';
+import { DEFAULT_NUM_STEPS, DEFAULT_TTS_TEMPERATURE } from '../src/voice/voice-generation.js';
+import { MODELS_SUBDIR } from '../src/voice/voice-fetch.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 

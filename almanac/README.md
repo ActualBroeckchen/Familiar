@@ -16,26 +16,9 @@ should not rediscover from scratch.
 
 ## Start here
 
-Proto-Familiar surfaces a persistent AI companion (the Familiar) as one embodiment of an
-entity whose identity and memory live in a separate canonical store. Start with:
+Read [Getting Started](getting-started) for a guided path through the five core pages that build a working model of the system: architecture, entity-as-subject, multi-embodiment, core prompts, and proactivity over caution.
 
-- [Architecture](architecture) — the system map: the server, the thalamus/cerebellum split,
-  the caring spine, and where each subsystem lives.
-- [Entity-as-subject](concepts/entity-as-subject) and
-  [Multi-embodiment](concepts/multi-embodiment) — the design stance everything else in this
-  repo is built to serve.
-- [Proactivity over caution](decisions/proactivity-over-caution) — the incident that shapes
-  every prompt governing when the Familiar acts on its own.
-- [Weather](architecture/weather) and [Location privacy](decisions/location-privacy) — how the
-  Familiar learns the ward's weather without geographic location ever reaching the model.
-- [Vision and media](architecture/vision-and-media) — image input, storage, and the single seam
-  where attachments become LLM-visible (shipped 0.9.0-alpha).
-- [Engineering conventions](reference/engineering-conventions) — the repo-wide operating
-  rules (versioning, degradation, ids) referenced throughout the architecture pages.
-
-[Concepts](concepts) indexes all repo-specific vocabulary by cluster, and
-[Decisions](decisions) indexes all twenty-two recorded decisions by the question each one
-answers.
+Then use [Concepts](concepts) to look up repo-specific vocabulary by cluster, and [Decisions](decisions) to find the recorded decisions that constrain the architecture.
 
 ## Notability Bar
 

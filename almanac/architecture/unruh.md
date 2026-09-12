@@ -28,10 +28,10 @@ sources:
     note: "Later review conversation with Claude Fable 5 in which the maintainer articulated two framings for Unruh's schedule and threat mechanics that are not yet reflected in code or docs/unruh-design.md."
   - id: reminders-loop-js
     type: file
-    path: reminders-loop.js
+    path: src/schedule/reminders-loop.js
   - id: temporal-format-js
     type: file
-    path: temporal-format.js
+    path: src/schedule/temporal-format.js
   - id: relative-time-js
     type: file
     path: relative-time.js
@@ -43,7 +43,7 @@ sources:
     path: unruh/src/unruh/gcal.py
   - id: gcal-projection
     type: file
-    path: gcal-projection.js
+    path: src/gcal/gcal-projection.js
   - id: cerebellum
     type: file
     path: cerebellum.js
@@ -80,6 +80,9 @@ sources:
   - id: tool-surfacing-js
     type: file
     path: tool-surfacing.js
+  - id: intention-py
+    type: file
+    path: unruh/src/unruh/intention.py
 ---
 
 # Unruh
@@ -198,6 +201,50 @@ With both halves closed, the M8 loop runs end-to-end: `bookmark_for_later` creat
 `due_bookmarks` selects it once due during an idle cycle, `reportSurfacingOutcomes()` records
 whether the ward engaged, and the adaptive interval it produces feeds back into the next
 selection.
+
+## Intentions and rounds: a future the Familiar writes for itself (Initiative Session C)
+
+Alongside schedule nodes and interest weight, `intention.py` gives the Familiar a first-class
+"my intention" object: a `what`, an optional `why`, `refs` to other things in the graph, a
+`trigger` (`at` a specific time, `phase` of the ward's routine, `on_next_contact`, or `none`),
+and an optional `condition` [@intention-py]. A phase intention can be marked `recurring`, which
+makes it a **round** — a standing, phase-bound habit such as "every morning I go over the
+calendar" or "every noon I check on Chen if we haven't talked in an hour." This shipped as
+Initiative Session C (0.8.65-alpha), the intention-store follow-on to
+[Contact-rhythm baselines](../decisions/contact-rhythm-baselines)'s Session B, and is the data
+the [Autonomous loops](autonomous-loops) noticing tick (Session D) reads to decide whether
+"an aging intention" is worth surfacing.
+
+The module deliberately splits responsibility along the same line as the rest of Unruh:
+`intention.py` owns storage and **trigger timing only** — is an `at` time past, is this the
+routine phase right now, has this occurrence already fired — while evaluating the `condition`
+vocabulary is left to the Node side, because that gate needs live signals (the ward's contact
+gap, the needs ledger, whether a referenced item is still unresolved) that live there;
+`intentions_due()` returns each due intention with its condition still attached for the caller
+to apply, keeping the live-signal gate next to the data it reads [@intention-py]. Refs are
+stored as slug ids and never snapshotted, so a payoff turn dereferences the current state of the
+referenced thing rather than a stale copy taken when the intention was written [@intention-py].
+
+**The phase-round case-sensitivity bug (fixed 0.11.17).** A reported failure — an "evening
+check-in" round that never once fired — traced to `intentions_due()` matching a round's
+`trigger_phase` against the ward's live routine-phase label with an exact, case-sensitive
+string comparison. The Familiar names a trigger with a generic day-part word (`'evening'`; the
+tool's own example is `'morning'`), but the routine phase carries a real, often custom label
+(`'Evening'` or `'Evening wind-down'`) — so the round was silently never "due," for any of three
+reasons: a case mismatch, a longer or custom label, or no routine phase configured at all
+[@intention-py]. `phase_matches(trigger_phase, current_label)` is the due-time fix: a
+case-insensitive, substring-either-way comparison, so `'evening'` fires against
+`'Evening wind-down'` and an existing broken round starts working without being re-created
+[@intention-py]. `resolve_phase(typed, available_labels)` closes the same gap at write time
+instead of only at check time: `set_intention()` canonicalizes a typed phase word to a real
+routine-phase label up front (case-insensitive exact match first, then a unique substring match)
+so a round is stored against the exact label it will later be checked against; when nothing
+matches, the intention is still created, but the result carries a `warning` naming the mismatch
+and listing the ward's real phase labels, so an unfulfillable round is visible to the Familiar
+immediately rather than silently dead [@intention-py] [@server-py]. The lesson generalizes past
+this one field: a free-text label typed against a canonical value needs forgiveness at read time
+*and* canonicalization at write time — either alone leaves a way for a legacy or hand-typed round
+to go silently unfulfillable.
 
 ## Origin: a schedule, not a cronjob checklist
 

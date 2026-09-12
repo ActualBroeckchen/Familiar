@@ -349,6 +349,39 @@ via the launcher script (which primes uv's location); a bare
 
 ---
 
+## Local / custom connections (Ollama, LM Studio, llama.cpp, …)
+
+### "No response" or a connection error from a local model
+
+The provider is `ollama` / `lmstudio` / `custom` and nothing comes back.
+Work through it in order:
+
+- **Is the local server actually running and serving OpenAI-compat?**
+  `curl http://localhost:11434/v1/models` (Ollama) or
+  `http://localhost:1234/v1/models` (LM Studio) should return JSON. If
+  that fails, the model server is down or on a different port — start it,
+  or fix the **Base URL** field.
+- **Right port / host?** Ollama defaults to `11434`, LM Studio to `1234`.
+  A box on your LAN needs its address in the **Base URL** field
+  (`http://192.168.1.x:11434`). A bare host, a `…/v1` base, or a full
+  `…/chat/completions` endpoint are all accepted — the server appends
+  `/v1/chat/completions` when it's missing.
+- **Leave the API key blank.** Local servers ignore it, and Proto-Familiar
+  sends *no* `Authorization` header when the key is empty (a blank/garbage
+  Bearer token makes some local servers 400).
+- **Model name must match what the server has loaded** — for Ollama that's
+  a pulled tag (`ollama list`); for LM Studio the id shown in its server
+  panel. A wrong name usually surfaces as a 404 from the endpoint.
+
+### "Enter an API key" won't go away for a local/custom provider
+
+You're on an older cached copy of the web app. The key field is optional
+for `custom` / `ollama` / `lmstudio` (readiness is `providerRequiresKey`
+in `providers.js`). Hard-refresh the browser (Ctrl/Cmd-Shift-R) so the
+current `app.js` loads.
+
+---
+
 ## Unruh (temporal context)
 
 ### `[thalamus] Unruh venv missing at .../unruh/.venv — run \`cd unruh && uv sync\` to enable temporal context`
@@ -479,15 +512,22 @@ is not an off-switch.
 | `PROTO_FAMILIAR_VOICE_DISABLED` | all of voice — reading aloud, voice notes, the worker |
 | `PROTO_FAMILIAR_VOICE_PRESENCE_DISABLED` | group-call awareness — who's present, who joined/left, and per-speaker labels (falls back to the old unlabelled transcript) |
 | `PROTO_FAMILIAR_VOICE_GREETINGS_DISABLED` | the spoken hello when someone joins a group call (presence/labels stay on) |
+| `PROTO_FAMILIAR_VOICE_BARGE_DISABLED` | barge-in — the Familiar stopping when someone speaks over it in a call (falls back to the web browser's own barge; disables the noise-robust partial-driven interrupt) |
+| `PROTO_FAMILIAR_VOICE_TEXT_INTERLEAVE_DISABLED` | typing in a Discord voice channel's attached text chat during a call — the Familiar reading it and answering by voice (and describing an image shared there). Falls back to treating those messages as normal text |
+| `PROTO_FAMILIAR_PROACTIVE_SESSION_DISABLED` | recording proactive messages (reminders, event alerts, "a thought from me", triage check-ins) into your shared session so the Familiar knows it sent them and your reply has context (esp. Discord DMs). Delivery is unaffected either way |
 | `PROTO_FAMILIAR_VISION_DISABLED` | seeing images |
 | `PROTO_FAMILIAR_VISION_THREAT_DISABLED` | an image raising your Familiar's concern |
+| `PROTO_FAMILIAR_CRISIS_CLASSIFIER_DISABLED` | the ML distress classifier (the raise-only second opinion alongside the phrase detector) — off falls back to the phrase detector alone |
+| `PROTO_FAMILIAR_CRISIS_NORMALIZATION_DISABLED` | just the pro-suicide-attitude warning signal, leaving the rest of the classifier on |
 | `PROTO_FAMILIAR_ZAI_VISION_DISABLED` | the z.ai Coding-Plan vision route |
+| `PROTO_FAMILIAR_GIF_AS_VIDEO_DISABLED` | sending an animated GIF to a video-capable model as video (so it sees the motion) — with it off, a gif is always a still image |
 
 **Reaching out and noticing**
 
 | Switch | Stops |
 |---|---|
 | `PROTO_FAMILIAR_NOTICING_DISABLED` | noticing on its own |
+| `PROTO_FAMILIAR_ATTRIBUTION_RESWEEP_DISABLED` | only the noticing re-sweep that resurfaces fuzzy-attribution memories (noticing keeps running) |
 | `PROTO_FAMILIAR_WARMTH_DISABLED` | warm reach-outs |
 | `PROTO_FAMILIAR_TRIAGE_DISABLED` | silence triage (**safety** — read §10 of the voice spec first) |
 | `PROTO_FAMILIAR_THREAT_DISABLED` | crisis-signal scoring (**safety**) |
@@ -495,6 +535,7 @@ is not an off-switch.
 | `PROTO_FAMILIAR_PONDERING_DISABLED` | autonomous pondering |
 | `PROTO_FAMILIAR_PONDER_WEB_DISABLED` | looking things up on the web while pondering |
 | `PROTO_FAMILIAR_WAIT_STREAK_DISABLED` | the wait-streak nudge |
+| `PROTO_FAMILIAR_NAME_FIELDS_DISABLED` | stamping `name` handles on user turns (ward/villager attribution) across chat, Discord, and voice — turns go bare |
 
 **Time, reminders, calendar**
 
@@ -529,7 +570,10 @@ is not an off-switch.
 |---|---|
 | `PROTO_FAMILIAR_DISCORD_DISABLED` | the Discord gateway |
 | `PROTO_FAMILIAR_DISCORD_TOOLS_DISABLED` | tools on Discord turns |
+| `PROTO_FAMILIAR_DISCORD_EMOTES_DISABLED` | describing custom emotes into alt-text (`:tiredcat:` stays a bare shorthand) |
+| `PROTO_FAMILIAR_DISCORD_GIF_EMBEDS_DISABLED` | ingesting Tenor/Giphy gifs (they stay a bare link instead of watchable media) |
 | `PROTO_FAMILIAR_DISCORD_BATCH_DISABLED` | coalescing a burst into one reply |
+| `PROTO_FAMILIAR_SESSION_UNIFY_DISABLED` | unifying the ward's Discord DM with their web chat (one shared session) |
 | `PROTO_FAMILIAR_WEBSEARCH_DISABLED` | web search |
 | `PROTO_FAMILIAR_PAGE_WATCH_DISABLED` | watching web pages for changes |
 | `PROTO_FAMILIAR_TOOL_SURFACING_DISABLED` | surfacing relevant tools per turn |

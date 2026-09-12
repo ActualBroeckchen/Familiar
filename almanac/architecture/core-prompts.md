@@ -7,7 +7,7 @@ sources:
     path: core-prompts.js
   - id: prompt-capture-js
     type: file
-    path: prompt-capture.js
+    path: src/sessions/prompt-capture.js
   - id: architecture-doc
     type: file
     path: docs/architecture.md
@@ -16,7 +16,7 @@ sources:
     path: public/app.js
   - id: discord-gateway-js
     type: file
-    path: discord-gateway.js
+    path: src/discord/discord-gateway.js
 ---
 
 # Core Prompts and Multi-Surface Assembly
@@ -79,3 +79,8 @@ The corollary for observability: an inspector fed by "what should be assembled" 
 - [Phylactery](phylactery) — the identity layer distinct from the four core prompts, holding the base instructions and identity files.
 - [Architecture](../architecture) — the overview of system surfaces: web, Discord, voice, and background loops.
 - [Multi-embodiment](../concepts/multi-embodiment) — the design stance that one entity is accessed through multiple interfaces. Core prompts are part of ensuring that entity is consistent across all of them.
+- [Engineering conventions](../reference/engineering-conventions) — "Prompt catalog," the
+  generated review page for the Familiar's other in-code deliberation prompts (triage,
+  pondering, memory extraction, and the rest) and every tool description. The four core prompts
+  this page covers are ward-authored settings fields, not source-code literals, so the catalog
+  does not include them.
